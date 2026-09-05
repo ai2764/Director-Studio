@@ -9,16 +9,17 @@ import re
 import secrets
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
 from app.config import settings
-from app.core.jobs.store import job_dir
-from app.core.schemas import JobRecord
 
 from .errors import ProfileChangedError, ProfileStorageError, ProfileWarning
 from .models import H3BoundaryMapping, H3WorkflowProfile, ResolvedH3Profile
+
+if TYPE_CHECKING:
+    from app.core.schemas import JobRecord
 
 _PROFILE_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
 _IMPORT_ID_RE = re.compile(r"imp-[a-f0-9]{32}\Z")
@@ -147,6 +148,8 @@ class H3ProfileStore:
 
     def snapshot_for_job(self, job: JobRecord) -> ResolvedH3Profile:
         """Atomically capture the currently resolved profile for one local H3 job."""
+        from app.core.jobs.store import job_dir
+
         params = job.params or {}
         snapshot_dir = job_dir(job.id, project_id=job.project_id) / _JOB_SNAPSHOT_DIR
         identity_keys = {
@@ -227,6 +230,8 @@ class H3ProfileStore:
 
     def load_job_snapshot(self, job_id: str) -> ResolvedH3Profile:
         """Load and verify the immutable profile snapshot captured for a job."""
+        from app.core.jobs.store import job_dir
+
         snapshot_dir = job_dir(job_id) / _JOB_SNAPSHOT_DIR
         profile_path = snapshot_dir / _PROFILE_FILE
         workflow_path = snapshot_dir / _WORKFLOW_FILE
