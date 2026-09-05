@@ -47,3 +47,29 @@ Green phase:
 
 - The full suite emits two existing Pillow `Image.getdata` deprecation warnings from `test_tail_frame_extraction.py`; they are unrelated to Task 2.
 - Legacy/direct local H3 callers without profile identity fields continue to resolve the current active profile for backward compatibility. All jobs submitted through `start_pipeline_job()` now receive a snapshot before queue execution.
+
+## Fix round 1: Recovery preserves the original snapshot
+
+Reviewer finding reproduced:
+
+- A queued local H3 job was snapshotted with `first-profile`.
+- After selecting `second-profile`, `recover_interrupted_jobs()` replayed through `start_pipeline_job()`.
+- The original implementation unconditionally resolved the active profile and changed the recovered job to `second-profile`.
+- A deliberately corrupted existing workflow snapshot was also silently replaced instead of failing.
+
+Fix:
+
+- `snapshot_for_job()` now detects either an existing `workflow_profile` directory or any persisted H3 snapshot identity field before resolving the active profile.
+- Existing snapshots are loaded through the verifying snapshot loader, which checks metadata, workflow SHA-256, and pure Ref2AV shape.
+- The loaded profile ID, hash, and contract version must match the job record exactly.
+- A valid existing snapshot is returned without reading active selection and without rewriting snapshot files or job identity.
+- Missing, partial, corrupt, or mismatched snapshots raise explicitly; only a true first submission resolves and captures the active profile.
+
+TDD and verification evidence:
+
+- The new recovery test failed with `second-profile` where `first-profile` was expected.
+- The new corruption test failed because no `ProfileChangedError` was raised.
+- Both targeted tests passed after the snapshot reuse guard was added.
+- Focused H3/runtime suite: `45 passed in 0.66s`.
+- Full backend suite: `712 passed, 2 warnings in 27.43s`.
+- The response-schema test was also corrected to use an in-memory `JobRecord`; it no longer leaves queued jobs in the repository's ignored runtime data directory.

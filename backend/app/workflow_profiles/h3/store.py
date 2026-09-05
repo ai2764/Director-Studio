@@ -147,6 +147,25 @@ class H3ProfileStore:
 
     def snapshot_for_job(self, job: JobRecord) -> ResolvedH3Profile:
         """Atomically capture the currently resolved profile for one local H3 job."""
+        params = job.params or {}
+        snapshot_dir = job_dir(job.id, project_id=job.project_id) / _JOB_SNAPSHOT_DIR
+        identity_keys = {
+            "h3_profile_id",
+            "h3_profile_sha256",
+            "h3_contract_version",
+        }
+        if snapshot_dir.exists() or identity_keys.intersection(params):
+            snapshot = self.load_job_snapshot(job.id)
+            if (
+                params.get("h3_profile_id") != snapshot.profile_id
+                or params.get("h3_profile_sha256") != snapshot.workflow_sha256
+                or params.get("h3_contract_version") != 1
+            ):
+                raise ProfileChangedError(
+                    "Job profile snapshot identity does not match its job record"
+                )
+            return snapshot
+
         resolved = self.resolve_active()
         if resolved.source == "builtin":
             workflow_path = Path(settings.workflows_dir) / "h3_ref2va.api.json"
@@ -194,7 +213,6 @@ class H3ProfileStore:
                 "Active workflow changed while snapshotting the job"
             )
 
-        snapshot_dir = job_dir(job.id, project_id=job.project_id) / _JOB_SNAPSHOT_DIR
         self._atomic_write_bytes(snapshot_dir / _WORKFLOW_FILE, workflow_bytes)
         self._atomic_write_bytes(snapshot_dir / _PROFILE_FILE, profile_bytes)
         job.params = dict(job.params or {})

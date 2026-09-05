@@ -12,6 +12,7 @@ import pytest
 from app.config import settings
 from app.core.jobs import runner
 from app.core.jobs.store import create_job, job_dir, load_job
+from app.core.schemas import JobRecord, JobStatus
 from app.pipelines.h3_ref2va.pipeline import H3Ref2VaPipeline
 from app.pipelines.h3_ref2va.schemas import H3Ref2VaJobResponse
 from app.pipelines.h3_ref2va.workflow import fill_profile_graph, load_base_prompt
@@ -19,6 +20,7 @@ from app.workflow_profiles.h3 import (
     H3BoundaryMapping,
     H3ProfileStore,
     H3WorkflowProfile,
+    ProfileChangedError,
     ResolvedH3Profile,
     load_job_profile_snapshot,
 )
@@ -256,6 +258,87 @@ def test_pipeline_reads_snapshot_for_graph_and_output_mapping(
     assert mapped["video"].filename == "right.mp4"
 
 
+@pytest.mark.asyncio
+async def test_recovery_reuses_profile_from_original_submission(
+    tmp_projects_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    monkeypatch.setattr(settings, "jobs_dir", jobs_root)
+    monkeypatch.setattr(settings, "workflow_profiles_dir", tmp_path / "profiles")
+    profile_store = H3ProfileStore()
+    _install_profile(profile_store, "first-profile", saver_id="910")
+    _install_profile(profile_store, "second-profile", saver_id="920")
+    profile_store.select_profile("first-profile")
+    pipeline = H3Ref2VaPipeline()
+    job = create_job(
+        pipeline_id="h3_ref2va",
+        asset_kind="productions",
+        name="recover snapshot",
+        params={"h3_provider": "local"},
+    )
+    pipeline.prepare_job_submission(job)
+    runner.store.save_job(job)
+    first_hash = job.params["h3_profile_sha256"]
+    profile_store.select_profile("second-profile")
+
+    release = asyncio.Event()
+
+    async def queued_run(job_id, images, cancel):
+        await release.wait()
+
+    async def no_reservation(job, selected_pipeline, adapter):
+        return False
+
+    monkeypatch.setattr(runner, "_run_job", queued_run)
+    monkeypatch.setattr(runner, "_reserve_local_generation", no_reservation)
+
+    recovered = await runner.recover_interrupted_jobs()
+
+    replayed = load_job(job.id)
+    snapshot = load_job_profile_snapshot(job.id)
+    assert recovered == [job.id]
+    assert replayed is not None
+    assert replayed.params["h3_profile_id"] == "first-profile"
+    assert replayed.params["h3_profile_sha256"] == first_hash
+    assert snapshot.profile_id == "first-profile"
+    assert snapshot.mapping.saver_node_id == "910"
+
+    release.set()
+    await runner.await_pipeline_job(job.id)
+
+
+def test_corrupted_existing_snapshot_fails_instead_of_switching_profiles(
+    tmp_projects_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    monkeypatch.setattr(settings, "jobs_dir", jobs_root)
+    monkeypatch.setattr(settings, "workflow_profiles_dir", tmp_path / "profiles")
+    profile_store = H3ProfileStore()
+    _install_profile(profile_store, "first-profile", saver_id="910")
+    _install_profile(profile_store, "second-profile", saver_id="920")
+    profile_store.select_profile("first-profile")
+    pipeline = H3Ref2VaPipeline()
+    job = create_job(
+        pipeline_id="h3_ref2va",
+        asset_kind="productions",
+        name="corrupt snapshot",
+        params={"h3_provider": "local"},
+    )
+    pipeline.prepare_job_submission(job)
+    original_identity = dict(job.params)
+    snapshot_path = job_dir(job.id) / "workflow_profile" / "workflow.api.json"
+    snapshot_path.write_text("{}", encoding="utf-8")
+    profile_store.select_profile("second-profile")
+
+    with pytest.raises(ProfileChangedError, match="snapshot hash"):
+        pipeline.prepare_job_submission(job)
+
+    assert job.params == original_identity
+    assert snapshot_path.read_text(encoding="utf-8") == "{}"
+
+
 def test_minimax_job_skips_local_profile_snapshot(
     tmp_projects_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -299,15 +382,19 @@ def test_builtin_profile_is_snapshotted_for_local_job(
 
 
 def test_h3_job_response_exposes_profile_identity() -> None:
-    job = create_job(
+    job = JobRecord(
+        id="job_profile_response",
         pipeline_id="h3_ref2va",
         asset_kind="productions",
+        status=JobStatus.queued,
         name="response",
         params={
             "h3_profile_id": "custom-profile",
             "h3_profile_sha256": "a" * 64,
             "h3_contract_version": 1,
         },
+        created_at="2026-09-05T00:00:00Z",
+        updated_at="2026-09-05T00:00:00Z",
     )
 
     response = H3Ref2VaJobResponse.from_job(job)
