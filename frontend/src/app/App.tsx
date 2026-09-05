@@ -162,7 +162,7 @@ function AppShell() {
       </header>
 
       {/* Keep pages mounted so in-flight job UI/polling survives tab switches */}
-      {settingsVisited ? <div className={page === "settings" ? "page-pane active" : "page-pane"} hidden={page !== "settings"}><WorkflowSettingsPage /></div> : null}
+      {settingsVisited ? <div className={page === "settings" ? "page-pane active" : "page-pane"} hidden={page !== "settings"}><WorkflowSettingsPage active={page === "settings"} /></div> : null}
       <div
         className={page === "assets" ? "page-pane active" : "page-pane"}
         hidden={page !== "assets"}

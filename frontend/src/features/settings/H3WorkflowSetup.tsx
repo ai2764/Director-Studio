@@ -106,7 +106,7 @@ function initialMapping(analysis: H3Analysis): H3Mapping | null {
   };
 }
 
-export function H3WorkflowSetup() {
+export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
   const { projectId } = useProject();
   const [profiles, setProfiles] = useState<H3Profiles | null>(null);
   const [selectedProfile, setSelectedProfile] = useState("");
@@ -118,6 +118,9 @@ export function H3WorkflowSetup() {
   const [operation, setOperation] = useState<Operation>("loading");
   const [error, setError] = useState<string | null>(null);
   const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [assetRefresh, setAssetRefresh] = useState(0);
+  const libraryProject = useRef(projectId);
   const [pictures, setPictures] = useState<LibraryAsset[]>([]);
   const [voices, setVoices] = useState<LibraryAsset[]>([]);
   const [picture, setPicture] = useState("");
@@ -125,6 +128,7 @@ export function H3WorkflowSetup() {
   const [test, setTest] = useState<H3TestRun | null>(null);
   const [job, setJob] = useState<H3JobRecord | null>(null);
   const [pollVersion, setPollVersion] = useState(0);
+  const testInFlight = useRef(false);
   const errorRef = useRef<HTMLDivElement>(null);
   const busy = operation !== "idle";
   const applyAnalysis = (next: H3Analysis) => {
@@ -153,6 +157,7 @@ export function H3WorkflowSetup() {
             const restored = await getH3Job(next.lifecycle.test_job_id);
             if (!cancelled) setJob(restored);
           } else if (saved.test?.import_id === saved.importId) {
+            testInFlight.current = true;
             setTest(saved.test);
           }
         }
@@ -160,7 +165,7 @@ export function H3WorkflowSetup() {
         if (!cancelled)
           setError(err instanceof Error ? err.message : String(err));
       } finally {
-        if (!cancelled) setOperation("idle");
+        if (!cancelled) setOperation(testInFlight.current ? "testing" : "idle");
       }
     })();
     return () => {
@@ -169,12 +174,17 @@ export function H3WorkflowSetup() {
   }, []);
   useEffect(() => {
     let cancelled = false;
-    setPicture("");
-    setVoice("");
-    setPictures([]);
-    setVoices([]);
+    if (libraryProject.current !== projectId) {
+      libraryProject.current = projectId;
+      setPicture("");
+      setVoice("");
+      setPictures([]);
+      setVoices([]);
+    }
     setLibraryError(null);
-    if (!projectId) return;
+    setLibraryLoading(false);
+    if (!active || !projectId) return;
+    setLibraryLoading(true);
     Promise.all(
       [...PICTURE_KINDS, "voices" as LibraryKind].map((kind) =>
         listLibraryAssets(kind, projectId, true),
@@ -182,7 +192,7 @@ export function H3WorkflowSetup() {
     )
       .then((groups) => {
         if (!cancelled) {
-          setPictures([
+          const nextPictures = [
             ...new Map(
               groups
                 .slice(0, 5)
@@ -194,11 +204,17 @@ export function H3WorkflowSetup() {
                 )
                 .map((asset) => [asset.id, asset]),
             ).values(),
-          ]);
-          setVoices(
-            groups[5].filter(
-              (asset) => asset.meta?.h3_ready && asset.files.reference,
-            ),
+          ];
+          const nextVoices = groups[5].filter(
+            (asset) => asset.meta?.h3_ready && asset.files.reference,
+          );
+          setPictures(nextPictures);
+          setVoices(nextVoices);
+          setPicture((current) =>
+            nextPictures.some((asset) => asset.id === current) ? current : "",
+          );
+          setVoice((current) =>
+            nextVoices.some((asset) => asset.id === current) ? current : "",
           );
         }
       })
@@ -207,11 +223,14 @@ export function H3WorkflowSetup() {
           setLibraryError(
             `Could not load test assets: ${err instanceof Error ? err.message : String(err)}`,
           );
+      })
+      .finally(() => {
+        if (!cancelled) setLibraryLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, active, assetRefresh]);
 
   useEffect(() => {
     if (!test || !analysis) return;
@@ -219,6 +238,7 @@ export function H3WorkflowSetup() {
     let timer: ReturnType<typeof setTimeout>;
     let evidenceAttempts = 0;
     const poll = async () => {
+      let terminal = false;
       try {
         const nextJob = await getH3Job(test.job_id);
         if (cancelled) return;
@@ -228,6 +248,7 @@ export function H3WorkflowSetup() {
           timer = setTimeout(poll, 2000);
           return;
         }
+        terminal = true;
         if (nextJob.status !== "succeeded")
           throw new Error(
             nextJob.error || `Test ${nextJob.status}. Run the test again.`,
@@ -262,11 +283,13 @@ export function H3WorkflowSetup() {
         applyAnalysis(current);
         remember(current.import_id);
         setTest(null);
+        testInFlight.current = false;
         setOperation("idle");
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
-          setOperation("idle");
+          testInFlight.current = !terminal;
+          setOperation(terminal ? "idle" : "testing");
         }
       }
     };
@@ -304,8 +327,31 @@ export function H3WorkflowSetup() {
     );
   const canTest =
     !busy &&
+    !libraryLoading &&
     !dirty &&
     Boolean(picture && analysis && ["validated", "tested"].includes(stage));
+  async function startProfileTest() {
+    if (!analysis || !canTest || testInFlight.current) return;
+    testInFlight.current = true;
+    setOperation("testing");
+    setError(null);
+    setTest(null);
+    setJob(null);
+    setStage("validated");
+    try {
+      const run = await testH3Import(
+        analysis.import_id,
+        picture,
+        mapping?.audio_input_pattern ? voice || null : null,
+      );
+      remember(analysis.import_id, run);
+      setTest(run);
+    } catch (err) {
+      testInFlight.current = false;
+      setError(err instanceof Error ? err.message : String(err));
+      setOperation("idle");
+    }
+  }
   const editMapping = (value: H3Mapping) => {
     setMapping(value);
     setDirty(true);
@@ -385,7 +431,11 @@ export function H3WorkflowSetup() {
             <button
               type="button"
               className="btn secondary"
-              disabled={busy || selectedProfile === profiles.active.profile_id}
+              disabled={
+                busy ||
+                (selectedProfile === profiles.active.profile_id &&
+                  !profiles.active.warning)
+              }
               onClick={() =>
                 void perform("selecting", async () => {
                   const result = await selectH3Profile(selectedProfile);
@@ -658,6 +708,21 @@ export function H3WorkflowSetup() {
               {libraryError}
             </p>
           ) : null}
+          <div className="actions">
+            <button
+              type="button"
+              className="btn secondary"
+              disabled={!projectId || libraryLoading}
+              onClick={() => setAssetRefresh((version) => version + 1)}
+            >
+              Refresh assets
+            </button>
+          </div>
+          {libraryLoading ? (
+            <p className="field-hint" role="status">
+              Refreshing assets…
+            </p>
+          ) : null}
           <div className="workflow-test-assets">
             <label className="field">
               <span>Picture for test</span>
@@ -695,21 +760,7 @@ export function H3WorkflowSetup() {
               type="button"
               className="btn secondary"
               disabled={!canTest}
-              onClick={() =>
-                analysis &&
-                void perform("testing", async () => {
-                  setTest(null);
-                  setJob(null);
-                  setStage("validated");
-                  const run = await testH3Import(
-                    analysis.import_id,
-                    picture,
-                    mapping?.audio_input_pattern ? voice || null : null,
-                  );
-                  remember(analysis.import_id, run);
-                  setTest(run);
-                })
-              }
+              onClick={() => void startProfileTest()}
             >
               Run test
             </button>
@@ -730,7 +781,7 @@ export function H3WorkflowSetup() {
             >
               Activate profile
             </button>
-            {test && !busy && error ? (
+            {test && error ? (
               <button
                 type="button"
                 className="btn secondary"

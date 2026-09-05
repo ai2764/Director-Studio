@@ -36,7 +36,7 @@ vi.mock("../shared/project/ProjectPicker", () => ({
 }));
 
 vi.mock("../features/settings/WorkflowSettingsPage", () => ({
-  WorkflowSettingsPage: () => <h1>Workflow settings</h1>,
+  WorkflowSettingsPage: ({ active }: { active?: boolean }) => <h1 data-active={String(active)}>Workflow settings</h1>,
 }));
 
 vi.mock("../shared/api/client", () => ({
@@ -133,6 +133,7 @@ describe("App mode routing", () => {
     expect(screen.getByRole("navigation", { name: "Project workflow" }).contains(settings)).toBe(false);
     fireEvent.click(settings);
     expect(await screen.findByRole("heading", { name: "Workflow settings" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Workflow settings" }).getAttribute("data-active")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Director" }));
     expect(screen.queryByRole("heading", { name: "Workflow settings" })).toBeNull();
   });

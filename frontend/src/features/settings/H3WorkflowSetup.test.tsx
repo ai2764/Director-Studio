@@ -398,3 +398,172 @@ it("waits for durable evidence and offers recovery if job success was not record
   );
   vi.useRealTimers();
 });
+
+it("locks test submission and workflow edits across deferred first and subsequent status requests", async () => {
+  const base = vi.mocked(fetch).getMockImplementation()!;
+  const pending: ((response: Response) => void)[] = [];
+  vi.mocked(fetch).mockImplementation((url, init) =>
+    String(url).includes("/jobs/")
+      ? new Promise<Response>((resolve) => pending.push(resolve))
+      : base(url, init),
+  );
+  render(<H3WorkflowSetup />);
+  await startTest();
+  await waitFor(() => expect(pending).toHaveLength(1));
+  const run = screen.getByRole("button", {
+    name: "Run test",
+  }) as HTMLButtonElement;
+  expect(run.disabled).toBe(true);
+  expect(
+    (screen.getByRole("button", { name: "Save mapping" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  expect(
+    (screen.getByLabelText("Import H3 API workflow") as HTMLInputElement)
+      .disabled,
+  ).toBe(true);
+  fireEvent.click(run);
+  expect(requested.filter((item) => item.url.endsWith("/test"))).toHaveLength(
+    1,
+  );
+  vi.useFakeTimers();
+  await act(async () => {
+    pending[0](
+      new Response(
+        JSON.stringify({ id: "job-1", status: "running", outputs: {} }),
+      ),
+    );
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+  expect(pending).toHaveLength(2);
+  expect(run.disabled).toBe(true);
+  await act(async () => {
+    pending[1](
+      new Response(
+        JSON.stringify({
+          id: "job-1",
+          status: "failed",
+          error: "Test failed",
+          outputs: {},
+        }),
+      ),
+    );
+  });
+  expect(run.disabled).toBe(false);
+});
+
+it("refreshes Picture and Voice choices when Settings becomes active without restarting test polling", async () => {
+  const base = vi.mocked(fetch).getMockImplementation()!;
+  let newAssets = false;
+  let finishJob: ((response: Response) => void) | undefined;
+  let jobRequests = 0;
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (String(url).includes("/jobs/")) {
+      jobRequests += 1;
+      return new Promise<Response>((resolve) => {
+        finishJob = resolve;
+      });
+    }
+    if (newAssets && String(url).startsWith("/api/library?"))
+      return new Response(
+        JSON.stringify([
+          {
+            id: String(url).includes("voices") ? "voice-2" : "picture-2",
+            name: String(url).includes("voices") ? "New Voice" : "New Picture",
+            files: { master: "master.png", reference: "voice.wav" },
+            meta: { h3_ready: true },
+          },
+        ]),
+      );
+    return base(url, init);
+  });
+  const view = render(<H3WorkflowSetup active />);
+  await startTest();
+  await waitFor(() => expect(jobRequests).toBe(1));
+  view.rerender(<H3WorkflowSetup active={false} />);
+  newAssets = true;
+  view.rerender(<H3WorkflowSetup active />);
+  expect(
+    await screen.findByRole("option", { name: "New Picture" }),
+  ).toBeTruthy();
+  expect(screen.getByRole("option", { name: "New Voice" })).toBeTruthy();
+  expect(jobRequests).toBe(1);
+  expect(
+    (screen.getByRole("button", { name: "Run test" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  lifecycle = { ...lifecycle, status: "tested", test_job_id: "job-1" };
+  await act(async () => {
+    finishJob!(
+      new Response(
+        JSON.stringify({
+          id: "job-1",
+          status: "succeeded",
+          outputs: { video: { url: "/test.mp4" } },
+        }),
+      ),
+    );
+  });
+  expect(await screen.findByText("Tested")).toBeTruthy();
+});
+
+it("offers asset refresh after a library request fails", async () => {
+  const base = vi.mocked(fetch).getMockImplementation()!;
+  let unavailable = true;
+  vi.mocked(fetch).mockImplementation((url, init) =>
+    unavailable && String(url).startsWith("/api/library?")
+      ? Promise.reject(new Error("Library unavailable"))
+      : base(url, init),
+  );
+  render(<H3WorkflowSetup />);
+  await screen.findByText("Could not load test assets: Library unavailable");
+  unavailable = false;
+  fireEvent.click(screen.getByRole("button", { name: "Refresh assets" }));
+  expect(
+    await screen.findByRole("option", { name: "Test portrait" }),
+  ).toBeTruthy();
+  expect(
+    screen.queryByText("Could not load test assets: Library unavailable"),
+  ).toBeNull();
+});
+
+it("explicitly selects Official during fallback to clear the broken custom pointer", async () => {
+  const base = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((url, init) =>
+    String(url) === "/api/workflow-profiles/h3"
+      ? Promise.resolve(
+          new Response(
+            JSON.stringify({
+              active: {
+                ...active,
+                warning: {
+                  code: "custom_profile_unavailable",
+                  message: "Custom workflow hash changed",
+                },
+              },
+              profiles: [{ ...active, status: "active" }],
+            }),
+          ),
+        )
+      : base(url, init),
+  );
+  render(<H3WorkflowSetup />);
+  await screen.findByText("Using Built-in Official H3");
+  const useProfile = screen.getByRole("button", {
+    name: "Use profile",
+  }) as HTMLButtonElement;
+  expect(useProfile.disabled).toBe(false);
+  fireEvent.click(useProfile);
+  await waitFor(() =>
+    expect(screen.queryByText("Using Built-in Official H3")).toBeNull(),
+  );
+  expect(
+    JSON.parse(
+      String(
+        requested.find((item) => item.url.endsWith("/select"))?.init?.body,
+      ),
+    ),
+  ).toEqual({ profile_id: "builtin-official-h3" });
+});
