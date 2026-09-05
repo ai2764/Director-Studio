@@ -14,6 +14,8 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.config import settings
+from app.core.jobs.store import job_dir
+from app.core.schemas import JobRecord
 
 from .errors import ProfileChangedError, ProfileStorageError, ProfileWarning
 from .models import H3BoundaryMapping, H3WorkflowProfile, ResolvedH3Profile
@@ -24,6 +26,7 @@ _BUILTIN_PROFILE_ID = "builtin-official-h3"
 _WORKFLOW_FILE = "workflow.api.json"
 _PROFILE_FILE = "profile.json"
 _ACTIVE_FILE = "active.json"
+_JOB_SNAPSHOT_DIR = "workflow_profile"
 _H3_REF2AV_NODE = "MiniMaxH3ReferenceToVideo"
 _H3_I2V_NODE = "MiniMaxH3ImageToVideo"
 
@@ -141,6 +144,90 @@ class H3ProfileStore:
             return self._fallback("profile_changed", str(exc))
         except (ProfileStorageError, ValidationError, OSError, TypeError) as exc:
             return self._fallback("profile_unavailable", str(exc))
+
+    def snapshot_for_job(self, job: JobRecord) -> ResolvedH3Profile:
+        """Atomically capture the currently resolved profile for one local H3 job."""
+        resolved = self.resolve_active()
+        if resolved.source == "builtin":
+            workflow_path = Path(settings.workflows_dir) / "h3_ref2va.api.json"
+            profile = H3WorkflowProfile(
+                id=resolved.profile_id,
+                workflow_sha256=resolved.workflow_sha256,
+                mapping=resolved.mapping,
+                status="active",
+            )
+            profile_bytes = self._json_bytes(profile.model_dump(mode="json"))
+        else:
+            workflow_path = self.workflow_path(resolved.profile_id)
+            profile_path = self.profile_path(resolved.profile_id)
+            try:
+                profile_bytes = profile_path.read_bytes()
+            except OSError as exc:
+                raise ProfileStorageError(
+                    "Could not read active profile while snapshotting the job"
+                ) from exc
+            try:
+                source_profile = H3WorkflowProfile.model_validate(
+                    self._parse_json(profile_bytes, profile_path.name)
+                )
+            except ValidationError as exc:
+                raise ProfileStorageError(
+                    "Active profile metadata changed while snapshotting the job"
+                ) from exc
+            if (
+                source_profile.id != resolved.profile_id
+                or source_profile.workflow_sha256 != resolved.workflow_sha256
+                or source_profile.mapping != resolved.mapping
+            ):
+                raise ProfileChangedError(
+                    "Active profile metadata changed while snapshotting the job"
+                )
+
+        try:
+            workflow_bytes = workflow_path.read_bytes()
+        except OSError as exc:
+            raise ProfileStorageError(
+                "Could not read active workflow while snapshotting the job"
+            ) from exc
+        if self._sha256(workflow_bytes) != resolved.workflow_sha256:
+            raise ProfileChangedError(
+                "Active workflow changed while snapshotting the job"
+            )
+
+        snapshot_dir = job_dir(job.id, project_id=job.project_id) / _JOB_SNAPSHOT_DIR
+        self._atomic_write_bytes(snapshot_dir / _WORKFLOW_FILE, workflow_bytes)
+        self._atomic_write_bytes(snapshot_dir / _PROFILE_FILE, profile_bytes)
+        job.params = dict(job.params or {})
+        job.params.update(
+            {
+                "h3_profile_id": resolved.profile_id,
+                "h3_profile_sha256": resolved.workflow_sha256,
+                "h3_contract_version": 1,
+            }
+        )
+        return resolved
+
+    def load_job_snapshot(self, job_id: str) -> ResolvedH3Profile:
+        """Load and verify the immutable profile snapshot captured for a job."""
+        snapshot_dir = job_dir(job_id) / _JOB_SNAPSHOT_DIR
+        profile_path = snapshot_dir / _PROFILE_FILE
+        workflow_path = snapshot_dir / _WORKFLOW_FILE
+        profile_data = self._read_json(profile_path)
+        try:
+            profile = H3WorkflowProfile.model_validate(profile_data)
+        except ValidationError as exc:
+            raise ProfileStorageError("Job profile snapshot metadata is invalid") from exc
+        workflow, workflow_hash = self._read_workflow(workflow_path)
+        if profile.workflow_sha256 != workflow_hash:
+            raise ProfileChangedError("Job workflow profile snapshot hash does not match")
+        self._assert_pure_ref2av(workflow)
+        return ResolvedH3Profile(
+            profile_id=profile.id,
+            workflow=workflow,
+            mapping=profile.mapping,
+            workflow_sha256=workflow_hash,
+            source="builtin" if profile.id == _BUILTIN_PROFILE_ID else "custom",
+        )
 
     def _resolve_builtin(self) -> ResolvedH3Profile:
         path = Path(settings.workflows_dir) / "h3_ref2va.api.json"
@@ -296,3 +383,13 @@ class H3ProfileStore:
 def resolve_active_h3_profile() -> ResolvedH3Profile:
     """Resolve the active H3 profile for a newly submitted local H3 job."""
     return H3ProfileStore().resolve_active()
+
+
+def snapshot_profile_for_job(job: JobRecord) -> ResolvedH3Profile:
+    """Capture the active H3 profile before a local job enters the queue."""
+    return H3ProfileStore().snapshot_for_job(job)
+
+
+def load_job_profile_snapshot(job_id: str) -> ResolvedH3Profile:
+    """Resolve a job's captured H3 profile without consulting the active pointer."""
+    return H3ProfileStore().load_job_snapshot(job_id)

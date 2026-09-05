@@ -17,6 +17,12 @@ from ...core.h3.prompt import (
     validate_required_picture_bindings,
 )
 from ...core.schemas import ComfyImageRef, JobRecord
+from ...workflow_profiles.h3 import (
+    ResolvedH3Profile,
+    load_job_profile_snapshot,
+    resolve_active_h3_profile,
+    snapshot_profile_for_job,
+)
 from ..base import Pipeline
 from . import workflow
 
@@ -46,6 +52,27 @@ class H3Ref2VaPipeline(Pipeline):
                 return "comfy_mcp"
             return "h3_api"
         return self.execution_adapter_id
+
+    def prepare_job_submission(self, job: JobRecord) -> None:
+        """Snapshot local workflow state before the job can enter the queue."""
+        if self.execution_adapter_id_for_job(job) == "h3_api":
+            return
+        snapshot_profile_for_job(job)
+
+    @staticmethod
+    def _profile_for_job(job: JobRecord) -> ResolvedH3Profile:
+        params = job.params or {}
+        expected_id = params.get("h3_profile_id")
+        expected_hash = params.get("h3_profile_sha256")
+        expected_contract = params.get("h3_contract_version")
+        if not expected_id and not expected_hash and expected_contract is None:
+            return resolve_active_h3_profile()
+        profile = load_job_profile_snapshot(job.id)
+        if profile.profile_id != expected_id or profile.workflow_sha256 != expected_hash:
+            raise ValueError("H3 job profile snapshot does not match its job record")
+        if expected_contract != 1:
+            raise ValueError("H3 job profile snapshot contract version is unsupported")
+        return profile
 
     @staticmethod
     def _provider_name() -> str:
@@ -158,6 +185,7 @@ class H3Ref2VaPipeline(Pipeline):
             native_audio_name = uploaded_images.get(str(native_audio_key))
 
         output_prefix = p.get("output_prefix")
+        profile = self._profile_for_job(job)
         return workflow.build_ref2va_prompt(
             prompt=prompt_text,
             dialogue=[str(x) for x in dialogue],
@@ -170,6 +198,7 @@ class H3Ref2VaPipeline(Pipeline):
             seed=job.seed,
             output_prefix=output_prefix,
             job_id=job.id,
+            profile=profile,
         )
 
     def build_api_payload(
@@ -378,7 +407,8 @@ class H3Ref2VaPipeline(Pipeline):
         *,
         job: JobRecord | None = None,
     ) -> dict[str, ComfyImageRef]:
-        return workflow.map_history_outputs(history)
+        profile = self._profile_for_job(job) if job is not None else None
+        return workflow.map_history_outputs(history, profile=profile)
 
     def library_input_keys(self) -> list[str]:
         return []

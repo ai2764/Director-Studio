@@ -32,6 +32,9 @@ class H3Ref2VaJobResponse(BaseModel):
     json_shot_id: str | None = None
     json_storyboard_revision: int | None = None
     h3_provider: str = "local"
+    h3_profile_id: str | None = None
+    h3_profile_sha256: str | None = None
+    h3_contract_version: int | None = None
 
     @classmethod
     def from_job(cls, job: JobRecord) -> H3Ref2VaJobResponse:
@@ -77,6 +80,9 @@ class H3Ref2VaJobResponse(BaseModel):
             json_shot_id=p.get("json_shot_id") or None,
             json_storyboard_revision=revision_i,
             h3_provider=str(p.get("h3_provider") or "local"),
+            h3_profile_id=p.get("h3_profile_id") or None,
+            h3_profile_sha256=p.get("h3_profile_sha256") or None,
+            h3_contract_version=p.get("h3_contract_version"),
         )
 
 

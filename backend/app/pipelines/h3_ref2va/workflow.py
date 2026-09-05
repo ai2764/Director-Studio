@@ -5,12 +5,18 @@ from __future__ import annotations
 import copy
 import json
 import random
+import re
 from typing import Any
 
 from ...config import settings
 from ...core.h3.frames import validate_frame_count
 from ...core.h3.prompt import validate_h3_prompt
 from ...core.schemas import ComfyImageRef
+from ...workflow_profiles.h3 import (
+    H3BoundaryMapping,
+    ResolvedH3Profile,
+    resolve_active_h3_profile,
+)
 
 H3_REF_NODE = "MiniMaxH3ReferenceToVideo"
 H3_I2V_NODE = "MiniMaxH3ImageToVideo"
@@ -120,8 +126,18 @@ def _assert_pure_ref2va(graph: dict[str, Any]) -> None:
             )
 
 
-def fill_ref2va_graph(graph: dict[str, Any], job_params: dict[str, Any]) -> dict[str, Any]:
-    """Inject only Director Studio job boundaries into the official graph."""
+def _dynamic_input_regex(pattern: str) -> re.Pattern[str]:
+    if pattern.count("{index}") != 1:
+        raise ValueError("dynamic input pattern must contain exactly one {index}")
+    before, after = pattern.split("{index}")
+    return re.compile(rf"{re.escape(before)}\d+{re.escape(after)}\Z")
+
+
+def fill_profile_graph(
+    profile: ResolvedH3Profile,
+    job_params: dict[str, Any],
+) -> dict[str, Any]:
+    """Fill only the application-owned boundary declared by an H3 profile."""
     images = list(job_params.get("images") or [])
     audios = list(job_params.get("audios") or [])
     if len(images) > MAX_REF_IMAGES:
@@ -148,16 +164,16 @@ def fill_ref2va_graph(graph: dict[str, Any], job_params: dict[str, Any]) -> dict
         raise ValueError("frames is required")
     frames = validate_frame_count(int(frames))
 
-    filled = copy.deepcopy(graph)
+    filled = copy.deepcopy(profile.workflow)
     _assert_pure_ref2va(filled)
-    h3_id = _require_unique_node_id(filled, H3_REF_NODE)
-    noise_id = _require_unique_node_id(filled, "RandomNoise")
-    save_id = _require_unique_node_id(filled, "SaveVideo")
-
-    h3_inputs = filled[h3_id].setdefault("inputs", {})
+    binding = profile.mapping
+    h3_inputs = filled[binding.h3_node_id].setdefault("inputs", {})
+    dynamic_patterns = [_dynamic_input_regex(binding.picture_input_pattern)]
+    if binding.audio_input_pattern is not None:
+        dynamic_patterns.append(_dynamic_input_regex(binding.audio_input_pattern))
     for key in list(h3_inputs):
-        if key.startswith(
-            ("ref_images.", "ref_audios.", "ref_videos.", "ref_video_audios.")
+        if any(pattern.fullmatch(key) for pattern in dynamic_patterns) or key.startswith(
+            ("ref_videos.", "ref_video_audios.")
         ):
             del h3_inputs[key]
 
@@ -171,12 +187,10 @@ def fill_ref2va_graph(graph: dict[str, Any], job_params: dict[str, Any]) -> dict
         if seed < 0 or seed > MAX_COMFY_SEED:
             raise ValueError(f"seed must be in [0, {MAX_COMFY_SEED}]")
 
-    h3_inputs["prompt"] = prompt
-    h3_inputs["width"] = width
-    h3_inputs["height"] = height
-    h3_inputs["length"] = frames
-    if job_params.get("ref_image_size"):
-        h3_inputs["ref_image_size"] = str(job_params["ref_image_size"])
+    h3_inputs[binding.prompt_input] = prompt
+    h3_inputs[binding.width_input] = width
+    h3_inputs[binding.height_input] = height
+    h3_inputs[binding.frames_input] = frames
 
     next_id = _next_node_id(filled)
     for index, image_name in enumerate(images):
@@ -187,8 +201,11 @@ def fill_ref2va_graph(graph: dict[str, Any], job_params: dict[str, Any]) -> dict
             "inputs": {"image": image_name},
             "_meta": {"title": f"Ref Image {index}"},
         }
-        h3_inputs[f"ref_images.ref_image_{index}"] = [node_id, 0]
+        input_name = binding.picture_input_pattern.format(index=index)
+        h3_inputs[input_name] = [node_id, 0]
 
+    if audios and binding.audio_input_pattern is None:
+        raise ValueError("active H3 workflow profile does not support reference audio")
     for index, audio_name in enumerate(audios):
         node_id = str(next_id)
         next_id += 1
@@ -197,17 +214,45 @@ def fill_ref2va_graph(graph: dict[str, Any], job_params: dict[str, Any]) -> dict
             "inputs": {"audio": audio_name},
             "_meta": {"title": f"Ref Audio {index}"},
         }
-        h3_inputs[f"ref_audios.ref_audio_{index}"] = [node_id, 0]
+        input_name = binding.audio_input_pattern.format(index=index)
+        h3_inputs[input_name] = [node_id, 0]
 
     if seed is not None:
-        filled[noise_id].setdefault("inputs", {})["noise_seed"] = seed
+        filled[binding.seed_node_id].setdefault("inputs", {})[binding.seed_input] = seed
     output_prefix = job_params.get("output_prefix")
     if output_prefix:
-        filled[save_id].setdefault("inputs", {})["filename_prefix"] = str(
-            output_prefix
-        )
+        filled[binding.saver_node_id].setdefault("inputs", {})[
+            binding.output_prefix_input
+        ] = str(output_prefix)
 
     return filled
+
+
+def fill_ref2va_graph(graph: dict[str, Any], job_params: dict[str, Any]) -> dict[str, Any]:
+    """Backward-compatible fill for an official-shaped Ref2AV graph."""
+    mapping = H3BoundaryMapping(
+        h3_node_id=_require_unique_node_id(graph, H3_REF_NODE),
+        prompt_input="prompt",
+        width_input="width",
+        height_input="height",
+        frames_input="length",
+        picture_input_pattern="ref_images.ref_image_{index}",
+        audio_input_pattern="ref_audios.ref_audio_{index}",
+        seed_node_id=_require_unique_node_id(graph, "RandomNoise"),
+        seed_input="noise_seed",
+        saver_node_id=_require_unique_node_id(graph, "SaveVideo"),
+        output_prefix_input="filename_prefix",
+    )
+    return fill_profile_graph(
+        ResolvedH3Profile(
+            profile_id="legacy-official-graph",
+            workflow=graph,
+            mapping=mapping,
+            workflow_sha256="",
+            source="builtin",
+        ),
+        job_params,
+    )
 
 
 def build_ref2va_prompt(
@@ -223,8 +268,9 @@ def build_ref2va_prompt(
     seed: int | None = None,
     output_prefix: str | None = None,
     job_id: str | None = None,
+    profile: ResolvedH3Profile | None = None,
 ) -> tuple[dict[str, Any], int]:
-    """Load the official graph, inject job boundaries, and return it with seed."""
+    """Fill a resolved profile graph and return it with the job's concrete seed."""
     resolved_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
     if output_prefix is None and job_id:
         safe = "".join(
@@ -235,8 +281,8 @@ def build_ref2va_prompt(
     elif output_prefix is None:
         output_prefix = "director-studio/h3_ref2va"
 
-    filled = fill_ref2va_graph(
-        load_base_prompt(),
+    filled = fill_profile_graph(
+        profile or resolve_active_h3_profile(),
         {
             "prompt": prompt,
             "dialogue": list(dialogue or []),
@@ -253,30 +299,22 @@ def build_ref2va_prompt(
     return filled, resolved_seed
 
 
-def map_history_outputs(history: dict[str, Any]) -> dict[str, ComfyImageRef]:
-    """Map the official SaveVideo output to logical key ``video``."""
+def map_history_outputs(
+    history: dict[str, Any],
+    *,
+    profile: ResolvedH3Profile | None = None,
+) -> dict[str, ComfyImageRef]:
+    """Map the profile's declared saver output to logical key ``video``."""
     outputs = history.get("outputs") or {}
-
-    def _pick_media(node_out: dict[str, Any]) -> dict[str, Any] | None:
-        for key in ("videos", "gifs", "images", "audio"):
-            items = node_out.get(key) or []
-            if items:
-                return items[-1]
-        return None
-
-    ordered_node_outputs: list[dict[str, Any]] = []
-    official_output = outputs.get(NODE_SAVE) or outputs.get(str(NODE_SAVE))
-    if isinstance(official_output, dict):
-        ordered_node_outputs.append(official_output)
-    ordered_node_outputs.extend(
-        node_output
-        for node_id, node_output in outputs.items()
-        if str(node_id) != NODE_SAVE and isinstance(node_output, dict)
-    )
-
-    for node_output in ordered_node_outputs:
-        media = _pick_media(node_output)
-        if media:
+    saver_id = profile.mapping.saver_node_id if profile else NODE_SAVE
+    output_fields = profile.mapping.output_fields if profile else ("videos",)
+    node_output = outputs.get(saver_id) or outputs.get(str(saver_id))
+    if not isinstance(node_output, dict):
+        return {}
+    for field in output_fields:
+        items = node_output.get(field) or []
+        if items:
+            media = items[-1]
             return {
                 "video": ComfyImageRef(
                     filename=media.get("filename") or "",

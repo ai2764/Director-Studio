@@ -162,6 +162,10 @@ async def start_pipeline_job(
         )
 
     pipeline = get_pipeline(job.pipeline_id)
+    prepare_submission = getattr(pipeline, "prepare_job_submission", None)
+    if callable(prepare_submission):
+        prepare_submission(job)
+    store.save_job(job)
     labels = (
         pipeline.labels_for_job(job)
         if hasattr(pipeline, "labels_for_job")

@@ -11,11 +11,13 @@ from app.core.schemas import JobRecord, JobStatus
 from app.pipelines.h3_ref2va.pipeline import H3Ref2VaPipeline
 from app.pipelines.h3_ref2va.schemas import H3Ref2VaJobResponse
 from app.pipelines.h3_ref2va.workflow import (
+    fill_profile_graph,
     fill_ref2va_graph,
     load_base_prompt,
     map_history_outputs,
     minimal_graph,
 )
+from app.workflow_profiles.h3 import H3BoundaryMapping, ResolvedH3Profile
 
 
 VALID_PROMPT = (
@@ -298,3 +300,44 @@ def test_fill_requires_unique_boundary_nodes():
 
     with pytest.raises(RuntimeError, match="exactly one RandomNoise"):
         fill_ref2va_graph(graph, _base_job())
+
+
+def test_profile_output_fields_control_history_mapping():
+    graph = minimal_graph()
+    mapping = H3BoundaryMapping(
+        h3_node_id="10",
+        prompt_input="prompt",
+        width_input="width",
+        height_input="height",
+        frames_input="length",
+        picture_input_pattern="ref_images.ref_image_{index}",
+        audio_input_pattern="ref_audios.ref_audio_{index}",
+        seed_node_id="11",
+        seed_input="noise_seed",
+        saver_node_id="19",
+        output_prefix_input="filename_prefix",
+        output_fields=("gifs",),
+    )
+    profile = ResolvedH3Profile(
+        profile_id="gif-output",
+        workflow=graph,
+        mapping=mapping,
+        workflow_sha256="0" * 64,
+        source="custom",
+    )
+
+    filled = fill_profile_graph(profile, _base_job())
+    mapped = map_history_outputs(
+        {
+            "outputs": {
+                "19": {
+                    "videos": [{"filename": "wrong.mp4"}],
+                    "gifs": [{"filename": "right.webp"}],
+                }
+            }
+        },
+        profile=profile,
+    )
+
+    assert filled["19"]["inputs"]["filename_prefix"] == "director-studio/h3/sht1"
+    assert mapped["video"].filename == "right.webp"
