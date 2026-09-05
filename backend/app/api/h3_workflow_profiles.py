@@ -19,6 +19,13 @@ from ..workflow_profiles.h3 import (
     ProfileStorageError,
     ResolvedH3Profile,
 )
+from ..workflow_profiles.h3.agent import (
+    AgentConfigurationError,
+    ContractError,
+)
+from ..workflow_profiles.h3.agent import (
+    propose_h3_mapping as _propose_h3_mapping,
+)
 from ..workflow_profiles.h3.inspector import MAX_WORKFLOW_BYTES, inspect_h3_workflow
 from ..workflow_profiles.h3.validator import validate_h3_contract
 
@@ -179,6 +186,23 @@ def save_h3_import_mapping(
     except ProfileStorageError as exc:
         return _store_error(exc)
     return {"import_id": import_id, "mapping": body.model_dump(mode="json")}
+
+
+@router.post("/imports/{import_id:path}/propose-mapping", response_model=None)
+async def propose_h3_mapping(import_id: str) -> dict[str, Any] | JSONResponse:
+    """Return untrusted mapping advice without accepting or activating it."""
+    try:
+        proposal = await _propose_h3_mapping(import_id)
+    except ProfileStorageError as exc:
+        return _store_error(exc)
+    except AgentConfigurationError as exc:
+        return _error(503, "director_model_not_configured", str(exc))
+    except ContractError as exc:
+        return _error(422, "contract_error", str(exc), {"import_id": import_id})
+    return {
+        "import_id": import_id,
+        **proposal.model_dump(mode="json"),
+    }
 
 
 @router.post("/imports/{import_id:path}/validate", response_model=None)
