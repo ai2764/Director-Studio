@@ -9,7 +9,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import settings
+from app.core.jobs.store import build_output_slots, create_job, save_job
+from app.core.schemas import JobStatus
 from app.main import create_app
+from app.pipelines.h3_ref2va.pipeline import H3Ref2VaPipeline
 from app.workflow_profiles.h3 import H3ProfileStore, ProfileChangedError
 
 
@@ -21,6 +24,8 @@ def sample_api_json() -> bytes:
 @pytest.fixture
 def profile_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(settings, "workflow_profiles_dir", tmp_path / "profiles")
+    monkeypatch.setattr(settings, "jobs_dir", tmp_path / "jobs")
+    monkeypatch.setattr(settings, "projects_dir", tmp_path / "projects")
 
     class ValidatingClient:
         async def validate_workflow(self, graph):
@@ -50,11 +55,31 @@ def _import(profile_client: TestClient, workflow: bytes) -> str:
 def _mark_test_succeeded(import_id: str) -> None:
     store = H3ProfileStore()
     workflow_sha256, mapping_sha256 = store.import_identity(import_id)
+    job = create_job(
+        pipeline_id="h3_ref2va",
+        asset_kind="productions",
+        name="profile API test",
+        params={
+            "h3_provider": "local",
+            "h3_profile_test": True,
+            "h3_profile_import_id": import_id,
+            "h3_profile_test_workflow_sha256": workflow_sha256,
+            "h3_profile_test_mapping_sha256": mapping_sha256,
+        },
+        seed=42,
+        fixed_seed=True,
+    )
+    H3Ref2VaPipeline().prepare_job_submission(job)
+    video = settings.jobs_dir / job.id / "outputs" / "video.mp4"
+    video.write_bytes(b"mapped-video")
+    job.outputs = build_output_slots(job.id, {"video": video})
+    job.status = JobStatus.succeeded
+    save_job(job)
     store.record_test_success(
         import_id,
         workflow_sha256=workflow_sha256,
         mapping_sha256=mapping_sha256,
-        job_id="job_profile_test",
+        job_id=job.id,
     )
 
 

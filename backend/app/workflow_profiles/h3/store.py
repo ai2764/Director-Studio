@@ -179,9 +179,9 @@ class H3ProfileStore:
         *,
         workflow_sha256: str,
         mapping_sha256: str,
-        job_id: str | None = None,
+        job_id: str,
     ) -> dict[str, Any]:
-        """Persist trusted test-run evidence for Task 6's job completion hook."""
+        """Persist evidence only for an already durable successful test job."""
         directory = self._require_existing_import(import_id)
         current_workflow_sha256, current_mapping_sha256 = self.import_identity(
             import_id
@@ -189,6 +189,19 @@ class H3ProfileStore:
         if (
             current_workflow_sha256 != workflow_sha256
             or current_mapping_sha256 != mapping_sha256
+        ):
+            raise ProfileChangedError(
+                "Imported workflow or mapping changed during test execution"
+            )
+        self._require_successful_test_job(
+            import_id=import_id,
+            workflow_sha256=workflow_sha256,
+            mapping_sha256=mapping_sha256,
+            job_id=job_id,
+        )
+        if self.import_identity(import_id) != (
+            workflow_sha256,
+            mapping_sha256,
         ):
             raise ProfileChangedError(
                 "Imported workflow or mapping changed during test execution"
@@ -249,6 +262,19 @@ class H3ProfileStore:
                 "A successful test job is required before activation",
                 details={"import_id": import_id},
             )
+        self._require_successful_test_job(
+            import_id=import_id,
+            workflow_sha256=workflow_sha256,
+            mapping_sha256=mapping_sha256,
+            job_id=test_record["job_id"],
+        )
+        if self.import_identity(import_id) != (
+            workflow_sha256,
+            mapping_sha256,
+        ):
+            raise ProfileChangedError(
+                "Imported workflow or mapping changed during activation"
+            )
 
         from .validator import validate_h3_contract
 
@@ -277,6 +303,13 @@ class H3ProfileStore:
             validation_record=validation,
             test_record=test_record,
         )
+        if self.import_identity(import_id) != (
+            workflow_sha256,
+            mapping_sha256,
+        ):
+            raise ProfileChangedError(
+                "Imported workflow or mapping changed during activation"
+            )
         self.select_profile(profile_id)
         return profile
 
@@ -390,6 +423,102 @@ class H3ProfileStore:
                 details={"import_id": import_id},
             )
         return validation
+
+    def _require_successful_test_job(
+        self,
+        *,
+        import_id: str,
+        workflow_sha256: str,
+        mapping_sha256: str,
+        job_id: str,
+    ) -> JobRecord:
+        """Verify activation evidence against the authoritative durable job."""
+        from app.core.jobs.store import job_dir, load_job
+        from app.core.schemas import JobStatus
+
+        if not isinstance(job_id, str) or not re.fullmatch(r"job_[a-f0-9]{12}", job_id):
+            raise ProfileStateError(
+                "test_required",
+                "The referenced H3 profile test job is invalid",
+                details={"import_id": import_id},
+            )
+        job = load_job(job_id)
+        if job is None or job.status != JobStatus.succeeded:
+            raise ProfileStateError(
+                "test_required",
+                "The referenced H3 profile test job did not succeed",
+                details={"import_id": import_id, "job_id": job_id},
+            )
+        params = job.params or {}
+        if (
+            job.pipeline_id != "h3_ref2va"
+            or params.get("h3_profile_test") is not True
+            or params.get("h3_profile_import_id") != import_id
+            or params.get("h3_contract_version") != 1
+            or job.project_id is not None
+            or job.library_asset_id is not None
+            or "shot_id" in params
+            or "project_id" in params
+        ):
+            raise ProfileStateError(
+                "test_required",
+                "The referenced job is not an isolated H3 profile test job",
+                details={"import_id": import_id, "job_id": job_id},
+            )
+        if (
+            params.get("h3_profile_id") != import_id
+            or params.get("h3_profile_sha256") != workflow_sha256
+            or params.get("h3_profile_test_workflow_sha256") != workflow_sha256
+            or params.get("h3_profile_test_mapping_sha256") != mapping_sha256
+        ):
+            raise ProfileChangedError(
+                "H3 profile test job identity does not match its evidence"
+            )
+        try:
+            snapshot = self.load_job_snapshot(job_id)
+        except ProfileStorageError as exc:
+            raise ProfileStateError(
+                "test_required",
+                "The referenced H3 profile test job snapshot is unavailable",
+                details={"import_id": import_id, "job_id": job_id},
+            ) from exc
+        if (
+            snapshot.profile_id != import_id
+            or snapshot.workflow_sha256 != workflow_sha256
+            or self.mapping_sha256(snapshot.mapping) != mapping_sha256
+        ):
+            raise ProfileChangedError(
+                "H3 profile test job snapshot does not match its evidence"
+            )
+
+        video = (job.outputs or {}).get("video")
+        filename = video.filename if video is not None else None
+        if (
+            video is None
+            or not isinstance(filename, str)
+            or Path(filename).name != filename
+            or Path(filename).suffix.lower() not in {".mp4", ".webm", ".mov", ".mkv"}
+        ):
+            raise ProfileStateError(
+                "test_required",
+                "The referenced H3 profile test job has no mapped video output",
+                details={"import_id": import_id, "job_id": job_id},
+            )
+        output_path = (job_dir(job_id) / "outputs" / filename).resolve()
+        expected_url = f"/api/files/jobs/{job_id}/outputs/{filename}"
+        if (
+            not output_path.is_file()
+            or output_path.stat().st_size <= 0
+            or not video.path
+            or Path(video.path).resolve() != output_path
+            or video.url != expected_url
+        ):
+            raise ProfileStateError(
+                "test_required",
+                "The referenced H3 profile test job video is unavailable",
+                details={"import_id": import_id, "job_id": job_id},
+            )
+        return job
 
     def install_profile(
         self,

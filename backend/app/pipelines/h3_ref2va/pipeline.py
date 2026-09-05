@@ -63,13 +63,10 @@ class H3Ref2VaPipeline(Pipeline):
             return
         snapshot_profile_for_job(job)
 
-    def postprocess_job_outputs(self, job: JobRecord, saved: dict[str, Any]) -> None:
-        """Bind a downloaded setup-test video to its immutable import identity."""
+    def on_job_succeeded(self, job: JobRecord) -> None:
+        """Bind a durably succeeded setup-test job to its import identity."""
         params = job.params or {}
         if not bool(params.get("h3_profile_test")):
-            return
-        video_path = saved.get("video")
-        if video_path is None or not Path(video_path).is_file():
             return
         import_id = params.get("h3_profile_import_id")
         workflow_sha256 = params.get("h3_profile_test_workflow_sha256")
@@ -79,13 +76,6 @@ class H3Ref2VaPipeline(Pipeline):
             for value in (import_id, workflow_sha256, mapping_sha256)
         ):
             raise ValueError("H3 profile test job has no captured import identity")
-        snapshot = load_job_profile_snapshot(job.id)
-        if (
-            snapshot.profile_id != import_id
-            or snapshot.workflow_sha256 != workflow_sha256
-            or H3ProfileStore.mapping_sha256(snapshot.mapping) != mapping_sha256
-        ):
-            raise ValueError("H3 profile test snapshot identity changed")
         H3ProfileStore().record_test_success(
             import_id,
             workflow_sha256=workflow_sha256,

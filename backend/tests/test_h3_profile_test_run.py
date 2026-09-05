@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 from pathlib import Path
@@ -11,13 +12,23 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.config import settings
-from app.core.jobs.store import load_job, save_job
+from app.core.jobs.execution_adapters.comfy_mcp import (
+    ComfyMcpExecutionAdapter,
+    ComfyMcpExecutionRuntime,
+)
+from app.core.jobs.store import (
+    build_output_slots,
+    create_job,
+    load_job,
+    save_job,
+)
 from app.core.library.store import (
     asset_dir,
     create_external_asset,
     write_asset,
 )
 from app.core.schemas import JobStatus, LibraryAsset
+from app.integrations.comfy_mcp import McpOutputFile
 from app.main import create_app
 from app.pipelines.h3_ref2va.pipeline import H3Ref2VaPipeline
 from app.workflow_profiles.h3 import (
@@ -55,6 +66,96 @@ def _import_ready_profile(store: H3ProfileStore) -> str:
         comfy_payload={"valid": True, "error_count": 0, "warnings": []},
     )
     return import_id
+
+
+def _profile_test_job(store: H3ProfileStore, import_id: str):
+    workflow_sha256, mapping_sha256 = store.import_identity(import_id)
+    job = create_job(
+        pipeline_id="h3_ref2va",
+        asset_kind="productions",
+        name="profile adapter test",
+        params={
+            "h3_provider": "local",
+            "h3_profile_test": True,
+            "h3_profile_import_id": import_id,
+            "h3_profile_test_workflow_sha256": workflow_sha256,
+            "h3_profile_test_mapping_sha256": mapping_sha256,
+        },
+        seed=42,
+        fixed_seed=True,
+    )
+    H3Ref2VaPipeline().prepare_job_submission(job)
+    job.status = JobStatus.running
+    job.comfy_prompt_id = "prompt_profile_test"
+    save_job(job)
+    return job
+
+
+def _durable_success_job(store: H3ProfileStore, import_id: str):
+    job = _profile_test_job(store, import_id)
+    video = settings.jobs_dir / job.id / "outputs" / "video.mp4"
+    video.write_bytes(b"mapped-video")
+    job.outputs = build_output_slots(job.id, {"video": video})
+    job.status = JobStatus.succeeded
+    save_job(job)
+    return job
+
+
+def _record_durable_success(store: H3ProfileStore, import_id: str):
+    job = _durable_success_job(store, import_id)
+    store.record_test_success(
+        import_id,
+        workflow_sha256=job.params["h3_profile_test_workflow_sha256"],
+        mapping_sha256=job.params["h3_profile_test_mapping_sha256"],
+        job_id=job.id,
+    )
+    return job
+
+
+class _CompletedTestClient:
+    def __init__(self, cancel_event: asyncio.Event | None = None, *, phase: str = ""):
+        self.cancel_event = cancel_event
+        self.phase = phase
+
+    async def wait_for_completion(self, prompt_id, *, cancel_event):
+        assert prompt_id == "prompt_profile_test"
+        return {
+            "status": "completed",
+            "outputs_by_node": {
+                "999": ["http://comfy/view?filename=test.mp4&subfolder=&type=output"]
+            },
+        }
+
+    async def fetch_outputs(self, prompt_id):
+        assert prompt_id == "prompt_profile_test"
+        if self.phase == "during":
+            assert self.cancel_event is not None
+            self.cancel_event.set()
+            await asyncio.sleep(0)
+        elif self.phase == "after":
+            await asyncio.sleep(0)
+            assert self.cancel_event is not None
+            self.cancel_event.set()
+        return [
+            McpOutputFile(
+                filename="downloaded.mp4",
+                source_url=(
+                    "http://comfy/view?filename=test.mp4&subfolder=&type=output"
+                ),
+                data=b"mapped-video",
+            )
+        ]
+
+
+def _runtime(client) -> ComfyMcpExecutionRuntime:
+    async def no_op(_job):
+        return None
+
+    return ComfyMcpExecutionRuntime(
+        client_factory=lambda: client,
+        prepare=no_op,
+        finish=no_op,
+    )
 
 
 @pytest.fixture
@@ -190,7 +291,105 @@ def test_test_run_resolves_optional_voice_asset(
     assert captured_inputs["audio_1"] == ("reference.wav", b"RIFF-test-voice")
 
 
-def test_mapped_test_video_records_same_identity_and_allows_activation(
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["during", "after"])
+async def test_comfy_mcp_cancellation_while_fetching_never_records_test_evidence(
+    test_env: Path,
+    phase: str,
+) -> None:
+    store = H3ProfileStore()
+    import_id = _import_ready_profile(store)
+    job = _profile_test_job(store, import_id)
+    cancel_event = asyncio.Event()
+    client = _CompletedTestClient(cancel_event, phase=phase)
+
+    await ComfyMcpExecutionAdapter().resume(
+        job,
+        H3Ref2VaPipeline(),
+        cancel_event,
+        _runtime(client),
+    )
+
+    terminal = load_job(job.id)
+    assert terminal is not None
+    assert terminal.status == JobStatus.cancelled
+    assert not (store.import_workflow_path(import_id).parent / "test.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_failure_persisting_final_success_never_records_test_evidence(
+    test_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.jobs.execution_adapters import comfy_mcp
+
+    store = H3ProfileStore()
+    import_id = _import_ready_profile(store)
+    job = _profile_test_job(store, import_id)
+    real_save_job = comfy_mcp.store.save_job
+
+    def fail_final_success(candidate):
+        if candidate.status == JobStatus.succeeded:
+            raise OSError("final job persistence failed")
+        real_save_job(candidate)
+
+    monkeypatch.setattr(comfy_mcp.store, "save_job", fail_final_success)
+
+    await ComfyMcpExecutionAdapter().resume(
+        job,
+        H3Ref2VaPipeline(),
+        asyncio.Event(),
+        _runtime(_CompletedTestClient()),
+    )
+
+    terminal = load_job(job.id)
+    assert terminal is not None
+    assert terminal.status == JobStatus.failed
+    assert not (store.import_workflow_path(import_id).parent / "test.json").exists()
+
+
+@pytest.mark.parametrize(
+    "status",
+    [None, JobStatus.running, JobStatus.failed, JobStatus.cancelled],
+    ids=["missing", "running", "failed", "cancelled"],
+)
+def test_activation_rejects_evidence_for_non_succeeded_job(
+    test_env: Path,
+    status: JobStatus | None,
+) -> None:
+    store = H3ProfileStore()
+    import_id = _import_ready_profile(store)
+    workflow_sha256, mapping_sha256 = store.import_identity(import_id)
+    if status is None:
+        job_id = "job_missing_test_evidence"
+    else:
+        job = _profile_test_job(store, import_id)
+        video = settings.jobs_dir / job.id / "outputs" / "video.mp4"
+        video.write_bytes(b"mapped-video")
+        job.outputs = build_output_slots(job.id, {"video": video})
+        job.status = status
+        save_job(job)
+        job_id = job.id
+    evidence_path = store.import_workflow_path(import_id).parent / "test.json"
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "status": "succeeded",
+                "contract_version": 1,
+                "workflow_sha256": workflow_sha256,
+                "mapping_sha256": mapping_sha256,
+                "job_id": job_id,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProfileStateError, match="test job"):
+        store.activate_import(import_id)
+
+
+@pytest.mark.asyncio
+async def test_mapped_test_video_records_same_identity_and_allows_activation(
     test_env: Path,
     actor_picture,
     monkeypatch: pytest.MonkeyPatch,
@@ -214,12 +413,15 @@ def test_mapped_test_video_records_same_identity_and_allows_activation(
 
     job = load_job(response.json()["job_id"])
     assert job is not None
-    video = settings.jobs_dir / job.id / "outputs" / "video.mp4"
-    video.parent.mkdir(parents=True, exist_ok=True)
-    video.write_bytes(b"mapped-video")
-    H3Ref2VaPipeline().postprocess_job_outputs(job, {"video": video})
-    job.status = JobStatus.succeeded
+    job.status = JobStatus.running
+    job.comfy_prompt_id = "prompt_profile_test"
     save_job(job)
+    await ComfyMcpExecutionAdapter().resume(
+        job,
+        H3Ref2VaPipeline(),
+        asyncio.Event(),
+        _runtime(_CompletedTestClient()),
+    )
 
     profile = store.activate_import(import_id)
 
@@ -241,24 +443,12 @@ def test_test_result_is_not_recorded_without_a_downloaded_mapped_video(
 ) -> None:
     store = H3ProfileStore()
     import_id = _import_ready_profile(store)
-    workflow_sha256, mapping_sha256 = store.import_identity(import_id)
-    from app.core.jobs.store import create_job
+    job = _profile_test_job(store, import_id)
+    job.status = JobStatus.succeeded
+    save_job(job)
 
-    job = create_job(
-        pipeline_id="h3_ref2va",
-        asset_kind="productions",
-        name="missing video",
-        params={
-            "h3_profile_test": True,
-            "h3_profile_import_id": import_id,
-            "h3_profile_test_workflow_sha256": workflow_sha256,
-            "h3_profile_test_mapping_sha256": mapping_sha256,
-        },
-        seed=42,
-        fixed_seed=True,
-    )
-
-    H3Ref2VaPipeline().postprocess_job_outputs(job, {})
+    with pytest.raises(ProfileStateError, match="mapped video"):
+        H3Ref2VaPipeline().on_job_succeeded(job)
 
     assert not (store.import_workflow_path(import_id).parent / "test.json").exists()
 
@@ -266,13 +456,7 @@ def test_test_result_is_not_recorded_without_a_downloaded_mapped_video(
 def test_test_result_for_old_hash_cannot_activate(test_env: Path) -> None:
     store = H3ProfileStore()
     import_id = _import_ready_profile(store)
-    workflow_sha256, mapping_sha256 = store.import_identity(import_id)
-    store.record_test_success(
-        import_id,
-        workflow_sha256=workflow_sha256,
-        mapping_sha256=mapping_sha256,
-        job_id="job_old_hash",
-    )
+    _record_durable_success(store, import_id)
     workflow_path = store.import_workflow_path(import_id)
     graph = json.loads(workflow_path.read_text(encoding="utf-8"))
     graph["136"]["inputs"]["prompt"] = "changed after the test"
@@ -290,20 +474,95 @@ def test_test_result_for_old_hash_cannot_activate(test_env: Path) -> None:
         store.activate_import(import_id)
 
 
+def test_completion_rechecks_import_identity_after_durable_job_verification(
+    test_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = H3ProfileStore()
+    import_id = _import_ready_profile(store)
+    job = _durable_success_job(store, import_id)
+    original_verify = store._require_successful_test_job
+
+    def verify_then_change_import(**kwargs):
+        verified = original_verify(**kwargs)
+        workflow_path = store.import_workflow_path(import_id)
+        graph = json.loads(workflow_path.read_text(encoding="utf-8"))
+        graph["136"]["inputs"]["prompt"] = "changed during completion"
+        workflow_path.write_text(json.dumps(graph), encoding="utf-8")
+        return verified
+
+    monkeypatch.setattr(
+        store, "_require_successful_test_job", verify_then_change_import
+    )
+
+    with pytest.raises(ProfileChangedError, match="test execution"):
+        store.record_test_success(
+            import_id,
+            workflow_sha256=job.params["h3_profile_test_workflow_sha256"],
+            mapping_sha256=job.params["h3_profile_test_mapping_sha256"],
+            job_id=job.id,
+        )
+
+    assert not (store.import_workflow_path(import_id).parent / "test.json").exists()
+
+
+def test_activation_rechecks_import_identity_after_job_verification(
+    test_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = H3ProfileStore()
+    import_id = _import_ready_profile(store)
+    _record_durable_success(store, import_id)
+    original_verify = store._require_successful_test_job
+
+    def verify_then_change_import(**kwargs):
+        verified = original_verify(**kwargs)
+        workflow_path = store.import_workflow_path(import_id)
+        graph = json.loads(workflow_path.read_text(encoding="utf-8"))
+        graph["136"]["inputs"]["prompt"] = "changed during activation"
+        workflow_path.write_text(json.dumps(graph), encoding="utf-8")
+        return verified
+
+    monkeypatch.setattr(
+        store, "_require_successful_test_job", verify_then_change_import
+    )
+
+    with pytest.raises(ProfileChangedError, match="activation"):
+        store.activate_import(import_id)
+
+
+def test_activation_rechecks_import_identity_immediately_before_selection(
+    test_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = H3ProfileStore()
+    import_id = _import_ready_profile(store)
+    _record_durable_success(store, import_id)
+    original_install = store.install_profile
+
+    def install_then_change_import(*args, **kwargs):
+        original_install(*args, **kwargs)
+        workflow_path = store.import_workflow_path(import_id)
+        graph = json.loads(workflow_path.read_text(encoding="utf-8"))
+        graph["136"]["inputs"]["prompt"] = "changed before activation pointer"
+        workflow_path.write_text(json.dumps(graph), encoding="utf-8")
+
+    monkeypatch.setattr(store, "install_profile", install_then_change_import)
+
+    with pytest.raises(ProfileChangedError, match="activation"):
+        store.activate_import(import_id)
+
+    assert store.resolve_active().profile_id == "builtin-official-h3"
+
+
 def test_activation_rechecks_successful_comfy_validation(test_env: Path) -> None:
     store = H3ProfileStore()
     import_id = _import_ready_profile(store)
-    workflow_sha256, mapping_sha256 = store.import_identity(import_id)
+    _record_durable_success(store, import_id)
     validation_path = store.import_workflow_path(import_id).parent / "validation.json"
     validation = json.loads(validation_path.read_text(encoding="utf-8"))
     validation["comfy"] = {"valid": False, "error_count": 1}
     validation_path.write_text(json.dumps(validation), encoding="utf-8")
-    store.record_test_success(
-        import_id,
-        workflow_sha256=workflow_sha256,
-        mapping_sha256=mapping_sha256,
-        job_id="job_invalid_comfy",
-    )
 
     with pytest.raises(ProfileStateError, match="validation"):
         store.activate_import(import_id)
