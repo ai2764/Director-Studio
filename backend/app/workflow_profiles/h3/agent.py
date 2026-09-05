@@ -11,7 +11,11 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError
 
 from app.core.vram import get_director_model, get_orchestrator
 
-from .agent_prompt import mapping_messages
+from .agent_prompt import (
+    AUDIO_INPUT_PATTERN,
+    PICTURE_INPUT_PATTERN,
+    mapping_messages,
+)
 from .inspector import inspect_h3_workflow
 from .models import H3BoundaryMapping, H3WorkflowAnalysis
 from .store import H3ProfileStore
@@ -35,37 +39,44 @@ class MappingProposal(BaseModel):
         min_length=1
     )
 
+    @classmethod
+    def model_json_schema(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Expose the guarded dynamic socket choices to structured generation."""
+        schema = super().model_json_schema(*args, **kwargs)
+        mapping_schema = schema["$defs"]["H3BoundaryMapping"]
+        properties = mapping_schema["properties"]
+        properties["picture_input_pattern"] = {
+            "const": PICTURE_INPUT_PATTERN,
+            "title": "Picture Input Pattern",
+            "type": "string",
+        }
+        properties["audio_input_pattern"] = {
+            "anyOf": [
+                {"const": AUDIO_INPUT_PATTERN, "type": "string"},
+                {"type": "null"},
+            ],
+            "title": "Audio Input Pattern",
+        }
+        return schema
 
-_THINKING_RE = re.compile(
-    r"<think>[\s\S]*?</(?:think|redacted_reasoning)>|"
+
+_THINKING_PREFIX_RE = re.compile(
+    r"^\s*(?:<think>[\s\S]*?</(?:think|redacted_reasoning)>|"
     r"<thinking>[\s\S]*?</thinking>|"
-    r"<reasoning>[\s\S]*?</reasoning>",
+    r"<reasoning>[\s\S]*?</reasoning>)",
     re.IGNORECASE,
 )
-_PICTURE_PATTERN = "ref_images.ref_image_{index}"
-_AUDIO_PATTERN = "ref_audios.ref_audio_{index}"
 
 
 def _json_object(content: object) -> dict[str, Any]:
-    raw = _THINKING_RE.sub("", str(content or "")).strip()
-    open_think = re.search(r"<think(?:ing)?>", raw, re.IGNORECASE)
-    if open_think and not re.search(r"</think", raw, re.IGNORECASE):
-        after = raw[open_think.end() :]
-        start = after.find("{")
-        raw = after[start:] if start >= 0 else raw[: open_think.start()]
-    fence = re.fullmatch(r"```(?:json)?\s*([\s\S]*?)\s*```", raw, re.IGNORECASE)
-    if fence:
-        raw = fence.group(1).strip()
+    raw = str(content or "")
+    while match := _THINKING_PREFIX_RE.match(raw):
+        raw = raw[match.end() :]
+    raw = raw.strip()
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as exc:
-        start, end = raw.find("{"), raw.rfind("}")
-        if start < 0 or end <= start:
-            raise ContractError("mapping agent returned invalid JSON") from exc
-        try:
-            value = json.loads(raw[start : end + 1])
-        except json.JSONDecodeError as nested_exc:
-            raise ContractError("mapping agent returned invalid JSON") from nested_exc
+        raise ContractError("mapping agent returned invalid JSON") from exc
     if not isinstance(value, dict):
         raise ContractError("mapping agent must return one JSON object")
     return value
@@ -136,9 +147,9 @@ def _assert_proposal_is_bounded(
             input_name=getattr(mapping, field),
             field=field,
         )
-    if mapping.picture_input_pattern != _PICTURE_PATTERN:
+    if mapping.picture_input_pattern != PICTURE_INPUT_PATTERN:
         raise ContractError("picture_input_pattern is not the contract-v1 pattern")
-    if mapping.audio_input_pattern not in (None, _AUDIO_PATTERN):
+    if mapping.audio_input_pattern not in (None, AUDIO_INPUT_PATTERN):
         raise ContractError("audio_input_pattern is not a contract-v1 pattern")
     if mapping.output_fields != ("videos",):
         raise ContractError("output_fields is not the contract-v1 output selection")

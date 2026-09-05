@@ -258,6 +258,87 @@ async def test_ambiguous_proposal_uses_selected_model_redacted_manifest_and_sche
 
 
 @pytest.mark.asyncio
+async def test_ambiguous_request_discloses_exact_dynamic_socket_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workflow_profiles.h3.agent import H3MappingProposer
+
+    fake_ollama = FakeOllama(_agent_payload())
+    orchestrator = FakeOrchestrator(fake_ollama)
+    monkeypatch.setattr(
+        "app.workflow_profiles.h3.agent.get_orchestrator", lambda: orchestrator
+    )
+    monkeypatch.setattr(
+        "app.workflow_profiles.h3.agent.get_director_model", lambda: "qwen-test"
+    )
+
+    await H3MappingProposer().propose(_analysis())
+
+    request = fake_ollama.calls[0][1]
+    system_prompt = request["messages"][0]["content"]
+    user_payload = json.loads(request["messages"][1]["content"])
+    schema_json = json.dumps(request["format"], sort_keys=True)
+    assert "ref_images.ref_image_{index}" in system_prompt
+    assert "ref_audios.ref_audio_{index}" in system_prompt
+    assert user_payload["contract_v1_dynamic_socket_patterns"] == {
+        "picture_input_pattern": "ref_images.ref_image_{index}",
+        "audio_input_pattern": ["ref_audios.ref_audio_{index}", None],
+    }
+    assert "ref_images.ref_image_{index}" in schema_json
+    assert "ref_audios.ref_audio_{index}" in schema_json
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content_template",
+    [
+        pytest.param("prefix {json}", id="prefix"),
+        pytest.param("{json} trailing", id="trailing"),
+        pytest.param("<think>unterminated\n{json}", id="unterminated-think"),
+        pytest.param("```json\n{json}\n```", id="markdown-fence"),
+    ],
+)
+async def test_agent_rejects_any_non_json_around_the_proposal(
+    monkeypatch: pytest.MonkeyPatch,
+    content_template: str,
+) -> None:
+    from app.workflow_profiles.h3.agent import ContractError, H3MappingProposer
+
+    content = content_template.format(json=_agent_payload()["content"])
+    fake_ollama = FakeOllama({"content": content, "thinking": ""})
+    orchestrator = FakeOrchestrator(fake_ollama)
+    monkeypatch.setattr(
+        "app.workflow_profiles.h3.agent.get_orchestrator", lambda: orchestrator
+    )
+    monkeypatch.setattr(
+        "app.workflow_profiles.h3.agent.get_director_model", lambda: "qwen-test"
+    )
+
+    with pytest.raises(ContractError, match="invalid JSON"):
+        await H3MappingProposer().propose(_analysis())
+
+
+@pytest.mark.asyncio
+async def test_agent_rejects_single_element_proposal_array(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workflow_profiles.h3.agent import ContractError, H3MappingProposer
+
+    proposal_object = json.loads(_agent_payload()["content"])
+    fake_ollama = FakeOllama({"content": json.dumps([proposal_object]), "thinking": ""})
+    orchestrator = FakeOrchestrator(fake_ollama)
+    monkeypatch.setattr(
+        "app.workflow_profiles.h3.agent.get_orchestrator", lambda: orchestrator
+    )
+    monkeypatch.setattr(
+        "app.workflow_profiles.h3.agent.get_director_model", lambda: "qwen-test"
+    )
+
+    with pytest.raises(ContractError, match="one JSON object"):
+        await H3MappingProposer().propose(_analysis())
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("selected_model", ["  ", None])
 async def test_agent_requires_a_selected_director_model(
     monkeypatch: pytest.MonkeyPatch,
