@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,7 +16,12 @@ from pydantic import ValidationError
 
 from app.config import settings
 
-from .errors import ProfileChangedError, ProfileStorageError, ProfileWarning
+from .errors import (
+    ProfileChangedError,
+    ProfileStateError,
+    ProfileStorageError,
+    ProfileWarning,
+)
 from .models import H3BoundaryMapping, H3WorkflowProfile, ResolvedH3Profile
 
 if TYPE_CHECKING:
@@ -27,6 +33,9 @@ _BUILTIN_PROFILE_ID = "builtin-official-h3"
 _WORKFLOW_FILE = "workflow.api.json"
 _PROFILE_FILE = "profile.json"
 _ACTIVE_FILE = "active.json"
+_MAPPING_FILE = "mapping.json"
+_VALIDATION_FILE = "validation.json"
+_TEST_FILE = "test.json"
 _JOB_SNAPSHOT_DIR = "workflow_profile"
 _H3_REF2AV_NODE = "MiniMaxH3ReferenceToVideo"
 _H3_I2V_NODE = "MiniMaxH3ImageToVideo"
@@ -73,6 +82,213 @@ class H3ProfileStore:
     def import_workflow_path(self, import_id: str) -> Path:
         return self._import_dir(import_id) / _WORKFLOW_FILE
 
+    def import_workflow_sha256(self, import_id: str) -> str:
+        """Return the digest of the currently stored import bytes."""
+        _workflow, workflow_sha256 = self._read_workflow(
+            self.import_workflow_path(import_id)
+        )
+        return workflow_sha256
+
+    def load_import_workflow(self, import_id: str) -> dict[str, Any]:
+        """Load an import by opaque ID, never by a caller-provided path."""
+        workflow, _workflow_sha256 = self._read_workflow(
+            self.import_workflow_path(import_id)
+        )
+        return workflow
+
+    def save_import_mapping(
+        self,
+        import_id: str,
+        mapping: H3BoundaryMapping,
+    ) -> None:
+        """Persist an accepted mapping and invalidate mapping-specific evidence."""
+        directory = self._require_existing_import(import_id)
+        self._atomic_write_json(
+            directory / _MAPPING_FILE,
+            mapping.model_dump(mode="json"),
+        )
+        for stale_name in (_VALIDATION_FILE, _TEST_FILE):
+            try:
+                (directory / stale_name).unlink(missing_ok=True)
+            except OSError as exc:
+                raise ProfileStorageError(
+                    "Could not invalidate stale workflow profile evidence"
+                ) from exc
+
+    def load_import_mapping(self, import_id: str) -> H3BoundaryMapping | None:
+        """Load the selected mapping, or return none before one is accepted."""
+        path = self._require_existing_import(import_id) / _MAPPING_FILE
+        if not path.exists():
+            return None
+        try:
+            return H3BoundaryMapping.model_validate(self._read_json(path))
+        except ValidationError as exc:
+            raise ProfileStorageError("Stored import mapping is invalid") from exc
+
+    def record_validation_success(
+        self,
+        import_id: str,
+        *,
+        workflow_sha256: str,
+        mapping_sha256: str,
+        report: dict[str, Any],
+        comfy_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist successful contract and live-Comfy validation evidence."""
+        current_workflow_sha256, current_mapping_sha256 = self.import_identity(
+            import_id
+        )
+        if (
+            current_workflow_sha256 != workflow_sha256
+            or current_mapping_sha256 != mapping_sha256
+        ):
+            raise ProfileChangedError(
+                "Imported workflow or mapping changed during validation"
+            )
+        record = {
+            "valid": True,
+            "contract_version": 1,
+            "workflow_sha256": workflow_sha256,
+            "mapping_sha256": mapping_sha256,
+            "validated_at": datetime.now(UTC).isoformat(),
+            "report": report,
+            "comfy": comfy_payload,
+        }
+        self._atomic_write_json(
+            self._require_existing_import(import_id) / _VALIDATION_FILE,
+            record,
+        )
+        return record
+
+    def record_test_success(
+        self,
+        import_id: str,
+        *,
+        workflow_sha256: str,
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist trusted test-run evidence for Task 6's job completion hook."""
+        directory = self._require_existing_import(import_id)
+        mapping = self.load_import_mapping(import_id)
+        if mapping is None:
+            raise ProfileStateError(
+                "mapping_required",
+                "A workflow mapping is required before recording a test",
+                details={"import_id": import_id},
+            )
+        record = {
+            "status": "succeeded",
+            "workflow_sha256": str(workflow_sha256),
+            "mapping_sha256": self._mapping_sha256(mapping),
+            "job_id": job_id,
+            "tested_at": datetime.now(UTC).isoformat(),
+        }
+        self._atomic_write_json(directory / _TEST_FILE, record)
+        return record
+
+    def activate_import(self, import_id: str) -> H3WorkflowProfile:
+        """Install and select an import only with same-identity validation/test proof."""
+        directory = self._require_existing_import(import_id)
+        workflow, workflow_sha256 = self._read_workflow(directory / _WORKFLOW_FILE)
+        mapping = self.load_import_mapping(import_id)
+        if mapping is None:
+            raise ProfileStateError(
+                "mapping_required",
+                "A workflow mapping is required before activation",
+                details={"import_id": import_id},
+            )
+        mapping_sha256 = self._mapping_sha256(mapping)
+        validation = self._optional_record(directory / _VALIDATION_FILE)
+        if validation is None or validation.get("valid") is not True:
+            raise ProfileStateError(
+                "validation_required",
+                "Successful validation is required before activation",
+                details={"import_id": import_id},
+            )
+        if validation.get("contract_version") != 1:
+            raise ProfileStateError(
+                "unsupported_contract",
+                "The validated workflow contract version is unsupported",
+                details={"import_id": import_id},
+            )
+        if (
+            validation.get("workflow_sha256") != workflow_sha256
+            or validation.get("mapping_sha256") != mapping_sha256
+        ):
+            raise ProfileChangedError(
+                "Imported workflow or mapping changed after validation"
+            )
+
+        test_record = self._optional_record(directory / _TEST_FILE)
+        if test_record is None or test_record.get("status") != "succeeded":
+            raise ProfileStateError(
+                "test_required",
+                "A successful test for this workflow is required before activation",
+                details={"import_id": import_id},
+            )
+        if (
+            test_record.get("workflow_sha256") != workflow_sha256
+            or test_record.get("mapping_sha256") != mapping_sha256
+        ):
+            raise ProfileChangedError(
+                "Imported workflow or mapping changed after its successful test"
+            )
+        if not isinstance(test_record.get("job_id"), str) or not test_record["job_id"]:
+            raise ProfileStateError(
+                "test_required",
+                "A successful test job is required before activation",
+                details={"import_id": import_id},
+            )
+
+        from .validator import validate_h3_contract
+
+        contract = validate_h3_contract(workflow, mapping)
+        if not contract.valid:
+            raise ProfileStateError(
+                "contract_validation_failed",
+                "The workflow no longer satisfies the H3 contract",
+                details={
+                    "issues": [
+                        issue.model_dump(mode="json") for issue in contract.issues
+                    ]
+                },
+            )
+
+        profile_id = f"custom-{workflow_sha256[:32]}-{mapping_sha256[:16]}"
+        profile = H3WorkflowProfile(
+            id=profile_id,
+            workflow_sha256=workflow_sha256,
+            mapping=mapping,
+            status="active",
+        )
+        self.install_profile(profile, workflow)
+        self._atomic_write_json(
+            self._profile_dir(profile_id) / _VALIDATION_FILE,
+            {**validation, "test": test_record},
+        )
+        self.select_profile(profile_id)
+        return profile
+
+    def list_installed_profiles(self) -> list[H3WorkflowProfile]:
+        """Return valid installed custom profile metadata in stable ID order."""
+        if not self.profiles_dir.exists():
+            return []
+        profiles: list[H3WorkflowProfile] = []
+        for directory in sorted(
+            self.profiles_dir.iterdir(), key=lambda path: path.name
+        ):
+            if not directory.is_dir() or directory.is_symlink():
+                continue
+            try:
+                profile_id = self._require_profile_id(directory.name)
+                profile = H3WorkflowProfile.model_validate(
+                    self._read_json(self.profile_path(profile_id))
+                )
+            except (ProfileStorageError, ValidationError):
+                continue
+            profiles.append(profile)
+        return profiles
+
     def create_import(self, workflow: dict[str, Any]) -> str:
         """Persist an API workflow under a generated opaque import identifier."""
         if not isinstance(workflow, dict):
@@ -89,7 +305,36 @@ class H3ProfileStore:
             return import_id
         raise ProfileStorageError("Could not allocate a unique workflow import ID")
 
-    def install_profile(self, profile: H3WorkflowProfile, workflow: dict[str, Any]) -> None:
+    def _require_existing_import(self, import_id: str) -> Path:
+        directory = self._import_dir(import_id)
+        if not directory.is_dir() or directory.is_symlink():
+            raise ProfileStorageError("Workflow import was not found")
+        return directory
+
+    def import_identity(self, import_id: str) -> tuple[str, str]:
+        """Return the current workflow and mapping hashes for evidence binding."""
+        workflow_sha256 = self.import_workflow_sha256(import_id)
+        mapping = self.load_import_mapping(import_id)
+        if mapping is None:
+            raise ProfileStateError(
+                "mapping_required",
+                "A workflow mapping is required",
+                details={"import_id": import_id},
+            )
+        return workflow_sha256, self._mapping_sha256(mapping)
+
+    @classmethod
+    def _mapping_sha256(cls, mapping: H3BoundaryMapping) -> str:
+        return cls._sha256(cls._json_bytes(mapping.model_dump(mode="json")))
+
+    def _optional_record(self, path: Path) -> dict[str, Any] | None:
+        if not path.exists():
+            return None
+        return self._read_json(path)
+
+    def install_profile(
+        self, profile: H3WorkflowProfile, workflow: dict[str, Any]
+    ) -> None:
         """Persist one already-validated custom profile using only its safe ID."""
         profile_id = self._require_profile_id(profile.id)
         if not isinstance(workflow, dict):
@@ -98,7 +343,9 @@ class H3ProfileStore:
         workflow_bytes = self._json_bytes(workflow)
         actual_hash = self._sha256(workflow_bytes)
         if profile.workflow_sha256 != actual_hash:
-            raise ProfileChangedError("Profile workflow hash does not match supplied workflow")
+            raise ProfileChangedError(
+                "Profile workflow hash does not match supplied workflow"
+            )
         directory = self._profile_dir(profile_id)
         directory.mkdir(parents=True, exist_ok=True)
         self._atomic_write_bytes(directory / _WORKFLOW_FILE, workflow_bytes)
@@ -131,20 +378,30 @@ class H3ProfileStore:
             pointer = self._read_json(self.active_path)
             profile_id = self._require_profile_id(pointer.get("profile_id"))
             expected_hash = pointer.get("workflow_sha256")
-            if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
-                raise ProfileStorageError("Active profile pointer has an invalid workflow hash")
+            if not isinstance(expected_hash, str) or not re.fullmatch(
+                r"[0-9a-f]{64}", expected_hash
+            ):
+                raise ProfileStorageError(
+                    "Active profile pointer has an invalid workflow hash"
+                )
             resolved = (
                 self._resolve_builtin()
                 if profile_id == _BUILTIN_PROFILE_ID
                 else self._resolve_custom(profile_id)
             )
             if resolved.workflow_sha256 != expected_hash:
-                raise ProfileChangedError("Active profile hash no longer matches its pointer")
+                raise ProfileChangedError(
+                    "Active profile hash no longer matches its pointer"
+                )
             return resolved
         except ProfileChangedError as exc:
             return self._fallback("profile_changed", str(exc))
         except (ProfileStorageError, ValidationError, OSError, TypeError) as exc:
             return self._fallback("profile_unavailable", str(exc))
+
+    def resolve_builtin(self) -> ResolvedH3Profile:
+        """Resolve the packaged profile for setup/status responses."""
+        return self._resolve_builtin()
 
     def snapshot_for_job(self, job: JobRecord) -> ResolvedH3Profile:
         """Atomically capture the currently resolved profile for one local H3 job."""
@@ -239,10 +496,14 @@ class H3ProfileStore:
         try:
             profile = H3WorkflowProfile.model_validate(profile_data)
         except ValidationError as exc:
-            raise ProfileStorageError("Job profile snapshot metadata is invalid") from exc
+            raise ProfileStorageError(
+                "Job profile snapshot metadata is invalid"
+            ) from exc
         workflow, workflow_hash = self._read_workflow(workflow_path)
         if profile.workflow_sha256 != workflow_hash:
-            raise ProfileChangedError("Job workflow profile snapshot hash does not match")
+            raise ProfileChangedError(
+                "Job workflow profile snapshot hash does not match"
+            )
         self._assert_pure_ref2av(workflow)
         return ResolvedH3Profile(
             profile_id=profile.id,
@@ -332,7 +593,9 @@ class H3ProfileStore:
         try:
             raw = path.read_bytes()
         except OSError as exc:
-            raise ProfileStorageError(f"Could not read workflow file: {path.name}") from exc
+            raise ProfileStorageError(
+                f"Could not read workflow file: {path.name}"
+            ) from exc
         return self._parse_json(raw, path.name), self._sha256(raw)
 
     @staticmethod
@@ -364,7 +627,9 @@ class H3ProfileStore:
         try:
             raw = path.read_bytes()
         except OSError as exc:
-            raise ProfileStorageError(f"Could not read profile file: {path.name}") from exc
+            raise ProfileStorageError(
+                f"Could not read profile file: {path.name}"
+            ) from exc
         return self._parse_json(raw, path.name)
 
     @staticmethod
@@ -394,7 +659,9 @@ class H3ProfileStore:
                 os.fsync(temporary.fileno())
             os.replace(temp_name, path)
         except OSError as exc:
-            raise ProfileStorageError(f"Could not atomically write {path.name}") from exc
+            raise ProfileStorageError(
+                f"Could not atomically write {path.name}"
+            ) from exc
         finally:
             if temp_name:
                 try:

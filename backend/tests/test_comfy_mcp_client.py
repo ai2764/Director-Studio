@@ -179,8 +179,7 @@ async def test_submit_workflow_validates_before_queueing_and_removes_temp_graph(
         "run_workflow",
     ]
     workflow_paths = [Path(args["workflow_path"]) for _, args in session.calls]
-    assert workflow_paths[0] == workflow_paths[1]
-    assert not workflow_paths[0].exists()
+    assert all(not path.exists() for path in workflow_paths)
     assert session.calls[1][1]["wait"] is False
     assert session.calls[1][1]["confirm_spend"] is False
 
@@ -248,6 +247,52 @@ async def test_submit_workflow_repairs_new_save_video_dynamic_codec_before_queue
 
 
 @pytest.mark.asyncio
+async def test_validate_workflow_returns_payload_and_removes_temp_graph():
+    session = FakeToolSession(
+        [_result({"valid": True, "error_count": 0, "warnings": []})]
+    )
+    client = ComfyMcpClient(session=session)
+
+    payload = await client.validate_workflow(
+        {"1": {"class_type": "SaveVideo", "inputs": {}}}
+    )
+
+    assert payload == {"valid": True, "error_count": 0, "warnings": []}
+    assert [name for name, _ in session.calls] == ["validate_workflow"]
+    workflow_path = Path(session.calls[0][1]["workflow_path"])
+    assert workflow_path.suffixes == [".api", ".json"]
+    assert not workflow_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_validate_workflow_formats_all_structured_errors():
+    session = FakeToolSession(
+        [
+            _result(
+                {
+                    "valid": False,
+                    "error_count": 2,
+                    "errors": [
+                        {"node_id": "136", "message": "missing model"},
+                        {"node_id": "92", "error": "invalid codec"},
+                    ],
+                }
+            )
+        ]
+    )
+    client = ComfyMcpClient(session=session)
+
+    with pytest.raises(
+        ComfyMcpError,
+        match="missing model.*invalid codec",
+    ):
+        await client.validate_workflow({"136": {"class_type": "Missing"}})
+
+    workflow_path = Path(session.calls[0][1]["workflow_path"])
+    assert not workflow_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_submit_workflow_stops_when_live_validation_fails():
     session = FakeToolSession(
         [
@@ -294,9 +339,7 @@ async def test_wait_for_completion_retries_structured_timeouts_until_completed()
     )
 
     assert result["status"] == "completed"
-    assert result["outputs"] == [
-        "http://127.0.0.1:8188/view?filename=video.mp4"
-    ]
+    assert result["outputs"] == ["http://127.0.0.1:8188/view?filename=video.mp4"]
     assert [name for name, _ in session.calls] == ["job", "job"]
     assert all(args["action"] == "wait" for _, args in session.calls)
 
@@ -325,9 +368,7 @@ async def test_fetch_outputs_reads_downloaded_files_before_temp_cleanup():
 
     assert len(outputs) == 1
     assert outputs[0].filename == "prompt_000.mp4"
-    assert outputs[0].source_url == (
-        "http://127.0.0.1:8188/view?filename=video.mp4"
-    )
+    assert outputs[0].source_url == ("http://127.0.0.1:8188/view?filename=video.mp4")
     assert outputs[0].data == b"video-bytes"
     output_dir = Path(session.calls[0][1]["out_dir"])
     assert not output_dir.exists()

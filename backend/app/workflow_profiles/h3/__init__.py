@@ -1,6 +1,11 @@
 """Public H3 workflow-profile contracts and profile store."""
 
-from .errors import ProfileChangedError, ProfileStorageError, ProfileWarning
+from .errors import (
+    ProfileChangedError,
+    ProfileStateError,
+    ProfileStorageError,
+    ProfileWarning,
+)
 from .models import (
     H3AnalysisIssue,
     H3BoundaryMapping,
@@ -29,6 +34,7 @@ __all__ = [
     "H3WorkflowAnalysis",
     "H3WorkflowProfile",
     "ProfileChangedError",
+    "ProfileStateError",
     "ProfileStorageError",
     "ProfileWarning",
     "ResolvedH3Profile",
