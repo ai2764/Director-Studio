@@ -39,9 +39,15 @@ def isolated_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> H3Profile
     return H3ProfileStore()
 
 
-def installed_custom_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> H3ProfileStore:
-    store = isolated_store(tmp_path, monkeypatch)
-    workflow = {"136": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {}}}
+def _install_custom_profile(
+    store: H3ProfileStore,
+    workflow: dict[str, object] | None = None,
+    *,
+    status: str = "active",
+) -> None:
+    workflow = workflow or {
+        "136": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {}}
+    }
     workflow_bytes = json.dumps(
         workflow, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
@@ -49,9 +55,14 @@ def installed_custom_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> H
         id="custom",
         workflow_sha256=hashlib.sha256(workflow_bytes).hexdigest(),
         mapping=_mapping(),
-        status="active",
+        status=status,
     )
     store.install_profile(profile, workflow)
+
+
+def installed_custom_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> H3ProfileStore:
+    store = isolated_store(tmp_path, monkeypatch)
+    _install_custom_profile(store)
     store.select_profile("custom")
     return store
 
@@ -125,3 +136,71 @@ def test_generated_import_ids_are_opaque_and_unique(tmp_path: Path, monkeypatch:
     assert first != second
     assert first.startswith("imp-")
     assert store.import_workflow_path(first).is_file()
+
+
+@pytest.mark.parametrize("status", ["draft", "mapped", "validated", "broken"])
+def test_select_profile_rejects_custom_profiles_not_ready_for_activation(
+    status: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = isolated_store(tmp_path, monkeypatch)
+    _install_custom_profile(store, status=status)
+
+    with pytest.raises(ProfileStorageError, match="tested or active"):
+        store.select_profile("custom")
+
+
+def test_resolve_active_falls_back_when_pointer_targets_untested_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = isolated_store(tmp_path, monkeypatch)
+    _install_custom_profile(store, status="draft")
+    profile = H3WorkflowProfile.model_validate_json(store.profile_path("custom").read_text("utf-8"))
+    store.active_path.parent.mkdir(parents=True, exist_ok=True)
+    store.active_path.write_text(
+        json.dumps(
+            {"profile_id": "custom", "workflow_sha256": profile.workflow_sha256}
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = store.resolve_active()
+
+    assert resolved.source == "builtin"
+    assert resolved.warning is not None
+    assert resolved.warning.code == "profile_unavailable"
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        {"1": {"class_type": "LoadImage", "inputs": {}}},
+        {
+            "136": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {}},
+            "137": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {}},
+        },
+        {
+            "136": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {}},
+            "137": {"class_type": "MiniMaxH3ImageToVideo", "inputs": {}},
+        },
+        {
+            "136": {
+                "class_type": "MiniMaxH3ReferenceToVideo",
+                "inputs": {"ref_frame": "not allowed"},
+            }
+        },
+        {
+            "136": {
+                "class_type": "MiniMaxH3ReferenceToVideo",
+                "inputs": {"last_frame": "not allowed"},
+            }
+        },
+    ],
+    ids=["no-h3", "duplicate-h3", "i2v", "ref-frame", "last-frame"],
+)
+def test_install_profile_rejects_non_pure_ref2av_graphs(
+    workflow: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = isolated_store(tmp_path, monkeypatch)
+
+    with pytest.raises(ProfileStorageError, match="pure Ref2AV"):
+        _install_custom_profile(store, workflow)

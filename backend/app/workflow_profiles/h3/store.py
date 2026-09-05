@@ -24,6 +24,8 @@ _BUILTIN_PROFILE_ID = "builtin-official-h3"
 _WORKFLOW_FILE = "workflow.api.json"
 _PROFILE_FILE = "profile.json"
 _ACTIVE_FILE = "active.json"
+_H3_REF2AV_NODE = "MiniMaxH3ReferenceToVideo"
+_H3_I2V_NODE = "MiniMaxH3ImageToVideo"
 
 _OFFICIAL_MAPPING = H3BoundaryMapping(
     h3_node_id="136",
@@ -88,6 +90,7 @@ class H3ProfileStore:
         profile_id = self._require_profile_id(profile.id)
         if not isinstance(workflow, dict):
             raise ProfileStorageError("Profile workflow must be a JSON object")
+        self._assert_pure_ref2av(workflow)
         workflow_bytes = self._json_bytes(workflow)
         actual_hash = self._sha256(workflow_bytes)
         if profile.workflow_sha256 != actual_hash:
@@ -161,9 +164,14 @@ class H3ProfileStore:
             raise ProfileStorageError("Stored profile metadata is invalid") from exc
         if profile.id != profile_id:
             raise ProfileStorageError("Stored profile ID does not match its directory")
+        if profile.status not in {"tested", "active"}:
+            raise ProfileStorageError(
+                "Custom profile must be tested or active before selection"
+            )
         workflow, workflow_hash = self._read_workflow(workflow_path)
         if profile.workflow_sha256 != workflow_hash:
             raise ProfileChangedError("Stored workflow differs from the profile hash")
+        self._assert_pure_ref2av(workflow)
         return ResolvedH3Profile(
             profile_id=profile.id,
             workflow=workflow,
@@ -216,6 +224,31 @@ class H3ProfileStore:
         except OSError as exc:
             raise ProfileStorageError(f"Could not read workflow file: {path.name}") from exc
         return self._parse_json(raw, path.name), self._sha256(raw)
+
+    @staticmethod
+    def _assert_pure_ref2av(workflow: dict[str, Any]) -> None:
+        h3_nodes = 0
+        for node in workflow.values():
+            if not isinstance(node, dict):
+                continue
+            class_type = node.get("class_type")
+            if class_type == _H3_REF2AV_NODE:
+                h3_nodes += 1
+            if class_type == _H3_I2V_NODE:
+                raise ProfileStorageError(
+                    "Custom graph must remain a pure Ref2AV workflow (no I2V node)"
+                )
+            inputs = node.get("inputs")
+            if isinstance(inputs, dict) and {"ref_frame", "last_frame"} & inputs.keys():
+                raise ProfileStorageError(
+                    "Custom graph must remain a pure Ref2AV workflow "
+                    "(no ref_frame or last_frame input)"
+                )
+        if h3_nodes != 1:
+            raise ProfileStorageError(
+                "Custom graph must remain a pure Ref2AV workflow "
+                "with exactly one MiniMaxH3ReferenceToVideo node"
+            )
 
     def _read_json(self, path: Path) -> dict[str, Any]:
         try:
