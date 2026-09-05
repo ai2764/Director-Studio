@@ -21,10 +21,25 @@ function Normalize-ArchivePath([string]$Path) {
     return ($Path.Replace("\", "/") -replace "/+", "/")
 }
 
+function Get-NormalizedArchiveEntries([string[]]$Lines) {
+    return @(
+        foreach ($line in $Lines) {
+            $normalizedLine = (Normalize-ArchivePath $line).Trim()
+            if ($normalizedLine -match "'(?<path>[^']+)'\s*$") {
+                $Matches["path"]
+            }
+            elseif ($normalizedLine -match "^[^,\s]+$") {
+                $normalizedLine.Trim("'", '"')
+            }
+        }
+    )
+}
+
+$archiveEntries = Get-NormalizedArchiveEntries $archiveListing
+
 function Assert-ArchiveContains([string]$Path) {
     $normalizedPath = Normalize-ArchivePath $Path
-    $normalizedArchive = Normalize-ArchivePath $archiveText
-    if (-not $normalizedArchive.Contains($normalizedPath)) {
+    if ($archiveEntries -notcontains $normalizedPath) {
         throw "Packaged executable is missing workflow at runtime path: $normalizedPath"
     }
 }

@@ -5,6 +5,8 @@ import subprocess
 import zipfile
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_CHECK = REPO_ROOT / "scripts" / "test-packaged-workflow-assets.ps1"
 H3_CHECK = REPO_ROOT / "scripts" / "test-packaged-h3-profiles.ps1"
@@ -16,6 +18,13 @@ WORKFLOW_ENTRIES = (
     "workflows\\\\ref_frame_layout.api.json\n"
     "workflows\\\\h3_ref2va.api.json"
 )
+
+
+def _pyinstaller_listing(entries: str) -> str:
+    return "\n".join(
+        f" 30303772, 4863, 26027, 1, 'b', '{entry}'"
+        for entry in entries.splitlines()
+    )
 
 
 def _write_fake_archive_viewer(tmp_path: Path, listing: str) -> dict[str, str]:
@@ -135,3 +144,53 @@ def test_h3_archive_check_rejects_external_data_in_executable(tmp_path: Path):
 
     assert result.returncode != 0
     assert "data" in f"{result.stdout}\n{result.stderr}"
+
+
+@pytest.mark.parametrize("script", [WORKFLOW_CHECK, H3_CHECK])
+@pytest.mark.parametrize(
+    "wrong_entry",
+    [
+        r"workflows\\h3_ref2va.api.json.bak",
+        r"nested\\workflows\\h3_ref2va.api.json",
+    ],
+)
+def test_archive_checks_reject_non_exact_official_h3_entry(
+    tmp_path: Path,
+    script: Path,
+    wrong_entry: str,
+):
+    executable = tmp_path / "DirectorStudio.exe"
+    executable.write_bytes(b"same packaged executable")
+    zip_path = _write_portable_zip(tmp_path, executable)
+    listing = WORKFLOW_ENTRIES.replace(
+        r"workflows\\h3_ref2va.api.json",
+        wrong_entry,
+    )
+    env = _write_fake_archive_viewer(tmp_path, _pyinstaller_listing(listing))
+    arguments = ["-ExecutablePath", str(executable)]
+    if script == H3_CHECK:
+        arguments.extend(["-ZipPath", str(zip_path)])
+
+    result = _run_script(script, *arguments, env=env)
+
+    assert result.returncode != 0
+    assert "missing" in f"{result.stdout}\n{result.stderr}"
+    assert "workflows/h3_ref2va.api.json" in f"{result.stdout}\n{result.stderr}"
+
+
+@pytest.mark.parametrize("script", [WORKFLOW_CHECK, H3_CHECK])
+def test_archive_checks_accept_exact_pyinstaller_official_h3_entry(
+    tmp_path: Path,
+    script: Path,
+):
+    executable = tmp_path / "DirectorStudio.exe"
+    executable.write_bytes(b"same packaged executable")
+    zip_path = _write_portable_zip(tmp_path, executable)
+    env = _write_fake_archive_viewer(tmp_path, _pyinstaller_listing(WORKFLOW_ENTRIES))
+    arguments = ["-ExecutablePath", str(executable)]
+    if script == H3_CHECK:
+        arguments.extend(["-ZipPath", str(zip_path)])
+
+    result = _run_script(script, *arguments, env=env)
+
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"

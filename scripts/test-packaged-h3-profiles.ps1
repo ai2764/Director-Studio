@@ -16,21 +16,36 @@ if (-not (Test-Path -LiteralPath $resolvedZip -PathType Leaf)) {
     throw "Portable zip does not exist: $resolvedZip"
 }
 
-function Get-ExecutableArchiveText([string]$Path) {
+function Normalize-ArchivePath([string]$Path) {
+    return ($Path.Replace("\", "/") -replace "/+", "/")
+}
+
+function Get-ExecutableArchiveEntries([string]$Path) {
     $listing = @(
         py -m PyInstaller.utils.cliutils.archive_viewer -l $Path
     )
     if ($LASTEXITCODE -ne 0) {
         throw "Could not inspect packaged executable: $Path"
     }
-    return ((($listing -join "`n").Replace("\", "/")) -replace "/+", "/")
+    return @(
+        foreach ($line in $listing) {
+            $normalizedLine = (Normalize-ArchivePath $line).Trim()
+            if ($normalizedLine -match "'(?<path>[^']+)'\s*$") {
+                $Matches["path"]
+            }
+            elseif ($normalizedLine -match "^[^,\s]+$") {
+                $normalizedLine.Trim("'", '"')
+            }
+        }
+    )
 }
 
 function Assert-OfficialOnlyExecutable([string]$Path, [string]$Label) {
-    $listing = Get-ExecutableArchiveText $Path
-    if (-not $listing.Contains("workflows/h3_ref2va.api.json")) {
+    $entries = @(Get-ExecutableArchiveEntries $Path)
+    if ($entries -notcontains "workflows/h3_ref2va.api.json") {
         throw "$Label is missing workflows/h3_ref2va.api.json"
     }
+    $listing = $entries -join "`n"
     $forbiddenPatterns = @(
         "(?m)(^|[^A-Za-z0-9_.-])workflow_profiles/h3/imports(/|$)",
         "(?m)(^|[^A-Za-z0-9_.-])workflow_profiles/h3/profiles(/|$)",
