@@ -499,8 +499,8 @@ class H3ProfileStore:
         job_id: str,
     ) -> JobRecord:
         """Verify activation evidence against the authoritative durable job."""
-        from app.core.jobs.store import job_dir, load_job
-        from app.core.schemas import JobStatus
+        from app.core.jobs.store import job_dir
+        from app.core.schemas import JobRecord, JobStatus
 
         if not isinstance(job_id, str) or not re.fullmatch(r"job_[a-f0-9]{12}", job_id):
             raise ProfileStateError(
@@ -508,7 +508,11 @@ class H3ProfileStore:
                 "The referenced H3 profile test job is invalid",
                 details={"import_id": import_id},
             )
-        job = load_job(job_id)
+        job_record_path = job_dir(job_id) / "job.json"
+        try:
+            job = JobRecord.model_validate(self._read_json(job_record_path))
+        except ValidationError as exc:
+            raise ProfileStorageError("Stored H3 profile test job is invalid") from exc
         if job is None or job.status != JobStatus.succeeded:
             raise ProfileStateError(
                 "test_required",
@@ -517,7 +521,8 @@ class H3ProfileStore:
             )
         params = job.params or {}
         if (
-            job.pipeline_id != "h3_ref2va"
+            job.id != job_id
+            or job.pipeline_id != "h3_ref2va"
             or params.get("h3_profile_test") is not True
             or params.get("h3_profile_import_id") != import_id
             or params.get("h3_contract_version") != 1

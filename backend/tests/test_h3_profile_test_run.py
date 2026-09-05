@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,7 @@ from app.workflow_profiles.h3 import (
     H3ProfileStore,
     ProfileChangedError,
     ProfileStateError,
+    ProfileStorageError,
     load_job_profile_snapshot,
 )
 from app.workflow_profiles.h3.inspector import inspect_h3_workflow
@@ -140,6 +142,33 @@ def _record_durable_success(store: H3ProfileStore, import_id: str):
         job_id=job.id,
     )
     return job
+
+
+@pytest.mark.parametrize(
+    "kind", ["hardlink"] if os.name == "nt" else ["symlink", "hardlink"]
+)
+def test_linked_test_job_metadata_cannot_authorize_activation(
+    test_env: Path, kind: str
+) -> None:
+    store = H3ProfileStore()
+    import_id = _import_ready_profile(store)
+    job = _durable_success_job(store, import_id)
+    job_path = settings.jobs_dir / job.id / "job.json"
+    outside_path = test_env.parent / f"outside-{kind}-job.json"
+    outside_path.write_bytes(job_path.read_bytes())
+    job_path.unlink()
+    if kind == "hardlink":
+        os.link(outside_path, job_path)
+    else:
+        job_path.symlink_to(outside_path)
+
+    with pytest.raises(ProfileStorageError, match="storage path"):
+        store.record_test_success(
+            import_id,
+            workflow_sha256=job.params["h3_profile_test_workflow_sha256"],
+            mapping_sha256=job.params["h3_profile_test_mapping_sha256"],
+            job_id=job.id,
+        )
 
 
 class _CompletedTestClient:
