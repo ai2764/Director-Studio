@@ -1,0 +1,181 @@
+{
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "type": "qwen_image"
+    },
+    "_meta": {
+      "title": "CLIP"
+    }
+  },
+  "3": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "qwen_image_edit_2511_fp8mixed.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "UNET"
+    }
+  },
+  "4": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "_meta": {
+      "title": "VAE"
+    }
+  },
+  "17": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["3", 0],
+      "lora_name": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
+      "strength_model": 1.0
+    },
+    "_meta": {
+      "title": "LoRA · Multi-angle"
+    }
+  },
+  "18": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["17", 0],
+      "lora_name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+      "strength_model": 1.0
+    },
+    "_meta": {
+      "title": "LoRA · Lightning 4step (1.0)"
+    }
+  },
+  "5": {
+    "class_type": "ModelSamplingAuraFlow",
+    "inputs": {
+      "model": ["18", 0],
+      "shift": 3.1
+    },
+    "_meta": {
+      "title": "AuraFlow Sampling"
+    }
+  },
+  "6": {
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "width": 1536,
+      "height": 1536,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "Empty Latent 1536x1536"
+    }
+  },
+  "7": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "placeholder.png"
+    },
+    "_meta": {
+      "title": "Prop photo"
+    }
+  },
+  "10": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": ["2", 0],
+      "prompt": "Image 1 is the uploaded object. Create ONE isolated product-reference image in a hero three-quarter view. This single view will be composited downstream into a final Prop Reference Sheet. Do not create a sheet, collage, multi-panel image, labels, or multiple views in this image. Keep the exact same object identity: silhouette, proportions, materials, colors, logos, labels, wear, and distinctive details. Show one complete object where practical, sharp and photoreal, on a clean seamless warm-neutral studio background with soft even product lighting. No environment, table, unrelated objects, hands, text, watermark, or altered logo.",
+      "vae": ["4", 0],
+      "image1": ["7", 0]
+    },
+    "_meta": {
+      "title": "Positive Prop Encode"
+    }
+  },
+  "20": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": ["2", 0],
+      "prompt": "Image 1 is the uploaded object. Create ONE isolated product-reference image in a complete front view. This single view will be composited downstream into a final Prop Reference Sheet. Do not create a sheet, collage, multi-panel image, labels, or multiple views in this image. Keep the exact same object identity: silhouette, proportions, materials, colors, logos, labels, wear, and distinctive details. Show one complete object where practical, sharp and photoreal, on a clean seamless warm-neutral studio background with soft even product lighting. No environment, table, unrelated objects, hands, text, watermark, or altered logo.",
+      "vae": ["4", 0],
+      "image1": ["7", 0]
+    },
+    "_meta": {"title": "Positive Front Encode"}
+  },
+  "21": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": ["2", 0],
+      "prompt": "Image 1 is the uploaded object. Create ONE isolated product-reference image in a complete side or rear view that reveals useful construction. This single view will be composited downstream into a final Prop Reference Sheet. Do not create a sheet, collage, multi-panel image, labels, or multiple views in this image. Keep the exact same object identity: silhouette, proportions, materials, colors, logos, labels, wear, and distinctive details. Show one complete object where practical, sharp and photoreal, on a clean seamless warm-neutral studio background with soft even product lighting. No environment, table, unrelated objects, hands, text, watermark, or altered logo.",
+      "vae": ["4", 0],
+      "image1": ["7", 0]
+    },
+    "_meta": {"title": "Positive Side / Rear Encode"}
+  },
+  "14": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": ["2", 0],
+      "prompt": "contact sheet, collage, multi-panel image, multiple views in one image, text labels, different props, inconsistent object versions, mismatched logos, mismatched labels, busy table, environment set, unrelated objects, watermark, text overlay, panel borders, logo bug, hands holding, cropped object, blurry, low quality, deformed objects",
+      "vae": ["4", 0]
+    },
+    "_meta": {
+      "title": "Negative Encode"
+    }
+  },
+  "11": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 0,
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0,
+      "model": ["5", 0],
+      "positive": ["10", 0],
+      "negative": ["14", 0],
+      "latent_image": ["6", 0]
+    },
+    "_meta": {
+      "title": "Sampler"
+    }
+  },
+  "23": {
+    "class_type": "KSampler",
+    "inputs": {"seed": 0, "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["5", 0], "positive": ["20", 0], "negative": ["14", 0], "latent_image": ["6", 0]},
+    "_meta": {"title": "Sample Front View"}
+  },
+  "24": {
+    "class_type": "KSampler",
+    "inputs": {"seed": 0, "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["5", 0], "positive": ["21", 0], "negative": ["14", 0], "latent_image": ["6", 0]},
+    "_meta": {"title": "Sample Side / Rear View"}
+  },
+  "12": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["11", 0],
+      "vae": ["4", 0]
+    },
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "25": {"class_type": "VAEDecode", "inputs": {"samples": ["23", 0], "vae": ["4", 0]}, "_meta": {"title": "Decode Front View"}},
+  "26": {"class_type": "VAEDecode", "inputs": {"samples": ["24", 0], "vae": ["4", 0]}, "_meta": {"title": "Decode Side / Rear View"}},
+  "27": {"class_type": "ImageScale", "inputs": {"image": ["12", 0], "upscale_method": "lanczos", "width": 1024, "height": 1536, "crop": "center"}, "_meta": {"title": "Hero · 1024x1536"}},
+  "28": {"class_type": "ImageScale", "inputs": {"image": ["25", 0], "upscale_method": "lanczos", "width": 512, "height": 768, "crop": "center"}, "_meta": {"title": "Front · 512x768"}},
+  "29": {"class_type": "ImageScale", "inputs": {"image": ["26", 0], "upscale_method": "lanczos", "width": 512, "height": 768, "crop": "center"}, "_meta": {"title": "Side / Rear · 512x768"}},
+  "30": {"class_type": "ImageConcatMulti", "inputs": {"image_1": ["28", 0], "image_2": ["29", 0], "inputcount": 2, "direction": "down", "match_image_size": false}, "_meta": {"title": "Right Column · Supporting Views"}},
+  "31": {"class_type": "ImageConcatMulti", "inputs": {"image_1": ["27", 0], "image_2": ["30", 0], "inputcount": 2, "direction": "right", "match_image_size": false}, "_meta": {"title": "Final 1536x1536 Prop Reference Sheet"}},
+  "13": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "director-studio/prop/reference_sheet",
+      "images": ["31", 0]
+    },
+    "_meta": {
+      "title": "Save Prop Reference Sheet"
+    }
+  }
+}

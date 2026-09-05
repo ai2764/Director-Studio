@@ -1,0 +1,2 @@
+comfy-cli>=1.19,<2
+comfy-mcp==0.10.0

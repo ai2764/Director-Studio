@@ -1,0 +1,1116 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "qwen_image_2512_fp8_e4m3fn.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "Qwen Image 2512 | Text Actor"
+    }
+  },
+  "2": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "lora_name": "Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors",
+      "strength_model": 1.0
+    },
+    "_meta": {
+      "title": "2512 Lightning 4-Step"
+    }
+  },
+  "3": {
+    "class_type": "ModelSamplingAuraFlow",
+    "inputs": {
+      "model": [
+        "2",
+        0
+      ],
+      "shift": 3.1
+    },
+    "_meta": {
+      "title": "2512 Sampling Shift"
+    }
+  },
+  "4": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "qwen_image_edit_2511_fp8mixed.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "Qwen Image Edit 2511 | Reference / Wardrobe / Three-View"
+    }
+  },
+  "5": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "4",
+        0
+      ],
+      "lora_name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+      "strength_model": 1.0
+    },
+    "_meta": {
+      "title": "2511 Edit Lightning 4-Step"
+    }
+  },
+  "6": {
+    "class_type": "ModelSamplingAuraFlow",
+    "inputs": {
+      "model": [
+        "5",
+        0
+      ],
+      "shift": 3.0
+    },
+    "_meta": {
+      "title": "2511 Sampling Shift"
+    }
+  },
+  "7": {
+    "class_type": "CFGNorm",
+    "inputs": {
+      "model": [
+        "6",
+        0
+      ],
+      "strength": 1.0,
+      "pre_cfg": false
+    },
+    "_meta": {
+      "title": "Edit CFG Norm"
+    }
+  },
+  "8": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Shared Qwen Vision Encoder"
+    }
+  },
+  "9": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "_meta": {
+      "title": "Shared Qwen VAE"
+    }
+  },
+  "10": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": [
+        "62",
+        0
+      ],
+      "clip": [
+        "8",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Encode Text Actor Prompt"
+    }
+  },
+  "11": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "8",
+        0
+      ],
+      "text": "cropped body, multiple people, duplicate body, extra limbs, missing limbs, deformed hands, malformed fingers, deformed feet, shoes, dramatic pose, side view, text, watermark, collage, cluttered background, blur, inconsistent hairstyle across panels, wrong rear hairstyle, inventing a bun when hair is loose, converting loose hair to updo, converting tied hair to loose"
+    },
+    "_meta": {
+      "title": "Text Actor Negative Prompt"
+    }
+  },
+  "12": {
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "width": 1104,
+      "height": 1472,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "Actor Master Size 1104x1472"
+    }
+  },
+  "13": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "3",
+        0
+      ],
+      "positive": [
+        "10",
+        0
+      ],
+      "negative": [
+        "11",
+        0
+      ],
+      "latent_image": [
+        "12",
+        0
+      ],
+      "seed": 25120809,
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "Text Actor Sampler"
+    }
+  },
+  "14": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "13",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Text Actor Decode"
+    }
+  },
+  "15": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "qwen_actor_asset_blank.ppm"
+    },
+    "_meta": {
+      "title": "[INPUT] Actor Reference (Optional)"
+    }
+  },
+  "16": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": [
+        "8",
+        0
+      ],
+      "prompt": [
+        "65",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ],
+      "image1": [
+        "15",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Normalize Reference to Full-Body Actor Master"
+    }
+  },
+  "17": {
+    "class_type": "FluxKontextMultiReferenceLatentMethod",
+    "inputs": {
+      "conditioning": [
+        "16",
+        0
+      ],
+      "reference_latents_method": "index_timestep_zero"
+    },
+    "_meta": {
+      "title": "Reference Image Method"
+    }
+  },
+  "18": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "17",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Reference Negative Conditioning"
+    }
+  },
+  "19": {
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "width": 1104,
+      "height": 1472,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "Reference Actor Master Size 1104x1472"
+    }
+  },
+  "20": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "7",
+        0
+      ],
+      "positive": [
+        "17",
+        0
+      ],
+      "negative": [
+        "18",
+        0
+      ],
+      "latent_image": [
+        "19",
+        0
+      ],
+      "seed": 25110820,
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "Reference Actor Sampler"
+    }
+  },
+  "21": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "20",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Reference Actor Decode"
+    }
+  },
+  "22": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "14",
+        0
+      ],
+      "on_true": [
+        "21",
+        0
+      ],
+      "switch": [
+        "71",
+        2
+      ]
+    },
+    "_meta": {
+      "title": "[AUTO] Actor Source from Reference Presence"
+    }
+  },
+  "23": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "qwen_actor_asset_blank.ppm"
+    },
+    "_meta": {
+      "title": "[INPUT] Wardrobe Reference (Optional)"
+    }
+  },
+  "24": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": [
+        "8",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ],
+      "image1": [
+        "22",
+        0
+      ],
+      "image2": [
+        "56",
+        0
+      ],
+      "image3": [
+        "15",
+        0
+      ],
+      "prompt": "Image 1 is the target actor master — LOCK its face, body silhouette, limb length, shoulder width, hip/waist ratio, height-in-frame, pose, and hairstyle. Image 2 is a CLOTHING / fabric / garment reference ONLY (ghost mannequin or model photo). Image 3 is the original actor reference; use it for identity only, preserving the same facial features and distinctive identity. Do not copy clothing, pose, framing, or background from image 3. Task: re-dress image 1 with the outfit from image 2. Change only clothes (and related fabric folds). HARD BODY LOCK: keep the exact body proportions of image 1. Do NOT adopt height, build, limb thickness, bust/hip shape, or posture from image 2. If image 2 is a different body type, ignore that body completely — only steal the garments. Preserve face identity and hairstyle of image 1. Exactly one front-facing complete full-body actor, bare feet, plain seamless white studio background, no text."
+    },
+    "_meta": {
+      "title": "Wardrobe Transfer | Image 1=Actor, Image 2=Clothing, Image 3=Identity"
+    }
+  },
+  "25": {
+    "class_type": "FluxKontextMultiReferenceLatentMethod",
+    "inputs": {
+      "conditioning": [
+        "24",
+        0
+      ],
+      "reference_latents_method": "index_timestep_zero"
+    },
+    "_meta": {
+      "title": "Wardrobe Reference Method"
+    }
+  },
+  "26": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "25",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Wardrobe Negative Conditioning"
+    }
+  },
+  "27": {
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "width": 1104,
+      "height": 1472,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "Wardrobe Master Size 1104x1472"
+    }
+  },
+  "28": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "7",
+        0
+      ],
+      "positive": [
+        "25",
+        0
+      ],
+      "negative": [
+        "26",
+        0
+      ],
+      "latent_image": [
+        "27",
+        0
+      ],
+      "seed": 25110821,
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "Wardrobe Sampler"
+    }
+  },
+  "29": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "28",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Wardrobe Master Decode"
+    }
+  },
+  "30": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "22",
+        0
+      ],
+      "on_true": [
+        "29",
+        0
+      ],
+      "switch": [
+        "73",
+        2
+      ]
+    },
+    "_meta": {
+      "title": "[AUTO] Wardrobe from Upload Presence"
+    }
+  },
+  "31": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "30",
+        0
+      ],
+      "filename_prefix": "actor-assets/01_actor_master"
+    },
+    "_meta": {
+      "title": "Save Final Actor Master"
+    }
+  },
+  "32": {
+    "class_type": "ImageCrop",
+    "inputs": {
+      "image": [
+        "45",
+        0
+      ],
+      "width": 2880,
+      "height": 960,
+      "x": 0,
+      "y": 0
+    },
+    "_meta": {
+      "title": "Bust Source Crop from Full-Body Sheet 2880x960"
+    }
+  },
+  "33": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": [
+        "8",
+        0
+      ],
+      "prompt": [
+        "69",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ],
+      "image1": [
+        "32",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Bust Three-View Prompt | Inherit Full-Body Sheet"
+    }
+  },
+  "34": {
+    "class_type": "FluxKontextMultiReferenceLatentMethod",
+    "inputs": {
+      "conditioning": [
+        "33",
+        0
+      ],
+      "reference_latents_method": "index_timestep_zero"
+    },
+    "_meta": {
+      "title": "Bust Reference Method"
+    }
+  },
+  "35": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "34",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Bust Negative Conditioning"
+    }
+  },
+  "36": {
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "width": 2880,
+      "height": 1280,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "Bust Three-View Size 2880x1280"
+    }
+  },
+  "37": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "7",
+        0
+      ],
+      "positive": [
+        "34",
+        0
+      ],
+      "negative": [
+        "35",
+        0
+      ],
+      "latent_image": [
+        "36",
+        0
+      ],
+      "seed": 25110822,
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "Bust Three-View Sampler"
+    }
+  },
+  "38": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "37",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Bust Three-View Decode"
+    }
+  },
+  "39": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "32",
+        0
+      ],
+      "filename_prefix": "actor-assets/02_bust_threeview"
+    },
+    "_meta": {
+      "title": "Save Bust Three-View (crop, no resample)"
+    }
+  },
+  "40": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": [
+        "8",
+        0
+      ],
+      "prompt": [
+        "67",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ],
+      "image1": [
+        "30",
+        0
+      ],
+      "image2": [
+        "15",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Full-Body Three-View | image1=master body+hair, image2=face ref"
+    }
+  },
+  "41": {
+    "class_type": "FluxKontextMultiReferenceLatentMethod",
+    "inputs": {
+      "conditioning": [
+        "40",
+        0
+      ],
+      "reference_latents_method": "index_timestep_zero"
+    },
+    "_meta": {
+      "title": "Full-Body Reference Method"
+    }
+  },
+  "42": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "41",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Full-Body Negative Conditioning"
+    }
+  },
+  "43": {
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "width": 2880,
+      "height": 1920,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "Full-Body Three-View Size 2880x1920"
+    }
+  },
+  "44": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "7",
+        0
+      ],
+      "positive": [
+        "41",
+        0
+      ],
+      "negative": [
+        "42",
+        0
+      ],
+      "latent_image": [
+        "43",
+        0
+      ],
+      "seed": 25110823,
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "Full-Body Three-View Sampler"
+    }
+  },
+  "45": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "44",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Full-Body Three-View Decode"
+    }
+  },
+  "46": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "45",
+        0
+      ],
+      "filename_prefix": "actor-assets/03_fullbody_threeview"
+    },
+    "_meta": {
+      "title": "Save Full-Body Three-View"
+    }
+  },
+  "47": {
+    "class_type": "ImageConcatMulti",
+    "inputs": {
+      "image_1": [
+        "32",
+        0
+      ],
+      "image_2": [
+        "45",
+        0
+      ],
+      "inputcount": 2,
+      "direction": "down",
+      "match_image_size": false
+    },
+    "_meta": {
+      "title": "Combine Bust + Full-Body Asset Sheet"
+    }
+  },
+  "48": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "47",
+        0
+      ],
+      "filename_prefix": "actor-assets/04_actor_asset_sheet"
+    },
+    "_meta": {
+      "title": "Save Final Actor Asset Sheet"
+    }
+  },
+  "50": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": [
+        "8",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ],
+      "image1": [
+        "23",
+        0
+      ],
+      "prompt": "Use image 1 as a clothing reference only. Extract the complete coordinated outfit worn by the model and present it as one clean front-facing ghost-mannequin product asset. Remove the person identity, face, hair, skin, body shape, pose, background and unrelated props. Preserve the exact garment categories, neckline, sleeves, silhouette, length, layers, colors, patterns, fabric, seams, closures and major construction details. Keep belts only when structurally part of the outfit. Exclude jewelry, handheld objects, headwear and shoes unless integral to the clothing design. Exactly one centered complete outfit, symmetrical product presentation, seamless pure white background, soft even studio lighting, no person, no visible body, no text, no logo added, no collage."
+    },
+    "_meta": {
+      "title": "Extract Full Outfit from Model"
+    }
+  },
+  "51": {
+    "class_type": "FluxKontextMultiReferenceLatentMethod",
+    "inputs": {
+      "conditioning": [
+        "50",
+        0
+      ],
+      "reference_latents_method": "index_timestep_zero"
+    },
+    "_meta": {
+      "title": "Outfit Extraction Reference Method"
+    }
+  },
+  "52": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "51",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Outfit Extraction Negative Conditioning"
+    }
+  },
+  "53": {
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "width": 1104,
+      "height": 1472,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "Extracted Outfit Size 1104x1472"
+    }
+  },
+  "54": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "7",
+        0
+      ],
+      "positive": [
+        "51",
+        0
+      ],
+      "negative": [
+        "52",
+        0
+      ],
+      "latent_image": [
+        "53",
+        0
+      ],
+      "seed": 25110824,
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "Outfit Extraction Sampler"
+    }
+  },
+  "55": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "54",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Outfit Extraction Decode"
+    }
+  },
+  "56": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "23",
+        0
+      ],
+      "on_true": [
+        "55",
+        0
+      ],
+      "switch": [
+        "73",
+        2
+      ]
+    },
+    "_meta": {
+      "title": "[AUTO] Normalize Uploaded Wardrobe"
+    }
+  },
+  "57": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "56",
+        0
+      ],
+      "filename_prefix": "actor-assets/00_wardrobe_reference"
+    },
+    "_meta": {
+      "title": "Save Selected Wardrobe Reference"
+    }
+  },
+  "58": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": "Photorealistic professional actor casting reference, one adult East Asian woman, front-facing complete full-body studio portrait, eye-level camera, standing upright in a neutral relaxed symmetrical pose, both arms naturally at her sides, entire body visible from head to bare feet with generous margin, centered composition. Natural facial features, long dark hair worn fully loose and untied, realistic healthy body proportions. She wears a simple fitted solid purple sleeveless yoga top and matching full-length purple yoga leggings. Plain seamless white studio background, soft even neutral lighting, sharp focus, accurate hands and feet. Exactly one person, no text, no collage, no props."
+    },
+    "_meta": {
+      "title": "[INPUT] Actor Description"
+    }
+  },
+  "59": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": ""
+    },
+    "_meta": {
+      "title": "[INPUT] Body Description (Optional)"
+    }
+  },
+  "60": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": ""
+    },
+    "_meta": {
+      "title": "[INPUT] Hidden / Back Hairstyle Description (Optional)"
+    }
+  },
+  "61": {
+    "class_type": "StringConcatenate",
+    "inputs": {
+      "string_a": [
+        "58",
+        0
+      ],
+      "string_b": [
+        "59",
+        0
+      ],
+      "delimiter": "\n\n"
+    },
+    "_meta": {
+      "title": "Compose Text Actor + Body"
+    }
+  },
+  "62": {
+    "class_type": "StringConcatenate",
+    "inputs": {
+      "string_a": [
+        "61",
+        0
+      ],
+      "string_b": [
+        "60",
+        0
+      ],
+      "delimiter": "\n\n"
+    },
+    "_meta": {
+      "title": "Compose Text Actor + Hidden Hair"
+    }
+  },
+  "63": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": "Image 1 is a FACE / facial-features reference ONLY. Use image 1 solely for: eye shape, nose, mouth, lips, eyebrows, jawline, cheekbones, face shape, age appearance, skin tone, and facial identity. Do NOT copy from image 1: hairstyle, hair length, hair color, bangs, bun, tied hair, body shape, height, build, weight, clothing, pose, camera crop, or background. BODY: build the full body only from the written actor description and the optional body description below (height, build, proportions). If body text is blank, use natural healthy adult proportions — never the body in image 1. HAIR: create hairstyle only from the written actor description and the optional hair description below (length, color, texture, loose vs tied, back view). Never copy hair from image 1. If hair is described as loose/open, keep it fully untied in front (and later in three-views); if described as tied, follow that text exactly. Create a photorealistic professional actor casting master: front-facing complete full-body neutral studio portrait, eye-level, upright symmetrical stance, arms at sides, head to bare feet with margin, plain seamless white background, soft even lighting. Clothing: if the text describes an outfit use that; otherwise simple neutral studio wear. Exactly one person, no text, no collage, no props."
+    },
+    "_meta": {
+      "title": "Reference Actor Base Prompt"
+    }
+  },
+  "64": {
+    "class_type": "StringConcatenate",
+    "inputs": {
+      "string_a": [
+        "63",
+        0
+      ],
+      "string_b": [
+        "59",
+        0
+      ],
+      "delimiter": "\n\nBODY (text only — do not use body from face reference image):\n"
+    },
+    "_meta": {
+      "title": "Compose Reference + Body"
+    }
+  },
+  "65": {
+    "class_type": "StringConcatenate",
+    "inputs": {
+      "string_a": [
+        "64",
+        0
+      ],
+      "string_b": [
+        "60",
+        0
+      ],
+      "delimiter": "\n\nHAIR (text only — do not copy hair from face reference image):\n"
+    },
+    "_meta": {
+      "title": "Compose Reference + Hidden Hair"
+    }
+  },
+  "66": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": "Image 1 is the final actor MASTER: body proportions, wardrobe/outfit, and hairstyle already defined by text (not by any photo body/hair). Image 2 (when present and not blank) is a FACE reference ONLY for five facial features and identity — match face shape/eyes/nose/mouth/skin across all three panels. Do NOT copy hairstyle or body from image 2. Create one wide professional actor turnaround sheet: exactly three equal vertical panels with clean white separators. Every panel: complete body head to bare feet, upright neutral pose, arms at sides. HAIR (from text / master only — identical on LEFT, CENTER, RIGHT): Follow the hairstyle already on the master image and any hair description text (length, color, loose vs tied). If hair is loose/open: fully free-falling on the back panel — no invented bun, 发髻, half-up, topknot, or updo. If hair is tied per text/master: keep the same tie on every panel. Do not invent a default rear style. LEFT: exact front view. CENTER: right-facing 45-degree three-quarter. RIGHT: exact back view with the same hairstyle structure as the front/master. Same scale, eye-level, light-gray studio background, accurate hands and feet. No text, labels, extra people, crop, duplicated limbs, shoes, or clothing changes."
+    },
+    "_meta": {
+      "title": "Full-Body Three-View Base Prompt"
+    }
+  },
+  "67": {
+    "class_type": "StringConcatenate",
+    "inputs": {
+      "string_a": [
+        "66",
+        0
+      ],
+      "string_b": [
+        "60",
+        0
+      ],
+      "delimiter": "\n\nHAIR (text only — must match master / hair description):\n"
+    },
+    "_meta": {
+      "title": "Compose Full-Body + Hidden Hair"
+    }
+  },
+  "68": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": "Bust three-view is produced by cropping the full-body three-view (no second sample). Upper strip of the three panels: front | three-quarter | back head-and-shoulders."
+    },
+    "_meta": {
+      "title": "Bust Three-View Base Prompt"
+    }
+  },
+  "69": {
+    "class_type": "StringConcatenate",
+    "inputs": {
+      "string_a": [
+        "68",
+        0
+      ],
+      "string_b": [
+        "60",
+        0
+      ],
+      "delimiter": "\n\nOptional hidden/back hairstyle description:\n"
+    },
+    "_meta": {
+      "title": "Compose Bust + Hidden Hair"
+    }
+  },
+  "70": {
+    "class_type": "GetImageSize",
+    "inputs": {
+      "image": [
+        "15",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Detect Actor Reference Size"
+    }
+  },
+  "71": {
+    "class_type": "SimpleCalculatorKJ",
+    "inputs": {
+      "variables.a": [
+        "70",
+        0
+      ],
+      "expression": "a > 1"
+    },
+    "_meta": {
+      "title": "Actor Reference Present (width > 1)"
+    }
+  },
+  "72": {
+    "class_type": "GetImageSize",
+    "inputs": {
+      "image": [
+        "23",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Detect Wardrobe Reference Size"
+    }
+  },
+  "73": {
+    "class_type": "SimpleCalculatorKJ",
+    "inputs": {
+      "variables.a": [
+        "72",
+        0
+      ],
+      "expression": "a > 1"
+    },
+    "_meta": {
+      "title": "Wardrobe Reference Present (width > 1)"
+    }
+  }
+}

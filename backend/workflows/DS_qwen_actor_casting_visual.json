@@ -1,0 +1,4622 @@
+{
+  "last_node_id": 455,
+  "last_link_id": 105,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "MarkdownNote",
+      "pos": [
+        0,
+        -120
+      ],
+      "size": [
+        520,
+        360
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "MarkdownNote"
+      },
+      "widgets_values": [
+        "# Director-Studio · Qwen Actor Asset Workbench (UI 镜像)\n\n对应：`qwen_actor_asset_workbench.api.json` + `workflow.py` 运行时补丁。\n\n## 参考策略\n- **image 脸图** = 只锁五官\n- **body / hair 文字** = 身材与发型权威\n- **服装图** = 只换衣（可选）\n- **三视** = 分视角采样 + 侧/背 hair-fix + 横向拼接\n- **胸像三视** = 全身三视顶部 crop（不再采样）\n\n## 使用\n1. 加载脸图 / 可选服装图\n2. 填 description / body / hair\n3. Queue 全图（或只跑到 master 预览）\n\n本图为**可视化教学/调试**；生产路径仍以 DS 后端 API 注入为准。\n"
+      ],
+      "title": "DS Qwen Actor Casting · 说明"
+    },
+    {
+      "id": 15,
+      "type": "LoadImage",
+      "pos": [
+        0,
+        280
+      ],
+      "size": [
+        320,
+        340
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            10,
+            39,
+            51,
+            75
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": [],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ],
+      "title": "[IN] 脸/五官 ref (actor)"
+    },
+    {
+      "id": 23,
+      "type": "LoadImage",
+      "pos": [
+        0,
+        660
+      ],
+      "size": [
+        320,
+        340
+      ],
+      "flags": {},
+      "order": 23,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            24,
+            35
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": [],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ],
+      "title": "[IN] 服装 ref (可选)"
+    },
+    {
+      "id": 58,
+      "type": "PrimitiveStringMultiline",
+      "pos": [
+        360,
+        280
+      ],
+      "size": [
+        400,
+        160
+      ],
+      "flags": {},
+      "order": 58,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PrimitiveStringMultiline"
+      },
+      "widgets_values": [
+        "Photorealistic professional actor casting, one adult East Asian woman about 25, front-facing full-body studio portrait."
+      ],
+      "title": "[IN] Actor description"
+    },
+    {
+      "id": 59,
+      "type": "PrimitiveStringMultiline",
+      "pos": [
+        360,
+        480
+      ],
+      "size": [
+        400,
+        120
+      ],
+      "flags": {},
+      "order": 59,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            4
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PrimitiveStringMultiline"
+      },
+      "widgets_values": [
+        "165cm average height, slim balanced proportions, natural adult build"
+      ],
+      "title": "[IN] Body description (文字权威)"
+    },
+    {
+      "id": 60,
+      "type": "PrimitiveStringMultiline",
+      "pos": [
+        360,
+        640
+      ],
+      "size": [
+        400,
+        140
+      ],
+      "flags": {},
+      "order": 60,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            6
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PrimitiveStringMultiline"
+      },
+      "widgets_values": [
+        "Long wavy black hair fully loose and completely untied; free-falling; no bun, no half-up, no ponytail, no 发髻"
+      ],
+      "title": "[IN] Hair description (文字权威)"
+    },
+    {
+      "id": 63,
+      "type": "PrimitiveStringMultiline",
+      "pos": [
+        360,
+        820
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 63,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PrimitiveStringMultiline"
+      },
+      "widgets_values": [
+        "Image 1 is a FACE / facial-features reference ONLY. Use image 1 solely for: eye shape, nose, mouth, lips, eyebrows, jawline, cheekbones, face shape, age appearance, skin tone, and facial identity. Do NOT copy from image 1: hairstyle, hair length, hair color, bangs, bun, tied hair, body shape, height, build, weight, clothing, pose, camera crop, or background. BODY: build the full body only from the written actor description and the optional body description below (height, build, proportions). HAIR: create hairstyle only from the written actor description and the optional hair description below. Never copy hair from image 1. Create a photorealistic professional actor casting master: front-facing complete full-body neutral studio portrait, eye-level, upright symmetrical stance, arms at sides, head to bare feet with margin, plain seamless white background, soft even lighting. Exactly one person, no text, no collage, no props."
+      ],
+      "title": "[PROMPT] Face-only master base"
+    },
+    {
+      "id": 70,
+      "type": "StringConcatenate",
+      "pos": [
+        800,
+        280
+      ],
+      "size": [
+        320,
+        100
+      ],
+      "flags": {},
+      "order": 70,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "string_a",
+          "type": "STRING",
+          "link": 1,
+          "widget": {
+            "name": "string_a"
+          }
+        },
+        {
+          "name": "string_b",
+          "type": "STRING",
+          "link": 2,
+          "widget": {
+            "name": "string_b"
+          }
+        },
+        {
+          "name": "delimiter",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "delimiter"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            3
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "StringConcatenate"
+      },
+      "widgets_values": [
+        "",
+        "",
+        "\n\n"
+      ],
+      "title": "merge base+desc"
+    },
+    {
+      "id": 71,
+      "type": "StringConcatenate",
+      "pos": [
+        800,
+        420
+      ],
+      "size": [
+        320,
+        100
+      ],
+      "flags": {},
+      "order": 71,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "string_a",
+          "type": "STRING",
+          "link": 3,
+          "widget": {
+            "name": "string_a"
+          }
+        },
+        {
+          "name": "string_b",
+          "type": "STRING",
+          "link": 4,
+          "widget": {
+            "name": "string_b"
+          }
+        },
+        {
+          "name": "delimiter",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "delimiter"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            5
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "StringConcatenate"
+      },
+      "widgets_values": [
+        "",
+        "",
+        "\n\nBODY (text only):\n"
+      ],
+      "title": "merge +body"
+    },
+    {
+      "id": 72,
+      "type": "StringConcatenate",
+      "pos": [
+        800,
+        560
+      ],
+      "size": [
+        320,
+        100
+      ],
+      "flags": {},
+      "order": 72,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "string_a",
+          "type": "STRING",
+          "link": 5,
+          "widget": {
+            "name": "string_a"
+          }
+        },
+        {
+          "name": "string_b",
+          "type": "STRING",
+          "link": 6,
+          "widget": {
+            "name": "string_b"
+          }
+        },
+        {
+          "name": "delimiter",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "delimiter"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            19
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "StringConcatenate"
+      },
+      "widgets_values": [
+        "",
+        "",
+        "\n\nHAIR (text only):\n"
+      ],
+      "title": "merge +hair → MASTER PROMPT"
+    },
+    {
+      "id": 100,
+      "type": "UNETLoader",
+      "pos": [
+        1200,
+        280
+      ],
+      "size": [
+        360,
+        100
+      ],
+      "flags": {},
+      "order": 100,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            7
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "qwen_image_edit_2511_fp8mixed.safetensors",
+        "default"
+      ],
+      "title": "UNET (Qwen Edit)"
+    },
+    {
+      "id": 101,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+        1200,
+        420
+      ],
+      "size": [
+        360,
+        110
+      ],
+      "flags": {},
+      "order": 101,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 7
+        },
+        {
+          "name": "lora_name",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "lora_name"
+          }
+        },
+        {
+          "name": "strength_model",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "strength_model"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            13,
+            27,
+            42,
+            54,
+            66,
+            78,
+            90
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+        "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+        1.0
+      ],
+      "title": "Lightning LoRA 4step"
+    },
+    {
+      "id": 102,
+      "type": "CLIPLoader",
+      "pos": [
+        1200,
+        580
+      ],
+      "size": [
+        360,
+        120
+      ],
+      "flags": {},
+      "order": 102,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            8,
+            21,
+            36,
+            48,
+            60,
+            72,
+            84
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader"
+      },
+      "widgets_values": [
+        "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "qwen_image",
+        "default"
+      ],
+      "title": "CLIP"
+    },
+    {
+      "id": 103,
+      "type": "VAELoader",
+      "pos": [
+        1200,
+        740
+      ],
+      "size": [
+        360,
+        80
+      ],
+      "flags": {},
+      "order": 103,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            9,
+            18,
+            22,
+            32,
+            37,
+            47,
+            49,
+            59,
+            61,
+            71,
+            73,
+            83,
+            85,
+            95
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "qwen_image_vae.safetensors"
+      ],
+      "title": "VAE"
+    },
+    {
+      "id": 200,
+      "type": "TextEncodeQwenImageEditPlus",
+      "pos": [
+        1640,
+        200
+      ],
+      "size": [
+        360,
+        200
+      ],
+      "flags": {},
+      "order": 200,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 8
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 9
+        },
+        {
+          "name": "image1",
+          "type": "IMAGE",
+          "link": 10
+        },
+        {
+          "name": "image2",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image3",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "link": 19,
+          "widget": {
+            "name": "prompt"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            11
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TextEncodeQwenImageEditPlus"
+      },
+      "widgets_values": [
+        "Image 1 is a FACE / facial-features reference ONLY. Use image 1 solely for: eye shape, nose, mouth, lips, eyebrows, jawline, cheekbones, face shape, age appearance, skin tone, and facial identity. Do NOT copy from image 1: hairstyle, hair length, hair color, bangs, bun, tied hair, body shape, height, build, weight, clothing, pose, camera crop, or background. BODY: build the full body only from the written actor description and the optional body description below (height, build, proportions). HAIR: create hairstyle only from the written actor description and the optional hair description below. Never copy hair from image 1. Create a photorealistic professional actor casting master: front-facing complete full-body neutral studio portrait, eye-level, upright symmetrical stance, arms at sides, head to bare feet with margin, plain seamless white background, soft even lighting. Exactly one person, no text, no collage, no props.\n\n(See left panel: description + body + hair text authority)"
+      ],
+      "title": "MASTER face-ref · Encode"
+    },
+    {
+      "id": 201,
+      "type": "FluxKontextMultiReferenceLatentMethod",
+      "pos": [
+        1640,
+        430
+      ],
+      "size": [
+        360,
+        80
+      ],
+      "flags": {},
+      "order": 201,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 11
+        },
+        {
+          "name": "reference_latents_method",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "reference_latents_method"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            12,
+            14
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "FluxKontextMultiReferenceLatentMethod"
+      },
+      "widgets_values": [
+        "index_timestep_zero"
+      ],
+      "title": "MASTER face-ref · RefMethod"
+    },
+    {
+      "id": 202,
+      "type": "ConditioningZeroOut",
+      "pos": [
+        2040,
+        430
+      ],
+      "size": [
+        240,
+        60
+      ],
+      "flags": {},
+      "order": 202,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 12
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            15
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ConditioningZeroOut"
+      },
+      "widgets_values": [],
+      "title": "MASTER face-ref · Neg0"
+    },
+    {
+      "id": 203,
+      "type": "EmptySD3LatentImage",
+      "pos": [
+        2040,
+        200
+      ],
+      "size": [
+        240,
+        120
+      ],
+      "flags": {},
+      "order": 203,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "width"
+          }
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "height"
+          }
+        },
+        {
+          "name": "batch_size",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "batch_size"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            16
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EmptySD3LatentImage"
+      },
+      "widgets_values": [
+        1024,
+        1536,
+        1
+      ],
+      "title": "MASTER face-ref · Latent"
+    },
+    {
+      "id": 204,
+      "type": "KSampler",
+      "pos": [
+        2340,
+        200
+      ],
+      "size": [
+        280,
+        300
+      ],
+      "flags": {},
+      "order": 204,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 13
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 14
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 15
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 16
+        },
+        {
+          "name": "seed",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "seed"
+          }
+        },
+        {
+          "name": "steps",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "steps"
+          }
+        },
+        {
+          "name": "cfg",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "cfg"
+          }
+        },
+        {
+          "name": "sampler_name",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "sampler_name"
+          }
+        },
+        {
+          "name": "scheduler",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "scheduler"
+          }
+        },
+        {
+          "name": "denoise",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "denoise"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            17
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        42,
+        "fixed",
+        4,
+        1.0,
+        "euler",
+        "simple",
+        1.0
+      ],
+      "title": "MASTER face-ref · Sample"
+    },
+    {
+      "id": 205,
+      "type": "VAEDecode",
+      "pos": [
+        2660,
+        200
+      ],
+      "size": [
+        240,
+        80
+      ],
+      "flags": {},
+      "order": 205,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 17
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 18
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            20,
+            23
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": [],
+      "title": "MASTER face-ref · Decode"
+    },
+    {
+      "id": 31,
+      "type": "SaveImage",
+      "pos": [
+        2900,
+        200
+      ],
+      "size": [
+        300,
+        280
+      ],
+      "flags": {},
+      "order": 31,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 20
+        },
+        {
+          "name": "filename_prefix",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "filename_prefix"
+          }
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "DS_01_actor_master"
+      ],
+      "title": "01 · Actor Master (pre-wardrobe)"
+    },
+    {
+      "id": 80,
+      "type": "PrimitiveStringMultiline",
+      "pos": [
+        1640,
+        720
+      ],
+      "size": [
+        360,
+        140
+      ],
+      "flags": {},
+      "order": 80,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            33
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PrimitiveStringMultiline"
+      },
+      "widgets_values": [
+        "Image 1 is the target actor master — LOCK its face, body silhouette, limb length, shoulder width, hip/waist ratio, height-in-frame, pose, and hairstyle. Image 2 is a CLOTHING / fabric / garment reference ONLY. Task: re-dress image 1 with the outfit from image 2. Change only clothes. HARD BODY LOCK: keep exact body proportions of image 1. Preserve face identity and hairstyle of image 1. Exactly one front-facing complete full-body actor, bare feet, plain white studio background."
+      ],
+      "title": "[PROMPT] Wardrobe transfer"
+    },
+    {
+      "id": 300,
+      "type": "TextEncodeQwenImageEditPlus",
+      "pos": [
+        1640,
+        900
+      ],
+      "size": [
+        360,
+        200
+      ],
+      "flags": {},
+      "order": 300,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 21
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 22
+        },
+        {
+          "name": "image1",
+          "type": "IMAGE",
+          "link": 23
+        },
+        {
+          "name": "image2",
+          "type": "IMAGE",
+          "link": 24
+        },
+        {
+          "name": "image3",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "link": 33,
+          "widget": {
+            "name": "prompt"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            25
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TextEncodeQwenImageEditPlus"
+      },
+      "widgets_values": [
+        "Image 1 is the target actor master — LOCK its face, body silhouette, limb length, shoulder width, hip/waist ratio, height-in-frame, pose, and hairstyle. Image 2 is a CLOTHING / fabric / garment reference ONLY. Task: re-dress image 1 with the outfit from image 2. Change only clothes. HARD BODY LOCK: keep exact body proportions of image 1. Preserve face identity and hairstyle of image 1. Exactly one front-facing complete full-body actor, bare feet, plain white studio background."
+      ],
+      "title": "WARDROBE apply · Encode"
+    },
+    {
+      "id": 301,
+      "type": "FluxKontextMultiReferenceLatentMethod",
+      "pos": [
+        1640,
+        1130
+      ],
+      "size": [
+        360,
+        80
+      ],
+      "flags": {},
+      "order": 301,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 25
+        },
+        {
+          "name": "reference_latents_method",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "reference_latents_method"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            26,
+            28
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "FluxKontextMultiReferenceLatentMethod"
+      },
+      "widgets_values": [
+        "index_timestep_zero"
+      ],
+      "title": "WARDROBE apply · RefMethod"
+    },
+    {
+      "id": 302,
+      "type": "ConditioningZeroOut",
+      "pos": [
+        2040,
+        1130
+      ],
+      "size": [
+        240,
+        60
+      ],
+      "flags": {},
+      "order": 302,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 26
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            29
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ConditioningZeroOut"
+      },
+      "widgets_values": [],
+      "title": "WARDROBE apply · Neg0"
+    },
+    {
+      "id": 303,
+      "type": "EmptySD3LatentImage",
+      "pos": [
+        2040,
+        900
+      ],
+      "size": [
+        240,
+        120
+      ],
+      "flags": {},
+      "order": 303,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "width"
+          }
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "height"
+          }
+        },
+        {
+          "name": "batch_size",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "batch_size"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            30
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EmptySD3LatentImage"
+      },
+      "widgets_values": [
+        1024,
+        1536,
+        1
+      ],
+      "title": "WARDROBE apply · Latent"
+    },
+    {
+      "id": 304,
+      "type": "KSampler",
+      "pos": [
+        2340,
+        900
+      ],
+      "size": [
+        280,
+        300
+      ],
+      "flags": {},
+      "order": 304,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 27
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 28
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 29
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 30
+        },
+        {
+          "name": "seed",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "seed"
+          }
+        },
+        {
+          "name": "steps",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "steps"
+          }
+        },
+        {
+          "name": "cfg",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "cfg"
+          }
+        },
+        {
+          "name": "sampler_name",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "sampler_name"
+          }
+        },
+        {
+          "name": "scheduler",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "scheduler"
+          }
+        },
+        {
+          "name": "denoise",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "denoise"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            31
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        43,
+        "fixed",
+        4,
+        1.0,
+        "euler",
+        "simple",
+        1.0
+      ],
+      "title": "WARDROBE apply · Sample"
+    },
+    {
+      "id": 305,
+      "type": "VAEDecode",
+      "pos": [
+        2660,
+        900
+      ],
+      "size": [
+        240,
+        80
+      ],
+      "flags": {},
+      "order": 305,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 31
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 32
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            34,
+            38,
+            50,
+            63,
+            74,
+            87
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": [],
+      "title": "WARDROBE apply · Decode"
+    },
+    {
+      "id": 330,
+      "type": "SaveImage",
+      "pos": [
+        2900,
+        900
+      ],
+      "size": [
+        300,
+        280
+      ],
+      "flags": {},
+      "order": 330,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 34
+        },
+        {
+          "name": "filename_prefix",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "filename_prefix"
+          }
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "DS_01b_master_wardrobe"
+      ],
+      "title": "01b · Master after wardrobe (DS node30)"
+    },
+    {
+      "id": 57,
+      "type": "SaveImage",
+      "pos": [
+        360,
+        1020
+      ],
+      "size": [
+        280,
+        260
+      ],
+      "flags": {},
+      "order": 57,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 35
+        },
+        {
+          "name": "filename_prefix",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "filename_prefix"
+          }
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "DS_00_wardrobe_reference"
+      ],
+      "title": "00 · Wardrobe ref (input copy)"
+    },
+    {
+      "id": 400,
+      "type": "TextEncodeQwenImageEditPlus",
+      "pos": [
+        3300,
+        80
+      ],
+      "size": [
+        360,
+        200
+      ],
+      "flags": {},
+      "order": 400,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 36
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 37
+        },
+        {
+          "name": "image1",
+          "type": "IMAGE",
+          "link": 38
+        },
+        {
+          "name": "image2",
+          "type": "IMAGE",
+          "link": 39
+        },
+        {
+          "name": "image3",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "prompt"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            40
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TextEncodeQwenImageEditPlus"
+      },
+      "widgets_values": [
+        "Image 1 is the actor MASTER. Produce a near-identical FRONT full-body casting photo. Keep the exact same face, hairstyle, body, and clothing as image 1. Image 2 is face micro-detail only.\nCAMERA: exact front view, subject facing the camera squarely.\nFull body head to bare feet, plain light-gray studio background.\nExactly one person, no text."
+      ],
+      "title": "TV1 front · Encode"
+    },
+    {
+      "id": 401,
+      "type": "FluxKontextMultiReferenceLatentMethod",
+      "pos": [
+        3300,
+        310
+      ],
+      "size": [
+        360,
+        80
+      ],
+      "flags": {},
+      "order": 401,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 40
+        },
+        {
+          "name": "reference_latents_method",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "reference_latents_method"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            41,
+            43
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "FluxKontextMultiReferenceLatentMethod"
+      },
+      "widgets_values": [
+        "index_timestep_zero"
+      ],
+      "title": "TV1 front · RefMethod"
+    },
+    {
+      "id": 402,
+      "type": "ConditioningZeroOut",
+      "pos": [
+        3700,
+        310
+      ],
+      "size": [
+        240,
+        60
+      ],
+      "flags": {},
+      "order": 402,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 41
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            44
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ConditioningZeroOut"
+      },
+      "widgets_values": [],
+      "title": "TV1 front · Neg0"
+    },
+    {
+      "id": 403,
+      "type": "EmptySD3LatentImage",
+      "pos": [
+        3700,
+        80
+      ],
+      "size": [
+        240,
+        120
+      ],
+      "flags": {},
+      "order": 403,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "width"
+          }
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "height"
+          }
+        },
+        {
+          "name": "batch_size",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "batch_size"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            45
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EmptySD3LatentImage"
+      },
+      "widgets_values": [
+        960,
+        1920,
+        1
+      ],
+      "title": "TV1 front · Latent"
+    },
+    {
+      "id": 404,
+      "type": "KSampler",
+      "pos": [
+        4000,
+        80
+      ],
+      "size": [
+        280,
+        300
+      ],
+      "flags": {},
+      "order": 404,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 42
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 43
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 44
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 45
+        },
+        {
+          "name": "seed",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "seed"
+          }
+        },
+        {
+          "name": "steps",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "steps"
+          }
+        },
+        {
+          "name": "cfg",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "cfg"
+          }
+        },
+        {
+          "name": "sampler_name",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "sampler_name"
+          }
+        },
+        {
+          "name": "scheduler",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "scheduler"
+          }
+        },
+        {
+          "name": "denoise",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "denoise"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            46
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        142,
+        "fixed",
+        4,
+        1.0,
+        "euler",
+        "simple",
+        1.0
+      ],
+      "title": "TV1 front · Sample"
+    },
+    {
+      "id": 405,
+      "type": "VAEDecode",
+      "pos": [
+        4320,
+        80
+      ],
+      "size": [
+        240,
+        80
+      ],
+      "flags": {},
+      "order": 405,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 46
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 47
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            96
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": [],
+      "title": "TV1 front · Decode"
+    },
+    {
+      "id": 420,
+      "type": "TextEncodeQwenImageEditPlus",
+      "pos": [
+        3300,
+        520
+      ],
+      "size": [
+        360,
+        200
+      ],
+      "flags": {},
+      "order": 420,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 48
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 49
+        },
+        {
+          "name": "image1",
+          "type": "IMAGE",
+          "link": 50
+        },
+        {
+          "name": "image2",
+          "type": "IMAGE",
+          "link": 51
+        },
+        {
+          "name": "image3",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "prompt"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            52
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TextEncodeQwenImageEditPlus"
+      },
+      "widgets_values": [
+        "Image 1 is the locked actor MASTER — source of truth for face, hair, body, clothes. Rotate ONLY the camera. Image 2 is FACE detail only — never take hair from image 2.\nCAMERA: right-facing 45-degree three-quarter view.\nCRITICAL: keep master's hairstyle; do not invent a bun if master is loose.\nFull body head to bare feet, plain light-gray studio background.\nExactly one person, no text."
+      ],
+      "title": "TV1 three-quarter · Encode"
+    },
+    {
+      "id": 421,
+      "type": "FluxKontextMultiReferenceLatentMethod",
+      "pos": [
+        3300,
+        750
+      ],
+      "size": [
+        360,
+        80
+      ],
+      "flags": {},
+      "order": 421,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 52
+        },
+        {
+          "name": "reference_latents_method",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "reference_latents_method"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            53,
+            55
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "FluxKontextMultiReferenceLatentMethod"
+      },
+      "widgets_values": [
+        "index_timestep_zero"
+      ],
+      "title": "TV1 three-quarter · RefMethod"
+    },
+    {
+      "id": 422,
+      "type": "ConditioningZeroOut",
+      "pos": [
+        3700,
+        750
+      ],
+      "size": [
+        240,
+        60
+      ],
+      "flags": {},
+      "order": 422,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 53
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            56
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ConditioningZeroOut"
+      },
+      "widgets_values": [],
+      "title": "TV1 three-quarter · Neg0"
+    },
+    {
+      "id": 423,
+      "type": "EmptySD3LatentImage",
+      "pos": [
+        3700,
+        520
+      ],
+      "size": [
+        240,
+        120
+      ],
+      "flags": {},
+      "order": 423,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "width"
+          }
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "height"
+          }
+        },
+        {
+          "name": "batch_size",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "batch_size"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            57
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EmptySD3LatentImage"
+      },
+      "widgets_values": [
+        960,
+        1920,
+        1
+      ],
+      "title": "TV1 three-quarter · Latent"
+    },
+    {
+      "id": 424,
+      "type": "KSampler",
+      "pos": [
+        4000,
+        520
+      ],
+      "size": [
+        280,
+        300
+      ],
+      "flags": {},
+      "order": 424,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 54
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 55
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 56
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 57
+        },
+        {
+          "name": "seed",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "seed"
+          }
+        },
+        {
+          "name": "steps",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "steps"
+          }
+        },
+        {
+          "name": "cfg",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "cfg"
+          }
+        },
+        {
+          "name": "sampler_name",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "sampler_name"
+          }
+        },
+        {
+          "name": "scheduler",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "scheduler"
+          }
+        },
+        {
+          "name": "denoise",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "denoise"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            58
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        143,
+        "fixed",
+        4,
+        1.0,
+        "euler",
+        "simple",
+        1.0
+      ],
+      "title": "TV1 three-quarter · Sample"
+    },
+    {
+      "id": 425,
+      "type": "VAEDecode",
+      "pos": [
+        4320,
+        520
+      ],
+      "size": [
+        240,
+        80
+      ],
+      "flags": {},
+      "order": 425,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 58
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 59
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            62
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": [],
+      "title": "TV1 three-quarter · Decode"
+    },
+    {
+      "id": 430,
+      "type": "TextEncodeQwenImageEditPlus",
+      "pos": [
+        4700,
+        520
+      ],
+      "size": [
+        360,
+        200
+      ],
+      "flags": {},
+      "order": 430,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 60
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 61
+        },
+        {
+          "name": "image1",
+          "type": "IMAGE",
+          "link": 62
+        },
+        {
+          "name": "image2",
+          "type": "IMAGE",
+          "link": 63
+        },
+        {
+          "name": "image3",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "prompt"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            64
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TextEncodeQwenImageEditPlus"
+      },
+      "widgets_values": [
+        "Image 1 is a three-view angle of the actor (pose/camera already correct). Image 2 is the MASTER with the CORRECT hairstyle. Redraw image 1 so the person has the EXACT same hairstyle as image 2. Keep image 1's camera angle, body pose, body proportions, and clothing. Only fix the hair to match image 2. If image 2 is loose free-falling hair, result must NOT have a bun or half-up. Photoreal casting photo, plain studio background, one person, no text."
+      ],
+      "title": "TV2 hair-fix 3/4 · Encode"
+    },
+    {
+      "id": 431,
+      "type": "FluxKontextMultiReferenceLatentMethod",
+      "pos": [
+        4700,
+        750
+      ],
+      "size": [
+        360,
+        80
+      ],
+      "flags": {},
+      "order": 431,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 64
+        },
+        {
+          "name": "reference_latents_method",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "reference_latents_method"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            65,
+            67
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "FluxKontextMultiReferenceLatentMethod"
+      },
+      "widgets_values": [
+        "index_timestep_zero"
+      ],
+      "title": "TV2 hair-fix 3/4 · RefMethod"
+    },
+    {
+      "id": 432,
+      "type": "ConditioningZeroOut",
+      "pos": [
+        5100,
+        750
+      ],
+      "size": [
+        240,
+        60
+      ],
+      "flags": {},
+      "order": 432,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 65
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            68
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ConditioningZeroOut"
+      },
+      "widgets_values": [],
+      "title": "TV2 hair-fix 3/4 · Neg0"
+    },
+    {
+      "id": 433,
+      "type": "EmptySD3LatentImage",
+      "pos": [
+        5100,
+        520
+      ],
+      "size": [
+        240,
+        120
+      ],
+      "flags": {},
+      "order": 433,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "width"
+          }
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "height"
+          }
+        },
+        {
+          "name": "batch_size",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "batch_size"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            69
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EmptySD3LatentImage"
+      },
+      "widgets_values": [
+        960,
+        1920,
+        1
+      ],
+      "title": "TV2 hair-fix 3/4 · Latent"
+    },
+    {
+      "id": 434,
+      "type": "KSampler",
+      "pos": [
+        5400,
+        520
+      ],
+      "size": [
+        280,
+        300
+      ],
+      "flags": {},
+      "order": 434,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 66
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 67
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 68
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 69
+        },
+        {
+          "name": "seed",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "seed"
+          }
+        },
+        {
+          "name": "steps",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "steps"
+          }
+        },
+        {
+          "name": "cfg",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "cfg"
+          }
+        },
+        {
+          "name": "sampler_name",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "sampler_name"
+          }
+        },
+        {
+          "name": "scheduler",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "scheduler"
+          }
+        },
+        {
+          "name": "denoise",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "denoise"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            70
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        193,
+        "fixed",
+        4,
+        1.0,
+        "euler",
+        "simple",
+        1.0
+      ],
+      "title": "TV2 hair-fix 3/4 · Sample"
+    },
+    {
+      "id": 435,
+      "type": "VAEDecode",
+      "pos": [
+        5720,
+        520
+      ],
+      "size": [
+        240,
+        80
+      ],
+      "flags": {},
+      "order": 435,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 70
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 71
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            97
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": [],
+      "title": "TV2 hair-fix 3/4 · Decode"
+    },
+    {
+      "id": 440,
+      "type": "TextEncodeQwenImageEditPlus",
+      "pos": [
+        3300,
+        960
+      ],
+      "size": [
+        360,
+        200
+      ],
+      "flags": {},
+      "order": 440,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 72
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 73
+        },
+        {
+          "name": "image1",
+          "type": "IMAGE",
+          "link": 74
+        },
+        {
+          "name": "image2",
+          "type": "IMAGE",
+          "link": 75
+        },
+        {
+          "name": "image3",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "prompt"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            76
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TextEncodeQwenImageEditPlus"
+      },
+      "widgets_values": [
+        "Image 1 is the locked actor MASTER — source of truth for face, hair, body, clothes. Rotate ONLY the camera. Image 2 is FACE detail only — never take hair from image 2.\nCAMERA: exact back view, subject facing fully away.\nCRITICAL: keep master's hairstyle on the back; no invented 发髻.\nFull body head to bare feet, plain light-gray studio background.\nExactly one person, no text."
+      ],
+      "title": "TV1 back · Encode"
+    },
+    {
+      "id": 441,
+      "type": "FluxKontextMultiReferenceLatentMethod",
+      "pos": [
+        3300,
+        1190
+      ],
+      "size": [
+        360,
+        80
+      ],
+      "flags": {},
+      "order": 441,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 76
+        },
+        {
+          "name": "reference_latents_method",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "reference_latents_method"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            77,
+            79
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "FluxKontextMultiReferenceLatentMethod"
+      },
+      "widgets_values": [
+        "index_timestep_zero"
+      ],
+      "title": "TV1 back · RefMethod"
+    },
+    {
+      "id": 442,
+      "type": "ConditioningZeroOut",
+      "pos": [
+        3700,
+        1190
+      ],
+      "size": [
+        240,
+        60
+      ],
+      "flags": {},
+      "order": 442,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 77
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            80
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ConditioningZeroOut"
+      },
+      "widgets_values": [],
+      "title": "TV1 back · Neg0"
+    },
+    {
+      "id": 443,
+      "type": "EmptySD3LatentImage",
+      "pos": [
+        3700,
+        960
+      ],
+      "size": [
+        240,
+        120
+      ],
+      "flags": {},
+      "order": 443,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "width"
+          }
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "height"
+          }
+        },
+        {
+          "name": "batch_size",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "batch_size"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            81
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EmptySD3LatentImage"
+      },
+      "widgets_values": [
+        960,
+        1920,
+        1
+      ],
+      "title": "TV1 back · Latent"
+    },
+    {
+      "id": 444,
+      "type": "KSampler",
+      "pos": [
+        4000,
+        960
+      ],
+      "size": [
+        280,
+        300
+      ],
+      "flags": {},
+      "order": 444,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 78
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 79
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 80
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 81
+        },
+        {
+          "name": "seed",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "seed"
+          }
+        },
+        {
+          "name": "steps",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "steps"
+          }
+        },
+        {
+          "name": "cfg",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "cfg"
+          }
+        },
+        {
+          "name": "sampler_name",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "sampler_name"
+          }
+        },
+        {
+          "name": "scheduler",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "scheduler"
+          }
+        },
+        {
+          "name": "denoise",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "denoise"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            82
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        144,
+        "fixed",
+        4,
+        1.0,
+        "euler",
+        "simple",
+        1.0
+      ],
+      "title": "TV1 back · Sample"
+    },
+    {
+      "id": 445,
+      "type": "VAEDecode",
+      "pos": [
+        4320,
+        960
+      ],
+      "size": [
+        240,
+        80
+      ],
+      "flags": {},
+      "order": 445,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 82
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 83
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            86
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": [],
+      "title": "TV1 back · Decode"
+    },
+    {
+      "id": 450,
+      "type": "TextEncodeQwenImageEditPlus",
+      "pos": [
+        4700,
+        960
+      ],
+      "size": [
+        360,
+        200
+      ],
+      "flags": {},
+      "order": 450,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 84
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 85
+        },
+        {
+          "name": "image1",
+          "type": "IMAGE",
+          "link": 86
+        },
+        {
+          "name": "image2",
+          "type": "IMAGE",
+          "link": 87
+        },
+        {
+          "name": "image3",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "prompt"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            88
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TextEncodeQwenImageEditPlus"
+      },
+      "widgets_values": [
+        "Image 1 is a three-view angle of the actor (pose/camera already correct). Image 2 is the MASTER with the CORRECT hairstyle. Redraw image 1 so the person has the EXACT same hairstyle as image 2. Keep image 1's camera angle, body pose, body proportions, and clothing. Only fix the hair to match image 2. If image 2 is loose free-falling hair, result must NOT have a bun or half-up. Photoreal casting photo, plain studio background, one person, no text."
+      ],
+      "title": "TV2 hair-fix back · Encode"
+    },
+    {
+      "id": 451,
+      "type": "FluxKontextMultiReferenceLatentMethod",
+      "pos": [
+        4700,
+        1190
+      ],
+      "size": [
+        360,
+        80
+      ],
+      "flags": {},
+      "order": 451,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 88
+        },
+        {
+          "name": "reference_latents_method",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "reference_latents_method"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            89,
+            91
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "FluxKontextMultiReferenceLatentMethod"
+      },
+      "widgets_values": [
+        "index_timestep_zero"
+      ],
+      "title": "TV2 hair-fix back · RefMethod"
+    },
+    {
+      "id": 452,
+      "type": "ConditioningZeroOut",
+      "pos": [
+        5100,
+        1190
+      ],
+      "size": [
+        240,
+        60
+      ],
+      "flags": {},
+      "order": 452,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 89
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            92
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ConditioningZeroOut"
+      },
+      "widgets_values": [],
+      "title": "TV2 hair-fix back · Neg0"
+    },
+    {
+      "id": 453,
+      "type": "EmptySD3LatentImage",
+      "pos": [
+        5100,
+        960
+      ],
+      "size": [
+        240,
+        120
+      ],
+      "flags": {},
+      "order": 453,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "width"
+          }
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "height"
+          }
+        },
+        {
+          "name": "batch_size",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "batch_size"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            93
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EmptySD3LatentImage"
+      },
+      "widgets_values": [
+        960,
+        1920,
+        1
+      ],
+      "title": "TV2 hair-fix back · Latent"
+    },
+    {
+      "id": 454,
+      "type": "KSampler",
+      "pos": [
+        5400,
+        960
+      ],
+      "size": [
+        280,
+        300
+      ],
+      "flags": {},
+      "order": 454,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 90
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 91
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 92
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 93
+        },
+        {
+          "name": "seed",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "seed"
+          }
+        },
+        {
+          "name": "steps",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "steps"
+          }
+        },
+        {
+          "name": "cfg",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "cfg"
+          }
+        },
+        {
+          "name": "sampler_name",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "sampler_name"
+          }
+        },
+        {
+          "name": "scheduler",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "scheduler"
+          }
+        },
+        {
+          "name": "denoise",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "denoise"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            94
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        194,
+        "fixed",
+        4,
+        1.0,
+        "euler",
+        "simple",
+        1.0
+      ],
+      "title": "TV2 hair-fix back · Sample"
+    },
+    {
+      "id": 455,
+      "type": "VAEDecode",
+      "pos": [
+        5720,
+        960
+      ],
+      "size": [
+        240,
+        80
+      ],
+      "flags": {},
+      "order": 455,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 94
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 95
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            99
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": [],
+      "title": "TV2 hair-fix back · Decode"
+    },
+    {
+      "id": 280,
+      "type": "ImageConcatMulti",
+      "pos": [
+        6100,
+        300
+      ],
+      "size": [
+        300,
+        140
+      ],
+      "flags": {},
+      "order": 280,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image_1",
+          "type": "IMAGE",
+          "link": 96
+        },
+        {
+          "name": "image_2",
+          "type": "IMAGE",
+          "link": 97
+        },
+        {
+          "name": "inputcount",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "inputcount"
+          }
+        },
+        {
+          "name": "direction",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "direction"
+          }
+        },
+        {
+          "name": "match_image_size",
+          "type": "BOOLEAN",
+          "link": null,
+          "widget": {
+            "name": "match_image_size"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            98
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageConcatMulti"
+      },
+      "widgets_values": [
+        2,
+        "right",
+        true
+      ],
+      "title": "Concat front|3/4"
+    },
+    {
+      "id": 281,
+      "type": "ImageConcatMulti",
+      "pos": [
+        6100,
+        500
+      ],
+      "size": [
+        300,
+        140
+      ],
+      "flags": {},
+      "order": 281,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image_1",
+          "type": "IMAGE",
+          "link": 98
+        },
+        {
+          "name": "image_2",
+          "type": "IMAGE",
+          "link": 99
+        },
+        {
+          "name": "inputcount",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "inputcount"
+          }
+        },
+        {
+          "name": "direction",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "direction"
+          }
+        },
+        {
+          "name": "match_image_size",
+          "type": "BOOLEAN",
+          "link": null,
+          "widget": {
+            "name": "match_image_size"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            100,
+            101,
+            104
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageConcatMulti"
+      },
+      "widgets_values": [
+        2,
+        "right",
+        true
+      ],
+      "title": "Concat +back → fullbody_threeview"
+    },
+    {
+      "id": 46,
+      "type": "SaveImage",
+      "pos": [
+        6500,
+        480
+      ],
+      "size": [
+        320,
+        280
+      ],
+      "flags": {},
+      "order": 46,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 100
+        },
+        {
+          "name": "filename_prefix",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "filename_prefix"
+          }
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "DS_03_fullbody_threeview"
+      ],
+      "title": "03 · Full-body Three-view"
+    },
+    {
+      "id": 32,
+      "type": "ImageCrop",
+      "pos": [
+        6100,
+        720
+      ],
+      "size": [
+        300,
+        160
+      ],
+      "flags": {},
+      "order": 32,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 101
+        },
+        {
+          "name": "width",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "width"
+          }
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "height"
+          }
+        },
+        {
+          "name": "x",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "x"
+          }
+        },
+        {
+          "name": "y",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "y"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            102,
+            103
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageCrop"
+      },
+      "widgets_values": [
+        2880,
+        806,
+        0,
+        0
+      ],
+      "title": "Bust crop (top 42%, no resample)"
+    },
+    {
+      "id": 39,
+      "type": "SaveImage",
+      "pos": [
+        6500,
+        720
+      ],
+      "size": [
+        320,
+        280
+      ],
+      "flags": {},
+      "order": 39,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 102
+        },
+        {
+          "name": "filename_prefix",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "filename_prefix"
+          }
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "DS_02_bust_threeview"
+      ],
+      "title": "02 · Bust Three-view (crop)"
+    },
+    {
+      "id": 47,
+      "type": "ImageConcatMulti",
+      "pos": [
+        6100,
+        1040
+      ],
+      "size": [
+        300,
+        140
+      ],
+      "flags": {},
+      "order": 47,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image_1",
+          "type": "IMAGE",
+          "link": 103
+        },
+        {
+          "name": "image_2",
+          "type": "IMAGE",
+          "link": 104
+        },
+        {
+          "name": "inputcount",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "inputcount"
+          }
+        },
+        {
+          "name": "direction",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "direction"
+          }
+        },
+        {
+          "name": "match_image_size",
+          "type": "BOOLEAN",
+          "link": null,
+          "widget": {
+            "name": "match_image_size"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            105
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageConcatMulti"
+      },
+      "widgets_values": [
+        2,
+        "down",
+        true
+      ],
+      "title": "Asset sheet concat"
+    },
+    {
+      "id": 48,
+      "type": "SaveImage",
+      "pos": [
+        6500,
+        1040
+      ],
+      "size": [
+        320,
+        280
+      ],
+      "flags": {},
+      "order": 48,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 105
+        },
+        {
+          "name": "filename_prefix",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "filename_prefix"
+          }
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "DS_04_actor_asset_sheet"
+      ],
+      "title": "04 · Asset Sheet"
+    }
+  ],
+  "links": [
+    [
+      1,
+      63,
+      0,
+      70,
+      0,
+      "STRING"
+    ],
+    [
+      2,
+      58,
+      0,
+      70,
+      1,
+      "STRING"
+    ],
+    [
+      3,
+      70,
+      0,
+      71,
+      0,
+      "STRING"
+    ],
+    [
+      4,
+      59,
+      0,
+      71,
+      1,
+      "STRING"
+    ],
+    [
+      5,
+      71,
+      0,
+      72,
+      0,
+      "STRING"
+    ],
+    [
+      6,
+      60,
+      0,
+      72,
+      1,
+      "STRING"
+    ],
+    [
+      7,
+      100,
+      0,
+      101,
+      0,
+      "MODEL"
+    ],
+    [
+      8,
+      102,
+      0,
+      200,
+      0,
+      "CLIP"
+    ],
+    [
+      9,
+      103,
+      0,
+      200,
+      1,
+      "VAE"
+    ],
+    [
+      10,
+      15,
+      0,
+      200,
+      2,
+      "IMAGE"
+    ],
+    [
+      11,
+      200,
+      0,
+      201,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      12,
+      201,
+      0,
+      202,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      13,
+      101,
+      0,
+      204,
+      0,
+      "MODEL"
+    ],
+    [
+      14,
+      201,
+      0,
+      204,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      15,
+      202,
+      0,
+      204,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      16,
+      203,
+      0,
+      204,
+      3,
+      "LATENT"
+    ],
+    [
+      17,
+      204,
+      0,
+      205,
+      0,
+      "LATENT"
+    ],
+    [
+      18,
+      103,
+      0,
+      205,
+      1,
+      "VAE"
+    ],
+    [
+      19,
+      72,
+      0,
+      200,
+      5,
+      "STRING"
+    ],
+    [
+      20,
+      205,
+      0,
+      31,
+      0,
+      "IMAGE"
+    ],
+    [
+      21,
+      102,
+      0,
+      300,
+      0,
+      "CLIP"
+    ],
+    [
+      22,
+      103,
+      0,
+      300,
+      1,
+      "VAE"
+    ],
+    [
+      23,
+      205,
+      0,
+      300,
+      2,
+      "IMAGE"
+    ],
+    [
+      24,
+      23,
+      0,
+      300,
+      3,
+      "IMAGE"
+    ],
+    [
+      25,
+      300,
+      0,
+      301,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      26,
+      301,
+      0,
+      302,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      27,
+      101,
+      0,
+      304,
+      0,
+      "MODEL"
+    ],
+    [
+      28,
+      301,
+      0,
+      304,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      29,
+      302,
+      0,
+      304,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      30,
+      303,
+      0,
+      304,
+      3,
+      "LATENT"
+    ],
+    [
+      31,
+      304,
+      0,
+      305,
+      0,
+      "LATENT"
+    ],
+    [
+      32,
+      103,
+      0,
+      305,
+      1,
+      "VAE"
+    ],
+    [
+      33,
+      80,
+      0,
+      300,
+      5,
+      "STRING"
+    ],
+    [
+      34,
+      305,
+      0,
+      330,
+      0,
+      "IMAGE"
+    ],
+    [
+      35,
+      23,
+      0,
+      57,
+      0,
+      "IMAGE"
+    ],
+    [
+      36,
+      102,
+      0,
+      400,
+      0,
+      "CLIP"
+    ],
+    [
+      37,
+      103,
+      0,
+      400,
+      1,
+      "VAE"
+    ],
+    [
+      38,
+      305,
+      0,
+      400,
+      2,
+      "IMAGE"
+    ],
+    [
+      39,
+      15,
+      0,
+      400,
+      3,
+      "IMAGE"
+    ],
+    [
+      40,
+      400,
+      0,
+      401,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      41,
+      401,
+      0,
+      402,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      42,
+      101,
+      0,
+      404,
+      0,
+      "MODEL"
+    ],
+    [
+      43,
+      401,
+      0,
+      404,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      44,
+      402,
+      0,
+      404,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      45,
+      403,
+      0,
+      404,
+      3,
+      "LATENT"
+    ],
+    [
+      46,
+      404,
+      0,
+      405,
+      0,
+      "LATENT"
+    ],
+    [
+      47,
+      103,
+      0,
+      405,
+      1,
+      "VAE"
+    ],
+    [
+      48,
+      102,
+      0,
+      420,
+      0,
+      "CLIP"
+    ],
+    [
+      49,
+      103,
+      0,
+      420,
+      1,
+      "VAE"
+    ],
+    [
+      50,
+      305,
+      0,
+      420,
+      2,
+      "IMAGE"
+    ],
+    [
+      51,
+      15,
+      0,
+      420,
+      3,
+      "IMAGE"
+    ],
+    [
+      52,
+      420,
+      0,
+      421,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      53,
+      421,
+      0,
+      422,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      54,
+      101,
+      0,
+      424,
+      0,
+      "MODEL"
+    ],
+    [
+      55,
+      421,
+      0,
+      424,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      56,
+      422,
+      0,
+      424,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      57,
+      423,
+      0,
+      424,
+      3,
+      "LATENT"
+    ],
+    [
+      58,
+      424,
+      0,
+      425,
+      0,
+      "LATENT"
+    ],
+    [
+      59,
+      103,
+      0,
+      425,
+      1,
+      "VAE"
+    ],
+    [
+      60,
+      102,
+      0,
+      430,
+      0,
+      "CLIP"
+    ],
+    [
+      61,
+      103,
+      0,
+      430,
+      1,
+      "VAE"
+    ],
+    [
+      62,
+      425,
+      0,
+      430,
+      2,
+      "IMAGE"
+    ],
+    [
+      63,
+      305,
+      0,
+      430,
+      3,
+      "IMAGE"
+    ],
+    [
+      64,
+      430,
+      0,
+      431,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      65,
+      431,
+      0,
+      432,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      66,
+      101,
+      0,
+      434,
+      0,
+      "MODEL"
+    ],
+    [
+      67,
+      431,
+      0,
+      434,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      68,
+      432,
+      0,
+      434,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      69,
+      433,
+      0,
+      434,
+      3,
+      "LATENT"
+    ],
+    [
+      70,
+      434,
+      0,
+      435,
+      0,
+      "LATENT"
+    ],
+    [
+      71,
+      103,
+      0,
+      435,
+      1,
+      "VAE"
+    ],
+    [
+      72,
+      102,
+      0,
+      440,
+      0,
+      "CLIP"
+    ],
+    [
+      73,
+      103,
+      0,
+      440,
+      1,
+      "VAE"
+    ],
+    [
+      74,
+      305,
+      0,
+      440,
+      2,
+      "IMAGE"
+    ],
+    [
+      75,
+      15,
+      0,
+      440,
+      3,
+      "IMAGE"
+    ],
+    [
+      76,
+      440,
+      0,
+      441,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      77,
+      441,
+      0,
+      442,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      78,
+      101,
+      0,
+      444,
+      0,
+      "MODEL"
+    ],
+    [
+      79,
+      441,
+      0,
+      444,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      80,
+      442,
+      0,
+      444,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      81,
+      443,
+      0,
+      444,
+      3,
+      "LATENT"
+    ],
+    [
+      82,
+      444,
+      0,
+      445,
+      0,
+      "LATENT"
+    ],
+    [
+      83,
+      103,
+      0,
+      445,
+      1,
+      "VAE"
+    ],
+    [
+      84,
+      102,
+      0,
+      450,
+      0,
+      "CLIP"
+    ],
+    [
+      85,
+      103,
+      0,
+      450,
+      1,
+      "VAE"
+    ],
+    [
+      86,
+      445,
+      0,
+      450,
+      2,
+      "IMAGE"
+    ],
+    [
+      87,
+      305,
+      0,
+      450,
+      3,
+      "IMAGE"
+    ],
+    [
+      88,
+      450,
+      0,
+      451,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      89,
+      451,
+      0,
+      452,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      90,
+      101,
+      0,
+      454,
+      0,
+      "MODEL"
+    ],
+    [
+      91,
+      451,
+      0,
+      454,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      92,
+      452,
+      0,
+      454,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      93,
+      453,
+      0,
+      454,
+      3,
+      "LATENT"
+    ],
+    [
+      94,
+      454,
+      0,
+      455,
+      0,
+      "LATENT"
+    ],
+    [
+      95,
+      103,
+      0,
+      455,
+      1,
+      "VAE"
+    ],
+    [
+      96,
+      405,
+      0,
+      280,
+      0,
+      "IMAGE"
+    ],
+    [
+      97,
+      435,
+      0,
+      280,
+      1,
+      "IMAGE"
+    ],
+    [
+      98,
+      280,
+      0,
+      281,
+      0,
+      "IMAGE"
+    ],
+    [
+      99,
+      455,
+      0,
+      281,
+      1,
+      "IMAGE"
+    ],
+    [
+      100,
+      281,
+      0,
+      46,
+      0,
+      "IMAGE"
+    ],
+    [
+      101,
+      281,
+      0,
+      32,
+      0,
+      "IMAGE"
+    ],
+    [
+      102,
+      32,
+      0,
+      39,
+      0,
+      "IMAGE"
+    ],
+    [
+      103,
+      32,
+      0,
+      47,
+      0,
+      "IMAGE"
+    ],
+    [
+      104,
+      281,
+      0,
+      47,
+      1,
+      "IMAGE"
+    ],
+    [
+      105,
+      47,
+      0,
+      48,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "1. Inputs · 脸/服装/文字",
+      "bounding": [
+        -40,
+        -140,
+        1200,
+        1480
+      ],
+      "color": "#3f789e",
+      "font_size": 22,
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "2. Models",
+      "bounding": [
+        1160,
+        240,
+        420,
+        640
+      ],
+      "color": "#3f8058",
+      "font_size": 22,
+      "flags": {}
+    },
+    {
+      "id": 3,
+      "title": "3. Master · face-ref + optional wardrobe",
+      "bounding": [
+        1600,
+        160,
+        1650,
+        1400
+      ],
+      "color": "#8a6d3b",
+      "font_size": 22,
+      "flags": {}
+    },
+    {
+      "id": 4,
+      "title": "4. Three-view · Pass1 转角 + Pass2 侧/背修发 + Concat",
+      "bounding": [
+        3240,
+        40,
+        2800,
+        1400
+      ],
+      "color": "#a35c5c",
+      "font_size": 22,
+      "flags": {}
+    },
+    {
+      "id": 5,
+      "title": "5. Outputs · bust crop / fullbody / asset sheet",
+      "bounding": [
+        6040,
+        240,
+        900,
+        1200
+      ],
+      "color": "#6b5b95",
+      "font_size": 22,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.35,
+      "offset": [
+        80,
+        40
+      ]
+    },
+    "frontendVersion": "1.47.11",
+    "info": {
+      "name": "DS Qwen Actor Casting (visual)",
+      "source": "qwen_actor_asset_workbench.api.json + workflow.py"
+    }
+  },
+  "version": 0.4
+}

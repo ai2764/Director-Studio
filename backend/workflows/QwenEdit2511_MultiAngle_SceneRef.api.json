@@ -1,0 +1,168 @@
+{
+  "41": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "example.png"
+    },
+    "_meta": {
+      "title": "Scene plate"
+    }
+  },
+  "93": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    }
+  },
+  "95": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    }
+  },
+  "108": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "qwen_image_edit_2511_fp8mixed.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "109": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["108", 0],
+      "lora_name": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
+      "strength_model": 1
+    },
+    "_meta": {
+      "title": "LoRA · Multi-angle"
+    }
+  },
+  "102": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["109", 0],
+      "lora_name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+      "strength_model": 1.0
+    },
+    "_meta": {
+      "title": "LoRA · Lightning 4step (1.0)"
+    }
+  },
+  "94": {
+    "class_type": "ModelSamplingAuraFlow",
+    "inputs": {
+      "model": ["102", 0],
+      "shift": 3.1
+    }
+  },
+  "98": {
+    "class_type": "CFGNorm",
+    "inputs": {
+      "model": ["94", 0],
+      "strength": 1
+    }
+  },
+  "107": {
+    "class_type": "ImageScale",
+    "inputs": {
+      "image": ["41", 0],
+      "upscale_method": "lanczos",
+      "width": 1728,
+      "height": 960,
+      "crop": "center"
+    },
+    "_meta": {
+      "title": "Quality canvas 1728x960"
+    }
+  },
+  "105": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": ["107", 0],
+      "vae": ["95", 0]
+    },
+    "_meta": {
+      "title": "Encode scene at quality canvas"
+    }
+  },
+  "121": {
+    "class_type": "StringConstantMultiline",
+    "inputs": {
+      "string": "left side view, eye level, medium shot (horizontal: 270, vertical: 0, zoom: 5.0)\nback view, eye level, medium shot (horizontal: 180, vertical: 0, zoom: 5.0)\nright side view, eye level, medium shot (horizontal: 90, vertical: 0, zoom: 5.0)\nfront-left view, eye level, medium shot (horizontal: 315, vertical: 0, zoom: 5.0)\nfront-right view, eye level, medium shot (horizontal: 45, vertical: 0, zoom: 5.0)\nfront view, bird's eye view, medium shot (horizontal: 0, vertical: 45, zoom: 5.0)\nfront view, low angle, medium shot (horizontal: 0, vertical: -30, zoom: 5.0)",
+      "strip_newlines": false
+    }
+  },
+  "113": {
+    "class_type": "CR Prompt List",
+    "inputs": {
+      "multiline_text": ["121", 0],
+      "prepend_text": "Keep the same location, architecture, materials, furniture layout, lighting, and time of day. Only change the camera. Do not redesign the set.",
+      "append_text": "",
+      "start_index": 0,
+      "max_rows": 7
+    }
+  },
+  "112": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": ["93", 0],
+      "vae": ["95", 0],
+      "image1": ["107", 0],
+      "prompt": ["113", 0]
+    },
+    "_meta": {
+      "title": "Positive encode"
+    }
+  },
+  "97": {
+    "class_type": "FluxKontextMultiReferenceLatentMethod",
+    "inputs": {
+      "conditioning": ["112", 0],
+      "reference_latents_method": "index_timestep_zero"
+    }
+  },
+  "96": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": ["97", 0]
+    },
+    "_meta": {
+      "title": "Negative zero"
+    }
+  },
+  "106": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["98", 0],
+      "positive": ["97", 0],
+      "negative": ["96", 0],
+      "latent_image": ["105", 0],
+      "seed": 0,
+      "steps": 4,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1
+    }
+  },
+  "103": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["106", 0],
+      "vae": ["95", 0]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["103", 0],
+      "filename_prefix": "director-studio/scene"
+    },
+    "_meta": {
+      "title": "Save scene views"
+    }
+  }
+}
