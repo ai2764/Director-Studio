@@ -20,8 +20,7 @@ $required = @(
     "Install-Tools.py",
     "portable-tools-requirements.txt",
     ".env",
-    "README.md",
-    "data"
+    "README.md"
 )
 foreach ($relativePath in $required) {
     $candidate = Join-Path $packagePath $relativePath
@@ -51,11 +50,6 @@ foreach ($line in $envLines) {
     }
 }
 
-$dataPath = Join-Path $packagePath "data"
-if (Get-ChildItem -LiteralPath $dataPath -Force | Select-Object -First 1) {
-    throw "Packaged data directory must be empty"
-}
-
 $forbiddenNames = @(
     ".env.example",
     "credentials.json",
@@ -70,7 +64,14 @@ foreach ($item in Get-ChildItem -LiteralPath $packagePath -Recurse -Force) {
     if ($segments -contains "harness") {
         throw "Package contains Harness content: $relative"
     }
-    if ($segments -contains "projects" -or $segments -contains "jobs") {
+    if (
+        $segments -contains "data" -or
+        $segments -contains "workflow_profiles" -or
+        $segments -contains "projects" -or
+        $segments -contains "jobs" -or
+        $segments -contains "outputs" -or
+        $segments -contains "tests"
+    ) {
         throw "Package contains persisted user state: $relative"
     }
     if ($forbiddenNames -contains $item.Name.ToLowerInvariant()) {
@@ -128,10 +129,6 @@ try {
     if ($frontend.StatusCode -ne 200 -or $frontend.Content -notmatch '<div id="root">') {
         throw "Packaged frontend entry page is unavailable"
     }
-    if (Get-ChildItem -LiteralPath $dataPath -Force | Select-Object -First 1) {
-        throw "Package verification modified the release data directory"
-    }
-
     [ordered]@{
         ok = $true
         package_root = $packagePath

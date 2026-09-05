@@ -35,7 +35,7 @@ The portable package runs Director Studio locally as one `DirectorStudio.exe`. T
 - [ComfyUI Desktop for Windows](https://docs.comfy.org/installation/desktop/windows), running at `http://127.0.0.1:8188`.
 - Python 3.10 or newer for the external Comfy command-line tools. Director Studio itself does not require a separate Python installation.
 
-Extract the complete zip to a writable folder such as `C:\DirectorStudio`. Keep all files and the `data` folder together; do not copy only the executable.
+Extract the complete zip to a writable folder such as `C:\DirectorStudio`; do not copy only the executable. The release archive intentionally contains no user data. Director Studio creates `data` beside the executable on first launch; after that, keep it with the other extracted files and back it up before upgrades.
 
 ```powershell
 Set-Location C:\DirectorStudio
@@ -83,6 +83,21 @@ Start Ollama and ComfyUI first, then run:
 
 If the MCP process cannot start, verify both configured executable paths. You can run `comfy --help` to check the Comfy CLI; do not use `comfy-mcp --help`, because that entry point starts the stdio server. If a workflow fails, load the same workflow in ComfyUI and confirm its custom nodes and models are installed.
 
+### Configure an H3 workflow profile
+
+Every clean Portable starts with **Built-in Official H3**. To use a compatible custom API workflow, follow this sequence:
+
+```text
+Start ComfyUI and Ollama -> run DirectorStudio.exe ->
+Settings -> Workflows -> H3 -> Import API JSON -> Validate -> Test -> Activate
+```
+
+If analysis finds more than one possible seed or saver node, accept the intended boundary mapping before validation. The Test step submits an isolated H3 job, so review its video before activation. Director Studio supports only workflows with a single `MiniMaxH3ReferenceToVideo` path; `MiniMaxH3ImageToVideo`, first-frame/last-frame sockets, and mixed I2V/Ref2AV graphs are rejected.
+
+Imported workflow JSON and its profile metadata stay under the external `data/workflow_profiles` directory and are never embedded in a release executable or zip. Any custom nodes, models, LoRAs, and other dependencies referenced by an imported graph remain the user's ComfyUI responsibility.
+
+Profile changes apply only to jobs submitted after the switch. Queued and running jobs keep the immutable workflow snapshot captured when they were submitted. Switching back to **Built-in Official H3** therefore requires no restart and does not alter work already in flight.
+
 ## How the local components fit together
 
 ```text
@@ -117,7 +132,9 @@ The workflow JSON files are bundled with the application, but their model files 
 
 Bundled pipelines load API-format workflow JSON from `backend/workflows/`, patch specific input and control nodes in `backend/app/pipelines/<pipeline>/workflow.py`, submit through MCP, and map known output nodes back into Director Studio. Because the current portable build is a one-file executable, bundled workflow files are read-only package resources and cannot be overridden beside `DirectorStudio.exe`.
 
-For a graph replacement that preserves the pipeline's exact node-ID/input/output contract:
+For a local H3 Ref2AV replacement in either Source or Portable, use **Settings -> Workflows -> H3** and complete Import API JSON -> Validate -> Test -> Activate. Director Studio discovers and maps the supported H3 boundary rather than requiring the official node IDs. This runtime profile flow is limited to `MiniMaxH3ReferenceToVideo` workflows.
+
+For a graph replacement in another pipeline that preserves the pipeline's exact node-ID/input/output contract:
 
 1. Export the workflow in the API format expected by the existing pipeline.
 2. Replace the matching JSON file under `backend/workflows/`.
@@ -131,11 +148,11 @@ For a new or incompatible graph:
 4. Add tests for graph validation, prompt injection, and output mapping.
 5. Rebuild with `pwsh -File scripts/build-legacy-portable.ps1`.
 
-Custom-workflow overrides are therefore supported from source only in the current release. A future portable release may expose configurable workflow files and mappings. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the pipeline contract and extension points.
+Non-H3 custom-workflow overrides remain source-only in the current release. Portable supports H3 Ref2AV profile import through Settings, while the packaged official workflow remains a read-only fallback. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the pipeline contract and extension points.
 
 ## Replacing bundled generation workflows
 
-This section covers the three bundled workflows intended for manual replacement: Actor Assets, Layout Reference Frame, and H3 Ref2AV Video. Scene generation is outside this guide.
+This section covers source-level replacement for Actor Assets and Layout Reference Frame, plus the H3 boundary contract used by runtime profile import. Scene generation is outside this guide.
 
 ### What MCP does—and what the pipeline adapter does
 
@@ -156,7 +173,7 @@ Node IDs below are the top-level object keys in an API-format workflow JSON. The
 
 ### General replacement procedure
 
-1. Work from a source checkout. The portable executable contains read-only bundled workflow resources; a JSON file cannot be dropped beside `DirectorStudio.exe` to override them.
+1. Work from a source checkout for Actor/Layout replacement. For H3 in Portable, use the Settings workflow above; a JSON file dropped beside `DirectorStudio.exe` is never treated as an override.
 2. Back up the current JSON under `backend/workflows/`.
 3. Build and successfully queue the replacement graph in ComfyUI, then export it in **API format**, not only the editable UI-format workflow.
 4. Identify the Director Studio feature being replaced and use the matching mapping table below.
@@ -284,7 +301,7 @@ Set-Location ..
 pwsh -File scripts/build-legacy-portable.ps1
 ```
 
-Before distributing the result, extract the new zip, configure its `.env`, start ComfyUI, and run one real job for every workflow you replaced. Unit tests verify the graph contract and mapping; only a real ComfyUI run proves that all custom nodes, model files, tensor shapes, and output formats are compatible on the target installation.
+Before distributing the result, extract the new zip, configure its `.env`, start ComfyUI and Ollama, and run one real job for every workflow you replaced. For an imported H3 profile, use the Settings Test step before activation, then submit a new Production job. Unit tests verify the graph contract and mapping; only a real ComfyUI run proves that all custom nodes, model files, tensor shapes, and output formats are compatible on the target installation.
 
 ## Development setup
 
@@ -379,6 +396,6 @@ python -m pip install -r backend/requirements-build.txt
 pwsh -File scripts/build-legacy-portable.ps1
 ```
 
-The build runs the frontend and focused packaged-runtime tests, creates the one-file executable, launches it on an isolated port, checks the health endpoint and bundled UI, then writes the archive and reports its SHA-256 in the terminal. The current script and archive retain their existing `legacy` filename for build compatibility; the packaged application itself is Director Studio:
+The build runs the frontend and focused packaged-runtime tests, creates the one-file executable, launches it on an isolated port, checks the health endpoint and bundled UI, then writes the archive and reports its SHA-256 in the terminal. It also verifies that the executable and zip contain the official H3 workflow but no imported profiles, active pointer, user data, projects, jobs, outputs, or tests. The current script and archive retain their existing `legacy` filename for build compatibility; the packaged application itself is Director Studio:
 
 - `dist/Director-Studio-Legacy-Windows-x64.zip`

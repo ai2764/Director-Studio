@@ -95,7 +95,6 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "Install-Tools.py") -Destination (Jo
 Copy-Item -LiteralPath (Join-Path $repoRoot "portable-tools-requirements.txt") -Destination (Join-Path $packageRoot "portable-tools-requirements.txt")
 Copy-Item -LiteralPath (Join-Path $backendRoot ".env.example") -Destination (Join-Path $packageRoot ".env")
 Copy-Item -LiteralPath (Join-Path $repoRoot "README.md") -Destination (Join-Path $packageRoot "README.md")
-New-Item -ItemType Directory -Path (Join-Path $packageRoot "data") -Force | Out-Null
 
 pwsh -NoProfile -File (Join-Path $PSScriptRoot "verify-legacy-portable.ps1") `
     -PackageRoot $packageRoot `
@@ -113,14 +112,18 @@ $requiredArchiveEntries = @(
     "$packageName/Install-Tools.py",
     "$packageName/portable-tools-requirements.txt",
     "$packageName/.env",
-    "$packageName/README.md",
-    "$packageName/data/"
+    "$packageName/README.md"
 )
 foreach ($requiredEntry in $requiredArchiveEntries) {
     if ($archiveEntries -notcontains $requiredEntry) {
         throw "Portable zip is missing required entry: $requiredEntry"
     }
 }
+
+pwsh -NoProfile -File (Join-Path $PSScriptRoot "test-packaged-h3-profiles.ps1") `
+    -ExecutablePath $builtExe `
+    -ZipPath $zipPath
+if ($LASTEXITCODE -ne 0) { throw "packaged H3 profile isolation test failed" }
 
 $hash = Get-FileHash -LiteralPath $zipPath -Algorithm SHA256
 $size = (Get-Item -LiteralPath $zipPath).Length

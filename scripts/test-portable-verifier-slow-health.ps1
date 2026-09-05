@@ -74,7 +74,7 @@ public static class SlowHealthServer
 '@
 
 try {
-    New-Item -ItemType Directory -Path (Join-Path $packageRoot "data") -Force | Out-Null
+    New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $packageRoot ".env") -Value "# test"
     Set-Content -LiteralPath (Join-Path $packageRoot "README.md") -Value "test package"
     Set-Content -LiteralPath (Join-Path $packageRoot "Install-Tools.cmd") -Value "@echo off"
