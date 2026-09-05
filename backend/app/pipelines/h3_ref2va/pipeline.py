@@ -11,13 +11,14 @@ from typing import Any
 from PIL import Image, UnidentifiedImageError
 
 from ...config import settings
-from ...core.library.audio import probe_audio
 from ...core.h3.prompt import (
     validate_no_time_addressable_pictures,
     validate_required_picture_bindings,
 )
+from ...core.library.audio import probe_audio
 from ...core.schemas import ComfyImageRef, JobRecord
 from ...workflow_profiles.h3 import (
+    H3ProfileStore,
     ResolvedH3Profile,
     load_job_profile_snapshot,
     resolve_active_h3_profile,
@@ -57,7 +58,40 @@ class H3Ref2VaPipeline(Pipeline):
         """Snapshot local workflow state before the job can enter the queue."""
         if self.execution_adapter_id_for_job(job) == "h3_api":
             return
+        if bool((job.params or {}).get("h3_profile_test")):
+            H3ProfileStore().snapshot_import_for_job(job)
+            return
         snapshot_profile_for_job(job)
+
+    def postprocess_job_outputs(self, job: JobRecord, saved: dict[str, Any]) -> None:
+        """Bind a downloaded setup-test video to its immutable import identity."""
+        params = job.params or {}
+        if not bool(params.get("h3_profile_test")):
+            return
+        video_path = saved.get("video")
+        if video_path is None or not Path(video_path).is_file():
+            return
+        import_id = params.get("h3_profile_import_id")
+        workflow_sha256 = params.get("h3_profile_test_workflow_sha256")
+        mapping_sha256 = params.get("h3_profile_test_mapping_sha256")
+        if not all(
+            isinstance(value, str) and value
+            for value in (import_id, workflow_sha256, mapping_sha256)
+        ):
+            raise ValueError("H3 profile test job has no captured import identity")
+        snapshot = load_job_profile_snapshot(job.id)
+        if (
+            snapshot.profile_id != import_id
+            or snapshot.workflow_sha256 != workflow_sha256
+            or H3ProfileStore.mapping_sha256(snapshot.mapping) != mapping_sha256
+        ):
+            raise ValueError("H3 profile test snapshot identity changed")
+        H3ProfileStore().record_test_success(
+            import_id,
+            workflow_sha256=workflow_sha256,
+            mapping_sha256=mapping_sha256,
+            job_id=job.id,
+        )
 
     @staticmethod
     def _profile_for_job(job: JobRecord) -> ResolvedH3Profile:
@@ -68,7 +102,10 @@ class H3Ref2VaPipeline(Pipeline):
         if not expected_id and not expected_hash and expected_contract is None:
             return resolve_active_h3_profile()
         profile = load_job_profile_snapshot(job.id)
-        if profile.profile_id != expected_id or profile.workflow_sha256 != expected_hash:
+        if (
+            profile.profile_id != expected_id
+            or profile.workflow_sha256 != expected_hash
+        ):
             raise ValueError("H3 job profile snapshot does not match its job record")
         if expected_contract != 1:
             raise ValueError("H3 job profile snapshot contract version is unsupported")
@@ -95,7 +132,11 @@ class H3Ref2VaPipeline(Pipeline):
                     "max_ref_images": workflow.MAX_REF_IMAGES,
                 },
                 "fields": [
-                    {"id": "prompt", "label": "H3 six-section prompt", "required": True},
+                    {
+                        "id": "prompt",
+                        "label": "H3 six-section prompt",
+                        "required": True,
+                    },
                     {
                         "id": "dialogue",
                         "label": "Dialogue lines (exact match in prompt)",
@@ -132,7 +173,7 @@ class H3Ref2VaPipeline(Pipeline):
         validate_no_time_addressable_pictures(prompt_text)
         layout_picture_indices = p.get("layout_picture_indices") or []
         if not isinstance(layout_picture_indices, (list, tuple)):
-            raise ValueError("layout_picture_indices must be a list")
+            raise TypeError("layout_picture_indices must be a list")
 
         frames = p.get("frames")
         if frames is None:
@@ -247,10 +288,14 @@ class H3Ref2VaPipeline(Pipeline):
             duration_raw = int(p.get("frames") or 0) / 24.0
         duration_number = float(duration_raw)
         if not duration_number.is_integer():
-            raise ValueError("MiniMax H3 API duration must be an integer number of seconds")
+            raise ValueError(
+                "MiniMax H3 API duration must be an integer number of seconds"
+            )
         duration = int(duration_number)
         if not 4 <= duration <= 15:
-            raise ValueError("MiniMax H3 API duration must be an integer from 4 to 15 seconds")
+            raise ValueError(
+                "MiniMax H3 API duration must be an integer from 4 to 15 seconds"
+            )
         if settings.h3_minimax_model != "MiniMax-H3":
             raise ValueError("Ref2AV requires the MiniMax-H3 model")
         if settings.h3_minimax_resolution not in {"768P", "2K"}:
@@ -266,7 +311,9 @@ class H3Ref2VaPipeline(Pipeline):
                 )
             total_audio_duration += audio_duration
         if total_audio_duration > 15.0:
-            raise ValueError("H3 API reference audio total duration must not exceed 15 seconds")
+            raise ValueError(
+                "H3 API reference audio total duration must not exceed 15 seconds"
+            )
 
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt_text}]
         for key in image_keys:
@@ -318,10 +365,14 @@ class H3Ref2VaPipeline(Pipeline):
         keys = [str(key) for key in value]
         duplicates = sorted({key for key in keys if keys.count(key) > 1})
         if duplicates:
-            raise ValueError("H3 API declared duplicate input keys: " + ", ".join(duplicates))
+            raise ValueError(
+                "H3 API declared duplicate input keys: " + ", ".join(duplicates)
+            )
         missing = [key for key in keys if key not in inputs]
         if missing:
-            raise ValueError("H3 API declared missing input keys: " + ", ".join(missing))
+            raise ValueError(
+                "H3 API declared missing input keys: " + ", ".join(missing)
+            )
         return keys
 
     @staticmethod
@@ -368,9 +419,13 @@ class H3Ref2VaPipeline(Pipeline):
                 width, height = image.size
                 actual_format = str(image.format or "").upper()
         except (OSError, UnidentifiedImageError) as exc:
-            raise ValueError(f"Unable to decode H3 API reference image: {filename}") from exc
+            raise ValueError(
+                f"Unable to decode H3 API reference image: {filename}"
+            ) from exc
         if actual_format not in expected_formats[suffix]:
-            raise ValueError(f"H3 API image content does not match its extension: {filename}")
+            raise ValueError(
+                f"H3 API image content does not match its extension: {filename}"
+            )
         if not 256 <= width <= 5760 or not 256 <= height <= 5760:
             raise ValueError(
                 f"H3 API image dimensions must each be between 256 and 5760 pixels: {filename}"
@@ -390,7 +445,9 @@ class H3Ref2VaPipeline(Pipeline):
                     frame_rate = source.getframerate()
                     return source.getnframes() / frame_rate
             except (EOFError, wave.Error, ZeroDivisionError) as exc:
-                raise ValueError(f"Unable to decode H3 API reference audio: {filename}") from exc
+                raise ValueError(
+                    f"Unable to decode H3 API reference audio: {filename}"
+                ) from exc
         temporary_path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temporary:

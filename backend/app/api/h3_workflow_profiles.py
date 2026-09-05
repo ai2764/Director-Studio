@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
+from ..core.jobs import create_job, start_pipeline_job
+from ..core.library.images import resolve_asset_image
+from ..core.library.store import asset_dir, load_asset
+from ..core.paths import LIBRARY_KINDS
 from ..integrations.comfy_mcp import ComfyMcpClient, ComfyMcpError
 from ..pipelines.h3_ref2va.workflow import fill_profile_graph
 from ..workflow_profiles.h3 import (
@@ -38,6 +43,65 @@ class _StrictModel(BaseModel):
 
 class SelectProfileRequest(_StrictModel):
     profile_id: StrictStr = Field(pattern=r"[a-z0-9][a-z0-9-]{0,63}")
+
+
+class TestProfileRequest(_StrictModel):
+    picture_asset_id: StrictStr = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+    audio_asset_id: StrictStr | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+    )
+
+
+_TEST_PROMPT = """subject_definitions:
+<Picture 1> defines the subject and visual identity for the whole clip.{audio_binding}
+summary:
+A neutral workflow setup test with natural, stable motion.
+retention_analysis:
+Preserve the subject identity, proportions, clothing, lighting, and background.
+detailed_description:
+The subject remains composed while the camera makes a slow camera push.
+overall_soundscape:
+Normal ambient audio at a natural level with no sudden or exaggerated sounds.
+non_diegetic_music:
+No music."""
+
+
+def _resolve_picture_asset(asset_id: str) -> tuple[str, bytes] | None:
+    role_for_kind = {
+        "actors": "actor",
+        "costumes": "costume",
+        "scenes": "scene",
+        "props": "prop",
+        "layouts": "layout_ref_frame",
+    }
+    for kind in LIBRARY_KINDS:
+        asset = load_asset(kind, asset_id)
+        if asset is None:
+            continue
+        resolved = resolve_asset_image(asset, role=role_for_kind.get(kind, "other"))
+        if resolved is not None:
+            filename, data, _file_key = resolved
+            return filename, data
+    return None
+
+
+def _resolve_voice_asset(asset_id: str) -> tuple[str, bytes] | None:
+    asset = load_asset("voices", asset_id)
+    if asset is None or not bool((asset.meta or {}).get("h3_ready")):
+        return None
+    filename = (asset.files or {}).get("reference")
+    if not isinstance(filename, str) or Path(filename).name != filename:
+        return None
+    directory = asset_dir("voices", asset.id, project_id=asset.project_id)
+    path = (directory / filename).resolve()
+    try:
+        path.relative_to(directory.resolve())
+    except ValueError:
+        return None
+    if not path.is_file():
+        return None
+    return path.name, path.read_bytes()
 
 
 def _error(
@@ -299,6 +363,94 @@ async def validate_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
         "workflow_sha256": record["workflow_sha256"],
         "validated_at": record["validated_at"],
         "comfy": comfy_payload,
+    }
+
+
+@router.post("/imports/{import_id:path}/test", status_code=202, response_model=None)
+async def test_h3_import(
+    import_id: str,
+    body: TestProfileRequest,
+) -> dict[str, Any] | JSONResponse:
+    """Start an isolated local test against a validated, unactivated import."""
+    store = H3ProfileStore()
+    try:
+        workflow_sha256, mapping_sha256 = store.testable_import_identity(import_id)
+        mapping = store.load_import_mapping(import_id)
+    except ProfileStorageError as exc:
+        return _store_error(exc)
+
+    picture = _resolve_picture_asset(body.picture_asset_id)
+    if picture is None:
+        return _error(
+            404,
+            "picture_asset_not_found",
+            "A readable Picture asset is required for the H3 profile test",
+            {"picture_asset_id": body.picture_asset_id},
+        )
+
+    inputs = {"picture_1": picture}
+    audio_keys: list[str] = []
+    audio_binding = ""
+    if body.audio_asset_id is not None:
+        if mapping is None or mapping.audio_input_pattern is None:
+            return _error(
+                422,
+                "audio_not_supported",
+                "This H3 workflow profile does not support reference Audio",
+                {"import_id": import_id},
+            )
+        audio = _resolve_voice_asset(body.audio_asset_id)
+        if audio is None:
+            return _error(
+                404,
+                "audio_asset_not_found",
+                "A readable H3-ready Voice asset is required",
+                {"audio_asset_id": body.audio_asset_id},
+            )
+        inputs["audio_1"] = audio
+        audio_keys.append("audio_1")
+        audio_binding = " <Audio 1> defines the optional voice reference."
+
+    job = create_job(
+        pipeline_id="h3_ref2va",
+        asset_kind="productions",
+        name="H3 workflow profile test",
+        notes="Isolated setup test; output is not attached to a shot or Asset Library.",
+        params={
+            "h3_provider": "local",
+            "h3_profile_test": True,
+            "h3_profile_import_id": import_id,
+            "h3_profile_test_workflow_sha256": workflow_sha256,
+            "h3_profile_test_mapping_sha256": mapping_sha256,
+            "prompt": _TEST_PROMPT.format(audio_binding=audio_binding),
+            "dialogue": [],
+            "frames": 56,
+            "width": 864,
+            "height": 480,
+            "image_keys": ["picture_1"],
+            "audio_keys": audio_keys,
+        },
+        seed=42,
+        fixed_seed=True,
+    )
+    try:
+        await start_pipeline_job(job, images=inputs)
+    except ProfileStorageError as exc:
+        return _store_error(exc)
+    except (TypeError, ValueError) as exc:
+        return _error(
+            422,
+            "test_job_invalid",
+            str(exc),
+            {"import_id": import_id},
+        )
+    return {
+        "import_id": import_id,
+        "job_id": job.id,
+        "job_url": f"/api/h3-ref2va/jobs/{job.id}",
+        "workflow_sha256": workflow_sha256,
+        "mapping_sha256": mapping_sha256,
+        "status": "queued",
     }
 
 
