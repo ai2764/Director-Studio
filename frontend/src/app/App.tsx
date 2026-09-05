@@ -9,7 +9,8 @@ import { fetchHealth } from "../shared/api/client";
 import { ProjectProvider, useProject } from "../shared/project/ProjectContext";
 import { ProjectPicker } from "../shared/project/ProjectPicker";
 import { DirectorStudioMark } from "../shared/components/DirectorStudioMark";
-import { NAV_ITEMS, type NavId } from "./navigation";
+import { NAV_ITEMS, type DesktopPage } from "./navigation";
+import { WorkflowSettingsPage } from "../features/settings/WorkflowSettingsPage";
 import type { Shot } from "../shared/api/types";
 
 function materialReviewRequest(
@@ -97,7 +98,8 @@ function MobileAppShell() {
 }
 
 function AppShell() {
-  const [page, setPage] = useState<NavId>("director");
+  const [page, setPage] = useState<DesktopPage>("director");
+  const [settingsVisited, setSettingsVisited] = useState(false);
   const [directorRequest, setDirectorRequest] = useState<DirectorChatRequest | null>(null);
   const requestSequence = useRef(0);
   const [health, setHealth] = useState<{
@@ -155,10 +157,12 @@ function AppShell() {
             <span className="dot" />
             <span className="health-label">ComfyUI</span>
           </div>
+          <button type="button" className="btn secondary topbar-settings" aria-current={page === "settings" ? "page" : undefined} onClick={() => { setSettingsVisited(true); setPage("settings"); }}>Settings</button>
         </div>
       </header>
 
       {/* Keep pages mounted so in-flight job UI/polling survives tab switches */}
+      {settingsVisited ? <div className={page === "settings" ? "page-pane active" : "page-pane"} hidden={page !== "settings"}><WorkflowSettingsPage /></div> : null}
       <div
         className={page === "assets" ? "page-pane active" : "page-pane"}
         hidden={page !== "assets"}

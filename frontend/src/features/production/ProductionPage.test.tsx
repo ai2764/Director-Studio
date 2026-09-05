@@ -9,6 +9,8 @@ import { listLibraryAssets } from "../library/api";
 
 const replaceShotMaterialsMock = vi.hoisted(() => vi.fn());
 const getH3ProviderStatusMock = vi.hoisted(() => vi.fn());
+const fetchH3ProfilesMock = vi.hoisted(() => vi.fn());
+vi.mock("../../shared/api/client", () => ({ fetchH3Profiles: fetchH3ProfilesMock }));
 
 let currentProjectId = "prj_test";
 
@@ -98,6 +100,7 @@ describe("ProductionPage prompt refresh", () => {
   afterEach(cleanup);
 
   beforeEach(() => {
+    fetchH3ProfilesMock.mockResolvedValue({ active: { display_name: "My H3 Quality Profile", source: "custom", warning: null }, profiles: [] });
     vi.clearAllMocks();
     currentProjectId = "prj_test";
     vi.mocked(listLibraryAssets).mockResolvedValue([]);
@@ -106,6 +109,22 @@ describe("ProductionPage prompt refresh", () => {
       minimax_configured: true,
       minimax_resolution: "768P",
     });
+  });
+
+  it("shows the resolved custom workflow in Production", async () => {
+    vi.mocked(getProject).mockResolvedValue(detail(shot(emptyPrompt)));
+    render(<ProductionPage active />);
+    expect(await screen.findByText("Workflow: My H3 Quality Profile")).toBeTruthy();
+    expect(screen.getByText("Local · ComfyUI — My H3 Quality Profile")).toBeTruthy();
+  });
+
+  it("discloses fallback without blocking the Production workspace", async () => {
+    fetchH3ProfilesMock.mockResolvedValue({ active: { display_name: "Built-in Official H3", source: "builtin", warning: { code: "custom_profile_unavailable", message: "Custom workflow hash changed" } }, profiles: [] });
+    vi.mocked(getProject).mockResolvedValue(detail(shot(emptyPrompt)));
+    render(<ProductionPage active />);
+    expect(await screen.findByText("Using Built-in Official H3")).toBeTruthy();
+    expect(screen.getByText("Custom workflow hash changed")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Production" })).toBeTruthy();
   });
 
   it("submits the selected H3 provider for one Production run", async () => {

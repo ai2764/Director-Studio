@@ -83,6 +83,31 @@ def _mark_test_succeeded(import_id: str) -> None:
     )
 
 
+def test_analysis_restores_only_current_durable_lifecycle(
+    profile_client, sample_api_json
+):
+    import_id = _import(profile_client, sample_api_json)
+    url = f"/api/workflow-profiles/h3/imports/{import_id}"
+    assert (
+        profile_client.get(f"{url}/analysis").json()["lifecycle"]["status"] == "draft"
+    )
+    assert profile_client.post(f"{url}/validate").status_code == 200
+    validated = profile_client.get(f"{url}/analysis").json()["lifecycle"]
+    assert validated["status"] == "validated"
+    assert validated["mapping_sha256"]
+    _mark_test_succeeded(import_id)
+    tested = profile_client.get(f"{url}/analysis").json()["lifecycle"]
+    assert tested["status"] == "tested"
+    assert tested["test_job_id"].startswith("job_")
+    assert tested["workflow_sha256"] == validated["workflow_sha256"]
+    graph = H3ProfileStore().load_import_workflow(import_id)
+    graph["136"]["inputs"]["width"] = 999
+    H3ProfileStore().import_workflow_path(import_id).write_text(json.dumps(graph))
+    stale = profile_client.get(f"{url}/analysis").json()["lifecycle"]
+    assert stale["status"] == "mapped"
+    assert stale["test_job_id"] is None
+
+
 def test_import_analyze_validate_activate_and_select_builtin(
     profile_client: TestClient,
     sample_api_json: bytes,

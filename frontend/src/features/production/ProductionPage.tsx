@@ -27,8 +27,26 @@ import {
 } from "./api";
 import { listLibraryAssets, type LibraryAsset } from "../library/api";
 import { ShotMaterialEditor } from "../director/ShotMaterialEditor";
+import { fetchH3Profiles } from "../../shared/api/client";
+import type { H3ActiveProfile } from "../../shared/api/types";
 
 const ACTIVE: JobStatus[] = ["queued", "uploading", "running"];
+
+function ProductionWorkflowProfile({ active }: { active: boolean }) {
+  const [profile, setProfile] = useState<H3ActiveProfile | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    fetchH3Profiles().then(({ active: resolved }) => { if (!cancelled) { setProfile(resolved); setError(null); } })
+      .catch((err: unknown) => { if (!cancelled) { setProfile(null); setError(err instanceof Error ? err.message : String(err)); } });
+    return () => { cancelled = true; };
+  }, [active]);
+  return <div className="production-workflow-profile">
+    {profile ? <><span>{`Local · ComfyUI — ${profile.display_name}`}</span><small>{`Workflow: ${profile.display_name}`}</small>
+      {profile.warning ? <div className="banner" role="status"><strong>Using Built-in Official H3</strong><span>{profile.warning.message}</span></div> : null}</> : <span className="muted">{error ? `Workflow status unavailable: ${error}` : "Loading local workflow…"}</span>}
+  </div>;
+}
 
 type DrawerTab = "layout" | "refs" | "prompt" | "run";
 type ResolutionPreset =
@@ -686,6 +704,7 @@ export function ProductionPage({
       }
       className="production-page"
     >
+      <ProductionWorkflowProfile active={Boolean(active)} />
       {error ? <div className="banner error">{error}</div> : null}
 
       <div className="split-layout production-split">

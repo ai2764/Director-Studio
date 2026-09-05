@@ -367,6 +367,53 @@ class H3ProfileStore:
             )
         return workflow_sha256, self.mapping_sha256(mapping)
 
+    def import_lifecycle(self, import_id: str) -> dict[str, Any]:
+        """Expose bounded current evidence for reloadable setup, never file paths."""
+        workflow_sha256 = self.import_workflow_sha256(import_id)
+        mapping = self.load_import_mapping(import_id)
+        mapping_sha256 = self.mapping_sha256(mapping) if mapping else None
+        result: dict[str, Any] = {
+            "status": "mapped" if mapping else "draft",
+            "workflow_sha256": workflow_sha256,
+            "mapping_sha256": mapping_sha256,
+            "validated_at": None,
+            "test_job_id": None,
+        }
+        if mapping_sha256 is None:
+            return result
+        directory = self._require_existing_import(import_id)
+        try:
+            validation = self._require_current_validation(
+                directory,
+                import_id=import_id,
+                workflow_sha256=workflow_sha256,
+                mapping_sha256=mapping_sha256,
+            )
+        except ProfileStorageError:
+            return result
+        result.update(status="validated", validated_at=validation.get("validated_at"))
+        try:
+            test = self._optional_record(directory / _TEST_FILE)
+            if not test or (
+                test.get("status") != "succeeded"
+                or test.get("contract_version") != 1
+                or test.get("workflow_sha256") != workflow_sha256
+                or test.get("mapping_sha256") != mapping_sha256
+            ):
+                return result
+            self._require_successful_test_job(
+                import_id=import_id,
+                workflow_sha256=workflow_sha256,
+                mapping_sha256=mapping_sha256,
+                job_id=test.get("job_id"),
+            )
+            if self.import_identity(import_id) != (workflow_sha256, mapping_sha256):
+                return {**result, "status": "mapped", "validated_at": None}
+        except ProfileStorageError:
+            return result
+        result.update(status="tested", test_job_id=test["job_id"])
+        return result
+
     @classmethod
     def mapping_sha256(cls, mapping: H3BoundaryMapping) -> str:
         """Hash one exact mapping snapshot using the store's canonical JSON."""

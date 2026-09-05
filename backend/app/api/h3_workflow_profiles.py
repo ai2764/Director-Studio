@@ -236,6 +236,7 @@ def analyze_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
         payload["mapping"] = accepted_mapping.model_dump(mode="json")
     payload["import_id"] = import_id
     payload["workflow_sha256"] = store.import_workflow_sha256(import_id)
+    payload["lifecycle"] = store.import_lifecycle(import_id)
     return payload
 
 

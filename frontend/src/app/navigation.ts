@@ -3,6 +3,8 @@
  * `comingSoon: true` shows a disabled nav chip without a page.
  */
 export type NavId = "assets" | "director" | "production";
+/** Settings is application configuration, outside the numbered project stages. */
+export type DesktopPage = NavId | "settings";
 
 export interface NavItem {
   id: NavId;
