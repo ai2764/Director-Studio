@@ -25,7 +25,6 @@ from app.workflow_profiles.h3 import (
     load_job_profile_snapshot,
 )
 
-
 SAMPLE_PROMPT = (
     "subject_definitions:\nA\n"
     "summary:\nB\n"
@@ -52,7 +51,9 @@ def _job_params(**overrides: object) -> dict[str, object]:
     return params
 
 
-def _mapping(*, h3: str = "136", noise: str = "129", saver: str = "92") -> H3BoundaryMapping:
+def _mapping(
+    *, h3: str = "136", noise: str = "129", saver: str = "92"
+) -> H3BoundaryMapping:
     return H3BoundaryMapping(
         h3_node_id=h3,
         prompt_input="prompt",
@@ -92,14 +93,30 @@ def _install_profile(store: H3ProfileStore, profile_id: str, *, saver_id: str) -
     encoded = json.dumps(
         graph, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
+    profile = H3WorkflowProfile(
+        id=profile_id,
+        workflow_sha256=hashlib.sha256(encoded).hexdigest(),
+        mapping=_mapping(saver=saver_id),
+        status="active",
+    )
+    mapping_sha256 = store.mapping_sha256(profile.mapping)
     store.install_profile(
-        H3WorkflowProfile(
-            id=profile_id,
-            workflow_sha256=hashlib.sha256(encoded).hexdigest(),
-            mapping=_mapping(saver=saver_id),
-            status="active",
-        ),
+        profile,
         graph,
+        validation_record={
+            "valid": True,
+            "contract_version": 1,
+            "workflow_sha256": profile.workflow_sha256,
+            "mapping_sha256": mapping_sha256,
+            "report": {"valid": True},
+            "comfy": {"valid": True},
+        },
+        test_record={
+            "status": "succeeded",
+            "workflow_sha256": profile.workflow_sha256,
+            "mapping_sha256": mapping_sha256,
+            "job_id": f"job_{profile_id}",
+        },
     )
 
 

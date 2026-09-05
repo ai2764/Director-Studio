@@ -185,7 +185,7 @@ def save_h3_import_mapping(
 async def validate_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
     store = H3ProfileStore()
     try:
-        graph = store.load_import_workflow(import_id)
+        graph, workflow_sha256 = store.load_import_workflow_snapshot(import_id)
         analysis = inspect_h3_workflow(graph)
         mapping = store.load_import_mapping(import_id) or analysis.mapping
         if mapping is None:
@@ -218,8 +218,8 @@ async def validate_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
                     ],
                 },
             )
+        mapping_sha256 = store.mapping_sha256(mapping)
         store.save_import_mapping(import_id, mapping)
-        workflow_sha256 = store.import_workflow_sha256(import_id)
         filled = fill_profile_graph(
             ResolvedH3Profile(
                 profile_id="validation-import",
@@ -239,7 +239,6 @@ async def validate_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
                 "output_prefix": "director-studio/h3/contract-validation",
             },
         )
-        workflow_sha256, mapping_sha256 = store.import_identity(import_id)
     except (TypeError, ValueError) as exc:
         return _error(
             422, "contract_validation_failed", str(exc), {"import_id": import_id}

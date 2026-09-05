@@ -53,3 +53,29 @@ The two full-suite warnings are pre-existing Pillow `Image.getdata` deprecations
 
 - Comfy validation is covered through the MCP transport boundary with a faithful fake session; no live local ComfyUI instance or GPU generation was run.
 - The real 56-frame test job and its evidence producer remain Task 6 scope. Until that producer lands, only trusted internal/test code can create successful-test evidence, so normal users cannot activate an imported profile yet.
+
+## Fix round 1/5 — evidence snapshot integrity
+
+Reviewer findings reproduced with six failing regressions:
+
+```text
+py -m pytest <six evidence regressions> -q
+6 failed in 1.81s
+```
+
+- `record_test_success` now requires the workflow and mapping hashes captured by the test job. It compares both with the current import identity and rejects changed imports instead of deriving a new mapping hash at completion time.
+- The validate route now loads the graph and workflow hash from one byte snapshot and hashes the exact mapping object used for contract/fill/Comfy validation before persisting that mapping. The evidence recorder compares current storage with those captured hashes, so a workflow edit or concurrent mapping PUT cannot be blessed.
+- Installed custom profiles now carry activation evidence bound to the full serialized profile metadata. Every custom select/resolve verifies successful contract and Comfy validation, a successful test job, workflow and mapping hashes, and the profile metadata hash. Workflow-preserving mapping or status edits fail selection or fall back to the built-in profile.
+- Existing store/runtime fixtures now install explicit successful validation and test evidence rather than bypassing the production invariant.
+
+Fix-round verification:
+
+```text
+py -m pytest tests/test_h3_profile_store.py tests/test_h3_profile_runtime.py tests/test_h3_workflow_inspector.py tests/test_h3_workflow_validator.py tests/test_h3_ref2va_graph.py tests/test_h3_workflow_profiles_api.py tests/test_comfy_mcp_client.py -q
+104 passed in 3.91s
+
+py -m pytest -q
+761 passed, 2 warnings in 25.80s
+```
+
+The warnings remain the same pre-existing Pillow deprecations noted above. Task 6 remains responsible for capturing both expected hashes when it creates a real setup-test job and passing those immutable values to `record_test_success` on successful output completion.

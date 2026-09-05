@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.config import settings
 from app.main import create_app
-from app.workflow_profiles.h3 import H3ProfileStore
+from app.workflow_profiles.h3 import H3ProfileStore, ProfileChangedError
 
 
 @pytest.fixture
@@ -49,10 +49,11 @@ def _import(profile_client: TestClient, workflow: bytes) -> str:
 
 def _mark_test_succeeded(import_id: str) -> None:
     store = H3ProfileStore()
-    workflow_sha256 = store.import_workflow_sha256(import_id)
+    workflow_sha256, mapping_sha256 = store.import_identity(import_id)
     store.record_test_success(
         import_id,
         workflow_sha256=workflow_sha256,
+        mapping_sha256=mapping_sha256,
         job_id="job_profile_test",
     )
 
@@ -231,6 +232,136 @@ def test_validation_rejects_workflow_changed_during_live_check(
 
     assert response.status_code == 409
     assert response.json()["code"] == "profile_changed"
+
+
+def test_test_success_rejects_mapping_changed_since_job_snapshot(
+    profile_client: TestClient,
+    sample_api_json: bytes,
+) -> None:
+    import_id = _import(profile_client, sample_api_json)
+    analysis = profile_client.get(
+        f"/api/workflow-profiles/h3/imports/{import_id}/analysis"
+    ).json()
+    mapping = analysis["mapping"]
+    assert (
+        profile_client.put(
+            f"/api/workflow-profiles/h3/imports/{import_id}/mapping",
+            json=mapping,
+        ).status_code
+        == 200
+    )
+    store = H3ProfileStore()
+    workflow_sha256, mapping_sha256 = store.import_identity(import_id)
+    store.save_import_mapping(
+        import_id,
+        store.load_import_mapping(import_id).model_copy(
+            update={"output_fields": ("files",)}
+        ),
+    )
+
+    with pytest.raises(ProfileChangedError, match="changed during test"):
+        store.record_test_success(
+            import_id,
+            workflow_sha256=workflow_sha256,
+            mapping_sha256=mapping_sha256,
+            job_id="job_profile_test",
+        )
+
+
+def test_validation_uses_graph_hash_captured_before_mapping_persistence(
+    profile_client: TestClient,
+    sample_api_json: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import_id = _import(profile_client, sample_api_json)
+    original = H3ProfileStore.save_import_mapping
+
+    def mutate_workflow_after_mapping_save(self, requested_id, mapping):
+        original(self, requested_id, mapping)
+        path = self.import_workflow_path(requested_id)
+        changed = json.loads(path.read_text(encoding="utf-8"))
+        changed["136"]["inputs"]["prompt"] = "changed before MCP validation"
+        path.write_text(json.dumps(changed), encoding="utf-8")
+
+    monkeypatch.setattr(
+        H3ProfileStore,
+        "save_import_mapping",
+        mutate_workflow_after_mapping_save,
+    )
+
+    response = profile_client.post(
+        f"/api/workflow-profiles/h3/imports/{import_id}/validate"
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "profile_changed"
+
+
+def test_validation_uses_mapping_hash_from_mapping_snapshot(
+    profile_client: TestClient,
+    sample_api_json: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import_id = _import(profile_client, sample_api_json)
+    original = H3ProfileStore.save_import_mapping
+
+    def replace_mapping_after_save(self, requested_id, mapping):
+        original(self, requested_id, mapping)
+        replacement = mapping.model_copy(update={"output_fields": ("files",)})
+        mapping_path = self.import_workflow_path(requested_id).parent / "mapping.json"
+        mapping_path.write_text(replacement.model_dump_json(), encoding="utf-8")
+
+    monkeypatch.setattr(
+        H3ProfileStore,
+        "save_import_mapping",
+        replace_mapping_after_save,
+    )
+
+    response = profile_client.post(
+        f"/api/workflow-profiles/h3/imports/{import_id}/validate"
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "profile_changed"
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        pytest.param("mapping", id="mapping"),
+        pytest.param("status", id="status"),
+    ],
+)
+def test_active_custom_profile_falls_back_when_installed_metadata_changes(
+    profile_client: TestClient,
+    sample_api_json: bytes,
+    tamper: str,
+) -> None:
+    import_id = _import(profile_client, sample_api_json)
+    assert (
+        profile_client.post(
+            f"/api/workflow-profiles/h3/imports/{import_id}/validate"
+        ).status_code
+        == 200
+    )
+    _mark_test_succeeded(import_id)
+    activated = profile_client.post(
+        f"/api/workflow-profiles/h3/imports/{import_id}/activate"
+    ).json()
+    store = H3ProfileStore()
+    profile_path = store.profile_path(activated["profile_id"])
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    if tamper == "mapping":
+        profile["mapping"]["output_fields"] = ["files"]
+    else:
+        profile["status"] = "tested"
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+
+    resolved = store.resolve_active()
+
+    assert resolved.source == "builtin"
+    assert resolved.warning is not None
+    assert resolved.warning.code == "profile_changed"
 
 
 def test_profile_listing_reports_active_and_installed_builtin(

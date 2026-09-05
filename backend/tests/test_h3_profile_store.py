@@ -44,6 +44,7 @@ def _install_custom_profile(
     workflow: dict[str, object] | None = None,
     *,
     status: str = "active",
+    with_evidence: bool = False,
 ) -> None:
     workflow = workflow or {
         "136": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {}}
@@ -57,17 +58,41 @@ def _install_custom_profile(
         mapping=_mapping(),
         status=status,
     )
-    store.install_profile(profile, workflow)
+    mapping_sha256 = store.mapping_sha256(profile.mapping)
+    evidence = {
+        "valid": True,
+        "contract_version": 1,
+        "workflow_sha256": profile.workflow_sha256,
+        "mapping_sha256": mapping_sha256,
+        "report": {"valid": True},
+        "comfy": {"valid": True},
+    }
+    test_record = {
+        "status": "succeeded",
+        "workflow_sha256": profile.workflow_sha256,
+        "mapping_sha256": mapping_sha256,
+        "job_id": "job_store_fixture",
+    }
+    store.install_profile(
+        profile,
+        workflow,
+        validation_record=evidence if with_evidence else None,
+        test_record=test_record if with_evidence else None,
+    )
 
 
-def installed_custom_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> H3ProfileStore:
+def installed_custom_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> H3ProfileStore:
     store = isolated_store(tmp_path, monkeypatch)
-    _install_custom_profile(store)
+    _install_custom_profile(store, with_evidence=True)
     store.select_profile("custom")
     return store
 
 
-def test_fresh_store_resolves_builtin_official(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fresh_store_resolves_builtin_official(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(settings, "workflow_profiles_dir", tmp_path / "profiles")
 
     resolved = H3ProfileStore().resolve_active()
@@ -79,14 +104,18 @@ def test_fresh_store_resolves_builtin_official(tmp_path: Path, monkeypatch: pyte
     assert resolved.mapping.saver_node_id == "92"
 
 
-def test_active_pointer_rejects_path_traversal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_active_pointer_rejects_path_traversal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store = isolated_store(tmp_path, monkeypatch)
 
     with pytest.raises(ProfileStorageError):
         store.select_profile("../outside")
 
 
-def test_changed_custom_workflow_falls_back_to_builtin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_changed_custom_workflow_falls_back_to_builtin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store = installed_custom_store(tmp_path, monkeypatch)
     store.workflow_path("custom").write_text("{}", encoding="utf-8")
 
@@ -97,10 +126,16 @@ def test_changed_custom_workflow_falls_back_to_builtin(tmp_path: Path, monkeypat
     assert resolved.warning.code == "profile_changed"
 
 
-def test_custom_profile_round_trips_utf8_bom_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_custom_profile_round_trips_utf8_bom_workflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store = installed_custom_store(tmp_path, monkeypatch)
-    profile = H3WorkflowProfile.model_validate_json(store.profile_path("custom").read_text("utf-8"))
-    workflow = {"136": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {"prompt": "å"}}}
+    profile = H3WorkflowProfile.model_validate_json(
+        store.profile_path("custom").read_text("utf-8")
+    )
+    workflow = {
+        "136": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {"prompt": "å"}}
+    }
     encoded = json.dumps(workflow, ensure_ascii=False, sort_keys=True).encode("utf-8")
     bom_encoded = b"\xef\xbb\xbf" + encoded
     profile = profile.model_copy(
@@ -108,6 +143,18 @@ def test_custom_profile_round_trips_utf8_bom_workflow(tmp_path: Path, monkeypatc
     )
     store.workflow_path("custom").write_bytes(bom_encoded)
     store.profile_path("custom").write_text(profile.model_dump_json(), encoding="utf-8")
+    evidence_path = store.profile_path("custom").parent / "validation.json"
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence["workflow_sha256"] = profile.workflow_sha256
+    evidence["test"]["workflow_sha256"] = profile.workflow_sha256
+    profile_bytes = json.dumps(
+        profile.model_dump(mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    evidence["profile_sha256"] = hashlib.sha256(profile_bytes).hexdigest()
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
     store.select_profile("custom")
 
     resolved = store.resolve_active()
@@ -127,7 +174,9 @@ def test_profile_models_forbid_unknown_fields_and_numeric_node_ids() -> None:
         H3BoundaryMapping.model_validate({**_mapping().model_dump(), "h3_node_id": 136})
 
 
-def test_generated_import_ids_are_opaque_and_unique(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generated_import_ids_are_opaque_and_unique(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store = isolated_store(tmp_path, monkeypatch)
 
     first = store.create_import({"1": {"class_type": "Test", "inputs": {}}})
@@ -149,12 +198,24 @@ def test_select_profile_rejects_custom_profiles_not_ready_for_activation(
         store.select_profile("custom")
 
 
+def test_select_profile_rejects_custom_profile_without_durable_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = isolated_store(tmp_path, monkeypatch)
+    _install_custom_profile(store, status="active")
+
+    with pytest.raises(ProfileStorageError, match="validation and test evidence"):
+        store.select_profile("custom")
+
+
 def test_resolve_active_falls_back_when_pointer_targets_untested_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = isolated_store(tmp_path, monkeypatch)
     _install_custom_profile(store, status="draft")
-    profile = H3WorkflowProfile.model_validate_json(store.profile_path("custom").read_text("utf-8"))
+    profile = H3WorkflowProfile.model_validate_json(
+        store.profile_path("custom").read_text("utf-8")
+    )
     store.active_path.parent.mkdir(parents=True, exist_ok=True)
     store.active_path.write_text(
         json.dumps(
