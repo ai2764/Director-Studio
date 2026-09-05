@@ -170,33 +170,19 @@ def _fixed_dependencies(
     graph: Mapping[str, Any],
     output_reachability: Mapping[str, list[str]],
     h3_id: str | None,
+    links: list[tuple[str, str, str]],
 ) -> tuple[H3FixedDependency, ...]:
     dependencies: list[H3FixedDependency] = []
     input_by_class = {"LoadImage": "image", "LoadAudio": "audio"}
-    mapped_file_nodes: set[str] = set()
-    h3_node = graph.get(h3_id) if h3_id else None
-    h3_inputs = h3_node.get("inputs") if isinstance(h3_node, Mapping) else None
-    if isinstance(h3_inputs, Mapping):
-        dynamic_input = re.compile(
-            r"(?:ref_images\.ref_image_|ref_audios\.ref_audio_)\d+\Z"
-        )
-        mapped_file_nodes = {
-            str(value[0])
-            for name, value in h3_inputs.items()
-            if dynamic_input.fullmatch(str(name)) and _is_link(value)
-        }
-    for node_id in sorted(graph):
+    dependency_nodes = _unmapped_reachable_file_nodes(
+        graph, output_reachability, h3_id, links
+    )
+    for node_id in sorted(dependency_nodes):
         node = graph[node_id]
-        if (
-            not isinstance(node, Mapping)
-            or not output_reachability.get(node_id)
-            or node_id in mapped_file_nodes
-        ):
-            continue
         class_type = node.get("class_type")
-        input_name = input_by_class.get(class_type)
+        input_name = input_by_class[class_type]
         inputs = node.get("inputs")
-        if input_name is None or not isinstance(inputs, Mapping):
+        if not isinstance(inputs, Mapping):
             continue
         value = inputs.get(input_name)
         if isinstance(value, str) and value:
@@ -211,7 +197,41 @@ def _fixed_dependencies(
     return tuple(dependencies)
 
 
-def inspect_h3_workflow(graph: object) -> H3WorkflowAnalysis:
+def _unmapped_reachable_file_nodes(
+    graph: Mapping[str, Any],
+    output_reachability: Mapping[str, list[str]],
+    h3_id: str | None,
+    links: list[tuple[str, str, str]],
+) -> set[str]:
+    """Return file loaders with at least one non-boundary final-output consumer."""
+    file_nodes = {
+        node_id
+        for node_id, node in graph.items()
+        if isinstance(node, Mapping)
+        and node.get("class_type") in {"LoadImage", "LoadAudio"}
+    }
+    mapped_edges: set[tuple[str, str, str]] = set()
+    h3_node = graph.get(h3_id) if h3_id else None
+    h3_inputs = h3_node.get("inputs") if isinstance(h3_node, Mapping) else None
+    if isinstance(h3_inputs, Mapping):
+        dynamic_input = re.compile(
+            r"(?:ref_images\.ref_image_|ref_audios\.ref_audio_)\d+\Z"
+        )
+        mapped_edges = {
+            (str(value[0]), h3_id, str(name))
+            for name, value in h3_inputs.items()
+            if dynamic_input.fullmatch(str(name)) and _is_link(value)
+        }
+    return {
+        source_id
+        for source_id, target_id, input_name in links
+        if source_id in file_nodes
+        and output_reachability.get(target_id)
+        and (source_id, target_id, input_name) not in mapped_edges
+    }
+
+
+def _inspect_h3_workflow(graph: object) -> H3WorkflowAnalysis:
     """Inspect one API-format graph without executing or exposing its raw values."""
     normalized = _load_graph(graph)
     outgoing, _incoming, _links = _graph_edges(normalized)
@@ -323,7 +343,9 @@ def inspect_h3_workflow(graph: object) -> H3WorkflowAnalysis:
     }
     seed_candidates = tuple(_candidate(node_id, normalized) for node_id in seed_ids)
     saver_candidates = tuple(_candidate(node_id, normalized) for node_id in saver_ids)
-    fixed_dependencies = _fixed_dependencies(normalized, output_reachability, h3_id)
+    fixed_dependencies = _fixed_dependencies(
+        normalized, output_reachability, h3_id, _links
+    )
 
     candidate_roles = {
         node_id: [
@@ -394,6 +416,28 @@ def inspect_h3_workflow(graph: object) -> H3WorkflowAnalysis:
         fixed_dependencies=fixed_dependencies,
         issues=tuple(issues),
         agent_manifest={"nodes": manifest_nodes},
+    )
+
+
+def inspect_h3_workflow(graph: object) -> H3WorkflowAnalysis:
+    """Inspect a graph and contain excessive nesting as a structured rejection."""
+    try:
+        return _inspect_h3_workflow(graph)
+    except RecursionError:
+        message = "workflow nesting exceeds depth 32"
+    except ValueError as exc:
+        if "nesting" not in str(exc):
+            raise
+        message = str(exc)
+    return H3WorkflowAnalysis(
+        compatibility="unsupported",
+        issues=(
+            H3AnalysisIssue(
+                code="invalid_structure",
+                message=message,
+            ),
+        ),
+        agent_manifest={"nodes": []},
     )
 
 

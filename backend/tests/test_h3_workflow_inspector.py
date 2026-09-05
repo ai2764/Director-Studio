@@ -170,6 +170,20 @@ def test_inspector_does_not_report_mapped_dynamic_picture_as_fixed() -> None:
     assert analysis.fixed_dependencies == ()
 
 
+def test_inspector_reports_loader_with_mapped_and_fixed_reachable_consumers() -> None:
+    graph = unique_graph()
+    graph["45"] = {
+        "class_type": "LoadImage",
+        "inputs": {"image": "fixed-control.png"},
+    }
+    graph["136"]["inputs"]["ref_images.ref_image_0"] = ["45", 0]  # type: ignore[index]
+    graph["140"]["inputs"]["control"] = ["45", 0]  # type: ignore[index]
+
+    analysis = inspect_h3_workflow(graph)
+
+    assert [dependency.node_id for dependency in analysis.fixed_dependencies] == ["45"]
+
+
 @pytest.mark.parametrize(
     ("node_id", "input_name", "candidate_field"),
     [
@@ -222,8 +236,23 @@ def test_inspector_rejects_nesting_deeper_than_thirty_two() -> None:
         nested = {"nested": nested}
     graph = {"1": {"class_type": "X", "inputs": {"value": nested}}}
 
-    with pytest.raises(ValueError, match="nesting"):
-        inspect_h3_workflow(graph)
+    analysis = inspect_h3_workflow(graph)
+
+    assert analysis.compatibility == "unsupported"
+    assert {issue.code for issue in analysis.issues} == {"invalid_structure"}
+    assert "nesting" in analysis.issues[0].message
+
+
+def test_inspector_contains_python_recursion_errors_as_unsupported() -> None:
+    nested: object = "value"
+    for _ in range(2_000):
+        nested = {"nested": nested}
+    graph = {"1": {"class_type": "X", "inputs": {"value": nested}}}
+
+    analysis = inspect_h3_workflow(graph)
+
+    assert analysis.compatibility == "unsupported"
+    assert {issue.code for issue in analysis.issues} == {"invalid_structure"}
 
 
 def test_inspector_rejects_serialized_workflows_over_eight_mib() -> None:

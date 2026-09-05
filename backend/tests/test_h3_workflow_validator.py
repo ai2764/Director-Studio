@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from test_h3_workflow_inspector import unique_graph
 
 from app.workflow_profiles.h3.inspector import inspect_h3_workflow
@@ -49,12 +50,61 @@ def test_validator_rejects_mapped_h3_input_that_does_not_exist() -> None:
     report = validate_h3_contract(unique_graph(), _mapping(prompt_input="text"))
 
     assert report.valid is False
-    assert {issue.code for issue in report.issues} == {"missing_mapped_input"}
+    assert {issue.code for issue in report.issues} == {"noncanonical_mapping"}
     assert "text" in report.issues[0].message
+
+
+@pytest.mark.parametrize(
+    ("field", "existing_but_wrong_input"),
+    [
+        ("prompt_input", "clip"),
+        ("width_input", "height"),
+        ("height_input", "width"),
+        ("frames_input", "prompt"),
+        ("seed_input", "api_token"),
+        ("output_prefix_input", "video"),
+    ],
+)
+def test_validator_rejects_existing_socket_with_wrong_contract_v1_semantics(
+    field: str, existing_but_wrong_input: str
+) -> None:
+    report = validate_h3_contract(
+        unique_graph(), _mapping(**{field: existing_but_wrong_input})
+    )
+
+    assert report.valid is False
+    assert {issue.code for issue in report.issues} == {"noncanonical_mapping"}
 
 
 def test_validator_rejects_mapping_to_disconnected_candidate() -> None:
     report = validate_h3_contract(unique_graph(), _mapping(seed_node_id="700"))
+
+    assert report.valid is False
+    assert {issue.code for issue in report.issues} == {"unreachable_mapping"}
+
+
+def test_validator_requires_selected_seed_to_reach_selected_saver() -> None:
+    graph = unique_graph()
+    graph["229"] = {
+        "class_type": "RandomNoise",
+        "inputs": {"noise_seed": 2},
+    }
+    graph["240"] = {
+        "class_type": "SamplerCustomAdvanced",
+        "inputs": {"positive": ["136", 0], "noise": ["229", 0]},
+    }
+    graph["230"] = {
+        "class_type": "VAEDecodeTiled",
+        "inputs": {"samples": ["240", 0]},
+    }
+    graph["148"] = {
+        "class_type": "SaveVideo",
+        "inputs": {"video": ["230", 0], "filename_prefix": "alternate/H3"},
+    }
+
+    report = validate_h3_contract(
+        graph, _mapping(seed_node_id="129", saver_node_id="148")
+    )
 
     assert report.valid is False
     assert {issue.code for issue in report.issues} == {"unreachable_mapping"}
@@ -88,6 +138,20 @@ def test_validator_reports_but_accepts_explicit_fixed_dependency() -> None:
     assert report.fixed_dependencies == analysis.fixed_dependencies
 
 
+def test_validator_accepts_loader_owned_only_by_mapped_dynamic_picture() -> None:
+    graph = unique_graph()
+    graph["45"] = {
+        "class_type": "LoadImage",
+        "inputs": {"image": "replace-me.png"},
+    }
+    graph["136"]["inputs"]["ref_images.ref_image_0"] = ["45", 0]  # type: ignore[index]
+
+    report = validate_h3_contract(graph, _mapping())
+
+    assert report.valid is True
+    assert report.fixed_dependencies == ()
+
+
 def test_validator_rejects_file_loader_without_explicit_file_input() -> None:
     graph = unique_graph()
     graph["44"] = {"class_type": "LoadAudio", "inputs": {}}
@@ -107,3 +171,16 @@ def test_validator_rejects_forbidden_graph_even_with_plausible_mapping() -> None
 
     assert report.valid is False
     assert {issue.code for issue in report.issues} == {"forbidden_semantics"}
+
+
+def test_validator_contains_deep_graph_failure_as_structured_issue() -> None:
+    graph = unique_graph()
+    nested: object = "value"
+    for _ in range(2_000):
+        nested = {"nested": nested}
+    graph["128"]["inputs"]["deep"] = nested  # type: ignore[index]
+
+    report = validate_h3_contract(graph, _mapping())
+
+    assert report.valid is False
+    assert {issue.code for issue in report.issues} == {"invalid_structure"}

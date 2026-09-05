@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from .inspector import _is_link, inspect_h3_workflow
+from .inspector import (
+    _graph_edges,
+    _is_link,
+    _unmapped_reachable_file_nodes,
+    inspect_h3_workflow,
+)
 from .models import (
     H3BoundaryMapping,
     H3ValidationIssue,
@@ -16,6 +21,15 @@ from .models import (
 _H3_CLASS = "MiniMaxH3ReferenceToVideo"
 _DYNAMIC_PICTURE_PATTERN = "ref_images.ref_image_{index}"
 _DYNAMIC_AUDIO_PATTERN = "ref_audios.ref_audio_{index}"
+_CANONICAL_FIELDS = {
+    "prompt_input": "prompt",
+    "width_input": "width",
+    "height_input": "height",
+    "frames_input": "length",
+    "picture_input_pattern": _DYNAMIC_PICTURE_PATTERN,
+    "seed_input": "noise_seed",
+    "output_prefix_input": "filename_prefix",
+}
 
 
 def _issue(
@@ -91,6 +105,36 @@ def validate_h3_contract(graph: object, mapping: H3BoundaryMapping) -> Validatio
                 input_name=analysis_issue.input_name,
             )
         )
+    if any(issue.code == "invalid_structure" for issue in issues):
+        return ValidationReport(
+            valid=False,
+            issues=tuple(issues),
+            fixed_dependencies=analysis.fixed_dependencies,
+            synthetic_boundary=synthetic_boundary,
+        )
+
+    canonical_fields: dict[str, bool] = {}
+    for field, expected in _CANONICAL_FIELDS.items():
+        actual = getattr(mapping, field)
+        canonical_fields[field] = actual == expected
+        if actual != expected:
+            issues.append(
+                _issue(
+                    "noncanonical_mapping",
+                    f"contract v1 requires {field}={expected}; got {actual}",
+                    input_name=str(actual),
+                )
+            )
+    canonical_audio = mapping.audio_input_pattern in (None, _DYNAMIC_AUDIO_PATTERN)
+    if not canonical_audio:
+        issues.append(
+            _issue(
+                "noncanonical_mapping",
+                f"contract v1 requires audio_input_pattern={_DYNAMIC_AUDIO_PATTERN} or absent; "
+                f"got {mapping.audio_input_pattern}",
+                input_name=mapping.audio_input_pattern,
+            )
+        )
 
     h3_node = _node(normalized, mapping.h3_node_id)
     if h3_node is None or h3_node.get("class_type") != _H3_CLASS:
@@ -102,35 +146,18 @@ def validate_h3_contract(graph: object, mapping: H3BoundaryMapping) -> Validatio
             )
         )
     else:
-        for input_name in (
-            mapping.prompt_input,
-            mapping.width_input,
-            mapping.height_input,
-            mapping.frames_input,
-        ):
-            _validate_mapped_input(issues, normalized, mapping.h3_node_id, input_name)
-
-    if mapping.picture_input_pattern != _DYNAMIC_PICTURE_PATTERN:
-        issues.append(
-            _issue(
-                "missing_mapped_input",
-                f"mapped Picture pattern must be {_DYNAMIC_PICTURE_PATTERN}",
-                node_id=mapping.h3_node_id,
-                input_name=mapping.picture_input_pattern,
-            )
-        )
-    if mapping.audio_input_pattern not in (None, _DYNAMIC_AUDIO_PATTERN):
-        issues.append(
-            _issue(
-                "missing_mapped_input",
-                f"mapped Audio pattern must be {_DYNAMIC_AUDIO_PATTERN} or absent",
-                node_id=mapping.h3_node_id,
-                input_name=mapping.audio_input_pattern,
-            )
-        )
+        for field in ("prompt_input", "width_input", "height_input", "frames_input"):
+            if canonical_fields[field]:
+                _validate_mapped_input(
+                    issues, normalized, mapping.h3_node_id, getattr(mapping, field)
+                )
 
     seed_ids = {candidate.node_id for candidate in analysis.seed_candidates}
     saver_ids = {candidate.node_id for candidate in analysis.saver_candidates}
+    reachable_outputs = {
+        str(node["node_id"]): node["reachable_outputs"]
+        for node in analysis.agent_manifest["nodes"]
+    }
     if mapping.seed_node_id not in seed_ids:
         issues.append(
             _issue(
@@ -139,7 +166,7 @@ def validate_h3_contract(graph: object, mapping: H3BoundaryMapping) -> Validatio
                 node_id=mapping.seed_node_id,
             )
         )
-    else:
+    elif canonical_fields["seed_input"]:
         _validate_mapped_input(
             issues, normalized, mapping.seed_node_id, mapping.seed_input
         )
@@ -151,26 +178,44 @@ def validate_h3_contract(graph: object, mapping: H3BoundaryMapping) -> Validatio
                 node_id=mapping.saver_node_id,
             )
         )
-    else:
+    elif canonical_fields["output_prefix_input"]:
         _validate_mapped_input(
             issues,
             normalized,
             mapping.saver_node_id,
             mapping.output_prefix_input,
         )
+    if (
+        mapping.seed_node_id in seed_ids
+        and mapping.saver_node_id in saver_ids
+        and mapping.saver_node_id
+        not in reachable_outputs.get(mapping.seed_node_id, [])
+    ):
+        issues.append(
+            _issue(
+                "unreachable_mapping",
+                f"mapped seed node {mapping.seed_node_id} does not reach selected saver "
+                f"{mapping.saver_node_id}",
+                node_id=mapping.seed_node_id,
+            )
+        )
 
     fixed_ids = {dependency.node_id for dependency in analysis.fixed_dependencies}
-    reachable_outputs = {
-        str(node["node_id"]): node["reachable_outputs"]
+    _outgoing, _incoming, links = _graph_edges(normalized)
+    h3_ids = [
+        str(node["node_id"])
         for node in analysis.agent_manifest["nodes"]
-    }
-    for node_id, node in normalized.items():
-        if not isinstance(node, Mapping) or node.get("class_type") not in {
-            "LoadImage",
-            "LoadAudio",
-        }:
-            continue
-        if node_id not in fixed_ids and reachable_outputs.get(node_id):
+        if "h3" in node["candidate_roles"]
+    ]
+    dependency_nodes = _unmapped_reachable_file_nodes(
+        normalized,
+        reachable_outputs,
+        h3_ids[0] if len(h3_ids) == 1 else None,
+        links,
+    )
+    for node_id in sorted(dependency_nodes - fixed_ids):
+        node = normalized[node_id]
+        if isinstance(node, Mapping):
             input_name = "image" if node.get("class_type") == "LoadImage" else "audio"
             issues.append(
                 _issue(

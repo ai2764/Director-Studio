@@ -47,3 +47,27 @@ Green phases:
 
 - The full backend suite retains two existing Pillow `Image.getdata` deprecation warnings in `test_tail_frame_extraction.py`; they are unrelated to Task 3.
 - Fixed workflow file dependencies are intentionally reported with their local relative value in the analysis record for explicit UI disclosure; their values are redacted from `agent_manifest`, which is the only payload intended for Ollama.
+
+## Fix round 1: Exact semantics, edge ownership, paired reachability, and depth containment
+
+Reviewer findings reproduced with failing regression tests:
+
+- Mappings could point application semantics at any existing input, allowing `clip`, `api_token`, `video`, or swapped dimensions to pass synthetic filling.
+- A loader connected through a mapped dynamic Picture/Audio edge was subsequently rejected as unmapped, while excluding its whole node also hid additional fixed consumers.
+- Seed and saver IDs were checked only against independent global candidate sets, so a seed selected from one branch could be paired with a saver on another branch.
+- Excessive nesting raised `ValueError` or Python `RecursionError` out of the public inspector instead of producing the structured compatibility result expected by setup callers.
+
+Corrections:
+
+- Contract-v1 validation now enforces canonical H3, RandomNoise, SaveVideo, and dynamic reference input semantics before attempting a fill.
+- Fixed dependency discovery now distinguishes mapped and workflow-owned consumer edges. A loader used only by a dynamic H3 reference is application-owned; the same loader is reported when any additional reachable consumer remains.
+- Validation now requires the selected seed's reachable-output set to contain the selected saver.
+- Nesting-limit and recursion failures are contained as `unsupported` / `invalid_structure`, and contract validation returns that fatal issue without misleading secondary mapping failures.
+
+TDD and verification evidence:
+
+- Corrected regression collection first produced 12 expected behavioral failures across the four reviewer findings.
+- Focused inspector/validator suite: `33 passed in 0.39s`.
+- Broader H3 profile/runtime suite: `82 passed in 0.81s`.
+- Ruff: `All checks passed!`.
+- Full backend suite: `745 passed, 2 warnings in 22.36s`.
