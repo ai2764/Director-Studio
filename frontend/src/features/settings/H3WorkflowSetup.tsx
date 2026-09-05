@@ -153,7 +153,11 @@ export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
           const next = await fetchH3ImportAnalysis(saved.importId);
           if (cancelled) return;
           applyAnalysis(next);
-          if (next.lifecycle.test_job_id) {
+          if (saved.test?.import_id === saved.importId && saved.test.job_id !== next.lifecycle.test_job_id) {
+            testInFlight.current = true;
+            setStage("validated");
+            setTest(saved.test);
+          } else if (next.lifecycle.test_job_id) {
             const restored = await getH3Job(next.lifecycle.test_job_id);
             if (!cancelled) setJob(restored);
           } else if (saved.test?.import_id === saved.importId) {
@@ -408,6 +412,16 @@ export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
             <p className="field-hint">
               Local ComfyUI generation uses this workflow.
             </p>
+            <dl className="field-hint">
+              <dt>Source</dt>
+              <dd>{profiles.active.source === "builtin" ? "Built-in" : "Custom"}</dd>
+              <dt>Workflow hash</dt>
+              <dd><code className="workflow-hash">{profiles.active.workflow_sha256}</code></dd>
+              <dt>Validated</dt>
+              <dd>{profiles.active.validated_at
+                ? <time dateTime={profiles.active.validated_at}>{new Date(profiles.active.validated_at).toLocaleString()}</time>
+                : profiles.active.source === "builtin" ? "Bundled official workflow" : "Unavailable"}</dd>
+            </dl>
             {profiles.active.warning ? (
               <div className="banner" role="status">
                 <strong>Using Built-in Official H3</strong>

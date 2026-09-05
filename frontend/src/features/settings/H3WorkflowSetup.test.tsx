@@ -172,6 +172,46 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
+
+it("restores a remembered second pending test ahead of earlier successful evidence", async () => {
+  lifecycle = { ...lifecycle, status: "tested", test_job_id: "job-old", validated_at: "now" };
+  localStorage.setItem("director-studio.h3-setup", JSON.stringify({
+    importId: "import-1",
+    test: { import_id: "import-1", job_id: "job-new", job_url: "/api/h3-ref2va/jobs/job-new",
+            workflow_sha256: "hash-1", mapping_sha256: "mapping-1", status: "queued" },
+  }));
+  const base = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((url, init) => {
+    if (String(url).includes("/jobs/")) return Promise.resolve(new Response(JSON.stringify({
+      id: String(url).endsWith("job-new") ? "job-new" : "job-old",
+      status: String(url).endsWith("job-new") ? "running" : "succeeded",
+      outputs: String(url).endsWith("job-new") ? {} : { video: { url: "/old.mp4" } },
+    })));
+    return base(url, init);
+  });
+  render(<H3WorkflowSetup />);
+  await screen.findByText("Test job: running");
+  for (const name of ["Run test", "Save mapping", "Activate profile"])
+    expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByLabelText("Import H3 API workflow") as HTMLInputElement).disabled).toBe(true);
+  expect(screen.queryByLabelText("Workflow test video")).toBeNull();
+});
+
+it("shows active profile source, workflow hash, and validation time", async () => {
+  const base = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((url, init) => String(url) === "/api/workflow-profiles/h3"
+    ? Promise.resolve(new Response(JSON.stringify({
+        active: { ...active, source: "custom", display_name: "Cinema H3 quality",
+                  workflow_sha256: "a".repeat(64), validated_at: "2026-09-05T12:34:56Z" },
+        profiles: [],
+      }))) : base(url, init));
+  render(<H3WorkflowSetup />);
+  await screen.findByText("Cinema H3 quality");
+  const card = screen.getByRole("complementary", { name: "Active profile" });
+  expect(card.textContent).toContain("Custom");
+  expect(card.textContent).toContain("a".repeat(64));
+  expect(card.querySelector("time")?.getAttribute("dateTime")).toBe("2026-09-05T12:34:56Z");
+});
 async function importWorkflow() {
   fireEvent.change(screen.getByLabelText("Import H3 API workflow"), {
     target: {

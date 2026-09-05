@@ -47,6 +47,36 @@ def _picture_png() -> bytes:
     return output.getvalue()
 
 
+def test_test_route_preparation_race_persists_failed_job(
+    test_env, actor_picture, monkeypatch
+):
+    from app.api import h3_workflow_profiles as api
+    from app.core.jobs.store import list_jobs
+
+    store = H3ProfileStore()
+    import_id = _import_ready_profile(store)
+    resolve_picture = api._resolve_picture_asset
+
+    def change_import(asset_id):
+        graph = store.load_import_workflow(import_id)
+        graph["136"]["inputs"]["width"] = 777
+        store.import_workflow_path(import_id).write_text(json.dumps(graph))
+        return resolve_picture(asset_id)
+
+    monkeypatch.setattr(api, "_resolve_picture_asset", change_import)
+    with TestClient(create_app()) as client:
+        response = client.post(
+            f"/api/workflow-profiles/h3/imports/{import_id}/test",
+            json={"picture_asset_id": actor_picture.id},
+        )
+    assert response.status_code == 409
+    jobs = list_jobs()
+    assert len(jobs) == 1
+    assert jobs[0].status == JobStatus.failed
+    assert "changed" in jobs[0].error.lower()
+    assert store.resolve_active().source == "builtin"
+
+
 def _import_ready_profile(store: H3ProfileStore) -> str:
     graph = json.loads(
         (settings.workflows_dir / "h3_ref2va.api.json").read_text(encoding="utf-8")

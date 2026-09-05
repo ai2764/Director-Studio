@@ -117,3 +117,5 @@ class ResolvedH3Profile:
     workflow_sha256: str
     source: Literal["builtin", "custom"]
     warning: ProfileWarning | None = None
+    display_name: str = "Custom H3 workflow"
+    validated_at: str | None = None

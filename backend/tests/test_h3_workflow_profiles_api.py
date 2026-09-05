@@ -52,6 +52,37 @@ def _import(profile_client: TestClient, workflow: bytes) -> str:
     return response.json()["import_id"]
 
 
+@pytest.mark.parametrize(
+    "shape", ["deep", "ui", "missing_class", "invalid_node", "empty"]
+)
+def test_import_rejects_invalid_structure_before_creating_directory(
+    profile_client, sample_api_json, shape
+):
+    graph = json.loads(sample_api_json)
+    if shape == "deep":
+        value = "leaf"
+        for _ in range(34):
+            value = {"nested": value}
+        graph["136"]["inputs"]["nested"] = value
+    elif shape == "ui":
+        graph = {"nodes": [], "links": [], "version": 0.4}
+    elif shape == "missing_class":
+        graph["extra"] = {"inputs": {}}
+    elif shape == "invalid_node":
+        graph["extra"] = "not a node"
+    else:
+        graph = {}
+    response = profile_client.post(
+        "/api/workflow-profiles/h3/imports",
+        files={
+            "workflow": ("bad.json", json.dumps(graph).encode(), "application/json")
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_workflow"
+    assert not H3ProfileStore().imports_dir.exists()
+
+
 def _mark_test_succeeded(import_id: str) -> None:
     store = H3ProfileStore()
     workflow_sha256, mapping_sha256 = store.import_identity(import_id)
@@ -81,6 +112,38 @@ def _mark_test_succeeded(import_id: str) -> None:
         mapping_sha256=mapping_sha256,
         job_id=job.id,
     )
+
+
+def test_installed_profile_keeps_upload_name_and_validation_timestamp(
+    profile_client, sample_api_json
+):
+    response = profile_client.post(
+        "/api/workflow-profiles/h3/imports",
+        files={
+            "workflow": (
+                "Cinema H3 quality.api.json",
+                sample_api_json,
+                "application/json",
+            )
+        },
+    )
+    import_id = response.json()["import_id"]
+    base = f"/api/workflow-profiles/h3/imports/{import_id}"
+    validated_at = profile_client.post(f"{base}/validate").json()["validated_at"]
+    _mark_test_succeeded(import_id)
+    activated = profile_client.post(f"{base}/activate").json()
+    profiles = profile_client.get("/api/workflow-profiles/h3").json()
+    active = profiles["active"]
+    assert active["display_name"] == "Cinema H3 quality"
+    assert active["source"] == "custom"
+    assert active["workflow_sha256"] == H3ProfileStore().import_workflow_sha256(
+        import_id
+    )
+    assert active["validated_at"] == validated_at
+    installed = next(
+        p for p in profiles["profiles"] if p["profile_id"] == activated["profile_id"]
+    )
+    assert installed["display_name"] == "Cinema H3 quality"
 
 
 def test_analysis_restores_only_current_durable_lifecycle(

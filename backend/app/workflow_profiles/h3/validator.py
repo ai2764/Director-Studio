@@ -146,6 +146,19 @@ def validate_h3_contract(graph: object, mapping: H3BoundaryMapping) -> Validatio
             )
         )
     else:
+        h3_inputs = h3_node.get("inputs")
+        if (
+            mapping.audio_input_pattern is None
+            and isinstance(h3_inputs, Mapping)
+            and any(str(name).startswith("ref_audios.") for name in h3_inputs)
+        ):
+            issues.append(
+                _issue(
+                    "unmapped_audio_boundary",
+                    "An H3 node with reference Audio sockets requires the canonical audio mapping",
+                    node_id=mapping.h3_node_id,
+                )
+            )
         for field in ("prompt_input", "width_input", "height_input", "frames_input"):
             if canonical_fields[field]:
                 _validate_mapped_input(
@@ -188,8 +201,7 @@ def validate_h3_contract(graph: object, mapping: H3BoundaryMapping) -> Validatio
     if (
         mapping.seed_node_id in seed_ids
         and mapping.saver_node_id in saver_ids
-        and mapping.saver_node_id
-        not in reachable_outputs.get(mapping.seed_node_id, [])
+        and mapping.saver_node_id not in reachable_outputs.get(mapping.seed_node_id, [])
     ):
         issues.append(
             _issue(
@@ -286,4 +298,6 @@ def validate_h3_contract(graph: object, mapping: H3BoundaryMapping) -> Validatio
         fixed_dependencies=analysis.fixed_dependencies,
         synthetic_boundary=synthetic_boundary,
     )
+
+
 __all__ = ["validate_h3_contract"]

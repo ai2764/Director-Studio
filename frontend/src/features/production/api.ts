@@ -140,6 +140,9 @@ export interface H3JobRecord {
   input_previews: Record<string, string>;
   pipeline_id: string;
   h3_provider?: H3Provider;
+  h3_profile_id?: string | null;
+  h3_profile_sha256?: string | null;
+  h3_contract_version?: number | null;
 }
 
 export async function getH3Job(jobId: string): Promise<H3JobRecord> {

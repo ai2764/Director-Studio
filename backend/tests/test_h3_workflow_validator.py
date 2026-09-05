@@ -46,6 +46,15 @@ def test_validator_fills_a_synthetic_boundary_job_and_accepts_exact_mapping() ->
     }
 
 
+def test_null_audio_mapping_rejects_surviving_boundary_audio():
+    graph = unique_graph()
+    graph["audio"] = {"class_type": "LoadAudio", "inputs": {"audio": "private.wav"}}
+    graph["136"]["inputs"]["ref_audios.ref_audio_0"] = ["audio", 0]
+    report = validate_h3_contract(graph, _mapping(audio_input_pattern=None))
+    assert report.valid is False
+    assert any(issue.code == "unmapped_audio_boundary" for issue in report.issues)
+
+
 def test_validator_rejects_mapped_h3_input_that_does_not_exist() -> None:
     report = validate_h3_contract(unique_graph(), _mapping(prompt_input="text"))
 

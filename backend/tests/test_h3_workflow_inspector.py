@@ -9,6 +9,24 @@ import pytest
 from app.workflow_profiles.h3.inspector import inspect_h3_workflow
 
 
+@pytest.mark.parametrize(
+    "title",
+    [
+        r"C:\Users\private\workflow.json",
+        "/home/private/workflow.json",
+        r"\\server\private\workflow.json",
+    ],
+)
+def test_agent_manifest_redacts_absolute_node_titles(title):
+    graph = unique_graph()
+    graph["136"]["_meta"] = {"title": title}
+    analysis = inspect_h3_workflow(graph)
+    node = next(
+        node for node in analysis.agent_manifest["nodes"] if node["node_id"] == "136"
+    )
+    assert node["title"] == "<redacted-path>"
+
+
 def unique_graph() -> dict[str, object]:
     return {
         "136": {
@@ -206,7 +224,10 @@ def test_inspector_rejects_candidate_missing_its_exact_boundary_input(
 @pytest.mark.parametrize(
     ("graph", "message"),
     [
-        ({str(index): {"class_type": "X", "inputs": {}} for index in range(2001)}, "2,000"),
+        (
+            {str(index): {"class_type": "X", "inputs": {}} for index in range(2001)},
+            "2,000",
+        ),
         ({"1": {"class_type": "X", "inputs": {"value": "x" * 65_537}}}, "64 KiB"),
     ],
 )

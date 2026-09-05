@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,6 +37,7 @@ _ACTIVE_FILE = "active.json"
 _MAPPING_FILE = "mapping.json"
 _VALIDATION_FILE = "validation.json"
 _TEST_FILE = "test.json"
+_IMPORT_FILE = "import.json"
 _JOB_SNAPSHOT_DIR = "workflow_profile"
 _H3_REF2AV_NODE = "MiniMaxH3ReferenceToVideo"
 _H3_I2V_NODE = "MiniMaxH3ImageToVideo"
@@ -74,13 +76,13 @@ class H3ProfileStore:
         return self.root / _ACTIVE_FILE
 
     def workflow_path(self, profile_id: str) -> Path:
-        return self._profile_dir(profile_id) / _WORKFLOW_FILE
+        return self._safe_path(self._profile_dir(profile_id) / _WORKFLOW_FILE)
 
     def profile_path(self, profile_id: str) -> Path:
-        return self._profile_dir(profile_id) / _PROFILE_FILE
+        return self._safe_path(self._profile_dir(profile_id) / _PROFILE_FILE)
 
     def import_workflow_path(self, import_id: str) -> Path:
-        return self._import_dir(import_id) / _WORKFLOW_FILE
+        return self._safe_path(self._import_dir(import_id) / _WORKFLOW_FILE)
 
     def import_workflow_sha256(self, import_id: str) -> str:
         """Return the digest of the currently stored import bytes."""
@@ -105,13 +107,17 @@ class H3ProfileStore:
     ) -> None:
         """Persist an accepted mapping and invalidate mapping-specific evidence."""
         directory = self._require_existing_import(import_id)
+        stale_paths = [
+            self._safe_path(directory / name, write=True)
+            for name in (_VALIDATION_FILE, _TEST_FILE)
+        ]
         self._atomic_write_json(
             directory / _MAPPING_FILE,
             mapping.model_dump(mode="json"),
         )
-        for stale_name in (_VALIDATION_FILE, _TEST_FILE):
+        for stale_path in stale_paths:
             try:
-                (directory / stale_name).unlink(missing_ok=True)
+                self._safe_path(stale_path, write=True).unlink(missing_ok=True)
             except OSError as exc:
                 raise ProfileStorageError(
                     "Could not invalidate stale workflow profile evidence"
@@ -119,7 +125,7 @@ class H3ProfileStore:
 
     def load_import_mapping(self, import_id: str) -> H3BoundaryMapping | None:
         """Load the selected mapping, or return none before one is accepted."""
-        path = self._require_existing_import(import_id) / _MAPPING_FILE
+        path = self._safe_path(self._require_existing_import(import_id) / _MAPPING_FILE)
         if not path.exists():
             return None
         try:
@@ -153,6 +159,11 @@ class H3ProfileStore:
             "workflow_sha256": workflow_sha256,
             "mapping_sha256": mapping_sha256,
             "validated_at": datetime.now(UTC).isoformat(),
+            "display_name": self._display_name(
+                self._optional_record(
+                    self._require_existing_import(import_id) / _IMPORT_FILE
+                )
+            ),
             "report": report,
             "comfy": comfy_payload,
         }
@@ -315,15 +326,15 @@ class H3ProfileStore:
 
     def list_installed_profiles(self) -> list[H3WorkflowProfile]:
         """Return valid installed custom profile metadata in stable ID order."""
-        if not self.profiles_dir.exists():
+        try:
+            directories = list(self._safe_path(self.profiles_dir).iterdir())
+        except (ProfileStorageError, OSError):
             return []
         profiles: list[H3WorkflowProfile] = []
-        for directory in sorted(
-            self.profiles_dir.iterdir(), key=lambda path: path.name
-        ):
-            if not directory.is_dir() or directory.is_symlink():
-                continue
+        for directory in sorted(directories, key=lambda path: path.name):
             try:
+                if not self._safe_path(directory).is_dir():
+                    continue
                 profile_id = self._require_profile_id(directory.name)
                 profile = H3WorkflowProfile.model_validate(
                     self._read_json(self.profile_path(profile_id))
@@ -333,25 +344,33 @@ class H3ProfileStore:
             profiles.append(profile)
         return profiles
 
-    def create_import(self, workflow: dict[str, Any]) -> str:
+    def create_import(
+        self, workflow: dict[str, Any], *, display_name: str = "Custom H3 workflow"
+    ) -> str:
         """Persist an API workflow under a generated opaque import identifier."""
         if not isinstance(workflow, dict):
             raise ProfileStorageError("Imported workflow must be a JSON object")
-        self.imports_dir.mkdir(parents=True, exist_ok=True)
+        self._mkdir(self.imports_dir)
         for _ in range(10):
             import_id = f"imp-{secrets.token_hex(16)}"
             import_dir = self._import_dir(import_id)
             try:
-                import_dir.mkdir()
+                self._safe_path(import_dir, write=True).mkdir()
             except FileExistsError:
                 continue
             self._atomic_write_json(import_dir / _WORKFLOW_FILE, workflow)
+            self._atomic_write_json(
+                import_dir / _IMPORT_FILE,
+                {
+                    "display_name": self._display_name({"display_name": display_name}),
+                },
+            )
             return import_id
         raise ProfileStorageError("Could not allocate a unique workflow import ID")
 
     def _require_existing_import(self, import_id: str) -> Path:
         directory = self._import_dir(import_id)
-        if not directory.is_dir() or directory.is_symlink():
+        if not self._safe_path(directory).is_dir():
             raise ProfileStorageError("Workflow import was not found")
         return directory
 
@@ -424,7 +443,7 @@ class H3ProfileStore:
         return cls._sha256(cls._json_bytes(profile.model_dump(mode="json")))
 
     def _optional_record(self, path: Path) -> dict[str, Any] | None:
-        if not path.exists():
+        if not self._safe_path(path).exists():
             return None
         return self._read_json(path)
 
@@ -551,7 +570,7 @@ class H3ProfileStore:
                 "The referenced H3 profile test job has no mapped video output",
                 details={"import_id": import_id, "job_id": job_id},
             )
-        output_path = (job_dir(job_id) / "outputs" / filename).resolve()
+        output_path = self._safe_path(job_dir(job_id) / "outputs" / filename)
         expected_url = f"/api/files/jobs/{job_id}/outputs/{filename}"
         if (
             not output_path.is_file()
@@ -587,7 +606,7 @@ class H3ProfileStore:
                 "Profile workflow hash does not match supplied workflow"
             )
         directory = self._profile_dir(profile_id)
-        directory.mkdir(parents=True, exist_ok=True)
+        self._mkdir(directory)
         self._atomic_write_bytes(directory / _WORKFLOW_FILE, workflow_bytes)
         self._atomic_write_json(
             directory / _PROFILE_FILE,
@@ -614,7 +633,7 @@ class H3ProfileStore:
             resolved = self._resolve_builtin()
         else:
             resolved = self._resolve_custom(profile_id)
-        self.root.mkdir(parents=True, exist_ok=True)
+        self._mkdir(self.root)
         self._atomic_write_json(
             self.active_path,
             {
@@ -625,9 +644,9 @@ class H3ProfileStore:
 
     def resolve_active(self) -> ResolvedH3Profile:
         """Resolve a valid active profile, otherwise safely use the official graph."""
-        if not self.active_path.exists():
-            return self._resolve_builtin()
         try:
+            if not self._safe_path(self.active_path).exists():
+                return self._resolve_builtin()
             pointer = self._read_json(self.active_path)
             profile_id = self._require_profile_id(pointer.get("profile_id"))
             expected_hash = pointer.get("workflow_sha256")
@@ -656,6 +675,15 @@ class H3ProfileStore:
         """Resolve the packaged profile for setup/status responses."""
         return self._resolve_builtin()
 
+    def resolve_profile(self, profile_id: str) -> ResolvedH3Profile:
+        """Read verified installed profile details without changing selection."""
+        profile_id = self._require_profile_id(profile_id)
+        return (
+            self._resolve_builtin()
+            if profile_id == _BUILTIN_PROFILE_ID
+            else self._resolve_custom(profile_id)
+        )
+
     def snapshot_for_job(self, job: JobRecord) -> ResolvedH3Profile:
         """Atomically capture the currently resolved profile for one local H3 job."""
         from app.core.jobs.store import job_dir
@@ -667,7 +695,7 @@ class H3ProfileStore:
             "h3_profile_sha256",
             "h3_contract_version",
         }
-        if snapshot_dir.exists() or identity_keys.intersection(params):
+        if self._safe_path(snapshot_dir).exists() or identity_keys.intersection(params):
             snapshot = self.load_job_snapshot(job.id)
             if (
                 params.get("h3_profile_id") != snapshot.profile_id
@@ -693,7 +721,7 @@ class H3ProfileStore:
             workflow_path = self.workflow_path(resolved.profile_id)
             profile_path = self.profile_path(resolved.profile_id)
             try:
-                profile_bytes = profile_path.read_bytes()
+                profile_bytes = self._read_bytes(profile_path)
             except OSError as exc:
                 raise ProfileStorageError(
                     "Could not read active profile while snapshotting the job"
@@ -716,7 +744,7 @@ class H3ProfileStore:
                 )
 
         try:
-            workflow_bytes = workflow_path.read_bytes()
+            workflow_bytes = self._read_bytes(workflow_path)
         except OSError as exc:
             raise ProfileStorageError(
                 "Could not read active workflow while snapshotting the job"
@@ -759,7 +787,7 @@ class H3ProfileStore:
             "h3_profile_sha256",
             "h3_contract_version",
         }
-        if snapshot_dir.exists() or identity_keys.intersection(params):
+        if self._safe_path(snapshot_dir).exists() or identity_keys.intersection(params):
             snapshot = self.load_job_snapshot(job.id)
             if (
                 params.get("h3_profile_id") != import_id
@@ -870,6 +898,7 @@ class H3ProfileStore:
             mapping=_OFFICIAL_MAPPING,
             workflow_sha256=workflow_hash,
             source="builtin",
+            display_name="Built-in Official H3",
         )
 
     def _resolve_custom(self, profile_id: str) -> ResolvedH3Profile:
@@ -931,6 +960,10 @@ class H3ProfileStore:
             mapping=profile.mapping,
             workflow_sha256=workflow_hash,
             source="custom",
+            display_name=self._display_name(evidence),
+            validated_at=evidence.get("validated_at")
+            if isinstance(evidence.get("validated_at"), str)
+            else None,
         )
 
     def _fallback(self, code: str, message: str) -> ResolvedH3Profile:
@@ -942,15 +975,26 @@ class H3ProfileStore:
             workflow_sha256=builtin.workflow_sha256,
             source=builtin.source,
             warning=ProfileWarning(code=code, message=message),
+            display_name=builtin.display_name,
+        )
+
+    @staticmethod
+    def _display_name(metadata: dict[str, Any] | None) -> str:
+        value = (metadata or {}).get("display_name")
+        if not isinstance(value, str):
+            return "Custom H3 workflow"
+        return (
+            re.sub(r"[\x00-\x1f\x7f\s]+", " ", value).strip()[:120]
+            or "Custom H3 workflow"
         )
 
     def _profile_dir(self, profile_id: str) -> Path:
-        return self.profiles_dir / self._require_profile_id(profile_id)
+        return self._safe_path(self.profiles_dir / self._require_profile_id(profile_id))
 
     def _import_dir(self, import_id: str) -> Path:
         if not isinstance(import_id, str) or not _IMPORT_ID_RE.fullmatch(import_id):
             raise ProfileStorageError("Invalid workflow import ID")
-        return self.imports_dir / import_id
+        return self._safe_path(self.imports_dir / import_id)
 
     @staticmethod
     def _require_profile_id(profile_id: object) -> str:
@@ -973,7 +1017,7 @@ class H3ProfileStore:
 
     def _read_workflow(self, path: Path) -> tuple[dict[str, Any], str]:
         try:
-            raw = path.read_bytes()
+            raw = self._read_bytes(path)
         except OSError as exc:
             raise ProfileStorageError(
                 f"Could not read workflow file: {path.name}"
@@ -1007,7 +1051,7 @@ class H3ProfileStore:
 
     def _read_json(self, path: Path) -> dict[str, Any]:
         try:
-            raw = path.read_bytes()
+            raw = self._read_bytes(path)
         except OSError as exc:
             raise ProfileStorageError(
                 f"Could not read profile file: {path.name}"
@@ -1027,9 +1071,55 @@ class H3ProfileStore:
     def _atomic_write_json(self, path: Path, value: dict[str, Any]) -> None:
         self._atomic_write_bytes(path, self._json_bytes(value))
 
-    @staticmethod
-    def _atomic_write_bytes(path: Path, value: bytes) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
+    def _safe_path(self, path: Path, *, write: bool = False) -> Path:
+        """Check containment and every existing component without following links."""
+        path = Path(os.path.abspath(path))
+        roots = [self.root, settings.jobs_dir, settings.projects_dir]
+        if not write:
+            roots.append(settings.workflows_dir)
+        allowed = [Path(os.path.abspath(root)) for root in roots]
+        if not any(path.is_relative_to(root) for root in allowed):
+            raise ProfileStorageError(
+                "Workflow profile path is outside its storage roots"
+            )
+        try:
+            for component in (*reversed(path.parents), path):
+                try:
+                    info = os.lstat(component)
+                except FileNotFoundError:
+                    continue
+                if (
+                    stat.S_ISLNK(info.st_mode)
+                    or getattr(info, "st_file_attributes", 0)
+                    & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                    or (stat.S_ISREG(info.st_mode) and info.st_nlink > 1)
+                ):
+                    raise ProfileStorageError(
+                        "Workflow profile paths cannot contain links or reparse points"
+                    )
+            if not any(path.resolve().is_relative_to(root) for root in allowed):
+                raise ProfileStorageError(
+                    "Workflow profile path escapes its storage root"
+                )
+        except (OSError, RuntimeError) as exc:
+            raise ProfileStorageError(
+                "Could not verify workflow profile storage path"
+            ) from exc
+        return path
+
+    def _read_bytes(self, path: Path) -> bytes:
+        path = self._safe_path(path)
+        raw = path.read_bytes()
+        self._safe_path(path)
+        return raw
+
+    def _mkdir(self, path: Path) -> None:
+        self._safe_path(path, write=True).mkdir(parents=True, exist_ok=True)
+        self._safe_path(path, write=True)
+
+    def _atomic_write_bytes(self, path: Path, value: bytes) -> None:
+        path = self._safe_path(path, write=True)
+        self._mkdir(path.parent)
         temp_name: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -1039,6 +1129,8 @@ class H3ProfileStore:
                 temporary.write(value)
                 temporary.flush()
                 os.fsync(temporary.fileno())
+            self._safe_path(Path(temp_name), write=True)
+            self._safe_path(path, write=True)
             os.replace(temp_name, path)
         except OSError as exc:
             raise ProfileStorageError(
@@ -1047,8 +1139,8 @@ class H3ProfileStore:
         finally:
             if temp_name:
                 try:
-                    Path(temp_name).unlink(missing_ok=True)
-                except OSError:
+                    self._safe_path(Path(temp_name), write=True).unlink(missing_ok=True)
+                except (OSError, ProfileStorageError):
                     pass
 
 

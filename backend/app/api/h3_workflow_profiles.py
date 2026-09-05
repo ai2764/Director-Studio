@@ -135,14 +135,11 @@ def _active_payload(store: H3ProfileStore) -> dict[str, Any]:
     resolved = store.resolve_active()
     return {
         "profile_id": resolved.profile_id,
-        "display_name": (
-            "Built-in Official H3"
-            if resolved.source == "builtin"
-            else resolved.profile_id.replace("-", " ").title()
-        ),
+        "display_name": resolved.display_name,
         "source": resolved.source,
         "workflow_sha256": resolved.workflow_sha256,
         "contract_version": 1,
+        "validated_at": resolved.validated_at,
         "warning": (
             {
                 "code": resolved.warning.code,
@@ -173,10 +170,14 @@ def list_h3_profiles() -> dict[str, Any]:
         }
     ]
     for profile in store.list_installed_profiles():
+        try:
+            resolved = store.resolve_profile(profile.id)
+        except ProfileStorageError:
+            continue
         profiles.append(
             {
                 "profile_id": profile.id,
-                "display_name": profile.id.replace("-", " ").title(),
+                "display_name": resolved.display_name,
                 "source": "custom",
                 "status": "active" if profile.id == active["profile_id"] else "tested",
                 "workflow_sha256": profile.workflow_sha256,
@@ -205,9 +206,35 @@ async def import_h3_workflow(
     if not isinstance(graph, dict):
         return _error(400, "invalid_workflow_json", "Workflow JSON must be an object")
     try:
-        inspect_h3_workflow(graph)
+        analysis = inspect_h3_workflow(graph)
+        structural_issues = [
+            issue
+            for issue in analysis.issues
+            if issue.code
+            in {
+                "invalid_structure",
+                "invalid_node",
+                "invalid_inputs",
+                "invalid_class_type",
+            }
+        ]
+        if not graph or structural_issues:
+            return _error(
+                400,
+                "invalid_workflow",
+                "Workflow must be a valid API graph",
+                {
+                    "issues": [
+                        issue.model_dump(mode="json") for issue in structural_issues
+                    ]
+                },
+            )
         store = H3ProfileStore()
-        import_id = store.create_import(graph)
+        filename = Path(
+            (workflow.filename or "Custom H3 workflow.json").replace("\\", "/")
+        ).stem
+        display_name = filename.removesuffix(".api")
+        import_id = store.create_import(graph, display_name=display_name)
         workflow_sha256 = store.import_workflow_sha256(import_id)
     except (TypeError, ValueError) as exc:
         return _error(400, "invalid_workflow", str(exc))

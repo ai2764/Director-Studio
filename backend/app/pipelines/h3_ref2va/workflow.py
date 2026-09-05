@@ -145,7 +145,9 @@ def fill_profile_graph(
     if len(audios) > MAX_REF_AUDIOS:
         raise ValueError(f"at most {MAX_REF_AUDIOS} audios allowed for H3 Ref2VA")
     if str(job_params.get("native_audio") or "").strip():
-        raise ValueError("native audio lock is not part of the official ComfyUI workflow")
+        raise ValueError(
+            "native audio lock is not part of the official ComfyUI workflow"
+        )
 
     prompt = job_params.get("prompt") or ""
     if "dialogue" in job_params:
@@ -169,12 +171,13 @@ def fill_profile_graph(
     binding = profile.mapping
     h3_inputs = filled[binding.h3_node_id].setdefault("inputs", {})
     dynamic_patterns = [_dynamic_input_regex(binding.picture_input_pattern)]
+    dynamic_patterns.append(_dynamic_input_regex("ref_audios.ref_audio_{index}"))
     if binding.audio_input_pattern is not None:
         dynamic_patterns.append(_dynamic_input_regex(binding.audio_input_pattern))
     for key in list(h3_inputs):
-        if any(pattern.fullmatch(key) for pattern in dynamic_patterns) or key.startswith(
-            ("ref_videos.", "ref_video_audios.")
-        ):
+        if any(
+            pattern.fullmatch(key) for pattern in dynamic_patterns
+        ) or key.startswith(("ref_videos.", "ref_video_audios.")):
             del h3_inputs[key]
 
     width = int(job_params.get("width") or DEFAULT_WIDTH)
@@ -228,7 +231,9 @@ def fill_profile_graph(
     return filled
 
 
-def fill_ref2va_graph(graph: dict[str, Any], job_params: dict[str, Any]) -> dict[str, Any]:
+def fill_ref2va_graph(
+    graph: dict[str, Any], job_params: dict[str, Any]
+) -> dict[str, Any]:
     """Backward-compatible fill for an official-shaped Ref2AV graph."""
     mapping = H3BoundaryMapping(
         h3_node_id=_require_unique_node_id(graph, H3_REF_NODE),

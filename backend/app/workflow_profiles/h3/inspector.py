@@ -51,9 +51,13 @@ def _load_graph(graph: object) -> dict[str, Any]:
         raise TypeError("workflow must be a JSON object")
     normalized = {str(node_id): node for node_id, node in graph.items()}
     if len(normalized) != len(graph):
-        raise ValueError("workflow contains duplicate node IDs after string normalization")
+        raise ValueError(
+            "workflow contains duplicate node IDs after string normalization"
+        )
     encoded_size = len(
-        json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
     )
     if encoded_size > MAX_WORKFLOW_BYTES:
         raise ValueError("workflow exceeds the 8 MiB limit")
@@ -139,7 +143,8 @@ def _title(node: object) -> str:
     if not isinstance(value, str):
         return ""
     value = _CONTROL_CHARACTERS.sub(" ", value)
-    return _WHITESPACE.sub(" ", value).strip()[:256]
+    value = _WHITESPACE.sub(" ", value).strip()[:256]
+    return "<redacted-path>" if _ABSOLUTE_PATH.match(value) else value
 
 
 def _candidate(node_id: str, graph: Mapping[str, Any]) -> H3NodeCandidate:
@@ -260,6 +265,17 @@ def _inspect_h3_workflow(graph: object) -> H3WorkflowAnalysis:
                 )
             )
             continue
+        if (
+            not isinstance(node.get("class_type"), str)
+            or not node["class_type"].strip()
+        ):
+            issues.append(
+                H3AnalysisIssue(
+                    code="invalid_class_type",
+                    message="workflow nodes require a class_type string",
+                    node_id=node_id,
+                )
+            )
         if node.get("class_type") == _I2V_CLASS:
             issues.append(
                 H3AnalysisIssue(
@@ -366,14 +382,18 @@ def _inspect_h3_workflow(graph: object) -> H3WorkflowAnalysis:
             continue
         class_type = str(node.get("class_type") or "")
         inputs = node.get("inputs")
-        input_names = sorted(str(name) for name in inputs) if isinstance(inputs, Mapping) else []
-        defaults = {
-            str(name): _redacted_default(class_type, str(name), value)
-            for name, value in sorted(
-                inputs.items(), key=lambda item: str(item[0])
-            )
-            if not _is_link(value)
-        } if isinstance(inputs, Mapping) else {}
+        input_names = (
+            sorted(str(name) for name in inputs) if isinstance(inputs, Mapping) else []
+        )
+        defaults = (
+            {
+                str(name): _redacted_default(class_type, str(name), value)
+                for name, value in sorted(inputs.items(), key=lambda item: str(item[0]))
+                if not _is_link(value)
+            }
+            if isinstance(inputs, Mapping)
+            else {}
+        )
         manifest_nodes.append(
             {
                 "node_id": node_id,

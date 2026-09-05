@@ -6,6 +6,7 @@ export interface H3ActiveProfile {
   source: "builtin" | "custom";
   workflow_sha256: string;
   contract_version: number;
+  validated_at?: string | null;
   warning: { code: string; message: string; details?: Record<string, unknown> } | null;
 }
 

@@ -21,6 +21,7 @@ from app.workflow_profiles.h3 import (
     H3ProfileStore,
     H3WorkflowProfile,
     ProfileChangedError,
+    ProfileStorageError,
     ResolvedH3Profile,
     load_job_profile_snapshot,
 )
@@ -419,3 +420,68 @@ def test_h3_job_response_exposes_profile_identity() -> None:
     assert response.h3_profile_id == "custom-profile"
     assert response.h3_profile_sha256 == "a" * 64
     assert response.h3_contract_version == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damage", ["corrupt", "missing"])
+@pytest.mark.parametrize("recover", [False, True])
+async def test_preparation_failure_is_durable_and_recovery_continues(
+    tmp_projects_dir, tmp_path, monkeypatch, damage, recover
+):
+    monkeypatch.setattr(settings, "jobs_dir", tmp_path / "jobs")
+    monkeypatch.setattr(settings, "workflow_profiles_dir", tmp_path / "profiles")
+    broken = create_job(
+        pipeline_id="h3_ref2va",
+        asset_kind="productions",
+        name="broken",
+        params={"h3_provider": "local"},
+    )
+    H3Ref2VaPipeline().prepare_job_submission(broken)
+    runner.store.save_job(broken)
+    identity = dict(broken.params)
+    path = job_dir(broken.id) / "workflow_profile" / "workflow.api.json"
+    if damage == "corrupt":
+        path.write_text("{}")
+    else:
+        path.unlink()
+    if not recover:
+        with pytest.raises(ProfileStorageError):
+            await runner.start_pipeline_job(broken)
+        assert load_job(broken.id).status == JobStatus.failed
+        assert load_job(broken.id).params == identity
+        assert load_job(broken.id).error
+        assert broken.id not in runner._tasks
+        return
+    healthy = create_job(
+        pipeline_id="h3_ref2va",
+        asset_kind="productions",
+        name="healthy",
+        params={"h3_provider": "local"},
+    )
+
+    async def no_run(*args):
+        return None
+
+    async def no_reservation(*args):
+        return False
+
+    monkeypatch.setattr(runner, "_run_job", no_run)
+    monkeypatch.setattr(runner, "_reserve_local_generation", no_reservation)
+    recovered = await runner.recover_interrupted_jobs()
+    await runner.await_pipeline_job(healthy.id)
+    assert recovered == [healthy.id]
+    assert load_job(broken.id).status == JobStatus.failed
+    assert load_job(broken.id).params == identity
+    assert load_job(healthy.id).params["h3_profile_id"] == "builtin-official-h3"
+
+
+def test_zero_audio_fill_removes_canonical_sockets_even_when_mapping_is_null():
+    graph = load_base_prompt()
+    graph["136"]["inputs"]["ref_audios.ref_audio_2"] = ["stale-audio", 0]
+    filled = fill_profile_graph(
+        _resolved(
+            graph, mapping=_mapping().model_copy(update={"audio_input_pattern": None})
+        ),
+        _job_params(audios=[]),
+    )
+    assert not any(key.startswith("ref_audios.") for key in filled["136"]["inputs"])
