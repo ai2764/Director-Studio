@@ -60,6 +60,7 @@ class H3BoundaryMapping:
     seed_node_id: str
     seed_input: str
     saver_node_id: str
+    output_prefix_input: str
     output_fields: tuple[str, ...]
 
 
