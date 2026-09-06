@@ -14,10 +14,16 @@ from app.pipelines.h3_ref2va.workflow import (
     fill_profile_graph,
     fill_ref2va_graph,
     load_base_prompt,
+    map_history_output_candidates,
     map_history_outputs,
     minimal_graph,
 )
-from app.workflow_profiles.h3 import H3BoundaryMapping, ResolvedH3Profile
+from app.workflow_profiles.h3 import (
+    H3BoundaryMapping,
+    H3InputMapping,
+    H3OutputSelection,
+    ResolvedH3Profile,
+)
 
 
 VALID_PROMPT = (
@@ -302,21 +308,21 @@ def test_fill_requires_unique_boundary_nodes():
         fill_ref2va_graph(graph, _base_job())
 
 
-def test_profile_output_fields_control_history_mapping():
+def test_profile_artifact_index_controls_history_mapping():
     graph = minimal_graph()
     mapping = H3BoundaryMapping(
-        h3_node_id="10",
-        prompt_input="prompt",
-        width_input="width",
-        height_input="height",
-        frames_input="length",
-        picture_input_pattern="ref_images.ref_image_{index}",
-        audio_input_pattern="ref_audios.ref_audio_{index}",
-        seed_node_id="11",
-        seed_input="noise_seed",
-        saver_node_id="19",
-        output_prefix_input="filename_prefix",
-        output_fields=("gifs",),
+        inputs=H3InputMapping(
+            h3_node_id="10",
+            prompt_input="prompt",
+            width_input="width",
+            height_input="height",
+            frames_input="length",
+            picture_input_pattern="ref_images.ref_image_{index}",
+            audio_input_pattern="ref_audios.ref_audio_{index}",
+            seed_node_id="11",
+            seed_input="noise_seed",
+        ),
+        output=H3OutputSelection(node_id="19", artifact_index=1),
     )
     profile = ResolvedH3Profile(
         profile_id="gif-output",
@@ -331,13 +337,52 @@ def test_profile_output_fields_control_history_mapping():
         {
             "outputs": {
                 "19": {
-                    "videos": [{"filename": "wrong.mp4"}],
-                    "gifs": [{"filename": "right.webp"}],
+                    "videos": [
+                        {"filename": "first.mp4"},
+                        {"filename": "second.mp4"},
+                    ],
                 }
             }
         },
         profile=profile,
     )
 
-    assert filled["19"]["inputs"]["filename_prefix"] == "director-studio/h3/sht1"
-    assert mapped["video"].filename == "right.webp"
+    assert "filename_prefix" not in filled["19"]["inputs"]
+    assert mapped["video"].filename == "second.mp4"
+
+
+def test_history_candidates_preserve_video_order_for_selected_output():
+    profile = ResolvedH3Profile(
+        profile_id="two-videos",
+        workflow=minimal_graph(),
+        mapping=H3BoundaryMapping(
+            inputs=H3InputMapping(
+                h3_node_id="10",
+                prompt_input="prompt",
+                width_input="width",
+                height_input="height",
+                frames_input="length",
+                picture_input_pattern="ref_images.ref_image_{index}",
+            ),
+            output=H3OutputSelection(node_id="19"),
+        ),
+        workflow_sha256="0" * 64,
+        source="custom",
+    )
+    history = {
+        "outputs": {
+            "19": {
+                "videos": [
+                    {"filename": "first.mp4"},
+                    {"filename": "second.mp4"},
+                ],
+                "images": [{"filename": "preview.png"}],
+            },
+            "99": {"videos": [{"filename": "unrelated.mp4"}]},
+        }
+    }
+
+    assert [
+        item.filename for item in map_history_output_candidates(history, profile=profile)
+    ] == ["first.mp4", "second.mp4"]
+    assert map_history_outputs(history, profile=profile) == {}

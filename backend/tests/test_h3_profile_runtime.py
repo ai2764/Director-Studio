@@ -276,7 +276,7 @@ def test_pipeline_reads_snapshot_for_graph_and_output_mapping(
         job=job,
     )
 
-    assert graph["910"]["inputs"]["filename_prefix"].endswith("h3_ref2va")
+    assert graph["910"]["inputs"]["filename_prefix"] == "video/MiniMax_H3"
     assert "920" not in graph
     assert mapped["video"].filename == "right.mp4"
 

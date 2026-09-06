@@ -1,16 +1,11 @@
-"""Exact application-boundary validation for inspected H3 workflows."""
+"""Boundary-only validation for opaque custom H3 workflows."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
 
-from .inspector import (
-    _graph_edges,
-    _is_link,
-    _unmapped_reachable_file_nodes,
-    inspect_h3_workflow,
-)
+from .inspector import _ancestors, _graph_edges, _is_link, _load_graph, _structural_issues
 from .models import (
     H3BoundaryMapping,
     H3ValidationIssue,
@@ -19,16 +14,14 @@ from .models import (
 )
 
 _H3_CLASS = "MiniMaxH3ReferenceToVideo"
-_DYNAMIC_PICTURE_PATTERN = "ref_images.ref_image_{index}"
-_DYNAMIC_AUDIO_PATTERN = "ref_audios.ref_audio_{index}"
-_CANONICAL_FIELDS = {
+_PICTURE_PATTERN = "ref_images.ref_image_{index}"
+_AUDIO_PATTERN = "ref_audios.ref_audio_{index}"
+_CANONICAL_INPUTS = {
     "prompt_input": "prompt",
     "width_input": "width",
     "height_input": "height",
     "frames_input": "length",
-    "picture_input_pattern": _DYNAMIC_PICTURE_PATTERN,
-    "seed_input": "noise_seed",
-    "output_prefix_input": "filename_prefix",
+    "picture_input_pattern": _PICTURE_PATTERN,
 }
 
 
@@ -47,32 +40,13 @@ def _issue(
     )
 
 
-def _node(graph: Mapping[str, Any], node_id: str) -> Mapping[str, Any] | None:
-    value = graph.get(node_id)
-    return value if isinstance(value, Mapping) else None
-
-
-def _validate_mapped_input(
-    issues: list[H3ValidationIssue],
-    graph: Mapping[str, Any],
-    node_id: str,
-    input_name: str,
-) -> None:
-    node = _node(graph, node_id)
-    inputs = node.get("inputs") if node else None
-    if not isinstance(inputs, Mapping) or input_name not in inputs:
-        issues.append(
-            _issue(
-                "missing_mapped_input",
-                f"mapped input {input_name} does not exist on node {node_id}",
-                node_id=node_id,
-                input_name=input_name,
-            )
-        )
-
-
-def validate_h3_contract(graph: object, mapping: H3BoundaryMapping) -> ValidationReport:
-    """Validate exact mapping names and the graph produced by a synthetic fill."""
+def validate_h3_contract(
+    graph: object,
+    mapping: H3BoundaryMapping,
+    object_info: Mapping[str, Any] | None = None,
+) -> ValidationReport:
+    """Validate only Director Studio's selected input/output graph boundary."""
+    del object_info
     synthetic_boundary = {
         "pictures": 1,
         "audios": 0,
@@ -82,167 +56,167 @@ def validate_h3_contract(graph: object, mapping: H3BoundaryMapping) -> Validatio
         "seed": 42,
     }
     try:
-        analysis = inspect_h3_workflow(graph)
-    except (TypeError, ValueError) as exc:
+        normalized = _load_graph(graph)
+    except (TypeError, ValueError, RecursionError) as exc:
+        message = (
+            "workflow nesting exceeds depth 32"
+            if isinstance(exc, RecursionError)
+            else str(exc)
+        )
         return ValidationReport(
             valid=False,
-            issues=(_issue("inspection_error", str(exc)),),
+            issues=(_issue("invalid_structure", message),),
             synthetic_boundary=synthetic_boundary,
         )
 
-    normalized = (
-        {str(node_id): node for node_id, node in graph.items()}
-        if isinstance(graph, Mapping)
-        else {}
-    )
+    structural = _structural_issues(normalized)
+    if structural:
+        return ValidationReport(
+            valid=False,
+            issues=tuple(
+                _issue(
+                    item.code,
+                    item.message,
+                    node_id=item.node_id,
+                    input_name=item.input_name,
+                )
+                for item in structural
+            ),
+            synthetic_boundary=synthetic_boundary,
+        )
+
+    outgoing, incoming, _links = _graph_edges(normalized)
     issues: list[H3ValidationIssue] = []
-    for analysis_issue in analysis.issues:
+    output_id = mapping.output.node_id
+    selected_output = normalized.get(output_id)
+    if not isinstance(selected_output, Mapping):
         issues.append(
             _issue(
-                analysis_issue.code,
-                analysis_issue.message,
-                node_id=analysis_issue.node_id,
-                input_name=analysis_issue.input_name,
+                "invalid_output_selection",
+                f"selected output node {output_id} does not exist",
+                node_id=output_id,
             )
         )
-    if any(issue.code == "invalid_structure" for issue in issues):
-        return ValidationReport(
-            valid=False,
-            issues=tuple(issues),
-            fixed_dependencies=analysis.fixed_dependencies,
-            synthetic_boundary=synthetic_boundary,
+        upstream: set[str] = set()
+    else:
+        upstream = _ancestors(output_id, incoming)
+        if outgoing.get(output_id):
+            issues.append(
+                _issue(
+                    "nonterminal_output",
+                    f"selected output node {output_id} has downstream consumers",
+                    node_id=output_id,
+                )
+            )
+
+    inputs_mapping = mapping.inputs
+    h3_id = inputs_mapping.h3_node_id
+    h3_node = normalized.get(h3_id)
+    if h3_id not in upstream:
+        issues.append(
+            _issue(
+                "unreachable_mapping",
+                f"mapped H3 node {h3_id} is not upstream of output {output_id}",
+                node_id=h3_id,
+            )
+        )
+    elif not isinstance(h3_node, Mapping) or h3_node.get("class_type") != _H3_CLASS:
+        issues.append(
+            _issue(
+                "invalid_mapped_node",
+                f"mapped H3 node {h3_id} is not {_H3_CLASS}",
+                node_id=h3_id,
+            )
         )
 
-    canonical_fields: dict[str, bool] = {}
-    for field, expected in _CANONICAL_FIELDS.items():
-        actual = getattr(mapping, field)
-        canonical_fields[field] = actual == expected
+    h3_inputs = h3_node.get("inputs") if isinstance(h3_node, Mapping) else None
+    for field, expected in _CANONICAL_INPUTS.items():
+        actual = getattr(inputs_mapping, field)
         if actual != expected:
             issues.append(
                 _issue(
                     "noncanonical_mapping",
-                    f"contract v1 requires {field}={expected}; got {actual}",
+                    f"H3 boundary requires {field}={expected}; got {actual}",
+                    node_id=h3_id,
                     input_name=str(actual),
                 )
             )
-    canonical_audio = mapping.audio_input_pattern in (None, _DYNAMIC_AUDIO_PATTERN)
-    if not canonical_audio:
-        issues.append(
-            _issue(
-                "noncanonical_mapping",
-                f"contract v1 requires audio_input_pattern={_DYNAMIC_AUDIO_PATTERN} or absent; "
-                f"got {mapping.audio_input_pattern}",
-                input_name=mapping.audio_input_pattern,
-            )
-        )
-
-    h3_node = _node(normalized, mapping.h3_node_id)
-    if h3_node is None or h3_node.get("class_type") != _H3_CLASS:
-        issues.append(
-            _issue(
-                "invalid_mapped_node",
-                f"mapped H3 node {mapping.h3_node_id} is not {_H3_CLASS}",
-                node_id=mapping.h3_node_id,
-            )
-        )
-    else:
-        h3_inputs = h3_node.get("inputs")
-        if (
-            mapping.audio_input_pattern is None
-            and isinstance(h3_inputs, Mapping)
-            and any(str(name).startswith("ref_audios.") for name in h3_inputs)
+        elif field != "picture_input_pattern" and (
+            not isinstance(h3_inputs, Mapping) or actual not in h3_inputs
         ):
             issues.append(
                 _issue(
-                    "unmapped_audio_boundary",
-                    "An H3 node with reference Audio sockets requires the canonical audio mapping",
-                    node_id=mapping.h3_node_id,
+                    "missing_mapped_input",
+                    f"mapped input {actual} does not exist on H3 node {h3_id}",
+                    node_id=h3_id,
+                    input_name=actual,
                 )
             )
-        for field in ("prompt_input", "width_input", "height_input", "frames_input"):
-            if canonical_fields[field]:
-                _validate_mapped_input(
-                    issues, normalized, mapping.h3_node_id, getattr(mapping, field)
+    if inputs_mapping.audio_input_pattern not in (None, _AUDIO_PATTERN):
+        issues.append(
+            _issue(
+                "noncanonical_mapping",
+                f"audio input pattern must be {_AUDIO_PATTERN} or absent",
+                node_id=h3_id,
+                input_name=inputs_mapping.audio_input_pattern,
+            )
+        )
+    if isinstance(h3_inputs, Mapping):
+        for forbidden in ("ref_frame", "last_frame"):
+            if forbidden in h3_inputs:
+                issues.append(
+                    _issue(
+                        "unsupported_boundary_input",
+                        f"selected H3 boundary uses unsupported input {forbidden}",
+                        node_id=h3_id,
+                        input_name=forbidden,
+                    )
                 )
 
-    seed_ids = {candidate.node_id for candidate in analysis.seed_candidates}
-    saver_ids = {candidate.node_id for candidate in analysis.saver_candidates}
-    reachable_outputs = {
-        str(node["node_id"]): node["reachable_outputs"]
-        for node in analysis.agent_manifest["nodes"]
-    }
-    if mapping.seed_node_id not in seed_ids:
-        issues.append(
-            _issue(
-                "unreachable_mapping",
-                f"mapped seed node {mapping.seed_node_id} is not on an H3 final-output path",
-                node_id=mapping.seed_node_id,
-            )
-        )
-    elif canonical_fields["seed_input"]:
-        _validate_mapped_input(
-            issues, normalized, mapping.seed_node_id, mapping.seed_input
-        )
-    if mapping.saver_node_id not in saver_ids:
-        issues.append(
-            _issue(
-                "unreachable_mapping",
-                f"mapped saver node {mapping.saver_node_id} is not reachable from H3",
-                node_id=mapping.saver_node_id,
-            )
-        )
-    elif canonical_fields["output_prefix_input"]:
-        _validate_mapped_input(
-            issues,
-            normalized,
-            mapping.saver_node_id,
-            mapping.output_prefix_input,
-        )
-    if (
-        mapping.seed_node_id in seed_ids
-        and mapping.saver_node_id in saver_ids
-        and mapping.saver_node_id not in reachable_outputs.get(mapping.seed_node_id, [])
-    ):
-        issues.append(
-            _issue(
-                "unreachable_mapping",
-                f"mapped seed node {mapping.seed_node_id} does not reach selected saver "
-                f"{mapping.saver_node_id}",
-                node_id=mapping.seed_node_id,
-            )
-        )
-
-    fixed_ids = {dependency.node_id for dependency in analysis.fixed_dependencies}
-    _outgoing, _incoming, links = _graph_edges(normalized)
-    h3_ids = [
-        str(node["node_id"])
-        for node in analysis.agent_manifest["nodes"]
-        if "h3" in node["candidate_roles"]
-    ]
-    dependency_nodes = _unmapped_reachable_file_nodes(
-        normalized,
-        reachable_outputs,
-        h3_ids[0] if len(h3_ids) == 1 else None,
-        links,
-    )
-    for node_id in sorted(dependency_nodes - fixed_ids):
-        node = normalized[node_id]
-        if isinstance(node, Mapping):
-            input_name = "image" if node.get("class_type") == "LoadImage" else "audio"
+    if inputs_mapping.seed_node_id is not None:
+        seed_id = inputs_mapping.seed_node_id
+        seed_input = inputs_mapping.seed_input
+        if seed_id not in upstream:
             issues.append(
                 _issue(
-                    "unmapped_file_input",
-                    f"reachable {node.get('class_type')} node lacks explicit fixed input {input_name}",
-                    node_id=node_id,
-                    input_name=input_name,
+                    "unreachable_mapping",
+                    f"mapped seed node {seed_id} is not upstream of output {output_id}",
+                    node_id=seed_id,
                 )
             )
+        else:
+            seed_node = normalized.get(seed_id)
+            seed_inputs = seed_node.get("inputs") if isinstance(seed_node, Mapping) else None
+            if not isinstance(seed_inputs, Mapping) or seed_input not in seed_inputs:
+                issues.append(
+                    _issue(
+                        "missing_mapped_input",
+                        f"mapped seed input {seed_input} does not exist on node {seed_id}",
+                        node_id=seed_id,
+                        input_name=seed_input,
+                    )
+                )
+
+    for target_id, node in normalized.items():
+        node_inputs = node.get("inputs") if isinstance(node, Mapping) else None
+        if not isinstance(node_inputs, Mapping):
+            continue
+        for input_name, value in node_inputs.items():
+            if _is_link(value) and str(value[0]) not in normalized:
+                issues.append(
+                    _issue(
+                        "dangling_link",
+                        f"input {input_name} links to missing node {value[0]}",
+                        node_id=target_id,
+                        input_name=str(input_name),
+                    )
+                )
 
     if not issues:
         try:
             from app.pipelines.h3_ref2va.workflow import fill_profile_graph
 
-            filled = fill_profile_graph(
+            fill_profile_graph(
                 ResolvedH3Profile(
                     profile_id="contract-validation",
                     workflow=normalized,
@@ -258,44 +232,14 @@ def validate_h3_contract(graph: object, mapping: H3BoundaryMapping) -> Validatio
                     "width": 864,
                     "height": 480,
                     "seed": 42,
-                    "output_prefix": "director-studio/h3/contract-test",
                 },
             )
         except (KeyError, TypeError, ValueError, RuntimeError) as exc:
             issues.append(_issue("synthetic_fill_failed", str(exc)))
-        else:
-            for target_id, node in filled.items():
-                if not isinstance(node, Mapping):
-                    continue
-                inputs = node.get("inputs")
-                if not isinstance(inputs, Mapping):
-                    continue
-                for input_name, value in inputs.items():
-                    if _is_link(value) and str(value[0]) not in filled:
-                        issues.append(
-                            _issue(
-                                "dangling_link",
-                                f"input {input_name} links to missing node {value[0]}",
-                                node_id=str(target_id),
-                                input_name=str(input_name),
-                            )
-                        )
-            required_filled_inputs = (
-                (mapping.h3_node_id, mapping.prompt_input),
-                (mapping.h3_node_id, mapping.width_input),
-                (mapping.h3_node_id, mapping.height_input),
-                (mapping.h3_node_id, mapping.frames_input),
-                (mapping.h3_node_id, mapping.picture_input_pattern.format(index=0)),
-                (mapping.seed_node_id, mapping.seed_input),
-                (mapping.saver_node_id, mapping.output_prefix_input),
-            )
-            for node_id, input_name in required_filled_inputs:
-                _validate_mapped_input(issues, filled, node_id, input_name)
 
     return ValidationReport(
         valid=not issues,
         issues=tuple(issues),
-        fixed_dependencies=analysis.fixed_dependencies,
         synthetic_boundary=synthetic_boundary,
     )
 
