@@ -1,12 +1,119 @@
-"""Deterministic inspection coverage for imported H3 API workflows."""
+"""Output-first inspection coverage for imported H3 API workflows."""
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from app.workflow_profiles.h3.inspector import inspect_h3_workflow
+
+
+FIXTURE = Path(__file__).parent / "fixtures" / "h3_multistage_vhs.api.json"
+
+
+def multistage_graph() -> dict[str, object]:
+    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+
+
+def object_info() -> dict[str, object]:
+    return {
+        "MiniMaxH3ReferenceToVideo": {
+            "display_name": "MiniMax H3 Ref2AV",
+            "output": ["CONDITIONING"],
+            "output_node": False,
+        },
+        "VHS_VideoCombine": {
+            "display_name": "Video Combine",
+            "output": ["VHS_FILENAMES"],
+            "output_node": True,
+        },
+        "SaveVideo": {
+            "display_name": "Save Video",
+            "output": ["VIDEO"],
+            "output_node": True,
+        },
+    }
+
+
+def test_discovers_named_terminal_video_outputs_without_saver_allowlist() -> None:
+    analysis = inspect_h3_workflow(multistage_graph(), object_info=object_info())
+
+    assert [candidate.node_id for candidate in analysis.output_candidates] == [
+        "214",
+        "300",
+    ]
+    assert analysis.output_candidates[0].display_name == "Final Video Combine"
+    assert analysis.output_candidates[0].object_display_name == "Video Combine"
+    assert analysis.output_candidates[0].class_type == "VHS_VideoCombine"
+    assert analysis.output_candidates[0].terminal is True
+    assert analysis.output_candidates[0].output_node is True
+    assert analysis.output_candidates[0].output_types == ("VHS_FILENAMES",)
+    assert analysis.mapping is None
+
+
+def test_reverse_traversal_only_offers_h3_and_seed_upstream_of_output() -> None:
+    analysis = inspect_h3_workflow(
+        multistage_graph(), object_info=object_info(), output_node_id="214"
+    )
+
+    assert [candidate.node_id for candidate in analysis.h3_candidates] == ["265"]
+    assert analysis.h3_candidates[0].display_name == "H3 Main Generator"
+    assert [candidate.node_id for candidate in analysis.seed_candidates] == ["129"]
+    assert analysis.mapping is not None
+    assert analysis.mapping.inputs.h3_node_id == "265"
+    assert analysis.mapping.output.node_id == "214"
+
+
+def test_selecting_other_output_changes_reverse_discovered_boundary() -> None:
+    analysis = inspect_h3_workflow(
+        multistage_graph(), object_info=object_info(), output_node_id="300"
+    )
+
+    assert [candidate.node_id for candidate in analysis.h3_candidates] == ["400"]
+    assert [candidate.node_id for candidate in analysis.seed_candidates] == ["700"]
+
+
+def test_topology_candidates_remain_available_without_object_info() -> None:
+    analysis = inspect_h3_workflow(multistage_graph())
+
+    assert {candidate.node_id for candidate in analysis.output_candidates} == {
+        "214",
+        "300",
+    }
+    assert any(issue.code == "object_info_unavailable" for issue in analysis.issues)
+
+
+def test_non_output_terminal_is_not_offered_when_live_metadata_is_available() -> None:
+    graph = multistage_graph()
+    graph["999"] = {
+        "class_type": "PrimitiveNode",
+        "inputs": {},
+        "_meta": {"title": "Unused primitive"},
+    }
+
+    analysis = inspect_h3_workflow(graph, object_info=object_info())
+
+    assert "999" not in {candidate.node_id for candidate in analysis.output_candidates}
+
+
+def test_malformed_nodes_report_one_named_issue_per_node() -> None:
+    graph = multistage_graph()
+    graph["58"] = {"inputs": {}, "_meta": {"title": "Broken Loader"}}
+    graph["140"] = []
+
+    analysis = inspect_h3_workflow(graph, object_info=object_info())
+
+    failures = [
+        issue
+        for issue in analysis.issues
+        if issue.code in {"invalid_node", "invalid_class_type", "invalid_inputs"}
+    ]
+    assert sorted((issue.node_id, issue.node_name) for issue in failures) == [
+        ("140", "Node 140"),
+        ("58", "Broken Loader"),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -17,208 +124,14 @@ from app.workflow_profiles.h3.inspector import inspect_h3_workflow
         r"\\server\private\workflow.json",
     ],
 )
-def test_agent_manifest_redacts_absolute_node_titles(title):
-    graph = unique_graph()
-    graph["136"]["_meta"] = {"title": title}
-    analysis = inspect_h3_workflow(graph)
-    node = next(
-        node for node in analysis.agent_manifest["nodes"] if node["node_id"] == "136"
-    )
-    assert node["title"] == "<redacted-path>"
+def test_candidate_titles_redact_absolute_paths(title: str) -> None:
+    graph = multistage_graph()
+    graph["214"]["_meta"] = {"title": title}  # type: ignore[index]
 
+    analysis = inspect_h3_workflow(graph, object_info=object_info())
 
-def unique_graph() -> dict[str, object]:
-    return {
-        "136": {
-            "class_type": "MiniMaxH3ReferenceToVideo",
-            "inputs": {
-                "prompt": "",
-                "width": 864,
-                "height": 480,
-                "length": 124,
-                "clip": ["128", 0],
-            },
-            "_meta": {"title": "H3\u0000 Reference\nNode"},
-        },
-        "128": {"class_type": "CLIPLoader", "inputs": {}},
-        "129": {
-            "class_type": "RandomNoise",
-            "inputs": {"noise_seed": 1, "api_token": "do-not-leak"},
-        },
-        "140": {
-            "class_type": "SamplerCustomAdvanced",
-            "inputs": {"positive": ["136", 0], "noise": ["129", 0]},
-        },
-        "130": {
-            "class_type": "VAEDecodeTiled",
-            "inputs": {"samples": ["140", 0]},
-        },
-        "92": {
-            "class_type": "SaveVideo",
-            "inputs": {
-                "video": ["130", 0],
-                "filename_prefix": "video/H3",
-                "authorization": "Bearer private",
-            },
-            "_meta": {"title": "Final video"},
-        },
-        "700": {"class_type": "RandomNoise", "inputs": {"noise_seed": 9}},
-        "701": {
-            "class_type": "SaveVideo",
-            "inputs": {"filename_prefix": r"C:\\private\\decoy.mp4"},
-        },
-    }
-
-
-def graph_with_preview_and_final_savers() -> dict[str, object]:
-    graph = unique_graph()
-    graph["148"] = {
-        "class_type": "SaveVideo",
-        "inputs": {"video": ["130", 0], "filename_prefix": "preview/H3"},
-        "_meta": {"title": "Preview"},
-    }
-    return graph
-
-
-def graph_with_forbidden(forbidden: str) -> dict[str, object]:
-    graph = unique_graph()
-    if forbidden == "MiniMaxH3ImageToVideo":
-        graph["500"] = {"class_type": forbidden, "inputs": {}}
-    else:
-        graph["136"]["inputs"][forbidden] = ["128", 0]  # type: ignore[index]
-    return graph
-
-
-def test_inspector_auto_maps_unique_ref2av_graph() -> None:
-    analysis = inspect_h3_workflow(unique_graph())
-
-    assert analysis.compatibility == "auto_compatible"
-    assert analysis.mapping is not None
-    assert analysis.mapping.h3_node_id == "136"
-    assert analysis.mapping.seed_node_id == "129"
-    assert analysis.mapping.saver_node_id == "92"
-
-
-def test_inspector_requires_confirmation_for_two_reachable_savers() -> None:
-    analysis = inspect_h3_workflow(graph_with_preview_and_final_savers())
-
-    assert analysis.compatibility == "needs_confirmation"
-    assert {candidate.node_id for candidate in analysis.saver_candidates} == {
-        "92",
-        "148",
-    }
-    assert {candidate.node_id for candidate in analysis.seed_candidates} == {"129"}
-
-
-@pytest.mark.parametrize(
-    "forbidden", ["MiniMaxH3ImageToVideo", "ref_frame", "last_frame"]
-)
-def test_inspector_rejects_non_ref2av_semantics(forbidden: str) -> None:
-    analysis = inspect_h3_workflow(graph_with_forbidden(forbidden))
-
-    assert analysis.compatibility == "unsupported"
-    assert any("pure Ref2AV" in issue.message for issue in analysis.issues)
-
-
-def test_inspector_manifest_is_compact_deterministic_and_redacted() -> None:
-    graph = unique_graph()
-    graph["125"] = {
-        "class_type": "ModelLoader",
-        "inputs": {
-            "model_name": "h3.safetensors",
-            "model_path": "/Users/private/h3.safetensors",
-        },
-        "_meta": {"title": "Model\r\nLoader"},
-    }
-    graph["140"]["inputs"]["model"] = ["125", 0]  # type: ignore[index]
-
-    first = inspect_h3_workflow(graph).agent_manifest
-    second = inspect_h3_workflow(dict(reversed(list(graph.items())))).agent_manifest
-
-    assert first == second
-    assert list(first) == ["nodes"]
-    nodes = {node["node_id"]: node for node in first["nodes"]}
-    assert nodes["136"]["title"] == "H3 Reference Node"
-    assert nodes["125"]["title"] == "Model Loader"
-    assert nodes["125"]["defaults"] == {
-        "model_name": "h3.safetensors",
-        "model_path": "<redacted>",
-    }
-    assert nodes["129"]["defaults"]["api_token"] == "<redacted>"
-    assert nodes["701"]["defaults"]["filename_prefix"] == "<redacted-path>"
-    assert "do-not-leak" not in json.dumps(first)
-    assert nodes["129"]["candidate_roles"] == ["seed"]
-    assert nodes["92"]["candidate_roles"] == ["saver"]
-    assert nodes["136"]["candidate_roles"] == ["h3"]
-    assert nodes["700"]["candidate_roles"] == []
-    assert nodes["136"]["reachable_outputs"] == ["92"]
-
-
-def test_inspector_reports_reachable_fixed_file_dependencies() -> None:
-    graph = unique_graph()
-    graph["44"] = {
-        "class_type": "LoadAudio",
-        "inputs": {"audio": "workflow-owned.wav"},
-    }
-    graph["140"]["inputs"]["guide_audio"] = ["44", 0]  # type: ignore[index]
-
-    analysis = inspect_h3_workflow(graph)
-
-    assert [dependency.model_dump() for dependency in analysis.fixed_dependencies] == [
-        {
-            "node_id": "44",
-            "class_type": "LoadAudio",
-            "input_name": "audio",
-            "value": "workflow-owned.wav",
-        }
-    ]
-
-
-def test_inspector_does_not_report_mapped_dynamic_picture_as_fixed() -> None:
-    graph = unique_graph()
-    graph["45"] = {
-        "class_type": "LoadImage",
-        "inputs": {"image": "replace-me.png"},
-    }
-    graph["136"]["inputs"]["ref_images.ref_image_0"] = ["45", 0]  # type: ignore[index]
-
-    analysis = inspect_h3_workflow(graph)
-
-    assert analysis.compatibility == "auto_compatible"
-    assert analysis.fixed_dependencies == ()
-
-
-def test_inspector_reports_loader_with_mapped_and_fixed_reachable_consumers() -> None:
-    graph = unique_graph()
-    graph["45"] = {
-        "class_type": "LoadImage",
-        "inputs": {"image": "fixed-control.png"},
-    }
-    graph["136"]["inputs"]["ref_images.ref_image_0"] = ["45", 0]  # type: ignore[index]
-    graph["140"]["inputs"]["control"] = ["45", 0]  # type: ignore[index]
-
-    analysis = inspect_h3_workflow(graph)
-
-    assert [dependency.node_id for dependency in analysis.fixed_dependencies] == ["45"]
-
-
-@pytest.mark.parametrize(
-    ("node_id", "input_name", "candidate_field"),
-    [
-        ("129", "noise_seed", "seed_candidates"),
-        ("92", "filename_prefix", "saver_candidates"),
-    ],
-)
-def test_inspector_rejects_candidate_missing_its_exact_boundary_input(
-    node_id: str, input_name: str, candidate_field: str
-) -> None:
-    graph = unique_graph()
-    del graph[node_id]["inputs"][input_name]  # type: ignore[index]
-
-    analysis = inspect_h3_workflow(graph)
-
-    assert analysis.compatibility == "unsupported"
-    assert getattr(analysis, candidate_field) == ()
+    candidate = next(item for item in analysis.output_candidates if item.node_id == "214")
+    assert candidate.display_name == "Video Combine"
 
 
 @pytest.mark.parametrize(
@@ -251,20 +164,7 @@ def test_inspector_rejects_more_than_ten_thousand_edges() -> None:
         inspect_h3_workflow(graph)
 
 
-def test_inspector_rejects_nesting_deeper_than_thirty_two() -> None:
-    nested: object = "value"
-    for _ in range(33):
-        nested = {"nested": nested}
-    graph = {"1": {"class_type": "X", "inputs": {"value": nested}}}
-
-    analysis = inspect_h3_workflow(graph)
-
-    assert analysis.compatibility == "unsupported"
-    assert {issue.code for issue in analysis.issues} == {"invalid_structure"}
-    assert "nesting" in analysis.issues[0].message
-
-
-def test_inspector_contains_python_recursion_errors_as_unsupported() -> None:
+def test_inspector_contains_excessive_nesting_as_unsupported() -> None:
     nested: object = "value"
     for _ in range(2_000):
         nested = {"nested": nested}

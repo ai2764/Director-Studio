@@ -1,4 +1,4 @@
-"""Deterministic, bounded inspection of ComfyUI H3 API workflows."""
+"""Deterministic output-first inspection of ComfyUI H3 API workflows."""
 
 from __future__ import annotations
 
@@ -12,7 +12,9 @@ from .models import (
     H3AnalysisIssue,
     H3BoundaryMapping,
     H3FixedDependency,
+    H3InputMapping,
     H3NodeCandidate,
+    H3OutputSelection,
     H3WorkflowAnalysis,
 )
 
@@ -23,20 +25,18 @@ MAX_NESTING = 32
 MAX_STRING_BYTES = 64 * 1024
 
 _H3_CLASS = "MiniMaxH3ReferenceToVideo"
-_I2V_CLASS = "MiniMaxH3ImageToVideo"
-_SECRET_PARTS = ("key", "token", "secret", "password", "authorization", "path")
-_ABSOLUTE_PATH = re.compile(r"^(?:[A-Za-z]:[\\/]|/|\\\\)")
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]+")
 _WHITESPACE = re.compile(r"\s+")
+_ABSOLUTE_PATH = re.compile(r"^(?:[A-Za-z]:[\\/]|/|\\\\)")
+_VIDEO_TYPE_PARTS = ("video", "vhs", "movie", "mp4", "webm", "filename")
 
 
 def _load_graph(graph: object) -> dict[str, Any]:
     if isinstance(graph, bytes):
-        raw = graph
-        if len(raw) > MAX_WORKFLOW_BYTES:
+        if len(graph) > MAX_WORKFLOW_BYTES:
             raise ValueError("workflow exceeds the 8 MiB limit")
         try:
-            graph = json.loads(raw.decode("utf-8-sig"))
+            graph = json.loads(graph.decode("utf-8-sig"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("workflow must be valid UTF-8 JSON") from exc
     elif isinstance(graph, str):
@@ -51,15 +51,11 @@ def _load_graph(graph: object) -> dict[str, Any]:
         raise TypeError("workflow must be a JSON object")
     normalized = {str(node_id): node for node_id, node in graph.items()}
     if len(normalized) != len(graph):
-        raise ValueError(
-            "workflow contains duplicate node IDs after string normalization"
-        )
-    encoded_size = len(
-        json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode(
-            "utf-8"
-        )
-    )
-    if encoded_size > MAX_WORKFLOW_BYTES:
+        raise ValueError("workflow contains duplicate node IDs after string normalization")
+    encoded = json.dumps(
+        normalized, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    if len(encoded) > MAX_WORKFLOW_BYTES:
         raise ValueError("workflow exceeds the 8 MiB limit")
     if len(normalized) > MAX_NODES:
         raise ValueError("workflow exceeds the 2,000 node limit")
@@ -78,8 +74,7 @@ def _check_value_limits(value: object, *, depth: int) -> None:
         for key, child in value.items():
             _check_value_limits(key, depth=depth + 1)
             _check_value_limits(child, depth=depth + 1)
-        return
-    if isinstance(value, (list, tuple)):
+    elif isinstance(value, (list, tuple)):
         for child in value:
             _check_value_limits(child, depth=depth + 1)
 
@@ -102,18 +97,13 @@ def _graph_edges(
     outgoing = {node_id: set() for node_id in graph}
     incoming = {node_id: set() for node_id in graph}
     links: list[tuple[str, str, str]] = []
-    edge_count = 0
     for target_id, node in graph.items():
-        if not isinstance(node, Mapping):
+        if not isinstance(node, Mapping) or not isinstance(node.get("inputs"), Mapping):
             continue
-        inputs = node.get("inputs")
-        if not isinstance(inputs, Mapping):
-            continue
-        for input_name, value in inputs.items():
+        for input_name, value in node["inputs"].items():
             if not _is_link(value):
                 continue
-            edge_count += 1
-            if edge_count > MAX_EDGES:
+            if len(links) >= MAX_EDGES:
                 raise ValueError("workflow exceeds the 10,000 graph edge limit")
             source_id = str(value[0])
             links.append((source_id, target_id, str(input_name)))
@@ -121,6 +111,18 @@ def _graph_edges(
                 outgoing[source_id].add(target_id)
                 incoming[target_id].add(source_id)
     return outgoing, incoming, links
+
+
+def _ancestors(start: str, incoming: Mapping[str, set[str]]) -> set[str]:
+    visited: set[str] = set()
+    pending = deque([start])
+    while pending:
+        node_id = pending.popleft()
+        if node_id in visited:
+            continue
+        visited.add(node_id)
+        pending.extend(sorted(incoming.get(node_id, ())))
+    return visited
 
 
 def _descendants(start: str, outgoing: Mapping[str, set[str]]) -> set[str]:
@@ -136,70 +138,130 @@ def _descendants(start: str, outgoing: Mapping[str, set[str]]) -> set[str]:
 
 
 def _title(node: object) -> str:
-    if not isinstance(node, Mapping):
+    if not isinstance(node, Mapping) or not isinstance(node.get("_meta"), Mapping):
         return ""
-    meta = node.get("_meta")
-    value = meta.get("title") if isinstance(meta, Mapping) else ""
+    value = node["_meta"].get("title")
     if not isinstance(value, str):
         return ""
-    value = _CONTROL_CHARACTERS.sub(" ", value)
-    value = _WHITESPACE.sub(" ", value).strip()[:256]
-    return "<redacted-path>" if _ABSOLUTE_PATH.match(value) else value
+    value = _WHITESPACE.sub(" ", _CONTROL_CHARACTERS.sub(" ", value)).strip()[:256]
+    return "" if _ABSOLUTE_PATH.match(value) else value
 
 
-def _candidate(node_id: str, graph: Mapping[str, Any]) -> H3NodeCandidate:
+def _metadata(class_type: str, object_info: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    value = object_info.get(class_type) if object_info else None
+    return value if isinstance(value, Mapping) else {}
+
+
+def _clean_name(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    value = _WHITESPACE.sub(" ", _CONTROL_CHARACTERS.sub(" ", value)).strip()[:256]
+    return "" if _ABSOLUTE_PATH.match(value) else value
+
+
+def _candidate(
+    node_id: str,
+    graph: Mapping[str, Any],
+    *,
+    object_info: Mapping[str, Any] | None,
+    terminal: bool = False,
+) -> H3NodeCandidate:
     node = graph[node_id]
+    class_type = str(node.get("class_type") or "")
+    metadata = _metadata(class_type, object_info)
+    title = _title(node)
+    object_name = _clean_name(metadata.get("display_name"))
+    output_types = metadata.get("output")
     return H3NodeCandidate(
         node_id=node_id,
-        class_type=str(node.get("class_type")),
-        title=_title(node),
+        class_type=class_type,
+        title=title,
+        object_display_name=object_name,
+        display_name=title or object_name or class_type or f"Node {node_id}",
+        terminal=terminal,
+        output_node=bool(metadata.get("output_node")),
+        output_types=tuple(
+            str(item) for item in output_types if isinstance(item, (str, int, float))
+        )
+        if isinstance(output_types, (list, tuple))
+        else (),
     )
 
 
-def _redacted_default(class_type: str, key: str, value: object) -> object:
-    lowered = key.casefold()
-    if any(part in lowered for part in _SECRET_PARTS):
-        return "<redacted>"
-    if class_type == "LoadImage" and lowered == "image":
-        return "<redacted-file>"
-    if class_type == "LoadAudio" and lowered == "audio":
-        return "<redacted-file>"
-    if isinstance(value, str) and _ABSOLUTE_PATH.match(value):
-        return "<redacted-path>"
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    return "<complex>"
+def _numeric_node_key(candidate: H3NodeCandidate) -> tuple[int, int | str]:
+    try:
+        return (0, int(candidate.node_id))
+    except ValueError:
+        return (1, candidate.node_id)
+
+
+def _looks_video_capable(candidate: H3NodeCandidate) -> bool:
+    return any(
+        part in output_type.casefold()
+        for output_type in candidate.output_types
+        for part in _VIDEO_TYPE_PARTS
+    )
+
+
+def _structural_issues(graph: Mapping[str, Any]) -> list[H3AnalysisIssue]:
+    issues: list[H3AnalysisIssue] = []
+    for node_id, node in graph.items():
+        if not isinstance(node, Mapping):
+            issues.append(
+                H3AnalysisIssue(
+                    code="invalid_node",
+                    message=f"Node {node_id} must be a JSON object",
+                    node_id=node_id,
+                    node_name=f"Node {node_id}",
+                )
+            )
+            continue
+        name = _title(node) or f"Node {node_id}"
+        class_type = node.get("class_type")
+        inputs = node.get("inputs")
+        if not isinstance(class_type, str) or not class_type.strip():
+            issues.append(
+                H3AnalysisIssue(
+                    code="invalid_class_type",
+                    message=f"{name} (Node {node_id}) requires a class_type string",
+                    node_id=node_id,
+                    node_name=name,
+                )
+            )
+        elif not isinstance(inputs, Mapping):
+            issues.append(
+                H3AnalysisIssue(
+                    code="invalid_inputs",
+                    message=f"{name} (Node {node_id}) inputs must be a JSON object",
+                    node_id=node_id,
+                    node_name=name,
+                )
+            )
+    return issues
 
 
 def _fixed_dependencies(
-    graph: Mapping[str, Any],
-    output_reachability: Mapping[str, list[str]],
-    h3_id: str | None,
-    links: list[tuple[str, str, str]],
+    graph: Mapping[str, Any], upstream: set[str]
 ) -> tuple[H3FixedDependency, ...]:
-    dependencies: list[H3FixedDependency] = []
-    input_by_class = {"LoadImage": "image", "LoadAudio": "audio"}
-    dependency_nodes = _unmapped_reachable_file_nodes(
-        graph, output_reachability, h3_id, links
-    )
-    for node_id in sorted(dependency_nodes):
-        node = graph[node_id]
-        class_type = node.get("class_type")
-        input_name = input_by_class[class_type]
-        inputs = node.get("inputs")
-        if not isinstance(inputs, Mapping):
+    result: list[H3FixedDependency] = []
+    fields = {"LoadImage": "image", "LoadAudio": "audio"}
+    for node_id in sorted(upstream):
+        node = graph.get(node_id)
+        if not isinstance(node, Mapping) or node.get("class_type") not in fields:
             continue
-        value = inputs.get(input_name)
+        input_name = fields[str(node["class_type"])]
+        inputs = node.get("inputs")
+        value = inputs.get(input_name) if isinstance(inputs, Mapping) else None
         if isinstance(value, str) and value:
-            dependencies.append(
+            result.append(
                 H3FixedDependency(
                     node_id=node_id,
-                    class_type=class_type,
+                    class_type=str(node["class_type"]),
                     input_name=input_name,
-                    value=value,
+                    value="<workflow file>",
                 )
             )
-    return tuple(dependencies)
+    return tuple(result)
 
 
 def _unmapped_reachable_file_nodes(
@@ -208,241 +270,198 @@ def _unmapped_reachable_file_nodes(
     h3_id: str | None,
     links: list[tuple[str, str, str]],
 ) -> set[str]:
-    """Return file loaders with at least one non-boundary final-output consumer."""
+    """Compatibility helper retained until boundary validation is rewritten."""
+    del h3_id
     file_nodes = {
         node_id
         for node_id, node in graph.items()
         if isinstance(node, Mapping)
         and node.get("class_type") in {"LoadImage", "LoadAudio"}
     }
-    mapped_edges: set[tuple[str, str, str]] = set()
-    h3_node = graph.get(h3_id) if h3_id else None
-    h3_inputs = h3_node.get("inputs") if isinstance(h3_node, Mapping) else None
-    if isinstance(h3_inputs, Mapping):
-        dynamic_input = re.compile(
-            r"(?:ref_images\.ref_image_|ref_audios\.ref_audio_)\d+\Z"
-        )
-        mapped_edges = {
-            (str(value[0]), h3_id, str(name))
-            for name, value in h3_inputs.items()
-            if dynamic_input.fullmatch(str(name)) and _is_link(value)
-        }
     return {
         source_id
-        for source_id, target_id, input_name in links
-        if source_id in file_nodes
-        and output_reachability.get(target_id)
-        and (source_id, target_id, input_name) not in mapped_edges
+        for source_id, target_id, _input_name in links
+        if source_id in file_nodes and output_reachability.get(target_id)
     }
 
 
-def _inspect_h3_workflow(graph: object) -> H3WorkflowAnalysis:
-    """Inspect one API-format graph without executing or exposing its raw values."""
+def _inspect_h3_workflow(
+    graph: object,
+    *,
+    object_info: Mapping[str, Any] | None,
+    output_node_id: str | None,
+) -> H3WorkflowAnalysis:
     normalized = _load_graph(graph)
-    outgoing, _incoming, _links = _graph_edges(normalized)
-    issues: list[H3AnalysisIssue] = []
-
-    h3_ids = sorted(
-        node_id
-        for node_id, node in normalized.items()
-        if isinstance(node, Mapping) and node.get("class_type") == _H3_CLASS
-    )
-    if len(h3_ids) != 1:
-        issues.append(
-            H3AnalysisIssue(
-                code="h3_node_count",
-                message=f"pure Ref2AV requires exactly one {_H3_CLASS} node; found {len(h3_ids)}",
-            )
-        )
-
-    for node_id, node in normalized.items():
-        if not isinstance(node, Mapping):
-            issues.append(
-                H3AnalysisIssue(
-                    code="invalid_node",
-                    message="workflow nodes must be JSON objects",
-                    node_id=node_id,
-                )
-            )
-            continue
-        if (
-            not isinstance(node.get("class_type"), str)
-            or not node["class_type"].strip()
-        ):
-            issues.append(
-                H3AnalysisIssue(
-                    code="invalid_class_type",
-                    message="workflow nodes require a class_type string",
-                    node_id=node_id,
-                )
-            )
-        if node.get("class_type") == _I2V_CLASS:
-            issues.append(
-                H3AnalysisIssue(
-                    code="forbidden_semantics",
-                    message="pure Ref2AV workflows cannot contain MiniMaxH3ImageToVideo",
-                    node_id=node_id,
-                )
-            )
-        inputs = node.get("inputs")
-        if not isinstance(inputs, Mapping):
-            issues.append(
-                H3AnalysisIssue(
-                    code="invalid_inputs",
-                    message="workflow node inputs must be a JSON object",
-                    node_id=node_id,
-                )
-            )
-            continue
-        for forbidden in ("ref_frame", "last_frame"):
-            if forbidden in inputs:
-                issues.append(
-                    H3AnalysisIssue(
-                        code="forbidden_semantics",
-                        message=f"pure Ref2AV workflows cannot contain the {forbidden} input",
-                        node_id=node_id,
-                        input_name=forbidden,
-                    )
-                )
-
-    h3_id = h3_ids[0] if len(h3_ids) == 1 else None
-    reachable_from_h3 = _descendants(h3_id, outgoing) if h3_id else set()
-    saver_ids = sorted(
-        node_id
-        for node_id in reachable_from_h3
-        if isinstance(normalized[node_id], Mapping)
-        and normalized[node_id].get("class_type") == "SaveVideo"
-        and isinstance(normalized[node_id].get("inputs"), Mapping)
-        and "filename_prefix" in normalized[node_id]["inputs"]
-    )
-    seed_ids = sorted(
-        node_id
-        for node_id, node in normalized.items()
-        if isinstance(node, Mapping)
-        and node.get("class_type") == "RandomNoise"
-        and isinstance(node.get("inputs"), Mapping)
-        and "noise_seed" in node["inputs"]
-        and set(saver_ids).intersection(_descendants(node_id, outgoing))
-    )
-
-    if h3_id:
-        h3_inputs = normalized[h3_id].get("inputs")
-        if isinstance(h3_inputs, Mapping):
-            for input_name in ("prompt", "width", "height", "length"):
-                if input_name not in h3_inputs:
-                    issues.append(
-                        H3AnalysisIssue(
-                            code="missing_h3_input",
-                            message=f"H3 node is missing required input {input_name}",
-                            node_id=h3_id,
-                            input_name=input_name,
-                        )
-                    )
-    if h3_id and not seed_ids:
-        issues.append(
-            H3AnalysisIssue(
-                code="missing_seed_candidate",
-                message="no RandomNoise node reaches an H3 final output",
-            )
-        )
-    if h3_id and not saver_ids:
-        issues.append(
-            H3AnalysisIssue(
-                code="missing_saver_candidate",
-                message="no SaveVideo node is reachable from the H3 node",
-            )
-        )
-
-    output_reachability = {
-        node_id: sorted(set(saver_ids).intersection(_descendants(node_id, outgoing)))
-        for node_id in normalized
-    }
-    seed_candidates = tuple(_candidate(node_id, normalized) for node_id in seed_ids)
-    saver_candidates = tuple(_candidate(node_id, normalized) for node_id in saver_ids)
-    fixed_dependencies = _fixed_dependencies(
-        normalized, output_reachability, h3_id, _links
-    )
-
-    candidate_roles = {
-        node_id: [
-            role
-            for role, candidates in (
-                ("h3", [h3_id] if h3_id else []),
-                ("seed", seed_ids),
-                ("saver", saver_ids),
-            )
-            if node_id in candidates
-        ]
-        for node_id in normalized
-    }
-    manifest_nodes: list[dict[str, Any]] = []
-    for node_id in sorted(normalized):
-        node = normalized[node_id]
-        if not isinstance(node, Mapping):
-            continue
-        class_type = str(node.get("class_type") or "")
-        inputs = node.get("inputs")
-        input_names = (
-            sorted(str(name) for name in inputs) if isinstance(inputs, Mapping) else []
-        )
-        defaults = (
-            {
-                str(name): _redacted_default(class_type, str(name), value)
-                for name, value in sorted(inputs.items(), key=lambda item: str(item[0]))
-                if not _is_link(value)
-            }
-            if isinstance(inputs, Mapping)
-            else {}
-        )
-        manifest_nodes.append(
-            {
-                "node_id": node_id,
-                "class_type": class_type,
-                "title": _title(node),
-                "input_names": input_names,
-                "reachable_outputs": output_reachability[node_id],
-                "candidate_roles": candidate_roles[node_id],
-                "defaults": defaults,
-            }
-        )
-
-    mapping = None
-    if not issues and len(seed_ids) == 1 and len(saver_ids) == 1 and h3_id:
-        mapping = H3BoundaryMapping(
-            h3_node_id=h3_id,
-            prompt_input="prompt",
-            width_input="width",
-            height_input="height",
-            frames_input="length",
-            picture_input_pattern="ref_images.ref_image_{index}",
-            audio_input_pattern="ref_audios.ref_audio_{index}",
-            seed_node_id=seed_ids[0],
-            seed_input="noise_seed",
-            saver_node_id=saver_ids[0],
-            output_prefix_input="filename_prefix",
-        )
+    issues = _structural_issues(normalized)
     if issues:
+        return H3WorkflowAnalysis(
+            compatibility="unsupported",
+            issues=tuple(issues),
+            agent_manifest={"nodes": []},
+        )
+
+    outgoing, incoming, _links = _graph_edges(normalized)
+    terminal_ids = {node_id for node_id, targets in outgoing.items() if not targets}
+    terminal_candidates = [
+        _candidate(
+            node_id,
+            normalized,
+            object_info=object_info,
+            terminal=True,
+        )
+        for node_id in terminal_ids
+    ]
+    if object_info is None:
+        output_candidates = terminal_candidates
+        issues.append(
+            H3AnalysisIssue(
+                code="object_info_unavailable",
+                message="Live ComfyUI node metadata is unavailable; confirm a terminal output",
+            )
+        )
+    else:
+        output_candidates = [
+            candidate
+            for candidate in terminal_candidates
+            if candidate.output_node and _looks_video_capable(candidate)
+        ]
+    output_candidates.sort(key=_numeric_node_key)
+
+    if output_node_id is None:
+        compatibility = "needs_confirmation" if output_candidates else "unsupported"
+        if not output_candidates:
+            issues.append(
+                H3AnalysisIssue(
+                    code="missing_output_candidate",
+                    message="No terminal video output candidates were found",
+                )
+            )
+        return H3WorkflowAnalysis(
+            compatibility=compatibility,
+            output_candidates=tuple(output_candidates),
+            saver_candidates=tuple(output_candidates),
+            issues=tuple(issues),
+            agent_manifest={"nodes": []},
+        )
+
+    selected = next(
+        (candidate for candidate in output_candidates if candidate.node_id == output_node_id),
+        None,
+    )
+    if selected is None:
+        issues.append(
+            H3AnalysisIssue(
+                code="invalid_output_selection",
+                message=f"Node {output_node_id} is not an eligible terminal video output",
+                node_id=output_node_id,
+                node_name=f"Node {output_node_id}",
+            )
+        )
+        return H3WorkflowAnalysis(
+            compatibility="unsupported",
+            output_candidates=tuple(output_candidates),
+            saver_candidates=tuple(output_candidates),
+            issues=tuple(issues),
+            agent_manifest={"nodes": []},
+        )
+
+    upstream = _ancestors(output_node_id, incoming)
+    h3_candidates = sorted(
+        (
+            _candidate(node_id, normalized, object_info=object_info)
+            for node_id in upstream
+            if normalized[node_id].get("class_type") == _H3_CLASS
+        ),
+        key=_numeric_node_key,
+    )
+    seed_candidates = sorted(
+        (
+            _candidate(node_id, normalized, object_info=object_info)
+            for node_id in upstream
+            if normalized[node_id].get("class_type") == "RandomNoise"
+            and "noise_seed" in normalized[node_id]["inputs"]
+        ),
+        key=_numeric_node_key,
+    )
+    mapping: H3BoundaryMapping | None = None
+    if not h3_candidates:
+        issues.append(
+            H3AnalysisIssue(
+                code="missing_upstream_h3",
+                message="The selected output has no upstream MiniMax H3 Ref2AV node",
+                node_id=output_node_id,
+                node_name=selected.display_name,
+            )
+        )
         compatibility = "unsupported"
-    elif len(seed_ids) > 1 or len(saver_ids) > 1:
+    elif len(h3_candidates) > 1:
         compatibility = "needs_confirmation"
     else:
-        compatibility = "auto_compatible"
+        h3_id = h3_candidates[0].node_id
+        h3_inputs = normalized[h3_id]["inputs"]
+        missing = [name for name in ("prompt", "width", "height", "length") if name not in h3_inputs]
+        for input_name in missing:
+            issues.append(
+                H3AnalysisIssue(
+                    code="missing_h3_input",
+                    message=f"{h3_candidates[0].display_name} (Node {h3_id}) is missing {input_name}",
+                    node_id=h3_id,
+                    node_name=h3_candidates[0].display_name,
+                    input_name=input_name,
+                )
+            )
+        if missing:
+            compatibility = "unsupported"
+        else:
+            seed = seed_candidates[0] if len(seed_candidates) == 1 else None
+            mapping = H3BoundaryMapping(
+                inputs=H3InputMapping(
+                    h3_node_id=h3_id,
+                    prompt_input="prompt",
+                    width_input="width",
+                    height_input="height",
+                    frames_input="length",
+                    picture_input_pattern="ref_images.ref_image_{index}",
+                    audio_input_pattern=(
+                        "ref_audios.ref_audio_{index}"
+                        if any(str(name).startswith("ref_audios.") for name in h3_inputs)
+                        else None
+                    ),
+                    seed_node_id=seed.node_id if seed else None,
+                    seed_input="noise_seed" if seed else None,
+                ),
+                output=H3OutputSelection(node_id=output_node_id),
+            )
+            compatibility = (
+                "needs_confirmation" if len(seed_candidates) > 1 else "auto_compatible"
+            )
 
     return H3WorkflowAnalysis(
         compatibility=compatibility,
         mapping=mapping,
-        seed_candidates=seed_candidates,
-        saver_candidates=saver_candidates,
-        fixed_dependencies=fixed_dependencies,
+        output_candidates=tuple(output_candidates),
+        h3_candidates=tuple(h3_candidates),
+        seed_candidates=tuple(seed_candidates),
+        saver_candidates=tuple(output_candidates),
+        fixed_dependencies=_fixed_dependencies(normalized, upstream),
         issues=tuple(issues),
-        agent_manifest={"nodes": manifest_nodes},
+        agent_manifest={"nodes": []},
     )
 
 
-def inspect_h3_workflow(graph: object) -> H3WorkflowAnalysis:
-    """Inspect a graph and contain excessive nesting as a structured rejection."""
+def inspect_h3_workflow(
+    graph: object,
+    *,
+    object_info: Mapping[str, Any] | None = None,
+    output_node_id: str | None = None,
+) -> H3WorkflowAnalysis:
+    """Inspect a graph without executing it or exposing raw workflow values."""
     try:
-        return _inspect_h3_workflow(graph)
+        return _inspect_h3_workflow(
+            graph,
+            object_info=object_info,
+            output_node_id=output_node_id,
+        )
     except RecursionError:
         message = "workflow nesting exceeds depth 32"
     except ValueError as exc:
@@ -451,12 +470,7 @@ def inspect_h3_workflow(graph: object) -> H3WorkflowAnalysis:
         message = str(exc)
     return H3WorkflowAnalysis(
         compatibility="unsupported",
-        issues=(
-            H3AnalysisIssue(
-                code="invalid_structure",
-                message=message,
-            ),
-        ),
+        issues=(H3AnalysisIssue(code="invalid_structure", message=message),),
         agent_manifest={"nodes": []},
     )
 

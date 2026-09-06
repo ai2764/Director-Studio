@@ -115,6 +115,7 @@ class H3AnalysisIssue(_StrictModel):
     code: StrictStr = Field(min_length=1)
     message: StrictStr = Field(min_length=1)
     node_id: StrictStr | None = None
+    node_name: StrictStr | None = None
     input_name: StrictStr | None = None
 
 
@@ -124,6 +125,11 @@ class H3NodeCandidate(_StrictModel):
     node_id: StrictStr = Field(min_length=1)
     class_type: StrictStr = Field(min_length=1)
     title: StrictStr = ""
+    object_display_name: StrictStr = ""
+    display_name: StrictStr = Field(min_length=1)
+    terminal: bool = False
+    output_node: bool = False
+    output_types: tuple[StrictStr, ...] = ()
 
 
 class H3FixedDependency(_StrictModel):
@@ -140,7 +146,10 @@ class H3WorkflowAnalysis(_StrictModel):
 
     compatibility: Literal["auto_compatible", "needs_confirmation", "unsupported"]
     mapping: H3BoundaryMapping | None = None
+    output_candidates: tuple[H3NodeCandidate, ...] = ()
+    h3_candidates: tuple[H3NodeCandidate, ...] = ()
     seed_candidates: tuple[H3NodeCandidate, ...] = ()
+    # Transitional fields disappear with the setup-agent API in Task 4.
     saver_candidates: tuple[H3NodeCandidate, ...] = ()
     fixed_dependencies: tuple[H3FixedDependency, ...] = ()
     issues: tuple[H3AnalysisIssue, ...] = ()

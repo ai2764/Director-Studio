@@ -26,6 +26,16 @@ class ComfyClient:
             r.raise_for_status()
             return r.json()
 
+    async def get_object_info(self) -> dict[str, Any]:
+        """Return live ComfyUI node metadata used for workflow boundary labels."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(f"{self.base_url}/object_info")
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, dict):
+            raise ComfyError("ComfyUI /object_info returned a non-object response")
+        return payload
+
     async def upload_image(
         self,
         data: bytes,
