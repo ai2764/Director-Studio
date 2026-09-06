@@ -184,6 +184,64 @@ def test_changed_node_ids_and_socket_names_fill_from_mapping() -> None:
     assert filled[audio_node]["inputs"]["audio"] == "voice.wav"
 
 
+def test_custom_profile_without_audio_bypasses_native_audio_lock() -> None:
+    graph = {
+        "136": {
+            "class_type": "MiniMaxH3ReferenceToVideo",
+            "inputs": {
+                "prompt": "old",
+                "width": 864,
+                "height": 480,
+                "length": 56,
+                "ref_audios.ref_audio_0": ["144", 0],
+            },
+        },
+        "143": {
+            "class_type": "LoadAudio",
+            "inputs": {"audio": "SELECT_OR_UPLOAD_SONG.mp3"},
+        },
+        "144": {
+            "class_type": "TrimAudioDuration",
+            "inputs": {"audio": ["143", 0]},
+        },
+        "145": {
+            "class_type": "MiniMaxH3NativeAudioLock",
+            "inputs": {
+                "audio": ["144", 0],
+                "model": ["148", 0],
+                "av_latent": ["136", 1],
+            },
+        },
+        "148": {"class_type": "MiniMaxH3SigmaShift", "inputs": {}},
+        "129": {"class_type": "RandomNoise", "inputs": {"noise_seed": 1}},
+        "124": {
+            "class_type": "BasicScheduler",
+            "inputs": {"model": ["145", 0]},
+        },
+        "125": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {"latent_image": ["145", 1]},
+        },
+        "130": {
+            "class_type": "CreateVideo",
+            "inputs": {"audio": ["145", 2]},
+        },
+        "92": {
+            "class_type": "SaveVideo",
+            "inputs": {"video": ["130", 0]},
+        },
+    }
+
+    filled = fill_profile_graph(
+        _resolved(graph),
+        _job_params(images=["one.png"], audios=[], seed=None),
+    )
+
+    assert filled["124"]["inputs"]["model"] == ["148", 0]
+    assert filled["125"]["inputs"]["latent_image"] == ["136", 1]
+    assert "audio" not in filled["130"]["inputs"]
+
+
 @pytest.mark.asyncio
 async def test_queued_job_keeps_profile_selected_at_submission(
     tmp_projects_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

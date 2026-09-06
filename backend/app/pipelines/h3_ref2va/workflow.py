@@ -130,6 +130,47 @@ def _dynamic_input_regex(pattern: str) -> re.Pattern[str]:
     return re.compile(rf"{re.escape(before)}\d+{re.escape(after)}\Z")
 
 
+def _bypass_native_audio_locks(
+    graph: dict[str, Any],
+    *,
+    h3_node_id: str,
+) -> None:
+    """Route custom profiles around optional exact-source-audio locks."""
+    for lock_id, lock_node in graph.items():
+        if (
+            not isinstance(lock_node, dict)
+            or lock_node.get("class_type") != "MiniMaxH3NativeAudioLock"
+        ):
+            continue
+        lock_inputs = lock_node.get("inputs") or {}
+        latent_source = lock_inputs.get("av_latent")
+        model_source = lock_inputs.get("model")
+        if latent_source != [h3_node_id, 1] or not isinstance(model_source, list):
+            continue
+        replacements = {
+            0: model_source,
+            1: latent_source,
+            2: None,
+        }
+        for consumer in graph.values():
+            if not isinstance(consumer, dict):
+                continue
+            consumer_inputs = consumer.get("inputs") or {}
+            for input_name, value in list(consumer_inputs.items()):
+                if (
+                    isinstance(value, list)
+                    and len(value) >= 2
+                    and str(value[0]) == lock_id
+                    and isinstance(value[1], int)
+                    and value[1] in replacements
+                ):
+                    replacement = replacements[value[1]]
+                    if replacement is None:
+                        del consumer_inputs[input_name]
+                    else:
+                        consumer_inputs[input_name] = list(replacement)
+
+
 def fill_profile_graph(
     profile: ResolvedH3Profile,
     job_params: dict[str, Any],
@@ -219,6 +260,8 @@ def fill_profile_graph(
 
     if seed is not None and binding.seed_node_id and binding.seed_input:
         filled[binding.seed_node_id].setdefault("inputs", {})[binding.seed_input] = seed
+    if profile.source == "custom":
+        _bypass_native_audio_locks(filled, h3_node_id=binding.h3_node_id)
     if profile.source == "builtin" and job_params.get("output_prefix"):
         filled[profile.mapping.output.node_id].setdefault("inputs", {})[
             "filename_prefix"

@@ -248,6 +248,8 @@ class ComfyMcpClient:
                 payload = decoded
                 break
         if payload is None:
+            if bool(getattr(result, "is_error", False)) and texts:
+                raise ComfyMcpError(f"MCP tool {name} failed: {'; '.join(texts)}")
             raise ComfyMcpError(f"MCP tool {name} returned no JSON object")
         if bool(getattr(result, "is_error", False)):
             message = payload.get("message") or payload.get("error") or payload

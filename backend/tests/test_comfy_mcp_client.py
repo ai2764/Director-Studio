@@ -314,6 +314,30 @@ async def test_submit_workflow_stops_when_live_validation_fails():
 
 
 @pytest.mark.asyncio
+async def test_client_preserves_plain_text_from_mcp_tool_errors():
+    session = FakeToolSession(
+        [
+            SimpleNamespace(
+                is_error=True,
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text="Error executing tool run_workflow",
+                    )
+                ],
+            )
+        ]
+    )
+    client = ComfyMcpClient(session=session)
+
+    with pytest.raises(
+        ComfyMcpError,
+        match="MCP tool run_workflow failed: Error executing tool run_workflow",
+    ):
+        await client.call_tool("run_workflow", {"workflow_path": "test.api.json"})
+
+
+@pytest.mark.asyncio
 async def test_wait_for_completion_retries_structured_timeouts_until_completed():
     session = FakeToolSession(
         [
