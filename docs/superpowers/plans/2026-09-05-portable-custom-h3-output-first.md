@@ -8,8 +8,6 @@
 
 **Tech Stack:** Python 3.13, FastAPI, Pydantic v2, httpx, pytest, React 19, TypeScript 5.8, Vitest, ComfyUI HTTP API, Comfy MCP, PyInstaller, PowerShell.
 
-**Spec:** `docs/superpowers/specs/2026-09-05-portable-h3-workflow-profiles-design.md`
-
 ## Global Constraints
 
 - Custom workflow setup must work without Ollama and must expose no LLM proposal endpoint.

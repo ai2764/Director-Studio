@@ -127,18 +127,6 @@ def _ancestors(start: str, incoming: Mapping[str, set[str]]) -> set[str]:
     return visited
 
 
-def _descendants(start: str, outgoing: Mapping[str, set[str]]) -> set[str]:
-    visited: set[str] = set()
-    pending = deque([start])
-    while pending:
-        node_id = pending.popleft()
-        if node_id in visited:
-            continue
-        visited.add(node_id)
-        pending.extend(sorted(outgoing.get(node_id, ())))
-    return visited
-
-
 def _title(node: object) -> str:
     if not isinstance(node, Mapping) or not isinstance(node.get("_meta"), Mapping):
         return ""
@@ -266,27 +254,6 @@ def _fixed_dependencies(
                 )
             )
     return tuple(result)
-
-
-def _unmapped_reachable_file_nodes(
-    graph: Mapping[str, Any],
-    output_reachability: Mapping[str, list[str]],
-    h3_id: str | None,
-    links: list[tuple[str, str, str]],
-) -> set[str]:
-    """Compatibility helper retained until boundary validation is rewritten."""
-    del h3_id
-    file_nodes = {
-        node_id
-        for node_id, node in graph.items()
-        if isinstance(node, Mapping)
-        and node.get("class_type") in {"LoadImage", "LoadAudio"}
-    }
-    return {
-        source_id
-        for source_id, target_id, _input_name in links
-        if source_id in file_nodes and output_reachability.get(target_id)
-    }
 
 
 def _inspect_h3_workflow(
