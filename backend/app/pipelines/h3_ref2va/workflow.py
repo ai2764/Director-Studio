@@ -112,20 +112,15 @@ def _next_node_id(graph: dict[str, Any]) -> int:
     return (max(ids) + 1) if ids else 1
 
 
-def _assert_pure_ref2va(graph: dict[str, Any]) -> None:
-    for node in graph.values():
-        if not isinstance(node, dict):
-            continue
-        if node.get("class_type") == H3_I2V_NODE:
-            raise ValueError(
-                f"{H3_I2V_NODE} is not allowed on pure Ref2AV pipeline "
-                "(no first/last frame I2V path)"
-            )
-        inputs = node.get("inputs") or {}
-        if "ref_frame" in inputs or "last_frame" in inputs:
-            raise ValueError(
-                "ref_frame/last_frame sockets are not allowed on pure Ref2AV pipeline"
-            )
+def _assert_pure_ref2va(graph: dict[str, Any], *, h3_node_id: str) -> None:
+    node = graph.get(h3_node_id)
+    if not isinstance(node, dict) or node.get("class_type") != H3_REF_NODE:
+        raise ValueError(f"selected node {h3_node_id} is not {H3_REF_NODE}")
+    inputs = node.get("inputs") or {}
+    if "ref_frame" in inputs or "last_frame" in inputs:
+        raise ValueError(
+            "ref_frame/last_frame sockets are not allowed on the selected Ref2AV boundary"
+        )
 
 
 def _dynamic_input_regex(pattern: str) -> re.Pattern[str]:
@@ -169,8 +164,8 @@ def fill_profile_graph(
     frames = validate_frame_count(int(frames))
 
     filled = copy.deepcopy(profile.workflow)
-    _assert_pure_ref2va(filled)
     binding = profile.mapping.inputs
+    _assert_pure_ref2va(filled, h3_node_id=binding.h3_node_id)
     h3_inputs = filled[binding.h3_node_id].setdefault("inputs", {})
     dynamic_patterns = [_dynamic_input_regex(binding.picture_input_pattern)]
     dynamic_patterns.append(_dynamic_input_regex("ref_audios.ref_audio_{index}"))

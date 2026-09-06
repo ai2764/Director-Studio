@@ -41,6 +41,7 @@ _WORKFLOW_FILE = "workflow.api.json"
 _PROFILE_FILE = "profile.json"
 _ACTIVE_FILE = "active.json"
 _MAPPING_FILE = "mapping.json"
+_OUTPUT_FILE = "output.json"
 _VALIDATION_FILE = "validation.json"
 _TEST_FILE = "test.json"
 _IMPORT_FILE = "import.json"
@@ -106,6 +107,34 @@ class H3ProfileStore:
     ) -> tuple[dict[str, Any], str]:
         """Load graph and digest from the same immutable byte snapshot."""
         return self._read_workflow(self.import_workflow_path(import_id))
+
+    def save_import_output(self, import_id: str, node_id: str) -> None:
+        """Persist an output choice and invalidate dependent mapping evidence."""
+        if not isinstance(node_id, str) or not node_id:
+            raise ProfileStorageError("A workflow output node ID is required")
+        directory = self._require_existing_import(import_id)
+        current = self.load_import_output(import_id)
+        self._atomic_write_json(directory / _OUTPUT_FILE, {"node_id": node_id})
+        if current == node_id:
+            return
+        for name in (_MAPPING_FILE, _VALIDATION_FILE, _TEST_FILE):
+            try:
+                self._safe_path(directory / name, write=True).unlink(missing_ok=True)
+            except OSError as exc:
+                raise ProfileStorageError(
+                    "Could not invalidate stale workflow boundary evidence"
+                ) from exc
+
+    def load_import_output(self, import_id: str) -> str | None:
+        """Load the confirmed output node for an import, if selected."""
+        path = self._safe_path(self._require_existing_import(import_id) / _OUTPUT_FILE)
+        if not path.exists():
+            return None
+        record = self._read_json(path)
+        node_id = record.get("node_id")
+        if not isinstance(node_id, str) or not node_id:
+            raise ProfileStorageError("Stored workflow output selection is invalid")
+        return node_id
 
     def save_import_mapping(
         self,
@@ -617,7 +646,7 @@ class H3ProfileStore:
         profile_id = self._require_profile_id(profile.id)
         if not isinstance(workflow, dict):
             raise ProfileStorageError("Profile workflow must be a JSON object")
-        self._assert_pure_ref2av(workflow)
+        self._assert_profile_boundary(workflow, profile.mapping)
         workflow_bytes = self._json_bytes(workflow)
         actual_hash = self._sha256(workflow_bytes)
         if profile.workflow_sha256 != actual_hash:
@@ -844,7 +873,7 @@ class H3ProfileStore:
             workflow_sha256=workflow_sha256,
             mapping_sha256=mapping_sha256,
         )
-        self._assert_pure_ref2av(workflow)
+        self._assert_profile_boundary(workflow, mapping)
         profile = H3WorkflowProfile(
             id=import_id,
             workflow_sha256=workflow_sha256,
@@ -899,7 +928,7 @@ class H3ProfileStore:
             raise ProfileChangedError(
                 "Job workflow profile snapshot hash does not match"
             )
-        self._assert_pure_ref2av(workflow)
+        self._assert_profile_boundary(workflow, profile.mapping)
         return ResolvedH3Profile(
             profile_id=profile.id,
             workflow=workflow,
@@ -972,7 +1001,7 @@ class H3ProfileStore:
             raise ProfileChangedError(
                 "Stored profile differs from its validation and test evidence"
             )
-        self._assert_pure_ref2av(workflow)
+        self._assert_profile_boundary(workflow, profile.mapping)
         return ResolvedH3Profile(
             profile_id=profile.id,
             workflow=workflow,
@@ -1044,28 +1073,16 @@ class H3ProfileStore:
         return self._parse_json(raw, path.name), self._sha256(raw)
 
     @staticmethod
-    def _assert_pure_ref2av(workflow: dict[str, Any]) -> None:
-        h3_nodes = 0
-        for node in workflow.values():
-            if not isinstance(node, dict):
-                continue
-            class_type = node.get("class_type")
-            if class_type == _H3_REF2AV_NODE:
-                h3_nodes += 1
-            if class_type == _H3_I2V_NODE:
-                raise ProfileStorageError(
-                    "Custom graph must remain a pure Ref2AV workflow (no I2V node)"
-                )
-            inputs = node.get("inputs")
-            if isinstance(inputs, dict) and {"ref_frame", "last_frame"} & inputs.keys():
-                raise ProfileStorageError(
-                    "Custom graph must remain a pure Ref2AV workflow "
-                    "(no ref_frame or last_frame input)"
-                )
-        if h3_nodes != 1:
+    def _assert_profile_boundary(
+        workflow: dict[str, Any], mapping: H3BoundaryMapping
+    ) -> None:
+        from .validator import validate_h3_contract
+
+        report = validate_h3_contract(workflow, mapping)
+        if not report.valid:
+            detail = "; ".join(issue.message for issue in report.issues)
             raise ProfileStorageError(
-                "Custom graph must remain a pure Ref2AV workflow "
-                "with exactly one MiniMaxH3ReferenceToVideo node"
+                f"Custom graph does not satisfy its confirmed H3 boundary: {detail}"
             )
 
     def _read_json(self, path: Path) -> dict[str, Any]:

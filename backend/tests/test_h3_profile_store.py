@@ -114,6 +114,24 @@ def isolated_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> H3Profile
     return H3ProfileStore()
 
 
+def _valid_workflow() -> dict[str, object]:
+    return {
+        "136": {
+            "class_type": "MiniMaxH3ReferenceToVideo",
+            "inputs": {"prompt": "", "width": 864, "height": 480, "length": 56},
+        },
+        "129": {"class_type": "RandomNoise", "inputs": {"noise_seed": 1}},
+        "140": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {"positive": ["136", 0], "noise": ["129", 0]},
+        },
+        "92": {
+            "class_type": "SaveVideo",
+            "inputs": {"video": ["140", 0], "filename_prefix": "video/H3"},
+        },
+    }
+
+
 def _install_custom_profile(
     store: H3ProfileStore,
     workflow: dict[str, object] | None = None,
@@ -121,9 +139,7 @@ def _install_custom_profile(
     status: str = "active",
     with_evidence: bool = False,
 ) -> None:
-    workflow = workflow or {
-        "136": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {}}
-    }
+    workflow = workflow or _valid_workflow()
     workflow_bytes = json.dumps(
         workflow, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
@@ -209,9 +225,8 @@ def test_custom_profile_round_trips_utf8_bom_workflow(
     profile = H3WorkflowProfile.model_validate_json(
         store.profile_path("custom").read_text("utf-8")
     )
-    workflow = {
-        "136": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {"prompt": "å"}}
-    }
+    workflow = _valid_workflow()
+    workflow["136"]["inputs"]["prompt"] = "å"  # type: ignore[index]
     encoded = json.dumps(workflow, ensure_ascii=False, sort_keys=True).encode("utf-8")
     bom_encoded = b"\xef\xbb\xbf" + encoded
     profile = profile.model_copy(
@@ -315,34 +330,53 @@ def test_resolve_active_falls_back_when_pointer_targets_untested_profile(
 @pytest.mark.parametrize(
     "workflow",
     [
-        {"1": {"class_type": "LoadImage", "inputs": {}}},
         {
-            "136": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {}},
-            "137": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {}},
+            **_valid_workflow(),
+            "136": {"class_type": "LoadImage", "inputs": {}},
         },
         {
-            "136": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {}},
-            "137": {"class_type": "MiniMaxH3ImageToVideo", "inputs": {}},
-        },
-        {
+            **_valid_workflow(),
             "136": {
-                "class_type": "MiniMaxH3ReferenceToVideo",
-                "inputs": {"ref_frame": "not allowed"},
-            }
+                **_valid_workflow()["136"],  # type: ignore[dict-item]
+                "inputs": {
+                    **_valid_workflow()["136"]["inputs"],  # type: ignore[index]
+                    "ref_frame": "not allowed",
+                },
+            },
         },
         {
+            **_valid_workflow(),
             "136": {
-                "class_type": "MiniMaxH3ReferenceToVideo",
-                "inputs": {"last_frame": "not allowed"},
-            }
+                **_valid_workflow()["136"],  # type: ignore[dict-item]
+                "inputs": {
+                    **_valid_workflow()["136"]["inputs"],  # type: ignore[index]
+                    "last_frame": "not allowed",
+                },
+            },
         },
     ],
-    ids=["no-h3", "duplicate-h3", "i2v", "ref-frame", "last-frame"],
+    ids=["selected-not-h3", "ref-frame", "last-frame"],
 )
-def test_install_profile_rejects_non_pure_ref2av_graphs(
+def test_install_profile_rejects_invalid_confirmed_boundary(
     workflow: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = isolated_store(tmp_path, monkeypatch)
 
-    with pytest.raises(ProfileStorageError, match="pure Ref2AV"):
+    with pytest.raises(ProfileStorageError, match="confirmed H3 boundary"):
         _install_custom_profile(store, workflow)
+
+
+def test_install_profile_allows_unrelated_h3_and_i2v_branches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = isolated_store(tmp_path, monkeypatch)
+    workflow = _valid_workflow()
+    workflow["500"] = {
+        "class_type": "MiniMaxH3ReferenceToVideo",
+        "inputs": {"prompt": "", "width": 1, "height": 1, "length": 6},
+    }
+    workflow["501"] = {"class_type": "MiniMaxH3ImageToVideo", "inputs": {}}
+
+    _install_custom_profile(store, workflow, status="draft")
+
+    assert store.profile_path("custom").is_file()

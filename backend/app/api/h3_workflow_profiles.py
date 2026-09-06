@@ -10,6 +10,7 @@ from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
+from ..core.comfy.client import ComfyClient
 from ..core.jobs import create_job, start_pipeline_job
 from ..core.library.images import resolve_asset_image
 from ..core.library.store import asset_dir, load_asset
@@ -24,13 +25,6 @@ from ..workflow_profiles.h3 import (
     ProfileStorageError,
     ResolvedH3Profile,
 )
-from ..workflow_profiles.h3.agent import (
-    AgentConfigurationError,
-    ContractError,
-)
-from ..workflow_profiles.h3.agent import (
-    propose_h3_mapping as _propose_h3_mapping,
-)
 from ..workflow_profiles.h3.inspector import MAX_WORKFLOW_BYTES, inspect_h3_workflow
 from ..workflow_profiles.h3.validator import validate_h3_contract
 
@@ -43,6 +37,10 @@ class _StrictModel(BaseModel):
 
 class SelectProfileRequest(_StrictModel):
     profile_id: StrictStr = Field(pattern=r"[a-z0-9][a-z0-9-]{0,63}")
+
+
+class SelectOutputRequest(_StrictModel):
+    node_id: StrictStr = Field(min_length=1)
 
 
 class TestProfileRequest(_StrictModel):
@@ -138,7 +136,7 @@ def _active_payload(store: H3ProfileStore) -> dict[str, Any]:
         "display_name": resolved.display_name,
         "source": resolved.source,
         "workflow_sha256": resolved.workflow_sha256,
-        "contract_version": 1,
+        "contract_version": 2,
         "validated_at": resolved.validated_at,
         "warning": (
             {
@@ -247,24 +245,75 @@ async def import_h3_workflow(
     }
 
 
-@router.get("/imports/{import_id:path}/analysis", response_model=None)
-def analyze_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
-    store = H3ProfileStore()
+async def _object_info_or_none() -> dict[str, Any] | None:
     try:
-        graph = store.load_import_workflow(import_id)
-        analysis = inspect_h3_workflow(graph)
-        accepted_mapping = store.load_import_mapping(import_id)
-    except (TypeError, ValueError) as exc:
-        return _error(400, "invalid_workflow", str(exc), {"import_id": import_id})
-    except ProfileStorageError as exc:
-        return _store_error(exc)
+        return await ComfyClient().get_object_info()
+    except Exception:  # noqa: BLE001 - topology-only fallback is deliberate
+        return None
+
+
+def _analysis_payload(
+    store: H3ProfileStore,
+    import_id: str,
+    analysis: Any,
+) -> dict[str, Any]:
     payload = analysis.model_dump(mode="json")
+    accepted_mapping = store.load_import_mapping(import_id)
     if accepted_mapping is not None:
         payload["mapping"] = accepted_mapping.model_dump(mode="json")
     payload["import_id"] = import_id
     payload["workflow_sha256"] = store.import_workflow_sha256(import_id)
     payload["lifecycle"] = store.import_lifecycle(import_id)
     return payload
+
+
+@router.get("/imports/{import_id:path}/analysis", response_model=None)
+async def analyze_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
+    store = H3ProfileStore()
+    try:
+        graph = store.load_import_workflow(import_id)
+        analysis = inspect_h3_workflow(
+            graph,
+            object_info=await _object_info_or_none(),
+            output_node_id=store.load_import_output(import_id),
+        )
+        return _analysis_payload(store, import_id, analysis)
+    except (TypeError, ValueError) as exc:
+        return _error(400, "invalid_workflow", str(exc), {"import_id": import_id})
+    except ProfileStorageError as exc:
+        return _store_error(exc)
+
+
+@router.put("/imports/{import_id:path}/output", response_model=None)
+async def select_h3_import_output(
+    import_id: str,
+    body: SelectOutputRequest,
+) -> dict[str, Any] | JSONResponse:
+    store = H3ProfileStore()
+    try:
+        graph = store.load_import_workflow(import_id)
+        object_info = await _object_info_or_none()
+        unselected = inspect_h3_workflow(graph, object_info=object_info)
+        if body.node_id not in {
+            candidate.node_id for candidate in unselected.output_candidates
+        }:
+            return _error(
+                422,
+                "output_selection_error",
+                f"Node {body.node_id} is not an eligible terminal video output",
+                {"import_id": import_id, "node_id": body.node_id},
+            )
+        store.save_import_output(import_id, body.node_id)
+        selected = inspect_h3_workflow(
+            graph,
+            object_info=object_info,
+            output_node_id=body.node_id,
+        )
+        return _analysis_payload(store, import_id, selected)
+    except (TypeError, ValueError) as exc:
+        return _error(400, "invalid_workflow", str(exc), {"import_id": import_id})
+    except ProfileStorageError as exc:
+        return _store_error(exc)
 
 
 @router.put("/imports/{import_id:path}/mapping", response_model=None)
@@ -274,27 +323,31 @@ def save_h3_import_mapping(
 ) -> dict[str, Any] | JSONResponse:
     store = H3ProfileStore()
     try:
+        selected_output = store.load_import_output(import_id)
+        if selected_output is None or body.output.node_id != selected_output:
+            return _error(
+                422,
+                "input_selection_error",
+                "The input mapping must use the confirmed final video output",
+                {"import_id": import_id, "node_id": body.output.node_id},
+            )
+        report = validate_h3_contract(store.load_import_workflow(import_id), body)
+        if not report.valid:
+            return _error(
+                422,
+                "input_selection_error",
+                "The confirmed H3 input boundary is invalid",
+                {
+                    "import_id": import_id,
+                    "issues": [
+                        issue.model_dump(mode="json") for issue in report.issues
+                    ],
+                },
+            )
         store.save_import_mapping(import_id, body)
     except ProfileStorageError as exc:
         return _store_error(exc)
     return {"import_id": import_id, "mapping": body.model_dump(mode="json")}
-
-
-@router.post("/imports/{import_id:path}/propose-mapping", response_model=None)
-async def propose_h3_mapping(import_id: str) -> dict[str, Any] | JSONResponse:
-    """Return untrusted mapping advice without accepting or activating it."""
-    try:
-        proposal = await _propose_h3_mapping(import_id)
-    except ProfileStorageError as exc:
-        return _store_error(exc)
-    except AgentConfigurationError as exc:
-        return _error(503, "director_model_not_configured", str(exc))
-    except ContractError as exc:
-        return _error(422, "contract_error", str(exc), {"import_id": import_id})
-    return {
-        "import_id": import_id,
-        **proposal.model_dump(mode="json"),
-    }
 
 
 @router.post("/imports/{import_id:path}/validate", response_model=None)
@@ -302,8 +355,7 @@ async def validate_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
     store = H3ProfileStore()
     try:
         graph, workflow_sha256 = store.load_import_workflow_snapshot(import_id)
-        analysis = inspect_h3_workflow(graph)
-        mapping = store.load_import_mapping(import_id) or analysis.mapping
+        mapping = store.load_import_mapping(import_id)
         if mapping is None:
             return _error(
                 422,
@@ -311,10 +363,8 @@ async def validate_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
                 "A compatible workflow mapping is required before validation",
                 {
                     "import_id": import_id,
-                    "compatibility": analysis.compatibility,
-                    "issues": [
-                        issue.model_dump(mode="json") for issue in analysis.issues
-                    ],
+                    "compatibility": "needs_confirmation",
+                    "issues": [],
                 },
             )
         report = validate_h3_contract(graph, mapping)
@@ -335,7 +385,6 @@ async def validate_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
                 },
             )
         mapping_sha256 = store.mapping_sha256(mapping)
-        store.save_import_mapping(import_id, mapping)
         filled = fill_profile_graph(
             ResolvedH3Profile(
                 profile_id="validation-import",
@@ -391,6 +440,7 @@ async def validate_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
         "workflow_sha256": record["workflow_sha256"],
         "validated_at": record["validated_at"],
         "comfy": comfy_payload,
+        "lifecycle": store.import_lifecycle(import_id),
     }
 
 
@@ -420,7 +470,7 @@ async def test_h3_import(
     audio_keys: list[str] = []
     audio_binding = ""
     if body.audio_asset_id is not None:
-        if mapping is None or mapping.audio_input_pattern is None:
+        if mapping is None or mapping.inputs.audio_input_pattern is None:
             return _error(
                 422,
                 "audio_not_supported",
