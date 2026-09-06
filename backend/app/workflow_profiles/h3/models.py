@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
 from .errors import ProfileWarning
 
@@ -14,8 +14,8 @@ class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class H3BoundaryMapping(_StrictModel):
-    """The application-owned inputs on an otherwise workflow-owned graph."""
+class H3InputMapping(_StrictModel):
+    """Application-owned inputs on an otherwise workflow-owned graph."""
 
     h3_node_id: StrictStr = Field(min_length=1)
     prompt_input: StrictStr = Field(min_length=1)
@@ -24,11 +24,78 @@ class H3BoundaryMapping(_StrictModel):
     frames_input: StrictStr = Field(min_length=1)
     picture_input_pattern: StrictStr = Field(min_length=1)
     audio_input_pattern: StrictStr | None = None
-    seed_node_id: StrictStr = Field(min_length=1)
-    seed_input: StrictStr = Field(min_length=1)
-    saver_node_id: StrictStr = Field(min_length=1)
-    output_prefix_input: StrictStr = Field(min_length=1)
-    output_fields: tuple[StrictStr, ...] = ("videos",)
+    seed_node_id: StrictStr | None = None
+    seed_input: StrictStr | None = None
+
+    @model_validator(mode="after")
+    def validate_seed_pair(self) -> "H3InputMapping":
+        if (self.seed_node_id is None) != (self.seed_input is None):
+            raise ValueError("seed_node_id and seed_input must be set together")
+        return self
+
+
+class H3OutputSelection(_StrictModel):
+    """The confirmed terminal node and optional observed artifact choice."""
+
+    node_id: StrictStr = Field(min_length=1)
+    artifact_index: int | None = Field(default=None, ge=0)
+
+
+class H3BoundaryMapping(_StrictModel):
+    """The complete Director Studio boundary around an opaque H3 graph."""
+
+    inputs: H3InputMapping
+    output: H3OutputSelection
+
+    # Transitional read-only aliases keep existing runtime call sites operational
+    # while Tasks 2-3 move graph analysis and filling to the nested contract.
+    @property
+    def h3_node_id(self) -> str:
+        return self.inputs.h3_node_id
+
+    @property
+    def prompt_input(self) -> str:
+        return self.inputs.prompt_input
+
+    @property
+    def width_input(self) -> str:
+        return self.inputs.width_input
+
+    @property
+    def height_input(self) -> str:
+        return self.inputs.height_input
+
+    @property
+    def frames_input(self) -> str:
+        return self.inputs.frames_input
+
+    @property
+    def picture_input_pattern(self) -> str:
+        return self.inputs.picture_input_pattern
+
+    @property
+    def audio_input_pattern(self) -> str | None:
+        return self.inputs.audio_input_pattern
+
+    @property
+    def seed_node_id(self) -> str | None:
+        return self.inputs.seed_node_id
+
+    @property
+    def seed_input(self) -> str | None:
+        return self.inputs.seed_input
+
+    @property
+    def saver_node_id(self) -> str:
+        return self.output.node_id
+
+    @property
+    def output_prefix_input(self) -> str:
+        return "filename_prefix"
+
+    @property
+    def output_fields(self) -> tuple[str, ...]:
+        return ("videos",)
 
 
 class H3WorkflowProfile(_StrictModel):
@@ -36,7 +103,7 @@ class H3WorkflowProfile(_StrictModel):
 
     id: StrictStr = Field(pattern=r"[a-z0-9][a-z0-9-]{0,63}")
     kind: Literal["h3_ref2av"] = "h3_ref2av"
-    contract_version: Literal[1] = 1
+    contract_version: Literal[2] = 2
     workflow_sha256: StrictStr = Field(pattern=r"[0-9a-f]{64}")
     mapping: H3BoundaryMapping
     status: Literal["draft", "mapped", "validated", "tested", "active", "broken"]

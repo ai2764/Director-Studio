@@ -18,6 +18,8 @@ from app.pipelines.h3_ref2va.schemas import H3Ref2VaJobResponse
 from app.pipelines.h3_ref2va.workflow import fill_profile_graph, load_base_prompt
 from app.workflow_profiles.h3 import (
     H3BoundaryMapping,
+    H3InputMapping,
+    H3OutputSelection,
     H3ProfileStore,
     H3WorkflowProfile,
     ProfileChangedError,
@@ -56,17 +58,18 @@ def _mapping(
     *, h3: str = "136", noise: str = "129", saver: str = "92"
 ) -> H3BoundaryMapping:
     return H3BoundaryMapping(
-        h3_node_id=h3,
-        prompt_input="prompt",
-        width_input="width",
-        height_input="height",
-        frames_input="length",
-        picture_input_pattern="ref_images.ref_image_{index}",
-        audio_input_pattern="ref_audios.ref_audio_{index}",
-        seed_node_id=noise,
-        seed_input="noise_seed",
-        saver_node_id=saver,
-        output_prefix_input="filename_prefix",
+        inputs=H3InputMapping(
+            h3_node_id=h3,
+            prompt_input="prompt",
+            width_input="width",
+            height_input="height",
+            frames_input="length",
+            picture_input_pattern="ref_images.ref_image_{index}",
+            audio_input_pattern="ref_audios.ref_audio_{index}",
+            seed_node_id=noise,
+            seed_input="noise_seed",
+        ),
+        output=H3OutputSelection(node_id=saver),
     )
 
 
@@ -106,7 +109,7 @@ def _install_profile(store: H3ProfileStore, profile_id: str, *, saver_id: str) -
         graph,
         validation_record={
             "valid": True,
-            "contract_version": 1,
+            "contract_version": 2,
             "workflow_sha256": profile.workflow_sha256,
             "mapping_sha256": mapping_sha256,
             "report": {"valid": True},
@@ -114,6 +117,7 @@ def _install_profile(store: H3ProfileStore, profile_id: str, *, saver_id: str) -
         },
         test_record={
             "status": "succeeded",
+            "contract_version": 2,
             "workflow_sha256": profile.workflow_sha256,
             "mapping_sha256": mapping_sha256,
             "job_id": f"job_{profile_id}",
@@ -145,17 +149,18 @@ def test_changed_node_ids_and_socket_names_fill_from_mapping() -> None:
         "902": {"class_type": "SaveVideo", "inputs": {"prefix": "old"}},
     }
     mapping = H3BoundaryMapping(
-        h3_node_id="900",
-        prompt_input="text",
-        width_input="w",
-        height_input="h",
-        frames_input="frame_count",
-        picture_input_pattern="pictures.{index}",
-        audio_input_pattern="sounds.{index}",
-        seed_node_id="901",
-        seed_input="seed_value",
-        saver_node_id="902",
-        output_prefix_input="prefix",
+        inputs=H3InputMapping(
+            h3_node_id="900",
+            prompt_input="text",
+            width_input="w",
+            height_input="h",
+            frames_input="frame_count",
+            picture_input_pattern="pictures.{index}",
+            audio_input_pattern="sounds.{index}",
+            seed_node_id="901",
+            seed_input="seed_value",
+        ),
+        output=H3OutputSelection(node_id="902"),
     )
 
     filled = fill_profile_graph(
@@ -172,7 +177,7 @@ def test_changed_node_ids_and_socket_names_fill_from_mapping() -> None:
     assert filled["900"]["inputs"]["frame_count"] == 294
     assert "pictures.8" not in filled["900"]["inputs"]
     assert filled["901"]["inputs"]["seed_value"] == 42
-    assert filled["902"]["inputs"]["prefix"] == "director-studio/h3/sample"
+    assert filled["902"]["inputs"]["prefix"] == "old"
     picture_node = filled["900"]["inputs"]["pictures.0"][0]
     audio_node = filled["900"]["inputs"]["sounds.0"][0]
     assert filled[picture_node]["inputs"]["image"] == "one.png"
@@ -218,11 +223,11 @@ async def test_queued_job_keeps_profile_selected_at_submission(
     snapshot = load_job_profile_snapshot(job.id)
     persisted = load_job(job.id)
     assert snapshot.profile_id == "first-profile"
-    assert snapshot.mapping.saver_node_id == "910"
+    assert snapshot.mapping.output.node_id == "910"
     assert persisted is not None
     assert persisted.params["h3_profile_id"] == "first-profile"
     assert persisted.params["h3_profile_sha256"] == snapshot.workflow_sha256
-    assert persisted.params["h3_contract_version"] == 1
+    assert persisted.params["h3_contract_version"] == 2
     assert (job_dir(job.id) / "workflow_profile" / "workflow.api.json").is_file()
     assert (job_dir(job.id) / "workflow_profile" / "profile.json").is_file()
 
@@ -320,7 +325,7 @@ async def test_recovery_reuses_profile_from_original_submission(
     assert replayed.params["h3_profile_id"] == "first-profile"
     assert replayed.params["h3_profile_sha256"] == first_hash
     assert snapshot.profile_id == "first-profile"
-    assert snapshot.mapping.saver_node_id == "910"
+    assert snapshot.mapping.output.node_id == "910"
 
     release.set()
     await runner.await_pipeline_job(job.id)
@@ -409,7 +414,7 @@ def test_h3_job_response_exposes_profile_identity() -> None:
         params={
             "h3_profile_id": "custom-profile",
             "h3_profile_sha256": "a" * 64,
-            "h3_contract_version": 1,
+            "h3_contract_version": 2,
         },
         created_at="2026-09-05T00:00:00Z",
         updated_at="2026-09-05T00:00:00Z",
@@ -419,7 +424,7 @@ def test_h3_job_response_exposes_profile_identity() -> None:
 
     assert response.h3_profile_id == "custom-profile"
     assert response.h3_profile_sha256 == "a" * 64
-    assert response.h3_contract_version == 1
+    assert response.h3_contract_version == 2
 
 
 @pytest.mark.asyncio
@@ -480,7 +485,14 @@ def test_zero_audio_fill_removes_canonical_sockets_even_when_mapping_is_null():
     graph["136"]["inputs"]["ref_audios.ref_audio_2"] = ["stale-audio", 0]
     filled = fill_profile_graph(
         _resolved(
-            graph, mapping=_mapping().model_copy(update={"audio_input_pattern": None})
+            graph,
+            mapping=_mapping().model_copy(
+                update={
+                    "inputs": _mapping().inputs.model_copy(
+                        update={"audio_input_pattern": None}
+                    )
+                }
+            ),
         ),
         _job_params(audios=[]),
     )

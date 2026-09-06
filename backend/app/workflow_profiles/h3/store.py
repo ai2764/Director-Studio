@@ -23,7 +23,13 @@ from .errors import (
     ProfileStorageError,
     ProfileWarning,
 )
-from .models import H3BoundaryMapping, H3WorkflowProfile, ResolvedH3Profile
+from .models import (
+    H3BoundaryMapping,
+    H3InputMapping,
+    H3OutputSelection,
+    H3WorkflowProfile,
+    ResolvedH3Profile,
+)
 
 if TYPE_CHECKING:
     from app.core.schemas import JobRecord
@@ -43,17 +49,18 @@ _H3_REF2AV_NODE = "MiniMaxH3ReferenceToVideo"
 _H3_I2V_NODE = "MiniMaxH3ImageToVideo"
 
 _OFFICIAL_MAPPING = H3BoundaryMapping(
-    h3_node_id="136",
-    prompt_input="prompt",
-    width_input="width",
-    height_input="height",
-    frames_input="length",
-    picture_input_pattern="ref_images.ref_image_{index}",
-    audio_input_pattern="ref_audios.ref_audio_{index}",
-    seed_node_id="129",
-    seed_input="noise_seed",
-    saver_node_id="92",
-    output_prefix_input="filename_prefix",
+    inputs=H3InputMapping(
+        h3_node_id="136",
+        prompt_input="prompt",
+        width_input="width",
+        height_input="height",
+        frames_input="length",
+        picture_input_pattern="ref_images.ref_image_{index}",
+        audio_input_pattern="ref_audios.ref_audio_{index}",
+        seed_node_id="129",
+        seed_input="noise_seed",
+    ),
+    output=H3OutputSelection(node_id="92"),
 )
 
 
@@ -155,7 +162,7 @@ class H3ProfileStore:
             )
         record = {
             "valid": True,
-            "contract_version": 1,
+            "contract_version": 2,
             "workflow_sha256": workflow_sha256,
             "mapping_sha256": mapping_sha256,
             "validated_at": datetime.now(UTC).isoformat(),
@@ -219,7 +226,7 @@ class H3ProfileStore:
             )
         record = {
             "status": "succeeded",
-            "contract_version": 1,
+            "contract_version": 2,
             "workflow_sha256": workflow_sha256,
             "mapping_sha256": mapping_sha256,
             "job_id": job_id,
@@ -254,7 +261,7 @@ class H3ProfileStore:
                 "A successful test for this workflow is required before activation",
                 details={"import_id": import_id},
             )
-        if test_record.get("contract_version") != 1:
+        if test_record.get("contract_version") != 2:
             raise ProfileStateError(
                 "unsupported_contract",
                 "The tested workflow contract version is unsupported",
@@ -415,7 +422,7 @@ class H3ProfileStore:
             test = self._optional_record(directory / _TEST_FILE)
             if not test or (
                 test.get("status") != "succeeded"
-                or test.get("contract_version") != 1
+                or test.get("contract_version") != 2
                 or test.get("workflow_sha256") != workflow_sha256
                 or test.get("mapping_sha256") != mapping_sha256
             ):
@@ -437,6 +444,13 @@ class H3ProfileStore:
     def mapping_sha256(cls, mapping: H3BoundaryMapping) -> str:
         """Hash one exact mapping snapshot using the store's canonical JSON."""
         return cls._sha256(cls._json_bytes(mapping.model_dump(mode="json")))
+
+    @classmethod
+    def boundary_sha256(cls, mapping: H3BoundaryMapping) -> str:
+        """Hash the submitted-graph boundary, excluding post-test artifact choice."""
+        payload = mapping.model_dump(mode="json")
+        payload["output"]["artifact_index"] = None
+        return cls._sha256(cls._json_bytes(payload))
 
     @classmethod
     def _profile_sha256(cls, profile: H3WorkflowProfile) -> str:
@@ -462,7 +476,7 @@ class H3ProfileStore:
                 "Successful validation is required before testing or activation",
                 details={"import_id": import_id},
             )
-        if validation.get("contract_version") != 1:
+        if validation.get("contract_version") != 2:
             raise ProfileStateError(
                 "unsupported_contract",
                 "The validated workflow contract version is unsupported",
@@ -525,7 +539,7 @@ class H3ProfileStore:
             or job.pipeline_id != "h3_ref2va"
             or params.get("h3_profile_test") is not True
             or params.get("h3_profile_import_id") != import_id
-            or params.get("h3_contract_version") != 1
+            or params.get("h3_contract_version") != 2
             or job.project_id is not None
             or job.library_asset_id is not None
             or "shot_id" in params
@@ -705,7 +719,7 @@ class H3ProfileStore:
             if (
                 params.get("h3_profile_id") != snapshot.profile_id
                 or params.get("h3_profile_sha256") != snapshot.workflow_sha256
-                or params.get("h3_contract_version") != 1
+                or params.get("h3_contract_version") != 2
             ):
                 raise ProfileChangedError(
                     "Job profile snapshot identity does not match its job record"
@@ -766,7 +780,7 @@ class H3ProfileStore:
             {
                 "h3_profile_id": resolved.profile_id,
                 "h3_profile_sha256": resolved.workflow_sha256,
-                "h3_contract_version": 1,
+                "h3_contract_version": 2,
             }
         )
         return resolved
@@ -797,7 +811,7 @@ class H3ProfileStore:
             if (
                 params.get("h3_profile_id") != import_id
                 or params.get("h3_profile_sha256") != expected_workflow_sha256
-                or params.get("h3_contract_version") != 1
+                or params.get("h3_contract_version") != 2
                 or snapshot.profile_id != import_id
                 or snapshot.workflow_sha256 != expected_workflow_sha256
                 or self.mapping_sha256(snapshot.mapping) != expected_mapping_sha256
@@ -855,7 +869,7 @@ class H3ProfileStore:
             {
                 "h3_profile_id": import_id,
                 "h3_profile_sha256": workflow_sha256,
-                "h3_contract_version": 1,
+                "h3_contract_version": 2,
             }
         )
         return ResolvedH3Profile(
@@ -935,7 +949,7 @@ class H3ProfileStore:
         test_record = evidence.get("test")
         if (
             evidence.get("valid") is not True
-            or evidence.get("contract_version") != 1
+            or evidence.get("contract_version") != 2
             or not isinstance(evidence.get("report"), dict)
             or evidence["report"].get("valid") is not True
             or not isinstance(evidence.get("comfy"), dict)

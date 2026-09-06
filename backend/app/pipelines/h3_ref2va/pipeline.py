@@ -97,7 +97,7 @@ class H3Ref2VaPipeline(Pipeline):
             or profile.workflow_sha256 != expected_hash
         ):
             raise ValueError("H3 job profile snapshot does not match its job record")
-        if expected_contract != 1:
+        if expected_contract != 2:
             raise ValueError("H3 job profile snapshot contract version is unsupported")
         return profile
 

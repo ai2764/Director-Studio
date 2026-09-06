@@ -9,6 +9,8 @@ from .errors import (
 from .models import (
     H3AnalysisIssue,
     H3BoundaryMapping,
+    H3InputMapping,
+    H3OutputSelection,
     H3FixedDependency,
     H3NodeCandidate,
     H3ValidationIssue,
@@ -27,9 +29,11 @@ from .store import (
 __all__ = [
     "H3AnalysisIssue",
     "H3BoundaryMapping",
+    "H3InputMapping",
     "H3FixedDependency",
     "H3NodeCandidate",
     "H3ProfileStore",
+    "H3OutputSelection",
     "H3ValidationIssue",
     "H3WorkflowAnalysis",
     "H3WorkflowProfile",
