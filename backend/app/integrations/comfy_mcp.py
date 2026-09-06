@@ -85,6 +85,36 @@ def format_validation_errors(payload: dict[str, Any]) -> str:
     return f"MCP workflow validation failed: {detail}"
 
 
+def _repair_save_video_dynamic_codec(
+    graph: dict[str, Any], errors: list[Any]
+) -> dict[str, Any] | None:
+    """Bridge the old and new ComfyUI SaveVideo API input layouts."""
+
+    repaired = copy.deepcopy(graph)
+    changed = False
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        if (
+            error.get("code") != "required_input_missing"
+            or error.get("field") != "format.codec"
+        ):
+            continue
+        node_id = str(error.get("node_id") or "")
+        node = repaired.get(node_id)
+        if not isinstance(node, dict) or node.get("class_type") != "SaveVideo":
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict) or "format.codec" in inputs:
+            continue
+        codec = inputs.get("codec")
+        if not isinstance(codec, str) or not codec:
+            continue
+        inputs["format.codec"] = codec
+        changed = True
+    return repaired if changed else None
+
+
 @dataclass(frozen=True)
 class McpOutputFile:
     """One MCP-downloaded artifact plus the original Comfy output URL."""
@@ -294,8 +324,10 @@ class ComfyMcpClient:
         return result
 
     async def submit_workflow(self, graph: dict[str, Any]) -> str:
-        await self.validate_workflow(graph)
         with self._temporary_workflow(graph) as workflow_path:
+            validation = await self._validate_workflow_path(graph, workflow_path)
+            if validation.get("valid") is not True:
+                raise ComfyMcpError(format_validation_errors(validation))
             queued = await self.call_tool(
                 "run_workflow",
                 {
@@ -330,13 +362,35 @@ class ComfyMcpClient:
         finally:
             workflow_path.unlink(missing_ok=True)
 
+    async def _validate_workflow_path(
+        self,
+        graph: dict[str, Any],
+        workflow_path: Path,
+    ) -> dict[str, Any]:
+        payload = await self.call_tool(
+            "validate_workflow",
+            {"workflow_path": str(workflow_path)},
+        )
+        if payload.get("valid") is not True:
+            repaired = _repair_save_video_dynamic_codec(
+                graph,
+                payload.get("errors") or [],
+            )
+            if repaired is not None:
+                workflow_path.write_text(
+                    json.dumps(repaired, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                payload = await self.call_tool(
+                    "validate_workflow",
+                    {"workflow_path": str(workflow_path)},
+                )
+        return payload
+
     async def validate_workflow(self, graph: dict[str, Any]) -> dict[str, Any]:
         """Ask Comfy MCP to validate a graph without queueing it."""
         with self._temporary_workflow(graph) as path:
-            payload = await self.call_tool(
-                "validate_workflow",
-                {"workflow_path": str(path)},
-            )
+            payload = await self._validate_workflow_path(graph, path)
         if payload.get("valid") is not True:
             raise ComfyMcpError(format_validation_errors(payload))
         return payload
