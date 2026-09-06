@@ -83,20 +83,22 @@ Start Ollama and ComfyUI first, then run:
 
 If the MCP process cannot start, verify both configured executable paths. You can run `comfy --help` to check the Comfy CLI; do not use `comfy-mcp --help`, because that entry point starts the stdio server. If a workflow fails, load the same workflow in ComfyUI and confirm its custom nodes and models are installed.
 
-### Configure an H3 workflow profile
+### Connect a custom H3 workflow
 
-Every clean Portable starts with **Built-in Official H3**. To use a compatible custom API workflow, follow this sequence:
+Every clean Portable starts with **Built-in Official H3**. First make sure your custom H3 Ref2AV workflow already runs successfully in the same local ComfyUI. Then connect it at runtime:
 
 ```text
-Start ComfyUI and Ollama -> run DirectorStudio.exe ->
-Settings -> Workflows -> H3 -> Import API JSON -> Validate -> Test -> Activate
+Settings -> Workflows -> H3 -> Import Workflow
+-> Final Video Output -> H3 Inputs -> Validate & Test -> Use Workflow
 ```
 
-If analysis finds more than one possible seed or saver node, accept the intended boundary mapping before validation. The Test step submits an isolated H3 job, so review its video before activation. Director Studio supports only workflows with a single `MiniMaxH3ReferenceToVideo` path; `MiniMaxH3ImageToVideo`, first-frame/last-frame sockets, and mixed I2V/Ref2AV graphs are rejected.
+Director Studio treats everything inside the selected path as an opaque ComfyUI graph. It first lists terminal video nodes; after you choose the final output, it searches backward and asks you to confirm the upstream `MiniMaxH3ReferenceToVideo` node and optional seed node. Node titles are shown before class names and IDs. The application only injects prompt, width, height, frame count, Picture 1–9, optional standalone Audio 1–3, and an optional seed. Internal models, samplers, LoRAs, upscalers, frame interpolation, and muxing stay exactly as the workflow defines them.
 
-Imported workflow JSON and its profile metadata stay under the external `data/workflow_profiles` directory and are never embedded in a release executable or zip. Any custom nodes, models, LoRAs, and other dependencies referenced by an imported graph remain the user's ComfyUI responsibility.
+The 56-frame test retains videos only from the final output node you selected. If that node emits several videos, preview them and choose one; this selection does not rerun ComfyUI. Reference-video inputs are not supported. Ollama is not used for importing, mapping, validating, or testing a custom workflow—the setup is deterministic and uses ComfyUI metadata plus your confirmations.
 
-Profile changes apply only to jobs submitted after the switch. Queued and running jobs keep the immutable workflow snapshot captured when they were submitted. Switching back to **Built-in Official H3** therefore requires no restart and does not alter work already in flight.
+Imported workflow JSON and its setup metadata stay under the external `data/workflow_profiles` directory and are never embedded in a release executable or zip. Any custom nodes, models, LoRAs, and other dependencies referenced by an imported graph remain the user's ComfyUI responsibility. If a custom workflow becomes unavailable or invalid, Director Studio falls back to **Built-in Official H3**.
+
+Workflow changes apply only to jobs submitted after the switch. Queued and running jobs keep the immutable workflow snapshot captured when they were submitted. You can switch back to **Built-in Official H3** without restarting, and doing so does not alter work already in flight.
 
 ## How the local components fit together
 
@@ -132,7 +134,7 @@ The workflow JSON files are bundled with the application, but their model files 
 
 Bundled pipelines load API-format workflow JSON from `backend/workflows/`, patch specific input and control nodes in `backend/app/pipelines/<pipeline>/workflow.py`, submit through MCP, and map known output nodes back into Director Studio. Because the current portable build is a one-file executable, bundled workflow files are read-only package resources and cannot be overridden beside `DirectorStudio.exe`.
 
-For a local H3 Ref2AV replacement in either Source or Portable, use **Settings -> Workflows -> H3** and complete Import API JSON -> Validate -> Test -> Activate. Director Studio discovers and maps the supported H3 boundary rather than requiring the official node IDs. This runtime profile flow is limited to `MiniMaxH3ReferenceToVideo` workflows.
+For a local H3 Ref2AV replacement in either Source or Portable, use **Settings -> Workflows -> H3** and complete Final Video Output -> H3 Inputs -> Validate & Test -> Use Workflow. Director Studio discovers the supported boundary instead of requiring official node IDs. The custom graph must contain an upstream `MiniMaxH3ReferenceToVideo` node and a terminal node that produces the final video.
 
 For a graph replacement in another pipeline that preserves the pipeline's exact node-ID/input/output contract:
 
@@ -148,7 +150,7 @@ For a new or incompatible graph:
 4. Add tests for graph validation, prompt injection, and output mapping.
 5. Rebuild with `pwsh -File scripts/build-legacy-portable.ps1`.
 
-Non-H3 custom-workflow overrides remain source-only in the current release. Portable supports H3 Ref2AV profile import through Settings, while the packaged official workflow remains a read-only fallback. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the pipeline contract and extension points.
+Non-H3 custom-workflow overrides remain source-only in the current release. Portable supports H3 Ref2AV workflow import through Settings, while the packaged official workflow remains a read-only fallback. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the pipeline contract and extension points.
 
 ## Replacing bundled generation workflows
 

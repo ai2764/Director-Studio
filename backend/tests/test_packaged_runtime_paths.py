@@ -20,10 +20,16 @@ WORKFLOW_ENTRIES = (
 )
 
 
+def test_removed_setup_agent_modules_cannot_enter_portable_build():
+    package = REPO_ROOT / "backend" / "app" / "workflow_profiles" / "h3"
+
+    assert not (package / "agent.py").exists()
+    assert not (package / "agent_prompt.py").exists()
+
+
 def _pyinstaller_listing(entries: str) -> str:
     return "\n".join(
-        f" 30303772, 4863, 26027, 1, 'b', '{entry}'"
-        for entry in entries.splitlines()
+        f" 30303772, 4863, 26027, 1, 'b', '{entry}'" for entry in entries.splitlines()
     )
 
 
@@ -33,7 +39,7 @@ def _write_fake_archive_viewer(tmp_path: Path, listing: str) -> dict[str, str]:
     listing_path = tmp_path / "archive-listing.txt"
     listing_path.write_text(listing, encoding="utf-8")
     (bin_dir / "py.cmd").write_text(
-        "@echo off\r\ntype \"%FAKE_ARCHIVE_LISTING%\"\r\n",
+        '@echo off\r\ntype "%FAKE_ARCHIVE_LISTING%"\r\n',
         encoding="utf-8",
     )
     env = os.environ.copy()

@@ -230,7 +230,7 @@ export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
   return (
     <div className="h3-workflow-setup" aria-busy={busy}>
       <aside className="workflow-profile-rail section-card" aria-labelledby="active-workflow-title">
-        <h2 id="active-workflow-title" className="section-card-title">Active H3 workflow</h2>
+        <h2 id="active-workflow-title" className="section-card-title">Current Workflow</h2>
         {profiles ? <>
           <strong className="workflow-profile-name">{profiles.active.display_name}</strong>
           <p className="field-hint">Local H3 jobs use this ComfyUI workflow.</p>
@@ -243,7 +243,7 @@ export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
           <button type="button" className="btn secondary" disabled={busy || selectedWorkflow === profiles.active.profile_id} onClick={() => void perform("selecting", async () => {
             const result = await selectH3Profile(selectedWorkflow);
             setProfiles({ ...profiles, active: result.active });
-          })}>Use workflow</button>
+          })}>Use Workflow</button>
           <details><summary>Workflow identity</summary><code className="workflow-hash">{profiles.active.workflow_sha256}</code></details>
           {profiles.active.warning ? <div className="banner" role="status">{profiles.active.warning.message}</div> : null}
         </> : <p className="field-hint">Loading active workflow…</p>}
@@ -252,9 +252,9 @@ export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
       <div className="workflow-setup-main">
         {error ? <div className="banner error" role="alert" tabIndex={-1} ref={errorRef}>{error}</div> : null}
         <section className="section-card" aria-labelledby="custom-h3-title">
-          <h2 id="custom-h3-title" className="section-card-title">Custom H3 workflow</h2>
+          <h2 id="custom-h3-title" className="section-card-title">Custom H3 Workflows</h2>
           <p className="field-hint">Import a ComfyUI API JSON. Director Studio leaves the internal graph unchanged and only connects its input and final-video boundaries.</p>
-          <label className="field"><span>Import API workflow</span><input type="file" accept=".json,application/json" disabled={busy} onChange={(event) => {
+          <label className="field"><span>Import Workflow</span><input type="file" accept=".json,application/json" disabled={busy} onChange={(event) => {
             const file = event.target.files?.[0];
             event.target.value = "";
             if (file) void perform("importing", async () => {
@@ -280,7 +280,7 @@ export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
         </section>
 
         <section className="section-card" aria-labelledby="inputs-title">
-          <h2 id="inputs-title" className="section-card-title">2. Director Studio inputs</h2>
+          <h2 id="inputs-title" className="section-card-title">2. H3 Inputs</h2>
           <p className="field-hint">After output selection, upstream H3 and optional seed nodes are discovered by reverse traversal.</p>
           {analysis && selectedOutput ? <>
             <label className="field"><span>H3 generation node</span><select aria-label="H3 generation node" value={mapping?.inputs.h3_node_id || ""} disabled={busy} onChange={(event) => {
@@ -302,7 +302,7 @@ export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
         </section>
 
         <section className="section-card" aria-labelledby="test-title">
-          <div className="section-card-head"><h2 id="test-title" className="section-card-title">3. Validate and test</h2><span role="status" aria-live="polite">{busy ? `${operation}…` : STATUS_LABELS[stage]}</span></div>
+          <div className="section-card-head"><h2 id="test-title" className="section-card-title">3. Validate &amp; Test</h2><span role="status" aria-live="polite">{busy ? `${operation}…` : STATUS_LABELS[stage]}</span></div>
           <p className="field-hint">ComfyUI validates the graph, then a 56-frame test confirms the selected boundary. Multiple videos can be previewed and selected without rerunning.</p>
           <button type="button" className="btn secondary" disabled={!canValidate} onClick={() => analysis && void perform("validating", async () => {
             await validateH3Import(analysis.import_id);
@@ -310,7 +310,7 @@ export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
           })}>Validate with ComfyUI</button>
           <div className="workflow-test-assets">
             <label className="field"><span>Picture for test</span><select value={picture} disabled={busy} onChange={(event) => setPicture(event.target.value)}><option value="">Choose one Picture…</option>{pictures.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select></label>
-            <label className="field"><span>Audio for test (optional)</span><select value={voice} disabled={busy || !mapping?.inputs.audio_input_pattern} onChange={(event) => setVoice(event.target.value)}><option value="">No Audio reference</option>{voices.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select></label>
+            <label className="field"><span>Voice for test (optional standalone Audio)</span><select value={voice} disabled={busy || !mapping?.inputs.audio_input_pattern} onChange={(event) => setVoice(event.target.value)}><option value="">No Audio reference</option>{voices.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select></label>
           </div>
           <div className="actions">
             <button type="button" className="btn secondary" disabled={!projectId || busy} onClick={() => setAssetRefresh((value) => value + 1)}>Refresh assets</button>
@@ -329,7 +329,7 @@ export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
             const result = await activateH3Import(analysis.import_id);
             const next = await fetchH3Profiles();
             setProfiles({ ...next, active: result.active }); setSelectedWorkflow(result.active.profile_id); setStage("active");
-          })}>Activate workflow</button>{test && error ? <button type="button" className="btn secondary" onClick={() => { setError(null); setPollVersion((value) => value + 1); }}>Check test status</button> : null}</div>
+          })}>Use Workflow</button>{test && error ? <button type="button" className="btn secondary" onClick={() => { setError(null); setPollVersion((value) => value + 1); }}>Check test status</button> : null}</div>
         </section>
       </div>
     </div>

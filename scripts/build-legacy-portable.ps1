@@ -45,6 +45,8 @@ try {
         tests/test_portable_tools_installer.py `
         tests/test_director_model_runtime.py `
         tests/test_llm_provider.py `
+        tests/test_packaged_runtime_paths.py `
+        tests/test_portable_runtime_paths.py `
         -q
     if ($LASTEXITCODE -ne 0) { throw "backend packaging tests failed" }
     py -m PyInstaller --version

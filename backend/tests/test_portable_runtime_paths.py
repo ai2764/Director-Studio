@@ -28,17 +28,27 @@ import sys
 sys.path.insert(0, {str(bundle_root)!r})
 sys.frozen = True
 sys._MEIPASS = {str(bundle_root)!r}
-sys.executable = {str(install_root / 'DirectorStudio.exe')!r}
+sys.executable = {str(install_root / "DirectorStudio.exe")!r}
 from app.runtime_paths import runtime_paths
 from app.config import settings
 from app.workflow_profiles.h3.store import H3ProfileStore
+from app.workflow_profiles.h3.models import H3WorkflowProfile
 resolved = H3ProfileStore().resolve_active()
+metadata = H3WorkflowProfile(
+    id=resolved.profile_id,
+    workflow_sha256=resolved.workflow_sha256,
+    mapping=resolved.mapping,
+    status='active',
+)
 print(json.dumps({{
     'bundle_root': str(runtime_paths.bundle_root),
     'data_root': str(runtime_paths.data_root),
     'workflows_dir': str(settings.workflows_dir),
     'profile_id': resolved.profile_id,
     'source': resolved.source,
+    'contract_version': metadata.contract_version,
+    'h3_node_id': resolved.mapping.inputs.h3_node_id,
+    'output_node_id': resolved.mapping.output.node_id,
 }}))
 """
     env = {
@@ -64,5 +74,10 @@ print(json.dumps({{
         "workflows_dir": str(bundle_root / "workflows"),
         "profile_id": "builtin-official-h3",
         "source": "builtin",
+        "contract_version": 2,
+        "h3_node_id": "136",
+        "output_node_id": "92",
     }
-    assert not (install_root / "data" / "workflow_profiles" / "h3" / "active.json").exists()
+    assert not (
+        install_root / "data" / "workflow_profiles" / "h3" / "active.json"
+    ).exists()
