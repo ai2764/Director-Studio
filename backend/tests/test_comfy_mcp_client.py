@@ -5,7 +5,6 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
-
 from app.config import settings
 from app.integrations.comfy_mcp import (
     ComfyMcpClient,
@@ -184,6 +183,68 @@ async def test_submit_workflow_validates_before_queueing_and_removes_temp_graph(
     assert not workflow_paths[0].exists()
     assert session.calls[1][1]["wait"] is False
     assert session.calls[1][1]["confirm_spend"] is False
+
+
+@pytest.mark.asyncio
+async def test_submit_workflow_repairs_new_save_video_dynamic_codec_before_queueing():
+    submitted_graphs: list[dict] = []
+
+    def capture_graph(_name: str, arguments: dict):
+        submitted_graphs.append(
+            json.loads(Path(arguments["workflow_path"]).read_text(encoding="utf-8"))
+        )
+        if len(submitted_graphs) == 1:
+            return _result(
+                {
+                    "valid": False,
+                    "error_count": 1,
+                    "errors": [
+                        {
+                            "node_id": "92",
+                            "field": "format.codec",
+                            "code": "required_input_missing",
+                            "message": (
+                                "required dynamic-combo input 'format.codec' is missing"
+                            ),
+                        }
+                    ],
+                }
+            )
+        if len(submitted_graphs) == 2:
+            return _result({"valid": True, "error_count": 0, "warnings": []})
+        return _result({"status": "queued", "prompt_id": "prompt_new_comfy"})
+
+    session = FakeToolSession([capture_graph, capture_graph, capture_graph])
+    client = ComfyMcpClient(session=session)
+    original = {
+        "92": {
+            "class_type": "SaveVideo",
+            "inputs": {
+                "video": ["130", 0],
+                "filename_prefix": "video/MiniMax_H3",
+                "format": "auto",
+                "codec": "auto",
+            },
+        }
+    }
+
+    prompt_id = await client.submit_workflow(original)
+
+    assert prompt_id == "prompt_new_comfy"
+    assert [name for name, _ in session.calls] == [
+        "validate_workflow",
+        "validate_workflow",
+        "run_workflow",
+    ]
+    assert submitted_graphs[0]["92"]["inputs"] == {
+        "video": ["130", 0],
+        "filename_prefix": "video/MiniMax_H3",
+        "format": "auto",
+        "codec": "auto",
+    }
+    assert submitted_graphs[1]["92"]["inputs"]["format.codec"] == "auto"
+    assert submitted_graphs[2] == submitted_graphs[1]
+    assert "format.codec" not in original["92"]["inputs"]
 
 
 @pytest.mark.asyncio
