@@ -85,11 +85,14 @@ def _import_ready_profile(store: H3ProfileStore) -> str:
     )
     graph["999"] = graph.pop("92")
     import_id = store.create_import(graph)
-    mapping = inspect_h3_workflow(graph).mapping
+    store.save_import_output(import_id, "999")
+    mapping = inspect_h3_workflow(graph, output_node_id="999").mapping
     assert mapping is not None
     assert mapping.saver_node_id == "999"
     store.save_import_mapping(import_id, mapping)
     workflow_sha256, mapping_sha256 = store.import_identity(import_id)
+    mapping = store.load_import_mapping(import_id)
+    assert mapping is not None
     store.record_validation_success(
         import_id,
         workflow_sha256=workflow_sha256,
@@ -102,6 +105,8 @@ def _import_ready_profile(store: H3ProfileStore) -> str:
 
 def _profile_test_job(store: H3ProfileStore, import_id: str):
     workflow_sha256, mapping_sha256 = store.import_identity(import_id)
+    mapping = store.load_import_mapping(import_id)
+    assert mapping is not None
     job = create_job(
         pipeline_id="h3_ref2va",
         asset_kind="productions",
@@ -112,6 +117,7 @@ def _profile_test_job(store: H3ProfileStore, import_id: str):
             "h3_profile_import_id": import_id,
             "h3_profile_test_workflow_sha256": workflow_sha256,
             "h3_profile_test_mapping_sha256": mapping_sha256,
+            "h3_profile_test_boundary_sha256": store.boundary_sha256(mapping),
         },
         seed=42,
         fixed_seed=True,
@@ -172,17 +178,24 @@ def test_linked_test_job_metadata_cannot_authorize_activation(
 
 
 class _CompletedTestClient:
-    def __init__(self, cancel_event: asyncio.Event | None = None, *, phase: str = ""):
+    def __init__(
+        self,
+        cancel_event: asyncio.Event | None = None,
+        *,
+        phase: str = "",
+        outputs_by_node: dict[str, list[str]] | None = None,
+    ):
         self.cancel_event = cancel_event
         self.phase = phase
+        self.outputs_by_node = outputs_by_node or {
+            "999": ["http://comfy/view?filename=test.mp4&subfolder=&type=output"]
+        }
 
     async def wait_for_completion(self, prompt_id, *, cancel_event):
         assert prompt_id == "prompt_profile_test"
         return {
             "status": "completed",
-            "outputs_by_node": {
-                "999": ["http://comfy/view?filename=test.mp4&subfolder=&type=output"]
-            },
+            "outputs_by_node": self.outputs_by_node,
         }
 
     async def fetch_outputs(self, prompt_id):
@@ -197,11 +210,12 @@ class _CompletedTestClient:
             self.cancel_event.set()
         return [
             McpOutputFile(
-                filename="downloaded.mp4",
-                source_url=(
-                    "http://comfy/view?filename=test.mp4&subfolder=&type=output"
-                ),
-                data=b"mapped-video",
+                filename=f"downloaded-{index}.mp4",
+                source_url=url,
+                data=f"mapped-video-{index}".encode(),
+            )
+            for index, url in enumerate(
+                url for urls in self.outputs_by_node.values() for url in urls
             )
         ]
 
@@ -419,6 +433,8 @@ def test_activation_rejects_evidence_for_non_succeeded_job(
     store = H3ProfileStore()
     import_id = _import_ready_profile(store)
     workflow_sha256, mapping_sha256 = store.import_identity(import_id)
+    mapping = store.load_import_mapping(import_id)
+    assert mapping is not None
     if status is None:
         job_id = "job_missing_test_evidence"
     else:
@@ -434,9 +450,10 @@ def test_activation_rejects_evidence_for_non_succeeded_job(
         json.dumps(
             {
                 "status": "succeeded",
-                "contract_version": 1,
+                "contract_version": 2,
                 "workflow_sha256": workflow_sha256,
                 "mapping_sha256": mapping_sha256,
+                "boundary_sha256": store.boundary_sha256(mapping),
                 "job_id": job_id,
             }
         ),
@@ -490,11 +507,76 @@ async def test_mapped_test_video_records_same_identity_and_allows_activation(
         )
     )
     assert record["status"] == "succeeded"
-    assert record["contract_version"] == 1
+    assert record["contract_version"] == 2
     assert record["workflow_sha256"] == job.params["h3_profile_test_workflow_sha256"]
-    assert record["mapping_sha256"] == job.params["h3_profile_test_mapping_sha256"]
+    assert record["boundary_sha256"] == job.params["h3_profile_test_boundary_sha256"]
+    assert record["artifact_index"] == 0
     assert record["job_id"] == job.id
     assert profile.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_profile_test_keeps_all_videos_from_confirmed_output_node_only(
+    test_env: Path,
+) -> None:
+    store = H3ProfileStore()
+    import_id = _import_ready_profile(store)
+    job = _profile_test_job(store, import_id)
+    other = "http://comfy/view?filename=wrong.mp4&subfolder=&type=output"
+    first = "http://comfy/view?filename=first.mp4&subfolder=&type=output"
+    second = "http://comfy/view?filename=second.mp4&subfolder=&type=output"
+
+    await ComfyMcpExecutionAdapter().resume(
+        job,
+        H3Ref2VaPipeline(),
+        asyncio.Event(),
+        _runtime(
+            _CompletedTestClient(
+                outputs_by_node={"777": [other], "999": [first, second]}
+            )
+        ),
+    )
+
+    terminal = load_job(job.id)
+    assert terminal is not None
+    assert terminal.status == JobStatus.succeeded
+    assert list(terminal.outputs) == ["video_candidate_0", "video_candidate_1"]
+    pending = json.loads(
+        (store.import_workflow_path(import_id).parent / "test.json").read_text()
+    )
+    assert pending["status"] == "awaiting_selection"
+    assert [item["artifact_index"] for item in pending["candidates"]] == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_selecting_observed_test_video_does_not_rerun_and_allows_activation(
+    test_env: Path,
+) -> None:
+    store = H3ProfileStore()
+    import_id = _import_ready_profile(store)
+    job = _profile_test_job(store, import_id)
+    first = "http://comfy/view?filename=first.mp4&subfolder=&type=output"
+    second = "http://comfy/view?filename=second.mp4&subfolder=&type=output"
+    await ComfyMcpExecutionAdapter().resume(
+        job,
+        H3Ref2VaPipeline(),
+        asyncio.Event(),
+        _runtime(_CompletedTestClient(outputs_by_node={"999": [first, second]})),
+    )
+
+    with TestClient(create_app()) as client:
+        response = client.put(
+            f"/api/workflow-profiles/h3/imports/{import_id}/test-output",
+            json={"artifact_index": 1},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["artifact_index"] == 1
+    mapping = store.load_import_mapping(import_id)
+    assert mapping is not None
+    assert mapping.output.artifact_index == 1
+    assert store.import_lifecycle(import_id)["status"] == "tested"
+    assert store.activate_import(import_id).mapping.output.artifact_index == 1
 
 
 def test_test_result_is_not_recorded_without_a_downloaded_mapped_video(

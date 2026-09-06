@@ -159,6 +159,42 @@ class H3ProfileStore:
                     "Could not invalidate stale workflow profile evidence"
                 ) from exc
 
+    def save_import_artifact_index(
+        self, import_id: str, artifact_index: int
+    ) -> H3BoundaryMapping:
+        """Select an observed output without invalidating graph validation."""
+        if (
+            not isinstance(artifact_index, int)
+            or isinstance(artifact_index, bool)
+            or artifact_index < 0
+        ):
+            raise ProfileStorageError(
+                "A non-negative output artifact index is required"
+            )
+        directory = self._require_existing_import(import_id)
+        mapping = self.load_import_mapping(import_id)
+        if mapping is None:
+            raise ProfileStateError(
+                "mapping_required", "A workflow mapping is required"
+            )
+        selected = mapping.model_copy(
+            update={
+                "output": mapping.output.model_copy(
+                    update={"artifact_index": artifact_index}
+                )
+            }
+        )
+        if self.boundary_sha256(selected) != self.boundary_sha256(mapping):
+            raise ProfileChangedError("Output selection changed the workflow boundary")
+        self._atomic_write_json(
+            directory / _MAPPING_FILE, selected.model_dump(mode="json")
+        )
+        validation = self._optional_record(directory / _VALIDATION_FILE)
+        if validation is not None:
+            validation["mapping_sha256"] = self.mapping_sha256(selected)
+            self._atomic_write_json(directory / _VALIDATION_FILE, validation)
+        return selected
+
     def load_import_mapping(self, import_id: str) -> H3BoundaryMapping | None:
         """Load the selected mapping, or return none before one is accepted."""
         path = self._safe_path(self._require_existing_import(import_id) / _MAPPING_FILE)
@@ -227,6 +263,8 @@ class H3ProfileStore:
         workflow_sha256: str,
         mapping_sha256: str,
         job_id: str,
+        boundary_sha256: str | None = None,
+        artifact_index: int | None = None,
     ) -> dict[str, Any]:
         """Persist evidence only for an already durable successful test job."""
         directory = self._require_existing_import(import_id)
@@ -240,16 +278,43 @@ class H3ProfileStore:
             raise ProfileChangedError(
                 "Imported workflow or mapping changed during test execution"
             )
-        self._require_successful_test_job(
+        boundary_sha256 = boundary_sha256 or self.boundary_sha256(
+            self.load_import_mapping(import_id)
+        )
+        job = self._require_successful_test_job(
             import_id=import_id,
             workflow_sha256=workflow_sha256,
             mapping_sha256=mapping_sha256,
+            boundary_sha256=boundary_sha256,
             job_id=job_id,
         )
-        if self.import_identity(import_id) != (
-            workflow_sha256,
-            mapping_sha256,
-        ):
+        candidates = self._test_video_candidates(job)
+        if artifact_index is None and len(candidates) == 1:
+            artifact_index = 0
+        if artifact_index is None:
+            record = {
+                "status": "awaiting_selection",
+                "contract_version": 2,
+                "workflow_sha256": workflow_sha256,
+                "mapping_sha256": mapping_sha256,
+                "boundary_sha256": boundary_sha256,
+                "job_id": job_id,
+                "candidates": candidates,
+            }
+            self._atomic_write_json(directory / _TEST_FILE, record)
+            return record
+        if artifact_index >= len(candidates):
+            raise ProfileStateError(
+                "test_output_required",
+                "The selected test video output does not exist",
+                details={
+                    "artifact_index": artifact_index,
+                    "candidate_count": len(candidates),
+                },
+            )
+        selected_mapping = self.save_import_artifact_index(import_id, artifact_index)
+        selected_mapping_sha256 = self.mapping_sha256(selected_mapping)
+        if self.import_workflow_sha256(import_id) != workflow_sha256:
             raise ProfileChangedError(
                 "Imported workflow or mapping changed during test execution"
             )
@@ -257,12 +322,34 @@ class H3ProfileStore:
             "status": "succeeded",
             "contract_version": 2,
             "workflow_sha256": workflow_sha256,
-            "mapping_sha256": mapping_sha256,
+            "mapping_sha256": selected_mapping_sha256,
+            "boundary_sha256": boundary_sha256,
             "job_id": job_id,
+            "artifact_index": artifact_index,
+            "candidates": candidates,
             "tested_at": datetime.now(UTC).isoformat(),
         }
         self._atomic_write_json(directory / _TEST_FILE, record)
         return record
+
+    def select_test_output(self, import_id: str, artifact_index: int) -> dict[str, Any]:
+        """Finalize an awaiting setup test using one observed candidate."""
+        directory = self._require_existing_import(import_id)
+        pending = self._optional_record(directory / _TEST_FILE)
+        if pending is None or pending.get("status") != "awaiting_selection":
+            raise ProfileStateError(
+                "test_output_required",
+                "No completed H3 workflow test is awaiting output selection",
+                details={"import_id": import_id},
+            )
+        return self.record_test_success(
+            import_id,
+            workflow_sha256=pending.get("workflow_sha256"),
+            mapping_sha256=pending.get("mapping_sha256"),
+            boundary_sha256=pending.get("boundary_sha256"),
+            job_id=pending.get("job_id"),
+            artifact_index=artifact_index,
+        )
 
     def activate_import(self, import_id: str) -> H3WorkflowProfile:
         """Install and select an import only with same-identity validation/test proof."""
@@ -313,6 +400,7 @@ class H3ProfileStore:
             import_id=import_id,
             workflow_sha256=workflow_sha256,
             mapping_sha256=mapping_sha256,
+            boundary_sha256=test_record.get("boundary_sha256"),
             job_id=test_record["job_id"],
         )
         if self.import_identity(import_id) != (
@@ -460,6 +548,7 @@ class H3ProfileStore:
                 import_id=import_id,
                 workflow_sha256=workflow_sha256,
                 mapping_sha256=mapping_sha256,
+                boundary_sha256=test.get("boundary_sha256"),
                 job_id=test.get("job_id"),
             )
             if self.import_identity(import_id) != (workflow_sha256, mapping_sha256):
@@ -539,6 +628,7 @@ class H3ProfileStore:
         import_id: str,
         workflow_sha256: str,
         mapping_sha256: str,
+        boundary_sha256: str | None = None,
         job_id: str,
     ) -> JobRecord:
         """Verify activation evidence against the authoritative durable job."""
@@ -583,7 +673,14 @@ class H3ProfileStore:
             params.get("h3_profile_id") != import_id
             or params.get("h3_profile_sha256") != workflow_sha256
             or params.get("h3_profile_test_workflow_sha256") != workflow_sha256
-            or params.get("h3_profile_test_mapping_sha256") != mapping_sha256
+            or (
+                boundary_sha256 is None
+                and params.get("h3_profile_test_mapping_sha256") != mapping_sha256
+            )
+            or (
+                boundary_sha256 is not None
+                and params.get("h3_profile_test_boundary_sha256") != boundary_sha256
+            )
         ):
             raise ProfileChangedError(
                 "H3 profile test job identity does not match its evidence"
@@ -599,40 +696,67 @@ class H3ProfileStore:
         if (
             snapshot.profile_id != import_id
             or snapshot.workflow_sha256 != workflow_sha256
-            or self.mapping_sha256(snapshot.mapping) != mapping_sha256
+            or (
+                boundary_sha256 is None
+                and self.mapping_sha256(snapshot.mapping) != mapping_sha256
+            )
+            or (
+                boundary_sha256 is not None
+                and self.boundary_sha256(snapshot.mapping) != boundary_sha256
+            )
         ):
             raise ProfileChangedError(
                 "H3 profile test job snapshot does not match its evidence"
             )
 
-        video = (job.outputs or {}).get("video")
-        filename = video.filename if video is not None else None
-        if (
-            video is None
-            or not isinstance(filename, str)
-            or Path(filename).name != filename
-            or Path(filename).suffix.lower() not in {".mp4", ".webm", ".mov", ".mkv"}
-        ):
+        candidates = self._test_video_candidates(job)
+        if not candidates:
             raise ProfileStateError(
                 "test_required",
                 "The referenced H3 profile test job has no mapped video output",
                 details={"import_id": import_id, "job_id": job_id},
             )
-        output_path = self._safe_path(job_dir(job_id) / "outputs" / filename)
-        expected_url = f"/api/files/jobs/{job_id}/outputs/{filename}"
-        if (
-            not output_path.is_file()
-            or output_path.stat().st_size <= 0
-            or not video.path
-            or Path(video.path).resolve() != output_path
-            or video.url != expected_url
-        ):
-            raise ProfileStateError(
-                "test_required",
-                "The referenced H3 profile test job video is unavailable",
-                details={"import_id": import_id, "job_id": job_id},
-            )
         return job
+
+    def _test_video_candidates(self, job: JobRecord) -> list[dict[str, Any]]:
+        """Return durable test videos in MCP-observed artifact order."""
+        from app.core.jobs.store import job_dir
+
+        candidates: list[dict[str, Any]] = []
+        outputs = job.outputs or {}
+        for index in range(len(outputs)):
+            key = f"video_candidate_{index}"
+            video = outputs.get(key)
+            if video is None and len(outputs) == 1 and index == 0:
+                video = outputs.get("video")
+            if video is None:
+                break
+            filename = video.filename
+            if (
+                not isinstance(filename, str)
+                or Path(filename).name != filename
+                or Path(filename).suffix.lower()
+                not in {".mp4", ".webm", ".mov", ".mkv"}
+            ):
+                continue
+            output_path = self._safe_path(job_dir(job.id) / "outputs" / filename)
+            expected_url = f"/api/files/jobs/{job.id}/outputs/{filename}"
+            if (
+                output_path.is_file()
+                and output_path.stat().st_size > 0
+                and video.path
+                and Path(video.path).resolve() == output_path
+                and video.url == expected_url
+            ):
+                candidates.append(
+                    {
+                        "artifact_index": index,
+                        "key": key,
+                        "filename": filename,
+                        "url": video.url,
+                    }
+                )
+        return candidates
 
     def install_profile(
         self,

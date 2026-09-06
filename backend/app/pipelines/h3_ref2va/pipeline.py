@@ -71,15 +71,22 @@ class H3Ref2VaPipeline(Pipeline):
         import_id = params.get("h3_profile_import_id")
         workflow_sha256 = params.get("h3_profile_test_workflow_sha256")
         mapping_sha256 = params.get("h3_profile_test_mapping_sha256")
+        boundary_sha256 = params.get("h3_profile_test_boundary_sha256")
         if not all(
             isinstance(value, str) and value
-            for value in (import_id, workflow_sha256, mapping_sha256)
+            for value in (
+                import_id,
+                workflow_sha256,
+                mapping_sha256,
+                boundary_sha256,
+            )
         ):
             raise ValueError("H3 profile test job has no captured import identity")
         H3ProfileStore().record_test_success(
             import_id,
             workflow_sha256=workflow_sha256,
             mapping_sha256=mapping_sha256,
+            boundary_sha256=boundary_sha256,
             job_id=job.id,
         )
 
@@ -455,6 +462,13 @@ class H3Ref2VaPipeline(Pipeline):
         job: JobRecord | None = None,
     ) -> dict[str, ComfyImageRef]:
         profile = self._profile_for_job(job) if job is not None else None
+        if job is not None and bool((job.params or {}).get("h3_profile_test")):
+            return {
+                f"video_candidate_{index}": candidate
+                for index, candidate in enumerate(
+                    workflow.map_history_output_candidates(history, profile=profile)
+                )
+            }
         return workflow.map_history_outputs(history, profile=profile)
 
     def library_input_keys(self) -> list[str]:

@@ -51,6 +51,10 @@ class TestProfileRequest(_StrictModel):
     )
 
 
+class SelectTestOutputRequest(_StrictModel):
+    artifact_index: int = Field(ge=0)
+
+
 _TEST_PROMPT = """subject_definitions:
 <Picture 1> defines the subject and visual identity for the whole clip.{audio_binding}
 summary:
@@ -500,6 +504,7 @@ async def test_h3_import(
             "h3_profile_import_id": import_id,
             "h3_profile_test_workflow_sha256": workflow_sha256,
             "h3_profile_test_mapping_sha256": mapping_sha256,
+            "h3_profile_test_boundary_sha256": store.boundary_sha256(mapping),
             "prompt": _TEST_PROMPT.format(audio_binding=audio_binding),
             "dialogue": [],
             "frames": 56,
@@ -529,6 +534,26 @@ async def test_h3_import(
         "workflow_sha256": workflow_sha256,
         "mapping_sha256": mapping_sha256,
         "status": "queued",
+    }
+
+
+@router.put("/imports/{import_id:path}/test-output", response_model=None)
+def select_h3_test_output(
+    import_id: str,
+    body: SelectTestOutputRequest,
+) -> dict[str, Any] | JSONResponse:
+    """Choose one already-generated setup-test video without rerunning Comfy."""
+    store = H3ProfileStore()
+    try:
+        record = store.select_test_output(import_id, body.artifact_index)
+    except ProfileStorageError as exc:
+        return _store_error(exc)
+    return {
+        "import_id": import_id,
+        "artifact_index": record["artifact_index"],
+        "job_id": record["job_id"],
+        "status": record["status"],
+        "lifecycle": store.import_lifecycle(import_id),
     }
 
 

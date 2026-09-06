@@ -51,10 +51,12 @@ def _load_graph(graph: object) -> dict[str, Any]:
         raise TypeError("workflow must be a JSON object")
     normalized = {str(node_id): node for node_id, node in graph.items()}
     if len(normalized) != len(graph):
-        raise ValueError("workflow contains duplicate node IDs after string normalization")
-    encoded = json.dumps(
-        normalized, ensure_ascii=False, separators=(",", ":")
-    ).encode("utf-8")
+        raise ValueError(
+            "workflow contains duplicate node IDs after string normalization"
+        )
+    encoded = json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
     if len(encoded) > MAX_WORKFLOW_BYTES:
         raise ValueError("workflow exceeds the 8 MiB limit")
     if len(normalized) > MAX_NODES:
@@ -147,7 +149,9 @@ def _title(node: object) -> str:
     return "" if _ABSOLUTE_PATH.match(value) else value
 
 
-def _metadata(class_type: str, object_info: Mapping[str, Any] | None) -> Mapping[str, Any]:
+def _metadata(
+    class_type: str, object_info: Mapping[str, Any] | None
+) -> Mapping[str, Any]:
     value = object_info.get(class_type) if object_info else None
     return value if isinstance(value, Mapping) else {}
 
@@ -345,7 +349,11 @@ def _inspect_h3_workflow(
         )
 
     selected = next(
-        (candidate for candidate in output_candidates if candidate.node_id == output_node_id),
+        (
+            candidate
+            for candidate in output_candidates
+            if candidate.node_id == output_node_id
+        ),
         None,
     )
     if selected is None:
@@ -399,7 +407,11 @@ def _inspect_h3_workflow(
     else:
         h3_id = h3_candidates[0].node_id
         h3_inputs = normalized[h3_id]["inputs"]
-        missing = [name for name in ("prompt", "width", "height", "length") if name not in h3_inputs]
+        missing = [
+            name
+            for name in ("prompt", "width", "height", "length")
+            if name not in h3_inputs
+        ]
         for input_name in missing:
             issues.append(
                 H3AnalysisIssue(
@@ -422,11 +434,10 @@ def _inspect_h3_workflow(
                     height_input="height",
                     frames_input="length",
                     picture_input_pattern="ref_images.ref_image_{index}",
-                    audio_input_pattern=(
-                        "ref_audios.ref_audio_{index}"
-                        if any(str(name).startswith("ref_audios.") for name in h3_inputs)
-                        else None
-                    ),
+                    # Comfy's dynamic Ref2AV sockets are not serialized until a
+                    # reference is connected, so absence from the API graph does
+                    # not mean the H3 node lacks standalone-audio support.
+                    audio_input_pattern="ref_audios.ref_audio_{index}",
                     seed_node_id=seed.node_id if seed else None,
                     seed_input="noise_seed" if seed else None,
                 ),
