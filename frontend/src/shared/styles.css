@@ -43,6 +43,8 @@
 .h3-workflow-setup .banner, .production-workflow-profile .banner { display: grid; gap: 6px; }
 .workflow-test-result { margin-top: 20px; border-top: 1px solid var(--border); }
 .workflow-test-result video { width: 100%; max-height: 500px; margin-top: 8px; }
+.workflow-test-candidate { display: grid; gap: 10px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.workflow-test-candidate .btn { justify-self: start; }
 .production-workflow-profile { display: grid; gap: 6px; margin-bottom: 18px; color: var(--muted); }
 .production-workflow-profile > span { color: var(--text); font-weight: 600; }
 .production-workflow-profile > small { font-size: .8rem; }

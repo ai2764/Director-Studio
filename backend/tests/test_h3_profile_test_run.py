@@ -88,7 +88,7 @@ def _import_ready_profile(store: H3ProfileStore) -> str:
     store.save_import_output(import_id, "999")
     mapping = inspect_h3_workflow(graph, output_node_id="999").mapping
     assert mapping is not None
-    assert mapping.saver_node_id == "999"
+    assert mapping.output.node_id == "999"
     store.save_import_mapping(import_id, mapping)
     workflow_sha256, mapping_sha256 = store.import_identity(import_id)
     mapping = store.load_import_mapping(import_id)
@@ -321,7 +321,7 @@ def test_test_run_creates_isolated_56_frame_local_h3_job(
 
     snapshot = load_job_profile_snapshot(job.id)
     assert snapshot.profile_id == import_id
-    assert snapshot.mapping.saver_node_id == "999"
+    assert snapshot.mapping.output.node_id == "999"
     assert job.params["h3_profile_sha256"] == snapshot.workflow_sha256
     assert job.params["h3_profile_test_workflow_sha256"] == snapshot.workflow_sha256
     assert job.params["h3_profile_test_mapping_sha256"] == store.mapping_sha256(
@@ -546,6 +546,29 @@ async def test_profile_test_keeps_all_videos_from_confirmed_output_node_only(
     )
     assert pending["status"] == "awaiting_selection"
     assert [item["artifact_index"] for item in pending["candidates"]] == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_profile_test_fails_when_only_an_unselected_node_emits_video(
+    test_env: Path,
+) -> None:
+    store = H3ProfileStore()
+    import_id = _import_ready_profile(store)
+    job = _profile_test_job(store, import_id)
+    other = "http://comfy/view?filename=wrong.mp4&subfolder=&type=output"
+
+    await ComfyMcpExecutionAdapter().resume(
+        job,
+        H3Ref2VaPipeline(),
+        asyncio.Event(),
+        _runtime(_CompletedTestClient(outputs_by_node={"777": [other]})),
+    )
+
+    terminal = load_job(job.id)
+    assert terminal is not None
+    assert terminal.status == JobStatus.failed
+    assert "mapped outputs" in (terminal.error or "")
+    assert not (store.import_workflow_path(import_id).parent / "test.json").exists()
 
 
 @pytest.mark.asyncio

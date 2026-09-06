@@ -28,7 +28,7 @@ class H3InputMapping(_StrictModel):
     seed_input: StrictStr | None = None
 
     @model_validator(mode="after")
-    def validate_seed_pair(self) -> "H3InputMapping":
+    def validate_seed_pair(self) -> H3InputMapping:
         if (self.seed_node_id is None) != (self.seed_input is None):
             raise ValueError("seed_node_id and seed_input must be set together")
         return self
@@ -46,56 +46,6 @@ class H3BoundaryMapping(_StrictModel):
 
     inputs: H3InputMapping
     output: H3OutputSelection
-
-    # Transitional read-only aliases keep existing runtime call sites operational
-    # while Tasks 2-3 move graph analysis and filling to the nested contract.
-    @property
-    def h3_node_id(self) -> str:
-        return self.inputs.h3_node_id
-
-    @property
-    def prompt_input(self) -> str:
-        return self.inputs.prompt_input
-
-    @property
-    def width_input(self) -> str:
-        return self.inputs.width_input
-
-    @property
-    def height_input(self) -> str:
-        return self.inputs.height_input
-
-    @property
-    def frames_input(self) -> str:
-        return self.inputs.frames_input
-
-    @property
-    def picture_input_pattern(self) -> str:
-        return self.inputs.picture_input_pattern
-
-    @property
-    def audio_input_pattern(self) -> str | None:
-        return self.inputs.audio_input_pattern
-
-    @property
-    def seed_node_id(self) -> str | None:
-        return self.inputs.seed_node_id
-
-    @property
-    def seed_input(self) -> str | None:
-        return self.inputs.seed_input
-
-    @property
-    def saver_node_id(self) -> str:
-        return self.output.node_id
-
-    @property
-    def output_prefix_input(self) -> str:
-        return "filename_prefix"
-
-    @property
-    def output_fields(self) -> tuple[str, ...]:
-        return ("videos",)
 
 
 class H3WorkflowProfile(_StrictModel):
@@ -149,11 +99,8 @@ class H3WorkflowAnalysis(_StrictModel):
     output_candidates: tuple[H3NodeCandidate, ...] = ()
     h3_candidates: tuple[H3NodeCandidate, ...] = ()
     seed_candidates: tuple[H3NodeCandidate, ...] = ()
-    # Transitional fields disappear with the setup-agent API in Task 4.
-    saver_candidates: tuple[H3NodeCandidate, ...] = ()
     fixed_dependencies: tuple[H3FixedDependency, ...] = ()
     issues: tuple[H3AnalysisIssue, ...] = ()
-    agent_manifest: dict[str, Any] = Field(default_factory=lambda: {"nodes": []})
 
 
 class H3ValidationIssue(_StrictModel):

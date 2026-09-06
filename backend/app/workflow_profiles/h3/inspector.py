@@ -301,7 +301,6 @@ def _inspect_h3_workflow(
         return H3WorkflowAnalysis(
             compatibility="unsupported",
             issues=tuple(issues),
-            agent_manifest={"nodes": []},
         )
 
     outgoing, incoming, _links = _graph_edges(normalized)
@@ -343,9 +342,7 @@ def _inspect_h3_workflow(
         return H3WorkflowAnalysis(
             compatibility=compatibility,
             output_candidates=tuple(output_candidates),
-            saver_candidates=tuple(output_candidates),
             issues=tuple(issues),
-            agent_manifest={"nodes": []},
         )
 
     selected = next(
@@ -368,9 +365,7 @@ def _inspect_h3_workflow(
         return H3WorkflowAnalysis(
             compatibility="unsupported",
             output_candidates=tuple(output_candidates),
-            saver_candidates=tuple(output_candidates),
             issues=tuple(issues),
-            agent_manifest={"nodes": []},
         )
 
     upstream = _ancestors(output_node_id, incoming)
@@ -453,10 +448,8 @@ def _inspect_h3_workflow(
         output_candidates=tuple(output_candidates),
         h3_candidates=tuple(h3_candidates),
         seed_candidates=tuple(seed_candidates),
-        saver_candidates=tuple(output_candidates),
         fixed_dependencies=_fixed_dependencies(normalized, upstream),
         issues=tuple(issues),
-        agent_manifest={"nodes": []},
     )
 
 
@@ -482,7 +475,6 @@ def inspect_h3_workflow(
     return H3WorkflowAnalysis(
         compatibility="unsupported",
         issues=(H3AnalysisIssue(code="invalid_structure", message=message),),
-        agent_manifest={"nodes": []},
     )
 
 
