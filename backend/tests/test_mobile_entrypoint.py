@@ -11,7 +11,7 @@ def test_mobile_path_serves_the_spa_entrypoint(tmp_path, monkeypatch):
         '<!doctype html><div id="root"></div>',
         encoding="utf-8",
     )
-    monkeypatch.setattr(settings, "project_root", tmp_path)
+    monkeypatch.setattr(settings, "frontend_dist", frontend_dist)
 
     with TestClient(create_app()) as client:
         response = client.get("/mobile")
