@@ -35,6 +35,10 @@ vi.mock("../shared/project/ProjectPicker", () => ({
   ProjectPicker: () => <div data-testid="project-picker" />,
 }));
 
+vi.mock("../features/settings/WorkflowSettingsPage", () => ({
+  WorkflowSettingsPage: ({ active }: { active?: boolean }) => <h1 data-active={String(active)}>Workflow settings</h1>,
+}));
+
 vi.mock("../shared/api/client", () => ({
   fetchHealth: vi.fn().mockResolvedValue({
     comfy_reachable: true,
@@ -122,6 +126,23 @@ vi.mock("../features/json-production/JsonProductionPage", () => ({
 
 describe("App mode routing", () => {
   afterEach(cleanup);
+
+  it("opens desktop Settings outside the project workflow navigation", async () => {
+    render(<App />);
+    const settings = screen.getByRole("button", { name: "Settings" });
+    expect(screen.getByRole("navigation", { name: "Project workflow" }).contains(settings)).toBe(false);
+    fireEvent.click(settings);
+    expect(await screen.findByRole("heading", { name: "Workflow settings" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Workflow settings" }).getAttribute("data-active")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Director" }));
+    expect(screen.queryByRole("heading", { name: "Workflow settings" })).toBeNull();
+  });
+
+  it("does not expose workflow setup in the mobile shell", () => {
+    window.history.replaceState({}, "", "/mobile");
+    render(<App />);
+    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();

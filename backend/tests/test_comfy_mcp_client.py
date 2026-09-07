@@ -179,10 +179,117 @@ async def test_submit_workflow_validates_before_queueing_and_removes_temp_graph(
         "run_workflow",
     ]
     workflow_paths = [Path(args["workflow_path"]) for _, args in session.calls]
-    assert workflow_paths[0] == workflow_paths[1]
-    assert not workflow_paths[0].exists()
+    assert all(not path.exists() for path in workflow_paths)
     assert session.calls[1][1]["wait"] is False
     assert session.calls[1][1]["confirm_spend"] is False
+
+
+@pytest.mark.asyncio
+async def test_submit_workflow_repairs_new_save_video_dynamic_codec_before_queueing():
+    submitted_graphs: list[dict] = []
+
+    def capture_graph(_name: str, arguments: dict):
+        submitted_graphs.append(
+            json.loads(Path(arguments["workflow_path"]).read_text(encoding="utf-8"))
+        )
+        if len(submitted_graphs) == 1:
+            return _result(
+                {
+                    "valid": False,
+                    "error_count": 1,
+                    "errors": [
+                        {
+                            "node_id": "92",
+                            "field": "format.codec",
+                            "code": "required_input_missing",
+                            "message": (
+                                "required dynamic-combo input 'format.codec' is missing"
+                            ),
+                        }
+                    ],
+                }
+            )
+        if len(submitted_graphs) == 2:
+            return _result({"valid": True, "error_count": 0, "warnings": []})
+        return _result({"status": "queued", "prompt_id": "prompt_new_comfy"})
+
+    session = FakeToolSession([capture_graph, capture_graph, capture_graph])
+    client = ComfyMcpClient(session=session)
+    original = {
+        "92": {
+            "class_type": "SaveVideo",
+            "inputs": {
+                "video": ["130", 0],
+                "filename_prefix": "video/MiniMax_H3",
+                "format": "auto",
+                "codec": "auto",
+            },
+        }
+    }
+
+    prompt_id = await client.submit_workflow(original)
+
+    assert prompt_id == "prompt_new_comfy"
+    assert [name for name, _ in session.calls] == [
+        "validate_workflow",
+        "validate_workflow",
+        "run_workflow",
+    ]
+    assert submitted_graphs[0]["92"]["inputs"] == {
+        "video": ["130", 0],
+        "filename_prefix": "video/MiniMax_H3",
+        "format": "auto",
+        "codec": "auto",
+    }
+    assert submitted_graphs[1]["92"]["inputs"]["format.codec"] == "auto"
+    assert submitted_graphs[2] == submitted_graphs[1]
+    assert "format.codec" not in original["92"]["inputs"]
+
+
+@pytest.mark.asyncio
+async def test_validate_workflow_returns_payload_and_removes_temp_graph():
+    session = FakeToolSession(
+        [_result({"valid": True, "error_count": 0, "warnings": []})]
+    )
+    client = ComfyMcpClient(session=session)
+
+    payload = await client.validate_workflow(
+        {"1": {"class_type": "SaveVideo", "inputs": {}}}
+    )
+
+    assert payload == {"valid": True, "error_count": 0, "warnings": []}
+    assert [name for name, _ in session.calls] == ["validate_workflow"]
+    workflow_path = Path(session.calls[0][1]["workflow_path"])
+    assert workflow_path.suffixes == [".api", ".json"]
+    assert not workflow_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_validate_workflow_formats_all_structured_errors():
+    session = FakeToolSession(
+        [
+            _result(
+                {
+                    "valid": False,
+                    "error_count": 2,
+                    "errors": [
+                        {"node_id": "136", "message": "missing model"},
+                        {"node_id": "92", "error": "invalid codec"},
+                    ],
+                }
+            )
+        ]
+    )
+    client = ComfyMcpClient(session=session)
+
+    with pytest.raises(
+        ComfyMcpError,
+        match="missing model.*invalid codec",
+    ):
+        await client.validate_workflow({"136": {"class_type": "Missing"}})
+
+    workflow_path = Path(session.calls[0][1]["workflow_path"])
+    assert not workflow_path.exists()
 
 
 @pytest.mark.asyncio
@@ -269,6 +376,30 @@ async def test_submit_workflow_stops_when_live_validation_fails():
 
 
 @pytest.mark.asyncio
+async def test_client_preserves_plain_text_from_mcp_tool_errors():
+    session = FakeToolSession(
+        [
+            SimpleNamespace(
+                is_error=True,
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text="Error executing tool run_workflow",
+                    )
+                ],
+            )
+        ]
+    )
+    client = ComfyMcpClient(session=session)
+
+    with pytest.raises(
+        ComfyMcpError,
+        match="MCP tool run_workflow failed: Error executing tool run_workflow",
+    ):
+        await client.call_tool("run_workflow", {"workflow_path": "test.api.json"})
+
+
+@pytest.mark.asyncio
 async def test_wait_for_completion_retries_structured_timeouts_until_completed():
     session = FakeToolSession(
         [
@@ -294,9 +425,7 @@ async def test_wait_for_completion_retries_structured_timeouts_until_completed()
     )
 
     assert result["status"] == "completed"
-    assert result["outputs"] == [
-        "http://127.0.0.1:8188/view?filename=video.mp4"
-    ]
+    assert result["outputs"] == ["http://127.0.0.1:8188/view?filename=video.mp4"]
     assert [name for name, _ in session.calls] == ["job", "job"]
     assert all(args["action"] == "wait" for _, args in session.calls)
 
@@ -325,9 +454,7 @@ async def test_fetch_outputs_reads_downloaded_files_before_temp_cleanup():
 
     assert len(outputs) == 1
     assert outputs[0].filename == "prompt_000.mp4"
-    assert outputs[0].source_url == (
-        "http://127.0.0.1:8188/view?filename=video.mp4"
-    )
+    assert outputs[0].source_url == ("http://127.0.0.1:8188/view?filename=video.mp4")
     assert outputs[0].data == b"video-bytes"
     output_dir = Path(session.calls[0][1]["out_dir"])
     assert not output_dir.exists()

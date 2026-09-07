@@ -1,0 +1,45 @@
+{
+  "2": {"class_type": "CLIPLoader", "inputs": {}},
+  "129": {"class_type": "RandomNoise", "inputs": {"noise_seed": 11}},
+  "265": {
+    "class_type": "MiniMaxH3ReferenceToVideo",
+    "inputs": {
+      "clip": ["2", 0],
+      "prompt": "",
+      "width": 864,
+      "height": 480,
+      "length": 56,
+      "ref_images.ref_image_0": ["10", 0]
+    },
+    "_meta": {"title": "H3 Main Generator"}
+  },
+  "10": {"class_type": "LoadImage", "inputs": {"image": "fixture.png"}},
+  "140": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {"positive": ["265", 0], "noise": ["129", 0]}
+  },
+  "180": {"class_type": "LatentSplit", "inputs": {"samples": ["140", 0]}},
+  "190": {"class_type": "LatentUpscale", "inputs": {"samples": ["180", 0]}},
+  "200": {"class_type": "LatentConcat", "inputs": {"samples": ["190", 0]}},
+  "210": {"class_type": "KSampler", "inputs": {"latent_image": ["200", 0]}},
+  "214": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {"images": ["210", 0]},
+    "_meta": {"title": "Final Video Combine"}
+  },
+  "700": {"class_type": "RandomNoise", "inputs": {"noise_seed": 22}},
+  "400": {
+    "class_type": "MiniMaxH3ReferenceToVideo",
+    "inputs": {"prompt": "", "width": 864, "height": 480, "length": 56},
+    "_meta": {"title": "Alternate H3 Generator"}
+  },
+  "290": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {"positive": ["400", 0], "noise": ["700", 0]}
+  },
+  "300": {
+    "class_type": "SaveVideo",
+    "inputs": {"video": ["290", 0], "filename_prefix": "alternate"},
+    "_meta": {"title": "Alternate Video"}
+  }
+}

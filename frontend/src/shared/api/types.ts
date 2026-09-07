@@ -1,5 +1,20 @@
 /** Shared job / media types used across features. */
 
+export interface H3ActiveProfile {
+  profile_id: string;
+  display_name: string;
+  source: "builtin" | "custom";
+  workflow_sha256: string;
+  contract_version: number;
+  validated_at?: string | null;
+  warning: { code: string; message: string; details?: Record<string, unknown> } | null;
+}
+
+export interface H3Profiles {
+  active: H3ActiveProfile;
+  profiles: { profile_id: string; display_name: string; source: "builtin" | "custom"; workflow_sha256: string; status: "active" | "available" | "tested" }[];
+}
+
 export type JobStatus =
   | "queued"
   | "uploading"

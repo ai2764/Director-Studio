@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     jobs_dir: Path = _DEFAULT_DATA_DIR / "jobs"
     library_root: Path = _DEFAULT_DATA_DIR / "library"
     projects_dir: Path = _DEFAULT_DATA_DIR / "projects"
+    workflow_profiles_dir: Path = _DEFAULT_DATA_DIR / "workflow_profiles"
     workflows_dir: Path = Path(__file__).resolve().parents[1] / "workflows"
 
     # Legacy convenience path (actor pipeline)
@@ -92,6 +93,7 @@ class Settings(BaseSettings):
         configured.setdefault("jobs_dir", data_root / "jobs")
         configured.setdefault("library_root", data_root / "library")
         configured.setdefault("projects_dir", data_root / "projects")
+        configured.setdefault("workflow_profiles_dir", data_root / "workflow_profiles")
         configured.setdefault(
             "library_dir",
             Path(configured["library_root"]) / "actors",

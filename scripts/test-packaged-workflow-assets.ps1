@@ -17,6 +17,41 @@ if ($LASTEXITCODE -ne 0) {
 }
 $archiveText = $archiveListing -join "`n"
 
+function Normalize-ArchivePath([string]$Path) {
+    return ($Path.Replace("\", "/") -replace "/+", "/")
+}
+
+function Get-NormalizedArchiveEntries([string[]]$Lines) {
+    return @(
+        foreach ($line in $Lines) {
+            $normalizedLine = (Normalize-ArchivePath $line).Trim()
+            if ($normalizedLine -match "'(?<path>[^']+)'\s*$") {
+                $Matches["path"]
+            }
+            elseif ($normalizedLine -match "^[^,\s]+$") {
+                $normalizedLine.Trim("'", '"')
+            }
+        }
+    )
+}
+
+$archiveEntries = Get-NormalizedArchiveEntries $archiveListing
+
+function Assert-ArchiveContains([string]$Path) {
+    $normalizedPath = Normalize-ArchivePath $Path
+    if ($archiveEntries -notcontains $normalizedPath) {
+        throw "Packaged executable is missing workflow at runtime path: $normalizedPath"
+    }
+}
+
+function Assert-ArchiveDoesNotContain([string]$Path) {
+    $normalizedPath = Normalize-ArchivePath $Path
+    $normalizedArchive = Normalize-ArchivePath $archiveText
+    if ($normalizedArchive.Contains($normalizedPath)) {
+        throw "Packaged executable must not contain external runtime state: $normalizedPath"
+    }
+}
+
 $requiredWorkflowAssets = @(
     "qwen_actor_asset_workbench.api.json",
     "qwen_prop_master.api.json",
@@ -25,11 +60,12 @@ $requiredWorkflowAssets = @(
     "h3_ref2va.api.json"
 )
 foreach ($filename in $requiredWorkflowAssets) {
-    # archive_viewer emits Python repr strings, so each path separator is escaped.
-    $expectedPath = "workflows\\$filename"
-    if (-not $archiveText.Contains("'$expectedPath'")) {
-        throw "Packaged executable is missing workflow at runtime path: $expectedPath"
-    }
+    Assert-ArchiveContains "workflows/$filename"
 }
+
+Assert-ArchiveContains "workflows/h3_ref2va.api.json"
+Assert-ArchiveDoesNotContain "workflow_profiles/h3/imports"
+Assert-ArchiveDoesNotContain "workflow_profiles/h3/profiles"
+Assert-ArchiveDoesNotContain "active.json"
 
 "Packaged workflow asset test passed."

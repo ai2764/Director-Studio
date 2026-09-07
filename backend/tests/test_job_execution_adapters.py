@@ -35,6 +35,20 @@ def test_pipeline_declares_execution_adapter_without_type_inference():
     assert GptActorPipeline().execution_adapter_id == "external"
 
 
+def test_pipeline_submission_hook_defaults_to_noop():
+    job = JobRecord(
+        id="job_hook",
+        pipeline_id="actor",
+        asset_kind="actors",
+        status=JobStatus.queued,
+        name="hook",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+
+    assert ActorPipeline().prepare_job_submission(job) is None
+
+
 def test_registry_resolves_declared_adapter_and_allows_future_h3_api():
     comfy = FakeAdapter("comfy")
     external = FakeAdapter("external")

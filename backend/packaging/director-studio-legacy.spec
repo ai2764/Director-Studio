@@ -5,6 +5,7 @@ from PyInstaller.utils.hooks import collect_submodules
 
 repo_root = Path(SPECPATH).parents[1]
 backend_root = repo_root / "backend"
+bundled_workflows = backend_root / "workflows"
 
 analysis = Analysis(
     [str(backend_root / "packaging" / "entrypoint.py")],
@@ -12,7 +13,9 @@ analysis = Analysis(
     binaries=[],
     datas=[
         (str(repo_root / "frontend" / "dist"), "frontend/dist"),
-        (str(backend_root / "workflows"), "workflows"),
+        # Durable data and user workflow profiles stay beside the executable.
+        # Only the repository-owned, read-only workflow collection is bundled.
+        (str(bundled_workflows), "workflows"),
         (
             str(backend_root / "app" / "agents" / "director" / "DIRECTOR_SKILL.md"),
             "app/agents/director",

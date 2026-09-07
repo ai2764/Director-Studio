@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from ....integrations.comfy_mcp import ComfyMcpClient
@@ -62,7 +63,7 @@ class ComfyMcpExecutionAdapter:
             await self._collect(job, pipeline, client, cancel_event)
         except asyncio.CancelledError:
             self._mark_cancelled(job.id)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - adapter persists provider failures
             self._mark_failed(job.id, exc, cancel_event)
         finally:
             await self._finalize(job.id, runtime)
@@ -86,7 +87,7 @@ class ComfyMcpExecutionAdapter:
             )
         except asyncio.CancelledError:
             self._mark_cancelled(job.id)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - adapter persists provider failures
             self._mark_failed(job.id, exc, cancel_event)
         finally:
             await self._finalize(job.id, runtime)
@@ -110,6 +111,8 @@ class ComfyMcpExecutionAdapter:
         if cancel_event.is_set():
             raise asyncio.CancelledError
         downloaded = await client.fetch_outputs(prompt_id)
+        if cancel_event.is_set():
+            raise asyncio.CancelledError
         if not downloaded:
             raise RuntimeError("Comfy MCP job completed without output files")
 
@@ -118,9 +121,7 @@ class ComfyMcpExecutionAdapter:
         if not expected:
             raise RuntimeError("Comfy MCP job completed without mapped outputs")
 
-        by_ref = {
-            self._ref_key_from_url(item.source_url): item for item in downloaded
-        }
+        by_ref = {self._ref_key_from_url(item.source_url): item for item in downloaded}
         saved: dict[str, Path] = {}
         for key, ref in expected.items():
             ref_key = (ref.filename, ref.subfolder, ref.type)
@@ -138,19 +139,29 @@ class ComfyMcpExecutionAdapter:
             )
 
         job = store.load_job(job.id) or job
+        if cancel_event.is_set():
+            raise asyncio.CancelledError
         try:
             pipeline.postprocess_job_outputs(job, saved)
         except Exception:
             logger.exception("postprocess failed for Comfy MCP job %s", job.id)
-        job.status = JobStatus.succeeded
-        job.error = None
         job.outputs = store.build_output_slots(
             job.id,
             saved,
             labels=pipeline.output_labels,
         )
         job.input_previews = store.input_preview_urls(job.id)
+        if cancel_event.is_set():
+            raise asyncio.CancelledError
+        job.status = JobStatus.succeeded
+        job.error = None
         store.save_job(job)
+        success_hook = getattr(pipeline, "on_job_succeeded", None)
+        if callable(success_hook):
+            try:
+                success_hook(job)
+            except Exception:
+                logger.exception("success hook failed for Comfy MCP job %s", job.id)
 
     @staticmethod
     def _ref_key_from_url(url: str) -> tuple[str, str, str]:

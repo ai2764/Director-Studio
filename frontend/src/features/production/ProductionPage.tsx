@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   EMPTY_PROMPT_SECTIONS,
   PROMPT_SECTION_KEYS,
@@ -27,8 +27,46 @@ import {
 } from "./api";
 import { listLibraryAssets, type LibraryAsset } from "../library/api";
 import { ShotMaterialEditor } from "../director/ShotMaterialEditor";
+import { fetchH3Profiles } from "../../shared/api/client";
+import type { H3ActiveProfile } from "../../shared/api/types";
 
 const ACTIVE: JobStatus[] = ["queued", "uploading", "running"];
+
+function ProductionWorkflowProfile({ profile, error, job }: {
+  profile: H3ActiveProfile | null;
+  error: string | null;
+  job: H3JobRecord | null;
+}) {
+  return (
+    <div className="production-workflow-profile">
+      {profile ? (
+        <>
+          <span>{`Local · ComfyUI — ${profile.display_name}`}</span>
+          <small>{`Workflow: ${profile.display_name}`}</small>
+          {profile.warning ? (
+            <div className="banner" role="status">
+              <strong>Using Built-in Official H3</strong>
+              <span>{profile.warning.message}</span>
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <span className="muted">
+          {error ? `Workflow status unavailable: ${error}` : "Loading local workflow…"}
+        </span>
+      )}
+      {job?.h3_profile_id ? (
+        <small>
+          Submitted workflow: {job.h3_profile_id === "builtin-official-h3"
+            ? "Built-in Official H3" : job.h3_profile_id}
+          {job.h3_profile_sha256 ? (
+            <code className="workflow-hash">{job.h3_profile_sha256}</code>
+          ) : null}
+        </small>
+      ) : null}
+    </div>
+  );
+}
 
 type DrawerTab = "layout" | "refs" | "prompt" | "run";
 type ResolutionPreset =
@@ -138,6 +176,32 @@ export function ProductionPage({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [h3Job, setH3Job] = useState<H3JobRecord | null>(null);
+  const [workflowProfile, setWorkflowProfile] = useState<H3ActiveProfile | null>(null);
+  const [workflowProfileError, setWorkflowProfileError] = useState<string | null>(null);
+  const profileRequest = useRef(0);
+  const refreshWorkflowProfile = useCallback(async () => {
+    const request = ++profileRequest.current;
+    try {
+      const current = await fetchH3Profiles();
+      if (request === profileRequest.current) {
+        setWorkflowProfile(current.active);
+        setWorkflowProfileError(null);
+      }
+    } catch (err) {
+      if (request === profileRequest.current) {
+        setWorkflowProfile(null);
+        setWorkflowProfileError(err instanceof Error ? err.message : String(err));
+      }
+    }
+  }, []);
+  useEffect(() => {
+    if (active) void refreshWorkflowProfile();
+    return () => { profileRequest.current += 1; };
+  }, [active, refreshWorkflowProfile]);
+  useEffect(() => {
+    if (h3Job && h3Job.h3_provider !== "minimax" && !ACTIVE.includes(h3Job.status))
+      void refreshWorkflowProfile();
+  }, [h3Job?.id, h3Job?.status, refreshWorkflowProfile]);
   const [tab, setTab] = useState<DrawerTab>("layout");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [voiceAssets, setVoiceAssets] = useState<LibraryAsset[]>([]);
@@ -362,6 +426,7 @@ export function ProductionPage({
         resolutionPreset === "auto"
           ? undefined
           : RESOLUTION_PRESETS[resolutionPreset];
+      if (h3Provider === "local") await refreshWorkflowProfile();
       replaceShot(await submitShot(selected.id, h3Provider, resolution));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -686,6 +751,7 @@ export function ProductionPage({
       }
       className="production-page"
     >
+      <ProductionWorkflowProfile profile={workflowProfile} error={workflowProfileError} job={h3Job} />
       {error ? <div className="banner error">{error}</div> : null}
 
       <div className="split-layout production-split">

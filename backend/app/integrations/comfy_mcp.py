@@ -11,6 +11,8 @@ import shlex
 import shutil
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -35,6 +37,52 @@ def _resolve_command(command: str) -> str:
 
 class ComfyMcpError(RuntimeError):
     pass
+
+
+def _repair_save_video_dynamic_codec(
+    graph: dict[str, Any], errors: list[Any]
+) -> dict[str, Any] | None:
+    """Bridge the old and new ComfyUI SaveVideo API input layouts."""
+
+    repaired = copy.deepcopy(graph)
+    changed = False
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        if (
+            error.get("code") != "required_input_missing"
+            or error.get("field") != "format.codec"
+        ):
+            continue
+        node_id = str(error.get("node_id") or "")
+        node = repaired.get(node_id)
+        if not isinstance(node, dict) or node.get("class_type") != "SaveVideo":
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict) or "format.codec" in inputs:
+            continue
+        codec = inputs.get("codec")
+        if not isinstance(codec, str) or not codec:
+            continue
+        inputs["format.codec"] = codec
+        changed = True
+    return repaired if changed else None
+
+
+def format_validation_errors(payload: dict[str, Any]) -> str:
+    """Format the MCP validator's structured failures without losing entries."""
+    messages: list[str] = []
+    for item in payload.get("errors") or []:
+        if isinstance(item, dict):
+            message = item.get("message") or item.get("error") or item
+        else:
+            message = item
+        messages.append(str(message))
+    detail = "; ".join(messages) or json.dumps(
+        payload.get("errors") or payload,
+        ensure_ascii=False,
+    )
+    return f"MCP workflow validation failed: {detail}"
 
 
 def _repair_save_video_dynamic_codec(
@@ -92,9 +140,9 @@ class PersistentMcpToolSession:
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._queue: asyncio.Queue[
-            tuple[str | None, dict[str, Any], asyncio.Future[Any]]
-        ] | None = None
+        self._queue: (
+            asyncio.Queue[tuple[str | None, dict[str, Any], asyncio.Future[Any]]] | None
+        ) = None
         self._worker: asyncio.Task[None] | None = None
 
     def _server_parameters(self) -> Any:
@@ -112,9 +160,7 @@ class PersistentMcpToolSession:
 
     async def _serve(
         self,
-        queue: asyncio.Queue[
-            tuple[str | None, dict[str, Any], asyncio.Future[Any]]
-        ],
+        queue: asyncio.Queue[tuple[str | None, dict[str, Any], asyncio.Future[Any]]],
     ) -> None:
         from mcp import ClientSession
         from mcp.client.stdio import stdio_client
@@ -202,9 +248,7 @@ class ComfyMcpClient:
     ) -> None:
         self._session = session or PersistentMcpToolSession()
         self.job_timeout_sec = float(
-            job_timeout_sec
-            if job_timeout_sec is not None
-            else settings.job_timeout_sec
+            job_timeout_sec if job_timeout_sec is not None else settings.job_timeout_sec
         )
 
     async def call_tool(
@@ -234,6 +278,8 @@ class ComfyMcpClient:
                 payload = decoded
                 break
         if payload is None:
+            if bool(getattr(result, "is_error", False)) and texts:
+                raise ComfyMcpError(f"MCP tool {name} failed: {'; '.join(texts)}")
             raise ComfyMcpError(f"MCP tool {name} returned no JSON object")
         if bool(getattr(result, "is_error", False)):
             message = payload.get("message") or payload.get("error") or payload
@@ -278,6 +324,30 @@ class ComfyMcpClient:
         return result
 
     async def submit_workflow(self, graph: dict[str, Any]) -> str:
+        with self._temporary_workflow(graph) as workflow_path:
+            validation = await self._validate_workflow_path(graph, workflow_path)
+            if validation.get("valid") is not True:
+                raise ComfyMcpError(format_validation_errors(validation))
+            queued = await self.call_tool(
+                "run_workflow",
+                {
+                    "workflow_path": str(workflow_path),
+                    "wait": False,
+                    "timeout_seconds": 110.0,
+                    "confirm_spend": False,
+                },
+            )
+        prompt_id = str(queued.get("prompt_id") or "").strip()
+        if not prompt_id:
+            raise ComfyMcpError("MCP run_workflow returned no prompt_id")
+        return prompt_id
+
+    @contextmanager
+    def _temporary_workflow(
+        self,
+        graph: dict[str, Any],
+    ) -> Iterator[Path]:
+        """Materialize one graph for an MCP call and always remove it."""
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
@@ -288,46 +358,42 @@ class ComfyMcpClient:
             json.dump(graph, handle, ensure_ascii=False)
             workflow_path = Path(handle.name)
         try:
-            validation = await self.call_tool(
-                "validate_workflow",
-                {"workflow_path": str(workflow_path)},
-            )
-            if validation.get("valid") is not True:
-                repaired = _repair_save_video_dynamic_codec(
-                    graph, validation.get("errors") or []
-                )
-                if repaired is not None:
-                    workflow_path.write_text(
-                        json.dumps(repaired, ensure_ascii=False), encoding="utf-8"
-                    )
-                    validation = await self.call_tool(
-                        "validate_workflow",
-                        {"workflow_path": str(workflow_path)},
-                    )
-            if validation.get("valid") is not True:
-                errors = validation.get("errors") or []
-                messages = [
-                    str(item.get("message") or item)
-                    for item in errors
-                    if isinstance(item, dict)
-                ]
-                detail = "; ".join(messages) or json.dumps(errors)
-                raise ComfyMcpError(f"MCP workflow validation failed: {detail}")
-            queued = await self.call_tool(
-                "run_workflow",
-                {
-                    "workflow_path": str(workflow_path),
-                    "wait": False,
-                    "timeout_seconds": 110.0,
-                    "confirm_spend": False,
-                },
-            )
+            yield workflow_path
         finally:
             workflow_path.unlink(missing_ok=True)
-        prompt_id = str(queued.get("prompt_id") or "").strip()
-        if not prompt_id:
-            raise ComfyMcpError("MCP run_workflow returned no prompt_id")
-        return prompt_id
+
+    async def _validate_workflow_path(
+        self,
+        graph: dict[str, Any],
+        workflow_path: Path,
+    ) -> dict[str, Any]:
+        payload = await self.call_tool(
+            "validate_workflow",
+            {"workflow_path": str(workflow_path)},
+        )
+        if payload.get("valid") is not True:
+            repaired = _repair_save_video_dynamic_codec(
+                graph,
+                payload.get("errors") or [],
+            )
+            if repaired is not None:
+                workflow_path.write_text(
+                    json.dumps(repaired, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                payload = await self.call_tool(
+                    "validate_workflow",
+                    {"workflow_path": str(workflow_path)},
+                )
+        return payload
+
+    async def validate_workflow(self, graph: dict[str, Any]) -> dict[str, Any]:
+        """Ask Comfy MCP to validate a graph without queueing it."""
+        with self._temporary_workflow(graph) as path:
+            payload = await self._validate_workflow_path(graph, path)
+        if payload.get("valid") is not True:
+            raise ComfyMcpError(format_validation_errors(payload))
+        return payload
 
     async def wait_for_completion(
         self,
@@ -354,7 +420,9 @@ class ComfyMcpClient:
                     "timeout_seconds": min(30.0, remaining),
                 },
             )
-            status_payload = payload.get("status") if payload.get("timed_out") else payload
+            status_payload = (
+                payload.get("status") if payload.get("timed_out") else payload
+            )
             if not isinstance(status_payload, dict):
                 raise ComfyMcpError("MCP job returned an invalid status payload")
             status = str(status_payload.get("status") or "").lower()

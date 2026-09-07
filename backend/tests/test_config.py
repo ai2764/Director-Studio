@@ -12,6 +12,7 @@ def test_data_dir_derives_all_persistent_subdirectories(tmp_path: Path) -> None:
     assert configured.library_root == data_root / "library"
     assert configured.library_dir == data_root / "library" / "actors"
     assert configured.jobs_dir == data_root / "jobs"
+    assert configured.workflow_profiles_dir == data_root / "workflow_profiles"
 
 
 def test_explicit_persistent_subdirectory_override_is_preserved(tmp_path: Path) -> None:

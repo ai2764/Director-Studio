@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
+from ...integrations.comfy_mcp import ComfyMcpClient
+from ...integrations.minimax_h3 import MiniMaxH3Client
 from ...pipelines.base import ExternalPipeline
 from ...pipelines.registry import get_pipeline
 from ..comfy import ComfyClient, ComfyError
@@ -20,11 +22,6 @@ from .execution_adapters.comfy_mcp import (
 )
 from .execution_adapters.external import ExternalExecutionAdapter
 from .execution_adapters.h3_api import H3ApiExecutionAdapter, H3ApiExecutionRuntime
-from ...integrations.comfy_mcp import ComfyMcpClient
-from ...integrations.minimax_h3 import MiniMaxH3Client
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger("director_studio.jobs")
 
@@ -95,6 +92,7 @@ def _can_replay(adapter: Any, pipeline: Any, job: JobRecord) -> bool:
         return bool(checker(job))
     return bool(adapter.can_replay(pipeline))
 
+
 # All Comfy pipeline jobs use exclusive VRAM (unload LLM before queue).
 # Includes h3_ref2va (video), ref_frame (reference still), actor, scene, …
 EXCLUSIVE_PIPELINES: frozenset[str] | None = None  # None = all pipelines
@@ -111,7 +109,9 @@ async def prepare_comfy(job: JobRecord) -> None:
     """Claim exclusive GPU / unload Ollama before Comfy upload/queue (incl. video)."""
     if not _uses_exclusive_vram(job.pipeline_id):
         return
-    logger.info("prepare_comfy: unload LLM before pipeline=%s job=%s", job.pipeline_id, job.id)
+    logger.info(
+        "prepare_comfy: unload LLM before pipeline=%s job=%s", job.pipeline_id, job.id
+    )
     await get_orchestrator().before_comfy_job(job.pipeline_id)
 
 
@@ -130,7 +130,9 @@ async def update_generation_phase(job_id: str, status: str, phase: str) -> None:
     )
 
 
-async def _reserve_local_generation(job: JobRecord, pipeline: Any, adapter: Any) -> bool:
+async def _reserve_local_generation(
+    job: JobRecord, pipeline: Any, adapter: Any
+) -> bool:
     if adapter.id not in LOCAL_COMFY_ADAPTER_IDS:
         return False
     phase = "queued" if job.status == JobStatus.queued else "generating"
@@ -157,11 +159,17 @@ async def start_pipeline_job(
     """
     images = images or {}
     for kind, (filename, data) in images.items():
-        store.save_input_file(
-            job.id, kind, filename, data, project_id=job.project_id
-        )
+        store.save_input_file(job.id, kind, filename, data, project_id=job.project_id)
 
     pipeline = get_pipeline(job.pipeline_id)
+    prepare_submission = getattr(pipeline, "prepare_job_submission", None)
+    if callable(prepare_submission):
+        try:
+            prepare_submission(job)
+        except Exception as exc:
+            _fail_job_preparation(job, exc)
+            raise
+    store.save_job(job)
     labels = (
         pipeline.labels_for_job(job)
         if hasattr(pipeline, "labels_for_job")
@@ -238,56 +246,68 @@ async def recover_interrupted_jobs() -> list[str]:
     for job in candidates:
         if job.status not in recoverable or job.id in _tasks:
             continue
-
-        pipeline = get_pipeline(job.pipeline_id)
-        adapter = _execution_adapters.resolve(pipeline, job=job)
-        if _submission_id(adapter, job):
-            await resume_pipeline_job(job)
-            recovered.append(job.id)
-            logger.info(
-                "resumed submitted job %s (%s) prompt=%s",
-                job.id,
-                job.pipeline_id,
-                _submission_id(adapter, job),
-            )
-            continue
-
-        if not _can_replay(adapter, pipeline, job):
-            job.status = JobStatus.failed
-            job.error = (
-                "Provider generation was interrupted and was not replayed because "
-                "submission may already have occurred. Ask the user to generate again."
-            )
-            store.save_job(job)
+        try:
+            if await _recover_interrupted_job(job):
+                recovered.append(job.id)
+        except Exception as exc:
+            logger.exception("Could not recover job %s (%s)", job.id, job.pipeline_id)
             try:
-                from .shot_sync import on_pipeline_job_terminal
-
-                on_pipeline_job_terminal(job)
+                _fail_job_preparation(job, exc)
             except Exception:
-                logger.exception(
-                    "shot_sync failed for interrupted external job %s (%s)",
-                    job.id,
-                    job.pipeline_id,
-                )
-            continue
-
-        directory = find_job_dir(job.id)
-        images: dict[str, tuple[str, bytes]] = {}
-        if directory is not None:
-            inputs = directory / "inputs"
-            if inputs.is_dir():
-                for path in sorted(inputs.iterdir()):
-                    if path.is_file():
-                        images[path.stem] = (path.name, path.read_bytes())
-
-        job.status = JobStatus.queued
-        job.error = None
-        store.save_job(job)
-        await start_pipeline_job(job, images=images or None)
-        recovered.append(job.id)
-        logger.info("recovered interrupted job %s (%s)", job.id, job.pipeline_id)
-
+                logger.exception("Could not persist recovery failure for %s", job.id)
     return recovered
+
+
+def _fail_job_preparation(job: JobRecord, exc: Exception) -> None:
+    job.status = JobStatus.failed
+    job.error = f"Job preparation failed: {exc}"
+    store.save_job(job)
+    try:
+        from .shot_sync import on_pipeline_job_terminal
+
+        on_pipeline_job_terminal(job)
+    except Exception:
+        logger.exception("shot_sync failed for preparation failure %s", job.id)
+
+
+async def _recover_interrupted_job(job: JobRecord) -> bool:
+    pipeline = get_pipeline(job.pipeline_id)
+    adapter = _execution_adapters.resolve(pipeline, job=job)
+    if _submission_id(adapter, job):
+        await resume_pipeline_job(job)
+        logger.info("resumed submitted job %s (%s)", job.id, job.pipeline_id)
+        return True
+
+    if not _can_replay(adapter, pipeline, job):
+        job.status = JobStatus.failed
+        job.error = (
+            "Provider generation was interrupted and was not replayed because "
+            "submission may already have occurred. Ask the user to generate again."
+        )
+        store.save_job(job)
+        try:
+            from .shot_sync import on_pipeline_job_terminal
+
+            on_pipeline_job_terminal(job)
+        except Exception:
+            logger.exception("shot_sync failed for interrupted external job %s", job.id)
+        return False
+
+    directory = find_job_dir(job.id)
+    images: dict[str, tuple[str, bytes]] = {}
+    if directory is not None:
+        inputs = directory / "inputs"
+        if inputs.is_dir():
+            for path in sorted(inputs.iterdir()):
+                if path.is_file():
+                    images[path.stem] = (path.name, path.read_bytes())
+
+    job.status = JobStatus.queued
+    job.error = None
+    store.save_job(job)
+    await start_pipeline_job(job, images=images or None)
+    logger.info("recovered interrupted job %s (%s)", job.id, job.pipeline_id)
+    return True
 
 
 def _recovery_sort_key(job: JobRecord) -> tuple[bool, str]:

@@ -59,6 +59,10 @@ class _PipelineCommon:
         """Optional local fixups after output files are saved."""
         return None
 
+    def prepare_job_submission(self, job: JobRecord) -> None:
+        """Optional synchronous preparation before a job enters the queue."""
+        return None
+
 
 class Pipeline(_PipelineCommon, ABC):
     """
