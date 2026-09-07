@@ -57,6 +57,7 @@ Director-Studio-Linux-x86_64/
 |-- install-tools.sh
 |-- Install-Tools.py
 |-- portable-tools-requirements.txt
+|-- README.md
 `-- .env
 ```
 
