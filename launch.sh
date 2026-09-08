@@ -30,8 +30,12 @@ child_pid=$!
 deadline=$((SECONDS + timeout_sec))
 while (( SECONDS < deadline )); do
   if ! kill -0 "$child_pid" 2>/dev/null; then
-    wait "$child_pid"
-    exit $?
+    if wait "$child_pid"; then
+      exit 1
+    else
+      child_status=$?
+      exit "$child_status"
+    fi
   fi
   if curl --fail --silent --show-error "$url/api/health" >/dev/null 2>&1; then
     if command -v xdg-open >/dev/null 2>&1; then
