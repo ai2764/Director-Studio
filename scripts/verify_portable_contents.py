@@ -230,7 +230,10 @@ def _verify_zip_archive(archive_path: Path, package_root: Path, flavor: PackageF
         names, executable_name = _verify_archive_names((info.filename for info in infos), flavor)
         required_names = _required_archive_names(flavor)
         for name, info in zip(names, infos, strict=True):
-            if name in required_names and info.is_dir():
+            file_type = stat.S_IFMT(info.external_attr >> 16)
+            if name in required_names and (
+                info.is_dir() or file_type not in (0, stat.S_IFREG)
+            ):
                 raise ValueError(f"required archive entry is not a regular file: {name}")
         env_info = infos[names.index(f"{flavor.name}/.env")]
         with archive.open(env_info) as archived_env:
