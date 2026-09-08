@@ -62,6 +62,7 @@ FORBIDDEN_DIRECTORY_NAMES = {
 }
 _CREDENTIAL_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".kdbx"}
 _CREDENTIAL_NAME_PARTS = ("credential", "secret", "token")
+_PUBLIC_CA_BUNDLE_PATHS = {("certifi", "cacert.pem")}
 _SECRET_KEY_PATTERN = re.compile(r"(?:secret|token|password|api[_-]?key)", re.I)
 _DRIVE_PATH_PATTERN = re.compile(r"^[A-Za-z]:/")
 
@@ -129,12 +130,16 @@ def _validate_content_path(parts: tuple[str, ...], *, label: str) -> None:
         raise ValueError(f"{label} contains forbidden directory: {part}")
 
     filename = parts[-1].lower()
+    normalized_parts = tuple(part.lower() for part in parts)
     if filename == "active.json":
         raise ValueError(f"{label} contains forbidden active workflow state: {parts[-1]}")
     if filename.startswith("test_") or ".test." in filename:
         raise ValueError(f"{label} contains forbidden test content: {parts[-1]}")
     if (
-        Path(filename).suffix in _CREDENTIAL_SUFFIXES
+        (
+            Path(filename).suffix in _CREDENTIAL_SUFFIXES
+            and normalized_parts not in _PUBLIC_CA_BUNDLE_PATHS
+        )
         or any(part in filename for part in _CREDENTIAL_NAME_PARTS)
     ):
         raise ValueError(f"{label} contains credential-like file: {parts[-1]}")
