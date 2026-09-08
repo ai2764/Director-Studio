@@ -133,6 +133,19 @@ def test_embedded_policy_allows_python_workflow_profiles_package():
     verifier.verify_embedded_entries(entries)
 
 
+def test_embedded_policy_allows_certifi_public_ca_bundle():
+    entries = set(verifier.REQUIRED_EMBEDDED)
+    entries.add("certifi/cacert.pem")
+    verifier.verify_embedded_entries(entries)
+
+
+def test_embedded_policy_still_rejects_private_pem():
+    entries = set(verifier.REQUIRED_EMBEDDED)
+    entries.add("tls/private.pem")
+    with pytest.raises(ValueError, match="credential"):
+        verifier.verify_embedded_entries(entries)
+
+
 @pytest.mark.parametrize("platform", ["windows", "linux"])
 def test_clean_package_requires_platform_files(tmp_path: Path, platform: str):
     flavor = verifier.FLAVORS[platform]
