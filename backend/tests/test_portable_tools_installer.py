@@ -133,7 +133,8 @@ def test_posix_wrapper_uses_sibling_installer(tmp_path: Path) -> None:
     arguments = tmp_path / "arguments"
     fake_python.write_text(
         "#!/usr/bin/env bash\n"
-        f"printf '%s\\n' \"$@\" > {arguments!s}\n"
+        "if [[ \"${1:-}\" == \"-c\" ]]; then exit 0; fi\n"
+        "printf '%s\\n' \"$@\" > \"$FAKE_ARGS\"\n"
         "exit 17\n",
         encoding="utf-8",
     )
@@ -142,7 +143,11 @@ def test_posix_wrapper_uses_sibling_installer(tmp_path: Path) -> None:
     completed = subprocess.run(
         [str(wrapper)],
         cwd=REPO_ROOT,
-        env={**os.environ, "DS_PYTHON_EXE": str(fake_python)},
+        env={
+            **os.environ,
+            "DS_PYTHON_EXE": str(fake_python),
+            "FAKE_ARGS": str(arguments),
+        },
         text=True,
         capture_output=True,
         check=False,
@@ -180,15 +185,12 @@ def test_dependency_verification_does_not_start_mcp_server(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    spec = importlib.util.spec_from_file_location("portable_tools_installer", INSTALLER)
-    assert spec is not None and spec.loader is not None
-    installer = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(installer)
+    installer = _load_installer()
 
-    scripts = tmp_path / "tools" / "venv" / "Scripts"
-    scripts.mkdir(parents=True)
-    for name in ("python.exe", "comfy-mcp.exe", "comfy.exe"):
-        (scripts / name).touch()
+    paths = installer.resolve_tool_paths(tmp_path)
+    paths.python.parent.mkdir(parents=True)
+    for executable in (paths.python, paths.mcp, paths.comfy):
+        executable.touch()
     requirements = tmp_path / "requirements.txt"
     requirements.touch()
     commands: list[list[str]] = []
@@ -196,8 +198,8 @@ def test_dependency_verification_does_not_start_mcp_server(
 
     installer.install_dependencies(tmp_path, requirements)
 
-    assert [str(scripts / "comfy-mcp.exe"), "--help"] not in commands
-    assert [str(scripts / "python.exe"), "-c", "import comfy_mcp"] in commands
+    assert [str(paths.mcp), "--help"] not in commands
+    assert [str(paths.python), "-c", "import comfy_mcp"] in commands
 
 
 def test_cmd_wrapper_returns_python_installer_failure(tmp_path: Path) -> None:
