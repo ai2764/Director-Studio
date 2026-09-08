@@ -38,9 +38,11 @@ def _write_archive(
     *,
     separator: str = "/",
     executable_bytes: bytes | None = None,
+    archive_env_bytes: bytes | None = None,
     extra_entries: tuple[str, ...] = (),
     tar_symlink: bool = False,
     tar_device: bool = False,
+    zip_special_mode: int | None = None,
 ) -> Path:
     members = [
         (name, (package / name).read_bytes())
@@ -49,6 +51,11 @@ def _write_archive(
     if executable_bytes is not None:
         members = [
             (name, executable_bytes if name == flavor.executable else contents)
+            for name, contents in members
+        ]
+    if archive_env_bytes is not None:
+        members = [
+            (name, archive_env_bytes if name == ".env" else contents)
             for name, contents in members
         ]
     members.extend((name, b"unexpected") for name in extra_entries)
@@ -60,6 +67,11 @@ def _write_archive(
                     f"{flavor.name}{separator}{name}",
                     contents,
                 )
+            if zip_special_mode is not None:
+                special = zipfile.ZipInfo(f"{flavor.name}/special-entry")
+                special.create_system = 3
+                special.external_attr = zip_special_mode << 16
+                archive.writestr(special, b"special")
         return path
 
     with tarfile.open(path, "w:gz") as archive:
@@ -147,6 +159,21 @@ def test_package_tree_rejects_active_secret(tmp_path: Path):
 
 
 @pytest.mark.parametrize("platform", ["windows", "linux"])
+def test_archive_rejects_active_secret_in_archived_env(tmp_path: Path, platform: str):
+    flavor = verifier.FLAVORS[platform]
+    package = _package_fixture(tmp_path, flavor)
+    archive = _write_archive(
+        tmp_path / ("portable.zip" if flavor.archive_kind == "zip" else "portable.tar.gz"),
+        package,
+        flavor,
+        archive_env_bytes=b"DS_H3_MINIMAX_API_KEY=secret\n",
+    )
+
+    with pytest.raises(ValueError, match="active secret"):
+        verifier.verify_archive(archive, package, flavor)
+
+
+@pytest.mark.parametrize("platform", ["windows", "linux"])
 def test_archive_accepts_normalized_members(tmp_path: Path, platform: str):
     flavor = verifier.FLAVORS[platform]
     package = _package_fixture(tmp_path, flavor)
@@ -218,6 +245,21 @@ def test_archive_rejects_executable_with_different_bytes(tmp_path: Path):
         verifier.verify_archive(archive, package, flavor)
 
 
+@pytest.mark.parametrize("special_mode", [stat.S_IFCHR, stat.S_IFBLK, stat.S_IFIFO])
+def test_zip_archive_rejects_unix_special_entries(tmp_path: Path, special_mode: int):
+    flavor = verifier.FLAVORS["windows"]
+    package = _package_fixture(tmp_path, flavor)
+    archive = _write_archive(
+        tmp_path / "portable.zip",
+        package,
+        flavor,
+        zip_special_mode=special_mode,
+    )
+
+    with pytest.raises(ValueError, match="special"):
+        verifier.verify_archive(archive, package, flavor)
+
+
 def test_tar_archive_rejects_symlink(tmp_path: Path):
     flavor = verifier.FLAVORS["linux"]
     package = _package_fixture(tmp_path, flavor)
@@ -251,6 +293,41 @@ def test_zip_archive_rejects_symlink(tmp_path: Path):
         contents.writestr(link, "DirectorStudio.exe")
 
     with pytest.raises(ValueError, match="links"):
+        verifier.verify_archive(archive, package, flavor)
+
+
+@pytest.mark.parametrize(
+    "directory",
+    ["DATA", "PROJECTS", "JOBS", "OUTPUTS", "TESTS", "WORKFLOW_PROFILES"],
+)
+def test_windows_package_rejects_forbidden_directory_case_insensitively(
+    tmp_path: Path, directory: str
+):
+    flavor = verifier.FLAVORS["windows"]
+    package = _package_fixture(tmp_path, flavor)
+    (package / directory).mkdir()
+
+    with pytest.raises(ValueError, match="forbidden directory"):
+        verifier.verify_package_tree(package, flavor)
+
+
+@pytest.mark.parametrize(
+    "directory",
+    ["DATA", "PROJECTS", "JOBS", "OUTPUTS", "TESTS", "WORKFLOW_PROFILES"],
+)
+def test_windows_archive_rejects_forbidden_directory_case_insensitively(
+    tmp_path: Path, directory: str
+):
+    flavor = verifier.FLAVORS["windows"]
+    package = _package_fixture(tmp_path, flavor)
+    archive = _write_archive(
+        tmp_path / "portable.zip",
+        package,
+        flavor,
+        extra_entries=(f"{directory}/state.json",),
+    )
+
+    with pytest.raises(ValueError, match="forbidden directory"):
         verifier.verify_archive(archive, package, flavor)
 
 
