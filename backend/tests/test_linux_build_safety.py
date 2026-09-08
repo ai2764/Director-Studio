@@ -10,6 +10,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "build-linux-portable.sh"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "linux-portable.yml"
+REQUIREMENTS = REPO_ROOT / "backend" / "requirements.txt"
 PACKAGE_NAME = "Director-Studio-Linux-x86_64"
 
 
@@ -131,3 +133,11 @@ def test_test_mode_only_loads_helpers_without_running_build_commands():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_linux_ci_installs_backend_test_dependencies():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    requirements = REQUIREMENTS.read_text(encoding="utf-8")
+
+    assert "ffmpeg" in workflow
+    assert "pytest-asyncio" in requirements
