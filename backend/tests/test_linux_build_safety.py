@@ -12,6 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "build-linux-portable.sh"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "linux-portable.yml"
 REQUIREMENTS = REPO_ROOT / "backend" / "requirements.txt"
+README = REPO_ROOT / "README.md"
 PACKAGE_NAME = "Director-Studio-Linux-x86_64"
 
 
@@ -141,3 +142,13 @@ def test_linux_ci_installs_backend_test_dependencies():
 
     assert "ffmpeg" in workflow
     assert "pytest-asyncio" in requirements
+
+
+def test_linux_installation_documents_ffmpeg_runtime_dependency():
+    linux_section = README.read_text(encoding="utf-8").split(
+        "## Linux portable installation", 1
+    )[1].split("## Connect a custom H3 workflow", 1)[0]
+
+    assert "sudo apt-get install" in linux_section
+    assert "ffmpeg" in linux_section
+    assert "ffprobe" in linux_section
