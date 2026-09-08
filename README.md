@@ -87,6 +87,13 @@ If the MCP process cannot start, verify both configured executable paths. You ca
 
 Supported: Ubuntu 22.04 or 24.04, x86_64. Ollama and ComfyUI remain external services and must be installed and running separately.
 
+Install the required host tools. Ubuntu's `ffmpeg` package provides both `ffmpeg` and `ffprobe`, which Director Studio uses for voice references and video tail-frame extraction:
+
+```bash
+sudo apt-get update
+sudo apt-get install --yes curl ffmpeg python3-venv
+```
+
 Extract the complete archive into a writable directory:
 
 ```bash
