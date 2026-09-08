@@ -5,6 +5,7 @@ import os
 import socket
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,7 +20,7 @@ sys.modules[spec.name] = verifier
 spec.loader.exec_module(verifier)
 
 
-pytestmark = pytest.mark.skipif(
+posix_only = pytest.mark.skipif(
     os.name == "nt", reason="requires POSIX process semantics"
 )
 
@@ -51,7 +52,9 @@ def _write_executable(package: Path, body: str) -> None:
     executable.chmod(0o755)
 
 
-def _write_healthy_executable(package: Path) -> None:
+def _write_healthy_executable(
+    package: Path, *, non_200_path: str | None = None
+) -> None:
     _write_executable(
         package,
         """
@@ -60,6 +63,7 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 os.mkdir("data")
+NON_200_PATH = PLACEHOLDER
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -71,7 +75,7 @@ class Handler(BaseHTTPRequestHandler):
                 "profiles": [],
             }
         elif self.path in {"/", "/mobile", "/docs"}:
-            self.send_response(200)
+            self.send_response(204 if self.path == NON_200_PATH else 200)
             self.end_headers()
             return
         else:
@@ -90,10 +94,11 @@ class Handler(BaseHTTPRequestHandler):
 
 server = ThreadingHTTPServer(("127.0.0.1", int(os.environ["DS_PORT"])), Handler)
 server.serve_forever()
-""",
+""".replace("PLACEHOLDER", repr(non_200_path)),
     )
 
 
+@posix_only
 def test_verify_runtime_uses_copy_and_checks_health_profiles_and_pages(
     tmp_path: Path,
 ) -> None:
@@ -113,6 +118,7 @@ def test_verify_runtime_uses_copy_and_checks_health_profiles_and_pages(
     assert not (package / "data").exists()
 
 
+@posix_only
 def test_verify_runtime_reports_early_exit_output_and_cleans_process_group(
     tmp_path: Path,
 ) -> None:
@@ -134,6 +140,7 @@ raise SystemExit(23)
     assert not _process_with_executable(package / "DirectorStudio")
 
 
+@posix_only
 def test_verify_runtime_times_out_health_and_cleans_process_group(
     tmp_path: Path,
 ) -> None:
@@ -151,3 +158,63 @@ time.sleep(30)
         verifier.verify_runtime(package, _free_port(), timeout_sec=0.5)
 
     assert not _process_with_executable(package / "DirectorStudio")
+
+
+@pytest.mark.parametrize("path", ["/", "/mobile", "/docs"])
+@posix_only
+def test_verify_runtime_rejects_non_200_required_page(
+    tmp_path: Path, path: str
+) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    _write_healthy_executable(package, non_200_path=path)
+
+    with pytest.raises(RuntimeError):
+        verifier.verify_runtime(package, _free_port(), timeout_sec=10)
+
+
+@posix_only
+def test_verify_runtime_captures_noisy_early_exit_output(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    _write_executable(
+        package,
+        """
+import sys
+sys.stdout.write("stdout prefix " + "x" * 1048576 + " stdout tail\\n")
+sys.stdout.flush()
+sys.stderr.write("stderr prefix " + "y" * 1048576 + " stderr tail\\n")
+sys.stderr.flush()
+raise SystemExit(23)
+""",
+    )
+
+    with pytest.raises(RuntimeError, match="stdout tail.*stderr tail"):
+        verifier.verify_runtime(package, _free_port(), timeout_sec=0.5)
+
+
+def test_stop_process_group_reaps_child_when_group_disappears(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.wait_calls: list[float] = []
+
+        def wait(self, *, timeout: float) -> None:
+            self.wait_calls.append(timeout)
+
+    def killpg(_process_group_id: int, _signal: int) -> None:
+        raise ProcessLookupError
+
+    process = FakeProcess()
+    monkeypatch.setattr(
+        verifier,
+        "os",
+        SimpleNamespace(name="posix", killpg=killpg),
+    )
+
+    verifier._stop_process_group(process, 123)  # type: ignore[arg-type]
+
+    assert process.wait_calls == [verifier._PROCESS_GROUP_TIMEOUT_SEC]
