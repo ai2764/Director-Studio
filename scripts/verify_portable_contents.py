@@ -213,6 +213,10 @@ def _verify_archive_names(names: Iterable[str], flavor: PackageFlavor) -> tuple[
     return normalized_names, executable_name
 
 
+def _required_archive_names(flavor: PackageFlavor) -> set[str]:
+    return {f"{flavor.name}/{name}" for name in required_package_files(flavor)}
+
+
 def _verify_zip_archive(archive_path: Path, package_root: Path, flavor: PackageFlavor) -> None:
     with zipfile.ZipFile(archive_path) as archive:
         infos = archive.infolist()
@@ -224,6 +228,10 @@ def _verify_zip_archive(archive_path: Path, package_root: Path, flavor: PackageF
             if file_type not in (0, stat.S_IFREG, stat.S_IFDIR):
                 raise ValueError(f"archive contains special entry: {info.filename}")
         names, executable_name = _verify_archive_names((info.filename for info in infos), flavor)
+        required_names = _required_archive_names(flavor)
+        for name, info in zip(names, infos, strict=True):
+            if name in required_names and info.is_dir():
+                raise ValueError(f"required archive entry is not a regular file: {name}")
         env_info = infos[names.index(f"{flavor.name}/.env")]
         with archive.open(env_info) as archived_env:
             _verify_env_content_has_no_active_secrets(archived_env.read())
@@ -244,6 +252,10 @@ def _verify_tar_archive(archive_path: Path, package_root: Path, flavor: PackageF
             if not member.isfile() and not member.isdir():
                 raise ValueError(f"archive contains unsupported member: {member.name}")
         names, executable_name = _verify_archive_names((member.name for member in members), flavor)
+        required_names = _required_archive_names(flavor)
+        for name, member in zip(names, members, strict=True):
+            if name in required_names and not member.isfile():
+                raise ValueError(f"required archive entry is not a regular file: {name}")
         env_member = members[names.index(f"{flavor.name}/.env")]
         archived_env = archive.extractfile(env_member)
         if archived_env is None:
