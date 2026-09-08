@@ -28,26 +28,43 @@ def _decode_tail(value: bytes | str | None) -> str:
     return value[-_OUTPUT_TAIL_CHARS:]
 
 
-def _runtime_exit_error(process: subprocess.Popen[bytes]) -> RuntimeError:
+def _read_tail(path: Path | None) -> str:
+    if path is None:
+        return ""
     try:
-        stdout, stderr = process.communicate(timeout=0.2)
-    except subprocess.TimeoutExpired as exc:
-        stdout, stderr = exc.output, exc.stderr
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - _OUTPUT_TAIL_CHARS))
+            return _decode_tail(stream.read())
+    except OSError:
+        return ""
+
+
+def _runtime_exit_error(
+    process: subprocess.Popen[bytes],
+    stdout_path: Path | None = None,
+    stderr_path: Path | None = None,
+) -> RuntimeError:
     return RuntimeError(
         "runtime exited with code "
-        f"{process.returncode}; stdout={_decode_tail(stdout)!r}; "
-        f"stderr={_decode_tail(stderr)!r}"
+        f"{process.returncode}; stdout={_read_tail(stdout_path)!r}; "
+        f"stderr={_read_tail(stderr_path)!r}"
     )
 
 
 def wait_for_health(
-    process: subprocess.Popen[bytes], url: str, timeout_sec: float
+    process: subprocess.Popen[bytes],
+    url: str,
+    timeout_sec: float,
+    *,
+    stdout_path: Path | None = None,
+    stderr_path: Path | None = None,
 ) -> dict[str, Any]:
     """Poll a packaged runtime health endpoint until it responds with JSON."""
     deadline = time.monotonic() + timeout_sec
     while True:
         if process.poll() is not None:
-            raise _runtime_exit_error(process)
+            raise _runtime_exit_error(process, stdout_path, stderr_path)
         try:
             with urllib.request.urlopen(url, timeout=_POLL_INTERVAL_SEC) as response:
                 payload = json.loads(response.read().decode("utf-8"))
@@ -98,22 +115,26 @@ def _stop_process_group(
     try:
         os.killpg(process_group_id, signal.SIGTERM)
     except ProcessLookupError:
-        return
+        pass
+    else:
+        deadline = time.monotonic() + _PROCESS_GROUP_TIMEOUT_SEC
+        while _group_exists(process_group_id) and time.monotonic() < deadline:
+            time.sleep(0.05)
 
-    deadline = time.monotonic() + _PROCESS_GROUP_TIMEOUT_SEC
-    while _group_exists(process_group_id) and time.monotonic() < deadline:
-        time.sleep(0.05)
-
-    if _group_exists(process_group_id):
-        try:
-            os.killpg(process_group_id, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        if _group_exists(process_group_id):
+            try:
+                os.killpg(process_group_id, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
     try:
         process.wait(timeout=_PROCESS_GROUP_TIMEOUT_SEC)
     except subprocess.TimeoutExpired:
-        pass
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        process.wait()
 
 
 def verify_runtime(
@@ -126,18 +147,23 @@ def verify_runtime(
         runtime_root = Path(temp) / "package"
         shutil.copytree(package_root, runtime_root)
         executable = runtime_root / "DirectorStudio"
+        stdout_path = Path(temp) / "stdout.log"
+        stderr_path = Path(temp) / "stderr.log"
         env = os.environ.copy()
         env.update({"DS_HOST": "127.0.0.1", "DS_PORT": str(port)})
         try:
-            process = subprocess.Popen(
-                [str(executable)],
-                cwd=runtime_root,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                start_new_session=True,
-            )
+            with stdout_path.open("wb") as stdout_file, stderr_path.open(
+                "wb"
+            ) as stderr_file:
+                process = subprocess.Popen(
+                    [str(executable)],
+                    cwd=runtime_root,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    start_new_session=True,
+                )
             if os.name != "nt":
                 process_group_id = os.getpgid(process.pid)
 
@@ -145,20 +171,27 @@ def verify_runtime(
                 process,
                 f"http://127.0.0.1:{port}/api/health",
                 timeout_sec,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
             )
             if health.get("ok") is not True:
                 raise RuntimeError(f"health check did not report ok: {health!r}")
 
             request_timeout = max(timeout_sec, 0.1)
-            frontend_status, _ = _get(
-                f"http://127.0.0.1:{port}/", request_timeout
-            )
-            mobile_status, _ = _get(
-                f"http://127.0.0.1:{port}/mobile", request_timeout
-            )
-            docs_status, _ = _get(
-                f"http://127.0.0.1:{port}/docs", request_timeout
-            )
+            page_statuses: dict[str, int] = {}
+            for path, result_key in (
+                ("/", "frontend_status"),
+                ("/mobile", "mobile_status"),
+                ("/docs", "docs_status"),
+            ):
+                status, _ = _get(
+                    f"http://127.0.0.1:{port}{path}", request_timeout
+                )
+                if status != 200:
+                    raise RuntimeError(
+                        f"{path} returned HTTP {status}; expected HTTP 200"
+                    )
+                page_statuses[result_key] = status
             profile_status, profile_body = _get(
                 f"http://127.0.0.1:{port}/api/workflow-profiles/h3",
                 request_timeout,
@@ -177,9 +210,7 @@ def verify_runtime(
             return {
                 "health": health,
                 "active_h3": active["profile_id"],
-                "frontend_status": frontend_status,
-                "mobile_status": mobile_status,
-                "docs_status": docs_status,
+                **page_statuses,
             }
         finally:
             if process is not None:
