@@ -218,3 +218,32 @@ def test_stop_process_group_reaps_child_when_group_disappears(
     verifier._stop_process_group(process, 123)  # type: ignore[arg-type]
 
     assert process.wait_calls == [verifier._PROCESS_GROUP_TIMEOUT_SEC]
+
+
+def test_stop_process_group_never_kills_child_directly_when_reap_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.kill_calls = 0
+
+        def wait(self, *, timeout: float) -> None:
+            raise verifier.subprocess.TimeoutExpired("DirectorStudio", timeout)
+
+        def kill(self) -> None:
+            self.kill_calls += 1
+
+    def killpg(_process_group_id: int, _signal: int) -> None:
+        raise ProcessLookupError
+
+    process = FakeProcess()
+    monkeypatch.setattr(
+        verifier,
+        "os",
+        SimpleNamespace(name="posix", killpg=killpg),
+    )
+
+    with pytest.raises(RuntimeError, match="reap"):
+        verifier._stop_process_group(process, 123)  # type: ignore[arg-type]
+
+    assert process.kill_calls == 0
