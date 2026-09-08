@@ -24,7 +24,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install system checks
-        run: sudo apt-get update && sudo apt-get install --yes shellcheck
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg shellcheck
       - name: Install Python dependencies
         run: python -m pip install -r backend/requirements.txt -r backend/requirements-build.txt
       - name: Build and verify Linux Portable
