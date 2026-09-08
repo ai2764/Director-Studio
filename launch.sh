@@ -13,6 +13,7 @@ if [[ -z "$port" && -f "$root_dir/.env" ]]; then
   port="$(sed -nE 's/^[[:space:]]*DS_PORT[[:space:]]*=[[:space:]]*"?([0-9]+)"?[[:space:]]*$/\1/p' "$root_dir/.env" | tail -n 1)"
 fi
 port="${port:-8790}"
+export DS_PORT="$port"
 timeout_sec="${DS_STARTUP_TIMEOUT_SEC:-60}"
 url="http://127.0.0.1:$port"
 
