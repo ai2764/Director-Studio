@@ -202,6 +202,7 @@ def test_dependency_verification_does_not_start_mcp_server(
     assert [str(paths.python), "-c", "import comfy_mcp"] in commands
 
 
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows CMD process semantics")
 def test_cmd_wrapper_returns_python_installer_failure(tmp_path: Path) -> None:
     shutil.copy2(REPO_ROOT / "Install-Tools.cmd", tmp_path / "Install-Tools.cmd")
     shutil.copy2(INSTALLER, tmp_path / "Install-Tools.py")
