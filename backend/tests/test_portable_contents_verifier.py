@@ -39,6 +39,7 @@ def _write_archive(
     separator: str = "/",
     executable_bytes: bytes | None = None,
     archive_env_bytes: bytes | None = None,
+    duplicate_env_bytes: bytes | None = None,
     extra_entries: tuple[str, ...] = (),
     tar_symlink: bool = False,
     tar_device: bool = False,
@@ -61,6 +62,8 @@ def _write_archive(
             for name, contents in members
         ]
     members.extend((name, b"unexpected") for name in extra_entries)
+    if duplicate_env_bytes is not None:
+        members.append((".env", duplicate_env_bytes))
 
     if flavor.archive_kind == "zip":
         with zipfile.ZipFile(path, "w") as archive:
@@ -199,6 +202,23 @@ def test_archive_rejects_active_secret_in_archived_env(tmp_path: Path, platform:
     )
 
     with pytest.raises(ValueError, match="active secret"):
+        verifier.verify_archive(archive, package, flavor)
+
+
+@pytest.mark.parametrize("platform", ["windows", "linux"])
+def test_archive_rejects_duplicate_normalized_env_member(
+    tmp_path: Path, platform: str
+):
+    flavor = verifier.FLAVORS[platform]
+    package = _package_fixture(tmp_path, flavor)
+    archive = _write_archive(
+        tmp_path / ("portable.zip" if flavor.archive_kind == "zip" else "portable.tar.gz"),
+        package,
+        flavor,
+        duplicate_env_bytes=b"DS_H3_MINIMAX_API_KEY=secret\n",
+    )
+
+    with pytest.raises(ValueError, match="duplicate"):
         verifier.verify_archive(archive, package, flavor)
 
 

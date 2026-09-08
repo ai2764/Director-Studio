@@ -98,6 +98,28 @@ server.serve_forever()
     )
 
 
+def test_verification_environment_removes_inherited_director_studio_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DS_DATA_DIR", "/outside/data")
+    monkeypatch.setenv("DS_JOBS_DIR", "/outside/jobs")
+    monkeypatch.setenv("DS_H3_PROVIDER", "custom")
+    monkeypatch.setenv("DS_H3_MINIMAX_API_KEY", "secret")
+    monkeypatch.setenv("UNRELATED_SETTING", "preserved")
+
+    environment = verifier._verification_environment(9123)
+
+    assert environment["DS_HOST"] == "127.0.0.1"
+    assert environment["DS_PORT"] == "9123"
+    assert environment["UNRELATED_SETTING"] == "preserved"
+    assert not {
+        "DS_DATA_DIR",
+        "DS_JOBS_DIR",
+        "DS_H3_PROVIDER",
+        "DS_H3_MINIMAX_API_KEY",
+    } & environment.keys()
+
+
 @posix_only
 def test_verify_runtime_uses_copy_and_checks_health_profiles_and_pages(
     tmp_path: Path,

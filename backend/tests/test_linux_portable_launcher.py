@@ -165,6 +165,47 @@ def test_launcher_maps_pre_health_zero_exit_to_failure_without_opening_browser(
     assert not open_capture.exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX process semantics")
+def test_launcher_timeout_kills_child_that_ignores_term(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    bin_dir = package / "bin"
+    package.mkdir()
+    bin_dir.mkdir()
+
+    shutil.copy2(LAUNCHER, package / "launch.sh")
+    (package / "launch.sh").chmod(0o755)
+    child_pid = tmp_path / "child-pid"
+    (package / "DirectorStudio").write_text(
+        "#!/usr/bin/env bash\n"
+        "trap '' TERM\n"
+        'printf "%s\\n" "$$" > "$CHILD_PID_CAPTURE"\n'
+        "while true; do sleep 1; done\n",
+        encoding="utf-8",
+    )
+    (package / "DirectorStudio").chmod(0o755)
+
+    environment = _base_env(bin_dir)
+    environment["CHILD_PID_CAPTURE"] = str(child_pid)
+    environment["DS_PORT"] = str(_free_port())
+    environment["DS_STARTUP_TIMEOUT_SEC"] = "1"
+    started = time.monotonic()
+    completed = subprocess.run(
+        [str(package / "launch.sh")],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=8,
+    )
+
+    pid = int(_wait_for_text(child_pid))
+    assert completed.returncode == 1
+    assert time.monotonic() - started < 7
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
 def _can_connect(port: int) -> bool:
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=0.2):
