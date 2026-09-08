@@ -42,6 +42,12 @@ def _write_fake_archive_viewer(tmp_path: Path, listing: str) -> dict[str, str]:
         '@echo off\r\ntype "%FAKE_ARCHIVE_LISTING%"\r\n',
         encoding="utf-8",
     )
+    python = bin_dir / "python"
+    python.write_text(
+        '#!/usr/bin/env bash\ncat "$FAKE_ARCHIVE_LISTING"\n',
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
     env["FAKE_ARCHIVE_LISTING"] = str(listing_path)
