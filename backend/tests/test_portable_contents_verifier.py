@@ -43,6 +43,7 @@ def _write_archive(
     tar_symlink: bool = False,
     tar_device: bool = False,
     zip_special_mode: int | None = None,
+    required_directory: str | None = None,
 ) -> Path:
     members = [
         (name, (package / name).read_bytes())
@@ -63,6 +64,9 @@ def _write_archive(
     if flavor.archive_kind == "zip":
         with zipfile.ZipFile(path, "w") as archive:
             for name, contents in members:
+                if name == required_directory:
+                    archive.writestr(f"{flavor.name}/{name}/", b"")
+                    continue
                 archive.writestr(
                     f"{flavor.name}{separator}{name}",
                     contents,
@@ -77,6 +81,10 @@ def _write_archive(
     with tarfile.open(path, "w:gz") as archive:
         for name, contents in members:
             member = tarfile.TarInfo(f"{flavor.name}{separator}{name}")
+            if name == required_directory:
+                member.type = tarfile.DIRTYPE
+                archive.addfile(member)
+                continue
             member.size = len(contents)
             archive.addfile(member, io.BytesIO(contents))
         if tar_symlink:
@@ -200,6 +208,24 @@ def test_archive_requires_exactly_one_executable(tmp_path: Path):
         )
 
     with pytest.raises(ValueError, match="exactly one"):
+        verifier.verify_archive(archive, package, flavor)
+
+
+@pytest.mark.parametrize("platform", ["windows", "linux"])
+@pytest.mark.parametrize("required_name", [".env", "README.md"])
+def test_archive_requires_required_entries_to_be_regular_files(
+    tmp_path: Path, platform: str, required_name: str
+):
+    flavor = verifier.FLAVORS[platform]
+    package = _package_fixture(tmp_path, flavor)
+    archive = _write_archive(
+        tmp_path / ("portable.zip" if flavor.archive_kind == "zip" else "portable.tar.gz"),
+        package,
+        flavor,
+        required_directory=required_name,
+    )
+
+    with pytest.raises(ValueError, match="regular file"):
         verifier.verify_archive(archive, package, flavor)
 
 
