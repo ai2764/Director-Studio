@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -9,6 +11,36 @@ import sys
 
 MCP_COMMAND_KEY = "DS_COMFY_MCP_COMMAND"
 COMFY_COMMAND_KEY = "DS_COMFY_MCP_COMFY_BIN"
+
+
+@dataclass(frozen=True)
+class ToolPaths:
+    python: Path
+    mcp: Path
+    comfy: Path
+
+
+def resolve_tool_paths(
+    install_root: Path,
+    platform_name: str | None = None,
+) -> ToolPaths:
+    selected = platform_name or os.name
+    venv_root = install_root / "tools" / "venv"
+    if selected == "nt":
+        commands = venv_root / "Scripts"
+        return ToolPaths(
+            python=commands / "python.exe",
+            mcp=commands / "comfy-mcp.exe",
+            comfy=commands / "comfy.exe",
+        )
+    if selected == "posix":
+        commands = venv_root / "bin"
+        return ToolPaths(
+            python=commands / "python",
+            mcp=commands / "comfy-mcp",
+            comfy=commands / "comfy",
+        )
+    raise RuntimeError(f"Unsupported operating system: {selected}")
 
 
 def _quoted(value: Path | str) -> str:
@@ -66,21 +98,18 @@ def _run(command: list[str]) -> None:
 
 def install_dependencies(install_root: Path, requirements: Path) -> tuple[Path, Path]:
     venv_root = install_root / "tools" / "venv"
-    venv_python = venv_root / "Scripts" / "python.exe"
-    if not venv_python.is_file():
+    paths = resolve_tool_paths(install_root)
+    if not paths.python.is_file():
         _run([sys.executable, "-m", "venv", str(venv_root)])
-    _run([str(venv_python), "-m", "pip", "install", "--upgrade", "pip"])
-    _run([str(venv_python), "-m", "pip", "install", "-r", str(requirements)])
+    _run([str(paths.python), "-m", "pip", "install", "--upgrade", "pip"])
+    _run([str(paths.python), "-m", "pip", "install", "-r", str(requirements)])
 
-    scripts = venv_root / "Scripts"
-    mcp_command = scripts / "comfy-mcp.exe"
-    comfy_command = scripts / "comfy.exe"
-    for executable in (mcp_command, comfy_command):
+    for executable in (paths.mcp, paths.comfy):
         if not executable.is_file():
             raise RuntimeError(f"Installation did not create {executable}")
-    _run([str(venv_python), "-c", "import comfy_mcp"])
-    _run([str(comfy_command), "--help"])
-    return mcp_command, comfy_command
+    _run([str(paths.python), "-c", "import comfy_mcp"])
+    _run([str(paths.comfy), "--help"])
+    return paths.mcp, paths.comfy
 
 
 def build_parser() -> argparse.ArgumentParser:
