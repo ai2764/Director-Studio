@@ -129,12 +129,10 @@ def _stop_process_group(
 
     try:
         process.wait(timeout=_PROCESS_GROUP_TIMEOUT_SEC)
-    except subprocess.TimeoutExpired:
-        try:
-            process.kill()
-        except ProcessLookupError:
-            pass
-        process.wait()
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            "could not reap packaged runtime after process-group cleanup"
+        ) from exc
 
 
 def verify_runtime(
