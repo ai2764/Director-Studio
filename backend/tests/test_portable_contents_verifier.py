@@ -44,6 +44,7 @@ def _write_archive(
     tar_device: bool = False,
     zip_special_mode: int | None = None,
     required_directory: str | None = None,
+    required_directory_without_slash: bool = False,
 ) -> Path:
     members = [
         (name, (package / name).read_bytes())
@@ -65,7 +66,14 @@ def _write_archive(
         with zipfile.ZipFile(path, "w") as archive:
             for name, contents in members:
                 if name == required_directory:
-                    archive.writestr(f"{flavor.name}/{name}/", b"")
+                    entry_name = f"{flavor.name}/{name}"
+                    if required_directory_without_slash:
+                        directory = zipfile.ZipInfo(entry_name)
+                        directory.create_system = 3
+                        directory.external_attr = stat.S_IFDIR << 16
+                        archive.writestr(directory, b"")
+                    else:
+                        archive.writestr(f"{entry_name}/", b"")
                     continue
                 archive.writestr(
                     f"{flavor.name}{separator}{name}",
@@ -223,6 +231,23 @@ def test_archive_requires_required_entries_to_be_regular_files(
         package,
         flavor,
         required_directory=required_name,
+    )
+
+    with pytest.raises(ValueError, match="regular file"):
+        verifier.verify_archive(archive, package, flavor)
+
+
+def test_zip_required_entry_rejects_directory_mode_without_trailing_slash(
+    tmp_path: Path,
+):
+    flavor = verifier.FLAVORS["windows"]
+    package = _package_fixture(tmp_path, flavor)
+    archive = _write_archive(
+        tmp_path / "portable.zip",
+        package,
+        flavor,
+        required_directory=".env",
+        required_directory_without_slash=True,
     )
 
     with pytest.raises(ValueError, match="regular file"):
