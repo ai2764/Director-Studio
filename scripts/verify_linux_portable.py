@@ -135,6 +135,16 @@ def _stop_process_group(
         ) from exc
 
 
+def _verification_environment(port: int) -> dict[str, str]:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("DS_")
+    }
+    environment.update({"DS_HOST": "127.0.0.1", "DS_PORT": str(port)})
+    return environment
+
+
 def verify_runtime(
     package_root: Path, port: int, timeout_sec: float
 ) -> dict[str, Any]:
@@ -147,8 +157,7 @@ def verify_runtime(
         executable = runtime_root / "DirectorStudio"
         stdout_path = Path(temp) / "stdout.log"
         stderr_path = Path(temp) / "stderr.log"
-        env = os.environ.copy()
-        env.update({"DS_HOST": "127.0.0.1", "DS_PORT": str(port)})
+        env = _verification_environment(port)
         try:
             with stdout_path.open("wb") as stdout_file, stderr_path.open(
                 "wb"

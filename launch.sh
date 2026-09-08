@@ -20,6 +20,14 @@ child_pid=""
 stop_child() {
   if [[ -n "$child_pid" ]] && kill -0 "$child_pid" 2>/dev/null; then
     kill -TERM "$child_pid" 2>/dev/null || true
+    for _ in {1..20}; do
+      if ! kill -0 "$child_pid" 2>/dev/null; then
+        wait "$child_pid" 2>/dev/null || true
+        return
+      fi
+      sleep 0.1
+    done
+    kill -KILL "$child_pid" 2>/dev/null || true
     wait "$child_pid" 2>/dev/null || true
   fi
 }

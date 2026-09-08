@@ -40,6 +40,7 @@ def _write_archive(
     executable_bytes: bytes | None = None,
     archive_env_bytes: bytes | None = None,
     duplicate_env_bytes: bytes | None = None,
+    duplicate_env_name: str = "./.env",
     extra_entries: tuple[str, ...] = (),
     tar_symlink: bool = False,
     tar_device: bool = False,
@@ -63,7 +64,7 @@ def _write_archive(
         ]
     members.extend((name, b"unexpected") for name in extra_entries)
     if duplicate_env_bytes is not None:
-        members.append((".env", duplicate_env_bytes))
+        members.append((duplicate_env_name, duplicate_env_bytes))
 
     if flavor.archive_kind == "zip":
         with zipfile.ZipFile(path, "w") as archive:

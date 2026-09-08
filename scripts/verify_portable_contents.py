@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tarfile
 import zipfile
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Literal
@@ -210,6 +211,13 @@ def _verify_archive_names(names: Iterable[str], flavor: PackageFlavor) -> tuple[
         normalized_names.append("/".join(parts))
     if normalized_names.count(executable_name) != 1:
         raise ValueError(f"archive must contain exactly one {flavor.executable}")
+    duplicate_names = sorted(
+        name for name, count in Counter(normalized_names).items() if count > 1
+    )
+    if duplicate_names:
+        raise ValueError(
+            f"archive contains duplicate normalized members: {', '.join(duplicate_names)}"
+        )
     missing = {
         f"{flavor.name}/{name}" for name in required_package_files(flavor)
     } - set(normalized_names)
