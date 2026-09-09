@@ -87,11 +87,15 @@ function MobileAppShell() {
         <DirectorPage mobile chatOnly requestedMessage={directorRequest} />
       </div>
       <div className="mobile-page mobile-production-page" hidden={page !== "production"}>
-        <ProductionPage
-          active={page === "production"}
-          mobile
-          onReviewMaterials={reviewMaterials}
-        />
+        {project?.mode === "json_production" ? (
+          <JsonProductionPage active={page === "production"} />
+        ) : (
+          <ProductionPage
+            active={page === "production"}
+            mobile
+            onReviewMaterials={reviewMaterials}
+          />
+        )}
       </div>
     </div>
   );

@@ -193,6 +193,24 @@ describe("App mode routing", () => {
     expect(screen.queryByTestId("production-page")).toBeNull();
   });
 
+  it("mounts JsonProductionPage for mobile json_production projects on the Production tab", () => {
+    window.history.replaceState({}, "", "/mobile");
+    projectState.project = {
+      id: "prj_json",
+      name: "JSON board",
+      script_text: "",
+      mode: "json_production",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      shot_ids: [],
+    };
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Production" }));
+
+    expect(screen.getByTestId("json-production-page")).toBeTruthy();
+    expect(screen.queryByTestId("production-page")).toBeNull();
+  });
+
   it("unmounts the previous Production page when project mode changes", () => {
     const { rerender } = render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "Production" }));
