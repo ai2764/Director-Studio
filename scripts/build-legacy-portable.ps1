@@ -106,6 +106,13 @@ if ($LASTEXITCODE -ne 0) { throw "Portable package verification failed" }
 tar.exe -a -c -f $zipPath -C $distRoot $packageName
 if ($LASTEXITCODE -ne 0) { throw "Portable zip creation failed" }
 
+py (Join-Path $PSScriptRoot "verify_portable_contents.py") `
+    --platform windows `
+    --package-root $packageRoot `
+    --executable $builtExe `
+    --archive $zipPath
+if ($LASTEXITCODE -ne 0) { throw "Cross-platform package policy verification failed" }
+
 $archiveEntries = @(tar.exe -tf $zipPath)
 if ($LASTEXITCODE -ne 0) { throw "Portable zip listing failed" }
 $requiredArchiveEntries = @(

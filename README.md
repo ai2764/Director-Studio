@@ -17,6 +17,24 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and exten
 | Execution | ComfyUI through MCP (actor / scene / prop / Layout / local H3) · MiniMax H3 official API |
 | Planning LLM | Local Ollama (exclusive VRAM with Comfy) |
 
+## Platform support
+
+| Platform | Portable package | Source install | Support level |
+|----------|------------------|----------------|---------------|
+| Windows 10/11 x64 | Yes | Yes | Officially supported and tested |
+| Ubuntu 22.04/24.04 x86_64 | Yes | Yes | Officially supported and tested |
+| Other Linux distributions | Not published | Likely compatible | Best effort; not covered by CI |
+| macOS | No | Not tested | Unsupported |
+
+Windows and Ubuntu use the same application code and project format. Only the platform entry points, private tool-environment paths, process handling, and package format differ:
+
+| Platform | Install tools | Start Portable | Release artifact |
+|----------|---------------|----------------|------------------|
+| Windows | `Install-Tools.cmd` | `DirectorStudio.exe` | `Director-Studio-Legacy-Windows-x64.zip` |
+| Ubuntu | `./install-tools.sh` | `./launch.sh` | `Director-Studio-Linux-x86_64.tar.gz` |
+
+An officially supported platform is exercised by its own CI build and packaged-runtime checks. “Best effort” means the source may run there, but releases are not built or verified for that platform.
+
 ## Windows portable installation
 
 The portable package runs Director Studio locally as one `DirectorStudio.exe`. The UI and backend are included; Ollama and ComfyUI remain external local services. The included installer creates a private Python environment for `comfy-cli` and `comfy-mcp`.
@@ -83,7 +101,52 @@ Start Ollama and ComfyUI first, then run:
 
 If the MCP process cannot start, verify both configured executable paths. You can run `comfy --help` to check the Comfy CLI; do not use `comfy-mcp --help`, because that entry point starts the stdio server. If a workflow fails, load the same workflow in ComfyUI and confirm its custom nodes and models are installed.
 
-### Connect a custom H3 workflow
+## Linux portable installation
+
+Supported: Ubuntu 22.04 or 24.04, x86_64. Ollama and ComfyUI remain external services and must be installed and running separately.
+
+Install the required host tools. Ubuntu's `ffmpeg` package provides both `ffmpeg` and `ffprobe`, which Director Studio uses for voice references and video tail-frame extraction:
+
+```bash
+sudo apt-get update
+sudo apt-get install --yes curl ffmpeg python3-venv
+```
+
+Extract the complete archive into a writable directory:
+
+```bash
+tar -xzf Director-Studio-Linux-x86_64.tar.gz
+cd Director-Studio-Linux-x86_64
+chmod +x DirectorStudio install-tools.sh launch.sh
+```
+
+Edit `.env` and confirm the Ollama and ComfyUI base URLs. Then install the private Comfy command-line environment:
+
+```bash
+./install-tools.sh
+```
+
+Start Ollama and ComfyUI, then launch Director Studio:
+
+```bash
+./launch.sh
+```
+
+The launcher waits for the health endpoint and opens the UI with `xdg-open` when available. Run `./DirectorStudio` instead when you do not want it to open a browser.
+
+Linux has the same Actor, Costume, Scene, Prop, Layout, official H3, MiniMax API, and runtime Custom H3 behavior as Windows. Follow the shared Custom H3 instructions below; imported workflows and generated state remain in the adjacent `data` directory.
+
+Troubleshooting:
+
+- The tools installer requires Python 3.11 or newer and Ubuntu's `python3-venv` package.
+- `launch.sh` uses `curl` for readiness. If `xdg-open` is unavailable or cannot open a browser, it prints the local URL for you to open manually.
+- Port 8790 is the default. Stop the process using it or set a different `DS_PORT` in `.env`.
+- If executable permissions were lost during a non-tar transfer, rerun `chmod +x DirectorStudio install-tools.sh launch.sh`.
+- Verify `DS_COMFY_BASE_URL` and `DS_OLLAMA_BASE_URL` when either external service cannot be reached.
+- Custom nodes, models, LoRAs, and other workflow dependencies remain your responsibility in ComfyUI.
+- The GitHub Actions artifact is CPU- and package-verified. GPU generation is not considered verified until the manual NVIDIA checklist has been completed on supported hardware.
+
+## Connect a custom H3 workflow
 
 Every clean Portable starts with **Built-in Official H3**. First make sure your custom H3 Ref2AV workflow already runs successfully in the same local ComfyUI. Then connect it at runtime:
 
@@ -307,6 +370,8 @@ Before distributing the result, extract the new zip, configure its `.env`, start
 
 ## Development setup
 
+Windows PowerShell:
+
 ```powershell
 # Backend (from backend/)
 python -m pip install -r requirements.txt
@@ -314,6 +379,26 @@ Copy-Item .env.example .env  # optional: customize local service settings
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8790 --reload
 
 # Frontend (from frontend/)
+npm install
+npm run dev
+```
+
+Ubuntu shell:
+
+```bash
+# From the repository root
+sudo apt-get update
+sudo apt-get install --yes ffmpeg python3-venv
+
+# Backend
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8790 --reload
+
+# Frontend, in another shell
+cd frontend
 npm install
 npm run dev
 ```
@@ -401,3 +486,18 @@ pwsh -File scripts/build-legacy-portable.ps1
 The build runs the frontend and focused packaged-runtime tests, creates the one-file executable, launches it on an isolated port, checks the health endpoint and bundled UI, then writes the archive and reports its SHA-256 in the terminal. It also verifies that the executable and zip contain the official H3 workflow but no imported profiles, active pointer, user data, projects, jobs, outputs, or tests. The current script and archive retain their existing `legacy` filename for build compatibility; the packaged application itself is Director Studio:
 
 - `dist/Director-Studio-Legacy-Windows-x64.zip`
+
+## Build the Linux portable package
+
+On Ubuntu 22.04 or 24.04 x86_64, install Node.js, npm, Python 3.11 or newer, PowerShell, FFmpeg, and ShellCheck, then run:
+
+```bash
+python3 -m pip install -r backend/requirements.txt
+python3 -m pip install -r backend/requirements-build.txt
+./scripts/build-linux-portable.sh
+```
+
+The Linux build runs the same application and packaged-content checks with Linux-specific launcher, process-cleanup, executable-permission, and archive-safety verification. It produces:
+
+- `dist/Director-Studio-Linux-x86_64.tar.gz`
+- `dist/Director-Studio-Linux-x86_64.tar.gz.sha256`
