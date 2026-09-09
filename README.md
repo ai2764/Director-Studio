@@ -17,6 +17,24 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and exten
 | Execution | ComfyUI through MCP (actor / scene / prop / Layout / local H3) · MiniMax H3 official API |
 | Planning LLM | Local Ollama (exclusive VRAM with Comfy) |
 
+## Platform support
+
+| Platform | Portable package | Source install | Support level |
+|----------|------------------|----------------|---------------|
+| Windows 10/11 x64 | Yes | Yes | Officially supported and tested |
+| Ubuntu 22.04/24.04 x86_64 | Yes | Yes | Officially supported and tested |
+| Other Linux distributions | Not published | Likely compatible | Best effort; not covered by CI |
+| macOS | No | Not tested | Unsupported |
+
+Windows and Ubuntu use the same application code and project format. Only the platform entry points, private tool-environment paths, process handling, and package format differ:
+
+| Platform | Install tools | Start Portable | Release artifact |
+|----------|---------------|----------------|------------------|
+| Windows | `Install-Tools.cmd` | `DirectorStudio.exe` | `Director-Studio-Legacy-Windows-x64.zip` |
+| Ubuntu | `./install-tools.sh` | `./launch.sh` | `Director-Studio-Linux-x86_64.tar.gz` |
+
+An officially supported platform is exercised by its own CI build and packaged-runtime checks. “Best effort” means the source may run there, but releases are not built or verified for that platform.
+
 ## Windows portable installation
 
 The portable package runs Director Studio locally as one `DirectorStudio.exe`. The UI and backend are included; Ollama and ComfyUI remain external local services. The included installer creates a private Python environment for `comfy-cli` and `comfy-mcp`.
@@ -352,6 +370,8 @@ Before distributing the result, extract the new zip, configure its `.env`, start
 
 ## Development setup
 
+Windows PowerShell:
+
 ```powershell
 # Backend (from backend/)
 python -m pip install -r requirements.txt
@@ -359,6 +379,26 @@ Copy-Item .env.example .env  # optional: customize local service settings
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8790 --reload
 
 # Frontend (from frontend/)
+npm install
+npm run dev
+```
+
+Ubuntu shell:
+
+```bash
+# From the repository root
+sudo apt-get update
+sudo apt-get install --yes ffmpeg python3-venv
+
+# Backend
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8790 --reload
+
+# Frontend, in another shell
+cd frontend
 npm install
 npm run dev
 ```
@@ -446,3 +486,18 @@ pwsh -File scripts/build-legacy-portable.ps1
 The build runs the frontend and focused packaged-runtime tests, creates the one-file executable, launches it on an isolated port, checks the health endpoint and bundled UI, then writes the archive and reports its SHA-256 in the terminal. It also verifies that the executable and zip contain the official H3 workflow but no imported profiles, active pointer, user data, projects, jobs, outputs, or tests. The current script and archive retain their existing `legacy` filename for build compatibility; the packaged application itself is Director Studio:
 
 - `dist/Director-Studio-Legacy-Windows-x64.zip`
+
+## Build the Linux portable package
+
+On Ubuntu 22.04 or 24.04 x86_64, install Node.js, npm, Python 3.11 or newer, PowerShell, FFmpeg, and ShellCheck, then run:
+
+```bash
+python3 -m pip install -r backend/requirements.txt
+python3 -m pip install -r backend/requirements-build.txt
+./scripts/build-linux-portable.sh
+```
+
+The Linux build runs the same application and packaged-content checks with Linux-specific launcher, process-cleanup, executable-permission, and archive-safety verification. It produces:
+
+- `dist/Director-Studio-Linux-x86_64.tar.gz`
+- `dist/Director-Studio-Linux-x86_64.tar.gz.sha256`
