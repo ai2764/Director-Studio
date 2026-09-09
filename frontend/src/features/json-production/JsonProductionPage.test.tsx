@@ -150,6 +150,32 @@ describe("JsonProductionPage import", () => {
     expect(screen.getByRole("button", { name: "Import JSON" })).toBeTruthy();
   });
 
+  it("captures a large clipboard payload without truncating it", async () => {
+    const document = {
+      ...twoShotDocument(),
+      shots: [
+        makeShot("shot_large", "Large paste", {
+          prompt: {
+            ...SHARED_PROMPT,
+            detailed_description: `0–6 seconds: ${"continuous motion detail ".repeat(1200)}`,
+          },
+        }),
+      ],
+    };
+    const json = JSON.stringify(document);
+    render(<JsonProductionPage active />);
+    const textarea = await screen.findByLabelText("Paste JSON") as HTMLTextAreaElement;
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        getData: (type: string) => (type === "text/plain" ? json : ""),
+      },
+    });
+
+    expect(textarea.value).toBe(json);
+    expect(screen.getByText(`${json.length} characters`)).toBeTruthy();
+  });
+
   it("never calls PUT when pasted JSON is invalid", async () => {
     render(<JsonProductionPage active />);
     await screen.findByLabelText("Paste JSON");

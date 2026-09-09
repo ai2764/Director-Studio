@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent as ReactClipboardEvent,
+} from "react";
 import { EMPTY_PROMPT_SECTIONS, type JobStatus, type PromptSections } from "../../shared/api/types";
 import { PageShell } from "../../shared/components/PageShell";
 import { useProject } from "../../shared/project/ProjectContext";
@@ -245,6 +252,18 @@ export function JsonProductionPage({ active = true }: { active?: boolean } = {})
     void file.text().then((text) => importJsonText(text));
   };
 
+  const onPasteJson = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = event.clipboardData.getData("text/plain");
+    if (!pasted) return;
+    event.preventDefault();
+    const textarea = event.currentTarget;
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? start;
+    setPasteText(
+      `${textarea.value.slice(0, start)}${pasted}${textarea.value.slice(end)}`,
+    );
+  };
+
   const onSavePrompt = async () => {
     if (!projectId || !storyboard || !selected) return;
     setError(null);
@@ -484,9 +503,13 @@ export function JsonProductionPage({ active = true }: { active?: boolean } = {})
               rows={12}
               value={pasteText}
               onChange={(e) => setPasteText(e.target.value)}
+              onPaste={onPasteJson}
               spellCheck={false}
             />
           </label>
+          <div className="field-hint json-paste-count" aria-live="polite">
+            {pasteText.length} characters
+          </div>
           <button
             type="button"
             className="btn primary"
