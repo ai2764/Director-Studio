@@ -30,6 +30,8 @@ function MobileAppShell() {
   const [directorRequest, setDirectorRequest] = useState<DirectorChatRequest | null>(null);
   const requestSequence = useRef(0);
   const { project } = useProject();
+  const jsonProductionMode = project?.mode === "json_production";
+  const activePage = jsonProductionMode ? "production" : page;
   const reviewMaterials = (shot: Shot, shotNumber: number) => {
     requestSequence.current += 1;
     setDirectorRequest(materialReviewRequest(shot, shotNumber, requestSequence.current));
@@ -37,7 +39,10 @@ function MobileAppShell() {
   };
 
   return (
-    <div className="mobile-app" data-theme="oat-walnut">
+    <div
+      className={jsonProductionMode ? "mobile-app json-production-mobile-app" : "mobile-app"}
+      data-theme="oat-walnut"
+    >
       <header className="mobile-topbar" aria-label="Mobile application header">
         <div className="mobile-topbar-row mobile-topbar-primary">
           <div className="mobile-brand-row">
@@ -52,51 +57,51 @@ function MobileAppShell() {
           </details>
         </div>
 
-        <nav className="mobile-topbar-row mobile-workspace-nav" aria-label="Mobile workspace">
+        {!jsonProductionMode ? <nav className="mobile-topbar-row mobile-workspace-nav" aria-label="Mobile workspace">
           <button
             type="button"
-            className={page === "asset" ? "active" : ""}
-            aria-current={page === "asset" ? "page" : undefined}
+            className={activePage === "asset" ? "active" : ""}
+            aria-current={activePage === "asset" ? "page" : undefined}
             onClick={() => setPage("asset")}
           >
             Asset
           </button>
           <button
             type="button"
-            className={page === "director" ? "active" : ""}
-            aria-current={page === "director" ? "page" : undefined}
+            className={activePage === "director" ? "active" : ""}
+            aria-current={activePage === "director" ? "page" : undefined}
             onClick={() => setPage("director")}
           >
             Director
           </button>
           <button
             type="button"
-            className={page === "production" ? "active" : ""}
-            aria-current={page === "production" ? "page" : undefined}
+            className={activePage === "production" ? "active" : ""}
+            aria-current={activePage === "production" ? "page" : undefined}
             onClick={() => setPage("production")}
           >
             Production
           </button>
-        </nav>
+        </nav> : null}
       </header>
 
-      <div className="mobile-page mobile-asset-page" hidden={page !== "asset"}>
+      <div className="mobile-page mobile-asset-page" hidden={activePage !== "asset"}>
         <MobileAssetWorkspace />
       </div>
-      <div className="mobile-page mobile-director-page" hidden={page !== "director"}>
+      <div className="mobile-page mobile-director-page" hidden={activePage !== "director"}>
         <DirectorPage mobile chatOnly requestedMessage={directorRequest} />
       </div>
       <div
         className={`mobile-page mobile-production-page${
           project?.mode === "json_production" ? " mobile-json-production-page" : ""
         }`}
-        hidden={page !== "production"}
+        hidden={activePage !== "production"}
       >
-        {project?.mode === "json_production" ? (
-          <JsonProductionPage active={page === "production"} />
+        {jsonProductionMode ? (
+          <JsonProductionPage active mobile />
         ) : (
           <ProductionPage
-            active={page === "production"}
+            active={activePage === "production"}
             mobile
             onReviewMaterials={reviewMaterials}
           />

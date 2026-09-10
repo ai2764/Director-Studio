@@ -4172,6 +4172,354 @@ select {
   max-height: min(42vh, 360px);
 }
 
+.json-upload-control {
+  position: relative;
+  display: inline-flex;
+  width: fit-content;
+  min-height: 2.45rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 680;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.json-upload-control input[type="file"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.json-upload-control:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* Mobile JSON Production: a high-contrast, one-shot-at-a-time control surface. */
+.json-production-mobile-app {
+  --bg: #eef1f4;
+  --bg-elev: #e6eaf0;
+  --bg-panel: #ffffff;
+  --panel: #ffffff;
+  --border: #cdd4dd;
+  --border-strong: #9da9b7;
+  --text: #17212b;
+  --muted: #5d6977;
+  --accent: #a33f2b;
+  --accent-dim: #81311f;
+  --accent-soft: #f2ddd7;
+  --ok: #28734e;
+  --danger: #af3434;
+  --info: #356f9f;
+  color: var(--text);
+}
+
+.json-production-mobile-app .mobile-topbar {
+  gap: 0;
+  padding-bottom: 0.55rem;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 1px 0 rgba(23, 33, 43, 0.05);
+}
+
+@media (max-width: 900px) {
+  .mobile-json-production-page .json-production-page {
+    min-height: 100%;
+    padding: 0.75rem 0.8rem 0;
+    color: var(--text);
+    background: var(--bg);
+  }
+
+  .mobile-json-production-page .page-shell-header {
+    align-items: center;
+    flex-wrap: nowrap;
+    margin-bottom: 0.75rem;
+  }
+
+  .mobile-json-production-page .page-shell-title {
+    font-size: 1.12rem;
+    letter-spacing: -0.02em;
+  }
+
+  .mobile-json-production-page .page-shell-sub {
+    display: none;
+  }
+
+  .mobile-json-production-page .page-shell-actions {
+    flex-shrink: 0;
+  }
+
+  .mobile-json-production-page .json-file-action {
+    min-width: 0;
+  }
+
+  .mobile-json-production-page .json-file-action > span {
+    display: inline-flex;
+    min-height: 2.35rem;
+    align-items: center;
+    padding: 0.5rem 0.72rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--accent);
+    font-size: 0.76rem;
+    font-weight: 720;
+  }
+
+  .mobile-json-production-page .json-file-action input[type="file"] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .json-mobile-workspace {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  .json-mobile-control-deck {
+    position: sticky;
+    top: -0.75rem;
+    z-index: 8;
+    margin: -0.1rem -0.8rem 0;
+    padding: 0.1rem 0.8rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    background: rgba(238, 241, 244, 0.96);
+    backdrop-filter: blur(12px);
+  }
+
+  .json-mobile-shot-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 0.6rem;
+  }
+
+  .json-mobile-shot-picker {
+    display: grid;
+    min-width: 0;
+    gap: 0.28rem;
+  }
+
+  .json-mobile-shot-picker > span {
+    color: var(--muted);
+    font-size: 0.68rem;
+    font-weight: 680;
+  }
+
+  .json-mobile-shot-picker select {
+    width: 100%;
+    min-height: 2.65rem;
+    padding: 0.5rem 2.1rem 0.5rem 0.7rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 9px;
+    background: var(--panel);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.86rem;
+    font-weight: 680;
+  }
+
+  .json-mobile-status {
+    display: inline-flex;
+    min-height: 2.65rem;
+    align-items: center;
+    padding: 0.45rem 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .json-mobile-status-ready,
+  .json-mobile-status-succeeded {
+    border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
+    color: var(--ok);
+  }
+
+  .json-mobile-status-running,
+  .json-mobile-status-queued,
+  .json-mobile-status-uploading {
+    border-color: color-mix(in srgb, var(--info) 35%, var(--border));
+    color: var(--info);
+  }
+
+  .json-mobile-status-missing,
+  .json-mobile-status-dirty {
+    color: #8a5b19;
+  }
+
+  .json-mobile-workflow-nav {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0;
+    margin-top: 0.68rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .json-mobile-workflow-nav button {
+    min-height: 2.45rem;
+    border: 0;
+    border-bottom: 3px solid transparent;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  .json-mobile-workflow-nav button.active {
+    border-bottom-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .json-mobile-stage {
+    min-height: 0;
+    padding: 0.85rem 0 6.25rem;
+  }
+
+  .json-mobile-stage .section-card {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .json-mobile-stage .section-card-title {
+    color: var(--text);
+    font-size: 0.9rem;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  .json-mobile-stage .field textarea {
+    border-color: var(--border);
+    background: var(--panel);
+    color: var(--text);
+  }
+
+  .json-mobile-stage .field textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+
+  .json-mobile-stage .json-shot-editor textarea {
+    min-height: 24rem;
+  }
+
+  .json-mobile-stage .json-asset-slot {
+    margin: 0 0 0.65rem;
+    padding: 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel);
+  }
+
+  .json-mobile-stage .json-asset-slot-title {
+    color: var(--text);
+    font-size: 0.84rem;
+    font-weight: 720;
+  }
+
+  .json-mobile-stage .json-file-state {
+    color: var(--muted);
+  }
+
+  .json-mobile-stage .json-upload-control {
+    width: 100%;
+    border-color: var(--border-strong);
+    background: var(--bg-elev);
+    color: var(--text);
+  }
+
+  .json-mobile-stage .json-asset-preview {
+    max-height: 15rem;
+    object-fit: contain;
+    background: #18202a;
+  }
+
+  .json-mobile-stage .json-output-content > .section-card-head {
+    margin-bottom: 0.75rem;
+  }
+
+  .json-mobile-stage .json-output-panel {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .json-mobile-stage .json-output-panel > .section-card-head {
+    display: none;
+  }
+
+  .json-mobile-stage .h3-preview {
+    width: 100%;
+    max-height: none;
+    border-radius: 10px;
+    background: #10161d;
+  }
+
+  .json-mobile-generate-bar {
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin: 0 -0.8rem;
+    padding: 0.68rem 0.8rem calc(0.68rem + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.97);
+    box-shadow: 0 -8px 24px rgba(23, 33, 43, 0.08);
+  }
+
+  .json-mobile-generate-bar > div {
+    display: grid;
+    min-width: 0;
+    flex: 1;
+    gap: 0.08rem;
+  }
+
+  .json-mobile-generate-bar strong {
+    color: var(--text);
+    font-size: 0.78rem;
+  }
+
+  .json-mobile-generate-bar span {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.68rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .json-mobile-generate-bar .btn {
+    min-height: 2.6rem;
+    flex-shrink: 0;
+  }
+
+  .json-mobile-generate-bar .btn.primary {
+    background: var(--accent);
+    color: #ffffff;
+  }
+}
+
 /* Oat & Walnut: a quiet, warm production desk shared by the workspace surfaces. */
 .app {
   --bg: #cfc6b9;

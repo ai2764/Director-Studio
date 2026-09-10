@@ -15,6 +15,8 @@ type Props = {
   onAudioFile: (index: number, file: File | null) => void;
   onGenerate: () => void;
   onCancel: () => void;
+  view?: "all" | "references" | "output";
+  showActions?: boolean;
 };
 
 function titleCaseRole(role: JsonPictureRole): string {
@@ -54,6 +56,8 @@ export function JsonAssetSlots({
   onAudioFile,
   onGenerate,
   onCancel,
+  view = "all",
+  showActions = true,
 }: Props) {
   const jobActive = job ? ACTIVE.has(job.status) : false;
   const canGenerate =
@@ -63,8 +67,9 @@ export function JsonAssetSlots({
 
   return (
     <section className="section-card compact-card json-asset-panel" aria-label="Shot assets">
+      {view !== "output" ? <div className="json-reference-content">
       <div className="section-card-head">
-        <h2 className="section-card-title">Assets</h2>
+        <h2 className="section-card-title">References</h2>
       </div>
 
       {shot.pictures.map((picture) => {
@@ -73,7 +78,7 @@ export function JsonAssetSlots({
         const preview = picturePreviews.get(picture.index);
         return (
           <div key={`picture-${picture.index}`} className="field json-asset-slot">
-            <span>{title}</span>
+            <span className="json-asset-slot-title">{title}</span>
             <p className="field-hint">{picture.label}</p>
             {preview ? (
               <img className="json-asset-preview" src={preview} alt="" />
@@ -91,19 +96,22 @@ export function JsonAssetSlots({
                 </button>
               </div>
             ) : (
-              <div className="muted tiny">No file selected</div>
+              <div className="muted tiny json-file-state">No file selected</div>
             )}
-            <input
-              type="file"
-              aria-label={title}
-              accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
-              onChange={(e) => {
-                const next = e.target.files?.[0] || null;
-                e.target.value = "";
-                if (!next) return;
-                onPictureFile(picture.index, next);
-              }}
-            />
+            <label className="json-upload-control">
+              <input
+                type="file"
+                aria-label={title}
+                accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                onChange={(e) => {
+                  const next = e.target.files?.[0] || null;
+                  e.target.value = "";
+                  if (!next) return;
+                  onPictureFile(picture.index, next);
+                }}
+              />
+              <span>{file ? "Replace file" : "Choose file"}</span>
+            </label>
           </div>
         );
       })}
@@ -119,7 +127,7 @@ export function JsonAssetSlots({
           const file = files.audio.get(audio.index) || null;
           return (
             <div key={`audio-${audio.index}`} className="field json-asset-slot">
-              <span>{title}</span>
+              <span className="json-asset-slot-title">{title}</span>
               {file ? (
                 <div className="json-asset-file-row">
                   <div className="filename">{file.name}</div>
@@ -133,19 +141,22 @@ export function JsonAssetSlots({
                   </button>
                 </div>
               ) : (
-                <div className="muted tiny">No file selected</div>
+                <div className="muted tiny json-file-state">No file selected</div>
               )}
-              <input
-                type="file"
-                aria-label={title}
-                accept="audio/wav,audio/mpeg,audio/flac,audio/mp4,.wav,.mp3,.flac,.m4a"
-                onChange={(e) => {
-                  const next = e.target.files?.[0] || null;
-                  e.target.value = "";
-                  if (!next) return;
-                  onAudioFile(audio.index, next);
-                }}
-              />
+              <label className="json-upload-control">
+                <input
+                  type="file"
+                  aria-label={title}
+                  accept="audio/wav,audio/mpeg,audio/flac,audio/mp4,.wav,.mp3,.flac,.m4a"
+                  onChange={(e) => {
+                    const next = e.target.files?.[0] || null;
+                    e.target.value = "";
+                    if (!next) return;
+                    onAudioFile(audio.index, next);
+                  }}
+                />
+                <span>{file ? "Replace file" : "Choose file"}</span>
+              </label>
             </div>
           );
         })
@@ -161,7 +172,12 @@ export function JsonAssetSlots({
       {promptDirty ? (
         <p className="field-hint">Save prompt changes before generating.</p>
       ) : null}
+      </div> : null}
 
+      {view !== "references" ? <div className="json-output-content">
+      {view === "output" ? <div className="section-card-head">
+        <h2 className="section-card-title">Output</h2>
+      </div> : null}
       {job ? (
         <div className="run-job-box">
           <div className={`status-pill status-${job.status}`}>
@@ -199,8 +215,9 @@ export function JsonAssetSlots({
           </div>
         </section>
       ) : null}
+      </div> : null}
 
-      <div className="sticky-actions">
+      {showActions ? <div className="sticky-actions">
         <button
           type="button"
           className="btn primary"
@@ -214,7 +231,7 @@ export function JsonAssetSlots({
             Cancel
           </button>
         ) : null}
-      </div>
+      </div> : null}
     </section>
   );
 }

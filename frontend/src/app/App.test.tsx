@@ -119,8 +119,12 @@ vi.mock("../features/production/ProductionPage", () => ({
   ),
 }));
 vi.mock("../features/json-production/JsonProductionPage", () => ({
-  JsonProductionPage: ({ active }: { active?: boolean }) => (
-    <div data-testid="json-production-page" data-active={String(Boolean(active))} />
+  JsonProductionPage: ({ active, mobile }: { active?: boolean; mobile?: boolean }) => (
+    <div
+      data-testid="json-production-page"
+      data-active={String(Boolean(active))}
+      data-mobile={String(Boolean(mobile))}
+    />
   ),
 }));
 
@@ -193,7 +197,7 @@ describe("App mode routing", () => {
     expect(screen.queryByTestId("production-page")).toBeNull();
   });
 
-  it("uses the mobile production page as the scroll surface for JSON production", () => {
+  it("opens mobile JSON production directly without the general workspace tabs", () => {
     window.history.replaceState({}, "", "/mobile");
     projectState.project = {
       id: "prj_json",
@@ -205,13 +209,18 @@ describe("App mode routing", () => {
       shot_ids: [],
     };
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Production" }));
 
     const jsonPage = screen.getByTestId("json-production-page");
     expect(jsonPage).toBeTruthy();
+    expect(jsonPage.dataset.active).toBe("true");
+    expect(jsonPage.dataset.mobile).toBe("true");
     expect(jsonPage.closest(".mobile-production-page")?.classList).toContain(
       "mobile-json-production-page",
     );
+    expect(screen.queryByRole("navigation", { name: "Mobile workspace" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Asset" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Director" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Production" })).toBeNull();
     expect(screen.queryByTestId("production-page")).toBeNull();
   });
 

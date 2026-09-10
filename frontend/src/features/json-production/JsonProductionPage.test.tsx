@@ -323,6 +323,35 @@ describe("JsonProductionPage three-column workspace", () => {
     expect(within(assets).getByText(/Audio 1 ·/)).toBeTruthy();
   });
 
+  it("uses a compact three-step workflow on mobile while keeping Generate available", async () => {
+    render(<JsonProductionPage active mobile />);
+
+    const shotPicker = (await screen.findByLabelText("Current shot")) as HTMLSelectElement;
+    expect(shotPicker.value).toBe("shot_001");
+    expect(screen.queryByRole("button", { name: /shot_001/ })).toBeNull();
+
+    const workflow = screen.getByRole("navigation", { name: "Shot workflow" });
+    expect(within(workflow).getByRole("button", { name: "Prompt" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByLabelText("Subject definitions")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Generate" })).toBeTruthy();
+
+    fireEvent.click(within(workflow).getByRole("button", { name: "References" }));
+    expect(screen.getByText("Picture 1 · Actor")).toBeTruthy();
+    const pictureInput = screen.getByLabelText("Picture 1 · Actor");
+    expect(pictureInput.closest(".json-upload-control")?.textContent).toBe("Choose file");
+    expect(screen.queryByLabelText("Subject definitions")).toBeNull();
+    expect(screen.getByRole("button", { name: "Generate" })).toBeTruthy();
+
+    fireEvent.click(within(workflow).getByRole("button", { name: "Output" }));
+    expect(screen.getByText("No H3 job yet for this shot.")).toBeTruthy();
+    expect(screen.queryByText("Picture 1 · Actor")).toBeNull();
+    expect(screen.getByRole("button", { name: "Generate" })).toBeTruthy();
+
+    fireEvent.change(shotPicker, { target: { value: "shot_002" } });
+    expect(await screen.findByText("No H3 job yet for this shot.")).toBeTruthy();
+    expect(shotPicker.value).toBe("shot_002");
+  });
+
   it("has no Library picker, Layout generator, QC, or Director action", async () => {
     render(<JsonProductionPage active />);
     await screen.findByRole("button", { name: /shot_001/ });
