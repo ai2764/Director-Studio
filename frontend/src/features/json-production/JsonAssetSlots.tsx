@@ -31,15 +31,13 @@ export function audioSlotTitle(index: number, label: string): string {
   return label.trim() ? `Audio ${index} · ${label}` : `Audio ${index}`;
 }
 
-function outputLink(
-  job: JsonShotJobRecord,
-  keys: string[],
-  fallbackLabel: string,
-): { href: string; label: string } | null {
-  for (const key of keys) {
+function finalOutputLink(job: JsonShotJobRecord): { href: string; label: string } | null {
+  for (const key of ["video", "master", "enhanced"]) {
     const slot = job.outputs?.[key];
-    if (slot?.url) return { href: slot.url, label: slot.label || fallbackLabel };
+    if (slot?.url) return { href: slot.url, label: slot.label || "Output" };
   }
+  const fallback = Object.values(job.outputs || {}).find((slot) => slot?.url);
+  if (fallback?.url) return { href: fallback.url, label: fallback.label || "Output" };
   return null;
 }
 
@@ -62,8 +60,7 @@ export function JsonAssetSlots({
   const jobActive = job ? ACTIVE.has(job.status) : false;
   const canGenerate =
     !busy && !promptDirty && !jobActive && readinessErrors.length === 0;
-  const enhanced = job ? outputLink(job, ["video", "enhanced"], "Enhanced") : null;
-  const raw = job ? outputLink(job, ["video_raw", "raw"], "Raw") : null;
+  const output = job ? finalOutputLink(job) : null;
 
   return (
     <section className="section-card compact-card json-asset-panel" aria-label="Shot assets">
@@ -191,27 +188,18 @@ export function JsonAssetSlots({
         <p className="field-hint">No H3 job yet for this shot.</p>
       )}
 
-      {enhanced || raw ? (
+      {output ? (
         <section className="json-output-panel" aria-label="Shot output">
           <div className="section-card-head">
             <h2 className="section-card-title">
               {outputVersion != null ? `Output v${outputVersion}` : "Output"}
             </h2>
           </div>
-          {enhanced ? (
-            <video className="h3-preview" controls playsInline src={enhanced.href} />
-          ) : null}
+          <video className="h3-preview" controls playsInline src={output.href} />
           <div className="json-job-outputs">
-            {enhanced ? (
-              <a className="btn secondary sm" href={enhanced.href} target="_blank" rel="noreferrer">
-                {enhanced.label}
-              </a>
-            ) : null}
-            {raw ? (
-              <a className="btn secondary sm" href={raw.href} target="_blank" rel="noreferrer">
-                {raw.label}
-              </a>
-            ) : null}
+            <a className="btn secondary sm" href={output.href} target="_blank" rel="noreferrer">
+              {output.label}
+            </a>
           </div>
         </section>
       ) : null}

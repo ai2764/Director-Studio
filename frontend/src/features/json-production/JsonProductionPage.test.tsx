@@ -540,9 +540,7 @@ describe("JsonProductionPage three-column workspace", () => {
     expect((await screen.findByRole("link", { name: /enhanced/i })).getAttribute("href")).toBe(
       "/api/files/jobs/job_json_1/enhanced.mp4",
     );
-    expect(screen.getByRole("link", { name: /raw/i }).getAttribute("href")).toBe(
-      "/api/files/jobs/job_json_1/raw.mp4",
-    );
+    expect(screen.queryByRole("link", { name: /raw/i })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "References" }));
     expect(screen.getByText("actor.png")).toBeTruthy();
     expect(screen.getByText("steps.wav")).toBeTruthy();
