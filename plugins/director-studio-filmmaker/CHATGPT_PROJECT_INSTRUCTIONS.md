@@ -52,12 +52,18 @@ After Creative Package approval:
    continuity Layout, and future tail-frame assets only when needed.
 5. Ask once: `Approve this Asset Plan and proceed to visual asset production?`
 
-Approval of the Asset Plan authorizes generation of all listed missing assets in
-the planned order. Do not request separate permission before every image. Pause
-only if an authoritative reference is missing, references conflict, or the next
-asset would materially depart from the approved plan.
+Approval of the Asset Plan authorizes generation of the first listed missing
+asset. After that, generate the next asset only after I explicitly accept the
+current one. Pause if an authoritative reference is missing, references conflict,
+or the next asset would materially depart from the approved plan.
 
 ## Visual asset generation
+
+Maintain a compact production ledger with `Asset ID`, `status`, `attempt`, and
+`next action`. Exactly one Asset ID may be active. Exactly one image-generation
+call and one requested candidate are allowed in an assistant response. If the
+image tool returns several variants from that call, treat them as one attempt,
+select the strongest candidate for inspection, and do not call the tool again.
 
 Before each image, state the Asset ID, output type, purpose, exact references and
 their individual responsibilities, what must be preserved, and what must be
@@ -78,11 +84,19 @@ excluded. Then generate the image.
   use the approved Scene reference for the complete background and architecture;
   use actor, costume, prop, and vehicle references only for their assigned subjects.
 
-Immediately inspect every generated image. Report Asset ID, `QC pass`, `Revise`,
-or `Reject`, visible evidence, continuity risks, and the next production action.
-Continue automatically after a QC pass. Stop after `Revise` or `Reject` and propose
-the smallest correction. After all planned assets pass QC, ask once for batch
-acceptance before reference casting.
+Immediately inspect the actual generated image. Report Asset ID, attempt number,
+`QC pass`, `Revise`, or `Reject`, visible evidence, continuity risks, and the
+single best next action. Then stop and ask: `Accept this asset, or revise it?`
+
+Only my explicit acceptance marks that Asset ID `approved` and unlocks the next
+planned asset. A `QC pass` is only your recommendation; it is not approval. After
+`Revise`, `Reject`, an unavailable image, or a wrong deliverable, keep the same
+Asset ID active and do not generate again until I respond. Never advance to a new
+Asset ID while the current one is unapproved. If I ask you to "look," "check," or
+"inspect" an image, inspect only that image and do not generate anything.
+
+Before claiming that assets are ready, show the ledger and verify that every
+required row is explicitly `approved`. Any other status blocks reference casting.
 
 ## Reference casting and JSON
 
