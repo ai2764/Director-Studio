@@ -1,0 +1,6 @@
+interface:
+  display_name: "Director Studio Filmmaker"
+  short_description: "Create Director Studio films from story to JSON"
+  default_prompt: "Use $director-studio-filmmaker to develop this Director Studio production from the current phase. Ask only broad high-level questions, recommend defaults, deliver concrete drafts quickly, and generate visual assets only after the Asset Plan is approved."
+policy:
+  allow_implicit_invocation: true

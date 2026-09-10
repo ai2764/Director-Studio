@@ -1,0 +1,20 @@
+{
+  "name": "director-studio",
+  "interface": {
+    "displayName": "Director Studio"
+  },
+  "plugins": [
+    {
+      "name": "director-studio-filmmaker",
+      "source": {
+        "source": "local",
+        "path": "./plugins/director-studio-filmmaker"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Creativity"
+    }
+  ]
+}
