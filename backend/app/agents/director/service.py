@@ -49,7 +49,6 @@ from ...core.projects.store import (
 )
 from ...core.schemas import JobStatus, LibraryAsset
 from ...core.vram import get_director_model, get_orchestrator
-from ...core.vram.ollama_client import OllamaClient
 from .context_io import load_agent_context, save_agent_context
 from .visual_direction import analyze_ref_frame
 from .planner import (
@@ -999,7 +998,17 @@ class DirectorService:
         if review_image is not None or tail_frame_redraw:
             direction_feedback = shot.feedback or ""
 
-        model = get_director_model()
+        runtime_provider = getattr(self.orchestrator, "provider", None)
+        model = (
+            get_director_model(runtime_provider.provider_id)
+            if runtime_provider is not None
+            else get_director_model()
+        )
+        vision_client = (
+            runtime_provider.client
+            if runtime_provider is not None
+            else getattr(self.plan_provider, "client", None)
+        )
         try:
             async with self.orchestrator.llm_session(release_on_exit=False):
                 await self.orchestrator.ensure_llm_ready()
@@ -1011,7 +1020,7 @@ class DirectorService:
                     review_image=review_image,
                     feedback=direction_feedback,
                     model=model,
-                    ollama=OllamaClient(),
+                    ollama=vision_client,
                 )
         except Exception as exc:
             await self.orchestrator.release_llm()

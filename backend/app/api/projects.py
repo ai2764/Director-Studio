@@ -26,6 +26,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
 from ..agents.director import DirectorService
+from ..agents.director.llm_plan_provider import DirectorLLMPlanProvider
 from ..agents.director.planner import role_to_library_kind
 from ..agents.director.skill_loader import with_director_skill
 from ..config import settings
@@ -92,8 +93,12 @@ from ..core.projects.transitions import (
     select_layout_reference,
 )
 from ..core.schemas import JobStatus, LibraryAsset
+from ..core.llm import (
+    LLMProvider,
+    UnsupportedLLMFeatureError,
+    get_llm_provider,
+)
 from ..core.vram import GenerationActiveError
-from ..core.vram.ollama_client import OllamaClient
 
 logger = logging.getLogger("director_studio.api.projects")
 _background_chat_tasks: set[Any] = set()
@@ -272,21 +277,17 @@ class SubmitResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class OllamaPlanProvider:
-    """Production PlanProvider backed by local Ollama."""
+class OllamaPlanProvider(DirectorLLMPlanProvider):
+    """Backward-compatible name for the active-provider planning adapter."""
 
     def __init__(self, model: str | None = None) -> None:
-        # Optional fixed model (tests); otherwise always use live runtime selection.
-        self._fixed_model = model
-        self.client = OllamaClient()
+        super().__init__(model=model)
 
     @property
     def model(self) -> str:
         if self._fixed_model:
             return self._fixed_model
-        from ..core.vram.director_model import get_director_model
-
-        return get_director_model()
+        return str(self.provider.model_status().get("model") or "").strip()
 
     async def complete(
         self,
@@ -320,7 +321,7 @@ def get_director_service(request: Request) -> DirectorService:
     svc = getattr(request.app.state, "director_service", None)
     if svc is not None:
         return svc
-    return DirectorService(plan_provider=OllamaPlanProvider())
+    return DirectorService(plan_provider=DirectorLLMPlanProvider())
 
 
 # ---------------------------------------------------------------------------
@@ -554,7 +555,10 @@ def _chat_result_to_response(result) -> ChatResponse:
     )
 
 
-async def _make_chat_fn(on_progress=None):
+async def _make_chat_fn(
+    on_progress=None,
+    provider: LLMProvider | None = None,
+):
     """Build chat_fn that streams tokens/thinking into on_progress when possible.
 
     Supports optional ``images`` (list of base64) for multimodal models.
@@ -563,6 +567,15 @@ async def _make_chat_fn(on_progress=None):
     from ..core.vram.director_model import get_director_model
 
     orch = get_orchestrator()
+    orchestrator_provider = getattr(orch, "provider", None)
+    active_provider = provider or orchestrator_provider or get_llm_provider()
+    # Older injected test orchestrators expose only ``ollama``. Production
+    # orchestrators always expose the provider boundary directly.
+    client = (
+        active_provider.client
+        if provider is not None or orchestrator_provider is not None
+        else getattr(orch, "ollama", active_provider.client)
+    )
 
     async def chat_fn(
         system: str,
@@ -590,7 +603,12 @@ async def _make_chat_fn(on_progress=None):
         ):
             # Always (re)load / verify GPU residency after Comfy may have unloaded it
             await orch.ensure_llm_ready(on_status=_runtime)
-            plan_model = get_director_model()
+            if provider is not None or orchestrator_provider is not None:
+                plan_model = str(
+                    active_provider.model_status().get("model") or ""
+                ).strip()
+            else:
+                plan_model = get_director_model()
             if use_images:
                 label = f"Thinking with {plan_model} · {len(use_images)} image{'s' if len(use_images) != 1 else ''}…"
             else:
@@ -649,7 +667,7 @@ async def _make_chat_fn(on_progress=None):
                 ):
                     messages.insert(0, {"role": "system", "content": system})
                 try:
-                    result = await orch.ollama.chat_response(
+                    result = await client.chat_response(
                         plan_model,
                         messages=messages,
                         tools=None if forced_tool_schema is not None else tools or None,
@@ -657,8 +675,15 @@ async def _make_chat_fn(on_progress=None):
                         require_vision=require_vision or bool(use_images),
                     )
                 except Exception as exc:
+                    unsupported_tools = (
+                        isinstance(exc, UnsupportedLLMFeatureError)
+                        and exc.feature == "tools"
+                    )
                     if (
-                        "XML syntax error" not in str(exc)
+                        (
+                            not unsupported_tools
+                            and "XML syntax error" not in str(exc)
+                        )
                         or provided_messages is not None
                         or use_images
                         or not tools
@@ -676,7 +701,7 @@ async def _make_chat_fn(on_progress=None):
                         "Do not claim the action succeeded; the application will validate "
                         "and execute it."
                     )
-                    return await orch.ollama.generate(plan_model, fallback_prompt)
+                    return await client.generate(plan_model, fallback_prompt)
                 if on_progress:
                     if result.get("thinking"):
                         await on_progress(
@@ -689,12 +714,12 @@ async def _make_chat_fn(on_progress=None):
                 return result
 
             # Prefer streaming so UI can show tokens live
-            if on_progress and hasattr(orch.ollama, "generate_stream"):
+            if on_progress and hasattr(client, "generate_stream"):
                 parts: list[str] = []
                 think_buf: list[str] = []
                 in_think = False
                 try:
-                    async for chunk in orch.ollama.generate_stream(
+                    async for chunk in client.generate_stream(
                         plan_model,
                         prompt,
                         images=use_images or None,
@@ -730,10 +755,10 @@ async def _make_chat_fn(on_progress=None):
                 except Exception:
                     logger.exception("stream generate failed; falling back to non-stream")
             if use_images:
-                return await orch.ollama.chat(
+                return await client.chat(
                     plan_model, user, system=system, images=use_images
                 )
-            return await orch.ollama.generate(plan_model, prompt)
+            return await client.generate(plan_model, prompt)
 
     return chat_fn
 
