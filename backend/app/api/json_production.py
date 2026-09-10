@@ -102,6 +102,7 @@ async def submit_json_shot(
     project_id: str,
     shot_id: str,
     revision: int = Form(...),
+    h3_provider: str | None = Form(None),
     pictures: list[UploadFile] = File(default_factory=list),
     audios: list[UploadFile] = File(default_factory=list),
 ) -> H3Ref2VaJobResponse:
@@ -110,6 +111,18 @@ async def submit_json_shot(
     shot = _shot_or_404(document, shot_id)
     if revision != document.revision:
         raise HTTPException(409, "stale production storyboard revision")
+
+    selected_h3_provider = str(
+        h3_provider or settings.h3_provider or "local"
+    ).strip().lower()
+    if selected_h3_provider not in {"local", "minimax"}:
+        raise HTTPException(
+            400, f"Unsupported H3 provider: {selected_h3_provider}"
+        )
+    if selected_h3_provider == "minimax" and not str(
+        settings.h3_minimax_api_key or ""
+    ).strip():
+        raise HTTPException(400, "MiniMax H3 API key is not configured")
 
     prompt_text = compose_h3_prompt(shot.prompt)
     try:
@@ -161,7 +174,7 @@ async def submit_json_shot(
         name=f"h3:{shot.title}",
         notes=shot.script_beat,
         params={
-            "h3_provider": settings.h3_provider,
+            "h3_provider": selected_h3_provider,
             "prompt": prompt_text,
             "dialogue": list(shot.dialogue),
             "frames": frames,

@@ -117,11 +117,12 @@ The same `openai-compatible` setting works with vLLM, LiteLLM, OpenRouter, DeepS
 
 LM Studio model instances are unloaded before local ComfyUI generation and loaded again by LM Studio on the next Director request. Remote providers do not participate in local GPU ownership.
 
-To use the official MiniMax API instead of local H3 generation, add your key and select the provider:
+To enable the official MiniMax API alongside local H3 generation, add your key. Production and JSON Production then offer a per-run **Local · ComfyUI** / **MiniMax · Official API** selector; `DS_H3_PROVIDER` only sets its initial choice:
 
 ```dotenv
-DS_H3_PROVIDER=minimax
 DS_H3_MINIMAX_API_KEY=your-secret-key
+# Optional: make MiniMax the initial selector value.
+DS_H3_PROVIDER=minimax
 ```
 
 Director Studio coordinates local generation with Ollama or LM Studio through its built-in exclusive GPU lock. VRAM policy, queue timeout, and LLM residency use internal defaults and require no user configuration.
@@ -589,7 +590,7 @@ API: `/api/actors/*` · `GET /api/pipelines`
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `DS_COMFY_BASE_URL` | `http://127.0.0.1:8188` | ComfyUI |
-| `DS_H3_PROVIDER` | `local` | `local` = ComfyUI MCP; `minimax` = official cloud API |
+| `DS_H3_PROVIDER` | `local` | Initial H3 provider shown in Production and JSON Production; each run can override it |
 | `DS_COMFY_MCP_COMMAND` | `comfy-mcp` | ComfyUI MCP executable; Portable installer writes its absolute path |
 | `DS_COMFY_MCP_ARGS` | empty | Optional extra command-line arguments passed to the MCP server process |
 | `DS_COMFY_MCP_COMFY_BIN` | `comfy` | comfy-cli executable used by the MCP server |
@@ -600,7 +601,7 @@ API: `/api/actors/*` · `GET /api/pipelines`
 | `DS_LLM_API_KEY` | empty | Optional credential for the active OpenAI-compatible endpoint |
 | `DS_LLM_TIMEOUT_SEC` | `600` | LLM request timeout in seconds |
 | `DS_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local Ollama for Director |
-| `DS_H3_MINIMAX_API_KEY` | empty | MiniMax API credential when `DS_H3_PROVIDER=minimax` |
+| `DS_H3_MINIMAX_API_KEY` | empty | MiniMax API credential; enables the official API option in H3 provider selectors |
 | `DS_H3_MINIMAX_MODEL` | `MiniMax-H3` | MiniMax H3 API model |
 | `DS_H3_MINIMAX_RESOLUTION` | `768P` | Requested MiniMax API output resolution |
 

@@ -177,15 +177,19 @@ def _submit_shot(
     revision: int,
     pictures: list[tuple[str, bytes, str]] | None = None,
     audios: list[tuple[str, bytes, str]] | None = None,
+    h3_provider: str | None = None,
 ):
     files: list[tuple[str, tuple[str, bytes, str]]] = []
     for name, data, mime in pictures or []:
         files.append(("pictures", (name, data, mime)))
     for name, data, mime in audios or []:
         files.append(("audios", (name, data, mime)))
+    form = {"revision": str(revision)}
+    if h3_provider is not None:
+        form["h3_provider"] = h3_provider
     return client.post(
         f"/api/projects/{project_id}/production-storyboard/shots/{shot_id}/submit",
-        data={"revision": str(revision)},
+        data=form,
         files=files or None,
     )
 
@@ -387,10 +391,72 @@ def test_valid_submit_creates_h3_job_without_library_assets(
     captured_images = capture_pipeline_start["images"]
     assert captured_job.pipeline_id == "h3_ref2va"
     assert captured_job.params["json_shot_id"] == "shot_001"
+    assert captured_job.params["h3_provider"] == settings.h3_provider
     assert captured_job.params["image_keys"] == ["ref_0"]
     assert captured_job.params["ref_roles"] == ["actor"]
     assert captured_images["ref_0"][1] == uploaded_png_bytes
     assert list((project_dir(project["id"]) / "library").rglob("asset.json")) == []
+
+
+def test_submit_uses_requested_minimax_provider(
+    client, capture_pipeline_start, monkeypatch
+):
+    monkeypatch.setattr(settings, "h3_provider", "local")
+    monkeypatch.setattr(settings, "h3_minimax_api_key", "test-key")
+    project = _create_project(client, mode="json_production")
+    saved = _put_storyboard(client, project["id"], _one_picture_document())
+
+    response = _submit_shot(
+        client,
+        project["id"],
+        "shot_001",
+        revision=saved["revision"],
+        pictures=[("lu.png", PNG_BYTES, "image/png")],
+        h3_provider="minimax",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["h3_provider"] == "minimax"
+    assert capture_pipeline_start["job"].params["h3_provider"] == "minimax"
+
+
+def test_submit_rejects_unconfigured_minimax_provider(
+    client, capture_pipeline_start, monkeypatch
+):
+    monkeypatch.setattr(settings, "h3_minimax_api_key", None)
+    project = _create_project(client, mode="json_production")
+    saved = _put_storyboard(client, project["id"], _one_picture_document())
+
+    response = _submit_shot(
+        client,
+        project["id"],
+        "shot_001",
+        revision=saved["revision"],
+        pictures=[("lu.png", PNG_BYTES, "image/png")],
+        h3_provider="minimax",
+    )
+
+    assert response.status_code == 400
+    assert "API key" in response.json()["detail"]
+    assert capture_pipeline_start["calls"] == 0
+
+
+def test_submit_rejects_unknown_h3_provider(client, capture_pipeline_start):
+    project = _create_project(client, mode="json_production")
+    saved = _put_storyboard(client, project["id"], _one_picture_document())
+
+    response = _submit_shot(
+        client,
+        project["id"],
+        "shot_001",
+        revision=saved["revision"],
+        pictures=[("lu.png", PNG_BYTES, "image/png")],
+        h3_provider="other",
+    )
+
+    assert response.status_code == 400
+    assert "Unsupported H3 provider" in response.json()["detail"]
+    assert capture_pipeline_start["calls"] == 0
 
 
 def test_list_h3_jobs_filters_project_and_json_shot_id(client):

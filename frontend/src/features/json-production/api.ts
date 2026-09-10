@@ -1,4 +1,5 @@
 import { parseError } from "../../shared/api/client";
+import type { H3Provider } from "../production/api";
 import type {
   JsonProductionDocument,
   JsonShotJobRecord,
@@ -41,9 +42,11 @@ export async function submitJsonShot(
   shotId: string,
   revision: number,
   files: ShotFileMaps,
+  h3Provider: H3Provider,
 ): Promise<JsonShotJobRecord> {
   const fd = new FormData();
   fd.append("revision", String(revision));
+  fd.append("h3_provider", h3Provider);
 
   const pictureIndexes = [...files.pictures.keys()].sort((a, b) => a - b);
   for (const index of pictureIndexes) {

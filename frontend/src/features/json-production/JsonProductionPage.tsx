@@ -10,7 +10,12 @@ import { EMPTY_PROMPT_SECTIONS, type JobStatus, type PromptSections } from "../.
 import { PageShell } from "../../shared/components/PageShell";
 import { ResizableWorkspace } from "../../shared/components/ResizableWorkspace";
 import { useProject } from "../../shared/project/ProjectContext";
-import { cancelH3Job } from "../production/api";
+import {
+  cancelH3Job,
+  getH3ProviderStatus,
+  type H3Provider,
+  type H3ProviderStatus,
+} from "../production/api";
 import { getStoryboard, listJsonShotJobs, putStoryboard, submitJsonShot } from "./api";
 import { JsonAssetSlots } from "./JsonAssetSlots";
 import { JsonPromptPanel } from "./JsonPromptPanel";
@@ -97,12 +102,38 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
   const [jobsByShotId, setJobsByShotId] = useState<Map<string, JsonShotJobRecord[]>>(() => new Map());
   const [mobileSection, setMobileSection] = useState<MobileSection>("prompt");
   const [desktopInspector, setDesktopInspector] = useState<DesktopInspector>("references");
+  const [h3ProviderStatus, setH3ProviderStatus] = useState<H3ProviderStatus | null>(null);
+  const [h3Provider, setH3Provider] = useState<H3Provider>("local");
 
   const previewRef = useRef(picturePreviews);
   previewRef.current = picturePreviews;
   const jobsRef = useRef(jobsByShotId);
   jobsRef.current = jobsByShotId;
   const loadGenRef = useRef(0);
+
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    getH3ProviderStatus()
+      .then((status) => {
+        if (cancelled) return;
+        setH3ProviderStatus(status);
+        setH3Provider(
+          status.default_provider === "minimax" && !status.minimax_configured
+            ? "local"
+            : status.default_provider,
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setH3ProviderStatus(null);
+          setH3Provider("local");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active]);
 
   const resetWorkspace = useCallback(() => {
     revokeUrls(previewRef.current);
@@ -399,7 +430,13 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
     setError(null);
     setBusy(true);
     try {
-      const job = await submitJsonShot(projectId, selected.id, storyboard.revision, files);
+      const job = await submitJsonShot(
+        projectId,
+        selected.id,
+        storyboard.revision,
+        files,
+        h3Provider,
+      );
       setJobsByShotId((prev) => {
         const next = new Map(prev);
         next.set(selected.id, upsertJob(next.get(selected.id), job));
@@ -478,6 +515,31 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
           ? "Output ready"
           : "Ready to generate";
 
+  const providerPicker = (
+    <label className="h3-provider-picker json-h3-provider-picker">
+      <span>Provider</span>
+      <select
+        aria-label="H3 provider"
+        value={h3Provider}
+        disabled={busy || selectedJobActive}
+        onChange={(event) => setH3Provider(event.target.value as H3Provider)}
+      >
+        <option value="local">Local · ComfyUI</option>
+        <option value="minimax" disabled={!h3ProviderStatus?.minimax_configured}>
+          MiniMax · Official API
+          {h3ProviderStatus && !h3ProviderStatus.minimax_configured
+            ? " · not configured"
+            : ""}
+        </option>
+      </select>
+      <small>
+        {h3Provider === "minimax"
+          ? `Official API · ${h3ProviderStatus?.minimax_resolution || "768P"}`
+          : "Active local workflow"}
+      </small>
+    </label>
+  );
+
   const promptPanel = selected ? (
     <JsonPromptPanel
       shot={selected}
@@ -536,19 +598,22 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
         )
       }
       actions={
-        <label className="field json-file-action">
-          <span>{mobile ? "Replace JSON" : "JSON file"}</span>
-          <input
-            type="file"
-            accept=".json,application/json"
-            disabled={!projectId || busy}
-            onChange={(e) => {
-              const file = e.target.files?.[0] || null;
-              e.target.value = "";
-              onJsonFile(file);
-            }}
-          />
-        </label>
+        <div className="json-production-header-actions">
+          {!mobile ? providerPicker : null}
+          <label className="field json-file-action">
+            <span>{mobile ? "Replace JSON" : "JSON file"}</span>
+            <input
+              type="file"
+              accept=".json,application/json"
+              disabled={!projectId || busy}
+              onChange={(e) => {
+                const file = e.target.files?.[0] || null;
+                e.target.value = "";
+                onJsonFile(file);
+              }}
+            />
+          </label>
+        </div>
       }
     >
       {error ? <div className="banner error">{error}</div> : null}
@@ -612,6 +677,8 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
                     : "Ready"}
             </span>
           </div>
+
+          {providerPicker}
 
           <nav className="json-mobile-workflow-nav" aria-label="Shot workflow">
             {(["prompt", "references", "output"] as const).map((section) => (

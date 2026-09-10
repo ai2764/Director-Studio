@@ -4347,6 +4347,21 @@ select {
   padding: 0.4rem 0.5rem;
 }
 
+.json-production-header-actions {
+  display: flex;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.json-production-header-actions .json-h3-provider-picker {
+  min-width: 13rem;
+  margin-top: 0;
+}
+
+.json-production-header-actions .json-h3-provider-picker small {
+  white-space: nowrap;
+}
+
 .json-empty-import {
   max-width: 52rem;
   margin: 0 auto;
@@ -4653,6 +4668,17 @@ select {
     border-bottom: 1px solid var(--border);
     background: rgba(238, 241, 244, 0.96);
     backdrop-filter: blur(12px);
+  }
+
+  .json-mobile-control-deck .json-h3-provider-picker {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 0.25rem 0.6rem;
+    margin-top: 0.55rem;
+  }
+
+  .json-mobile-control-deck .json-h3-provider-picker small {
+    grid-column: 2;
   }
 
   .json-mobile-shot-bar {

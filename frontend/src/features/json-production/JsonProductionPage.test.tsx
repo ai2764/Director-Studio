@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonProductionDocument, JsonProductionShot, JsonShotJobRecord } from "./types";
 import { JsonProductionPage } from "./JsonProductionPage";
 import { getStoryboard, listJsonShotJobs, putStoryboard, submitJsonShot } from "./api";
-import { cancelH3Job } from "../production/api";
+import { cancelH3Job, getH3ProviderStatus } from "../production/api";
 
 const projectState = vi.hoisted(() => ({ projectId: "prj_test" as string | null }));
 
@@ -22,6 +22,7 @@ vi.mock("./api", () => ({
 
 vi.mock("../production/api", () => ({
   cancelH3Job: vi.fn(),
+  getH3ProviderStatus: vi.fn(),
 }));
 
 const SHARED_PROMPT = {
@@ -139,6 +140,11 @@ describe("JsonProductionPage import", () => {
     vi.mocked(listJsonShotJobs).mockResolvedValue([]);
     vi.mocked(submitJsonShot).mockResolvedValue(jobRecord({ status: "queued" }));
     vi.mocked(cancelH3Job).mockResolvedValue(jobRecord({ status: "cancelled" }));
+    vi.mocked(getH3ProviderStatus).mockResolvedValue({
+      default_provider: "local",
+      minimax_configured: true,
+      minimax_resolution: "768P",
+    });
   });
 
   it("shows empty-state JSON file and paste JSON controls", async () => {
@@ -293,6 +299,43 @@ describe("JsonProductionPage three-column workspace", () => {
     vi.mocked(listJsonShotJobs).mockResolvedValue([]);
     vi.mocked(submitJsonShot).mockResolvedValue(jobRecord({ status: "queued" }));
     vi.mocked(cancelH3Job).mockResolvedValue(jobRecord({ status: "cancelled" }));
+    vi.mocked(getH3ProviderStatus).mockResolvedValue({
+      default_provider: "local",
+      minimax_configured: true,
+      minimax_resolution: "768P",
+    });
+  });
+
+  it("offers the official MiniMax API and submits it for only the current run", async () => {
+    render(<JsonProductionPage active />);
+
+    const provider = await screen.findByRole("combobox", { name: "H3 provider" });
+    fireEvent.change(provider, { target: { value: "minimax" } });
+    fireEvent.change(screen.getByLabelText("Picture 1 · Actor"), {
+      target: { files: [new File([new Uint8Array([1])], "actor.png", { type: "image/png" })] },
+    });
+    fireEvent.change(screen.getByLabelText("Picture 2 · Layout"), {
+      target: { files: [new File([new Uint8Array([2])], "layout.png", { type: "image/png" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+
+    await waitFor(() => expect(submitJsonShot).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(submitJsonShot).mock.calls[0][4]).toBe("minimax");
+  });
+
+  it("falls back to local H3 when the MiniMax API key is not configured", async () => {
+    vi.mocked(getH3ProviderStatus).mockResolvedValue({
+      default_provider: "minimax",
+      minimax_configured: false,
+      minimax_resolution: "2K",
+    });
+
+    render(<JsonProductionPage active />);
+
+    const provider = await screen.findByRole("combobox", { name: "H3 provider" }) as HTMLSelectElement;
+    expect(provider.value).toBe("local");
+    const minimax = within(provider).getByRole("option", { name: /MiniMax · Official API/ }) as HTMLOptionElement;
+    expect(minimax.disabled).toBe(true);
   });
 
   it("selecting shot_002 updates the list, six prompt fields, and asset slots", async () => {
@@ -388,6 +431,7 @@ describe("JsonProductionPage three-column workspace", () => {
     render(<JsonProductionPage active mobile />);
 
     const shotPicker = (await screen.findByLabelText("Current shot")) as HTMLSelectElement;
+    expect(screen.getByRole("combobox", { name: "H3 provider" })).toBeTruthy();
     expect(shotPicker.value).toBe("shot_001");
     expect(screen.queryByRole("button", { name: /shot_001/ })).toBeNull();
 
