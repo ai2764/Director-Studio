@@ -69,7 +69,19 @@ Set-Location C:\DirectorStudio
 notepad .env
 ```
 
-At minimum, confirm the local service URLs. When run, the installer writes its absolute MCP command paths automatically and replaces any prior values for those two path settings. Choose exactly one LLM configuration:
+At minimum, confirm the local service URLs. When run, the installer writes its absolute MCP command paths automatically and replaces any prior values for those two path settings.
+
+#### Director LLM providers
+
+`DS_LLM_PROVIDER` selects exactly one active Director provider. Do not set a model name in `.env`: Director Studio reads the provider's model catalog and exposes it in the Director model picker.
+
+| Provider | `DS_LLM_PROVIDER` | Model catalog | Local unload behavior |
+|----------|-------------------|---------------|-----------------------|
+| Ollama | `ollama` | Ollama API | Unloads before local ComfyUI jobs |
+| LM Studio | `lm-studio` | OpenAI-compatible `/v1/models` | Uses LM Studio's native unload endpoint |
+| OpenAI, llama.cpp, or another compatible service | `openai-compatible` | OpenAI-compatible `/v1/models` | No unload request is assumed |
+
+Choose one of these configurations. Ollama is the default:
 
 ```dotenv
 DS_COMFY_BASE_URL=http://127.0.0.1:8188
@@ -84,18 +96,26 @@ For LM Studio, enable its local API server first. The model itself is selected f
 ```dotenv
 DS_LLM_PROVIDER=lm-studio
 DS_LLM_BASE_URL=http://127.0.0.1:1234/v1
-# DS_LLM_API_KEY=lm-studio
 ```
 
-For OpenAI or another service exposing the common OpenAI Chat Completions and Models endpoints (including llama.cpp, vLLM, LiteLLM, OpenRouter, and DeepSeek-compatible gateways):
+For the OpenAI API:
 
 ```dotenv
 DS_LLM_PROVIDER=openai-compatible
 DS_LLM_BASE_URL=https://api.openai.com/v1
-DS_LLM_API_KEY=replace-with-a-real-secret
+DS_LLM_API_KEY=replace-with-your-api-key
 ```
 
-An API key is optional for unauthenticated local servers. LM Studio model instances are unloaded before local ComfyUI generation and are loaded again by LM Studio on the next Director request. Remote providers do not participate in local GPU ownership.
+For a local llama.cpp server exposing the OpenAI-compatible API:
+
+```dotenv
+DS_LLM_PROVIDER=openai-compatible
+DS_LLM_BASE_URL=http://127.0.0.1:8080/v1
+```
+
+The same `openai-compatible` setting works with vLLM, LiteLLM, OpenRouter, DeepSeek-compatible gateways, and most third-party services that implement Chat Completions plus Models. Replace the base URL with the provider's documented `/v1` endpoint and set `DS_LLM_API_KEY` only when that endpoint requires authentication.
+
+LM Studio model instances are unloaded before local ComfyUI generation and loaded again by LM Studio on the next Director request. Remote providers do not participate in local GPU ownership.
 
 To use the official MiniMax API instead of local H3 generation, add your key and select the provider:
 
@@ -107,6 +127,8 @@ DS_H3_MINIMAX_API_KEY=your-secret-key
 Director Studio coordinates local generation with Ollama or LM Studio through its built-in exclusive GPU lock. VRAM policy, queue timeout, and LLM residency use internal defaults and require no user configuration.
 
 Do not publish `.env`; it may contain provider credentials. Projects and generated application state are stored in the adjacent `data` folder. Back up that folder before replacing or upgrading the package.
+
+Keep unauthenticated Ollama, LM Studio, llama.cpp, and ComfyUI endpoints bound to `127.0.0.1`. To open Director Studio itself to the LAN, set `DS_HOST=0.0.0.0`, allow the selected `DS_PORT` through the host firewall, and use only a trusted private network. This does not add authentication to Director Studio or to the upstream model servers.
 
 ### 3. Start
 
@@ -484,6 +506,7 @@ API: `/api/actors/*` · `GET /api/pipelines`
 | `DS_COMFY_MCP_COMMAND` | `comfy-mcp` | ComfyUI MCP executable; Portable installer writes its absolute path |
 | `DS_COMFY_MCP_ARGS` | empty | Optional extra command-line arguments passed to the MCP server process |
 | `DS_COMFY_MCP_COMFY_BIN` | `comfy` | comfy-cli executable used by the MCP server |
+| `DS_HOST` | `127.0.0.1` | API bind address; use `0.0.0.0` only for an explicitly trusted LAN |
 | `DS_PORT` | `8790` | API port |
 | `DS_LLM_PROVIDER` | `ollama` | Active Director provider: `ollama`, `lm-studio`, or `openai-compatible` |
 | `DS_LLM_BASE_URL` | provider default | `/v1` base URL for LM Studio or an OpenAI-compatible server |
@@ -494,9 +517,9 @@ API: `/api/actors/*` · `GET /api/pipelines`
 | `DS_H3_MINIMAX_MODEL` | `MiniMax-H3` | MiniMax H3 API model |
 | `DS_H3_MINIMAX_RESOLUTION` | `768P` | Requested MiniMax API output resolution |
 
-The Director model is not required in the environment. Director Studio discovers the active provider's catalog, selects the first available model when no prior choice exists, and persists subsequent model-picker selections with their provider under `data/director_model.json`. If the provider returns no models, the selection remains empty.
+The Director model is not required in the environment. Director Studio discovers the active provider's catalog, selects the first available model when no prior choice exists, and persists subsequent model-picker selections with their provider under `data/director_model.json`. If the provider returns no models, the selection remains empty. The catalog endpoint must be reachable from the Director Studio backend, not only from the browser.
 
-For source development, set values in `backend/.env` (prefix `DS_`). In the portable package, use the `.env` beside `DirectorStudio.exe`.
+For source development, set values in `backend/.env` (prefix `DS_`). In the portable package, use the `.env` beside `DirectorStudio.exe`. Both files are ignored by Git; keep real credentials out of README, issue reports, screenshots, and committed example files.
 
 ## Build the Windows portable package
 
