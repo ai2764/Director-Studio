@@ -193,7 +193,7 @@ describe("App mode routing", () => {
     expect(screen.queryByTestId("production-page")).toBeNull();
   });
 
-  it("mounts JsonProductionPage for mobile json_production projects on the Production tab", () => {
+  it("uses the mobile production page as the scroll surface for JSON production", () => {
     window.history.replaceState({}, "", "/mobile");
     projectState.project = {
       id: "prj_json",
@@ -207,7 +207,11 @@ describe("App mode routing", () => {
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "Production" }));
 
-    expect(screen.getByTestId("json-production-page")).toBeTruthy();
+    const jsonPage = screen.getByTestId("json-production-page");
+    expect(jsonPage).toBeTruthy();
+    expect(jsonPage.closest(".mobile-production-page")?.classList).toContain(
+      "mobile-json-production-page",
+    );
     expect(screen.queryByTestId("production-page")).toBeNull();
   });
 

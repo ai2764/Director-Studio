@@ -2902,6 +2902,13 @@ select {
   overflow: hidden;
 }
 
+.mobile-production-page.mobile-json-production-page {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
 .mobile-production-review {
   height: 100%;
   overflow-x: hidden;
@@ -4018,6 +4025,24 @@ select {
 @media (max-width: 900px) {
   .json-production-grid {
     grid-template-columns: 1fr;
+  }
+
+  .mobile-json-production-page .json-production-page {
+    flex: none;
+    min-height: 100%;
+  }
+
+  .mobile-json-production-page .json-production-grid {
+    flex: none;
+    align-items: start;
+  }
+
+  .mobile-json-production-page .json-shot-panel,
+  .mobile-json-production-page .json-prompt-panel,
+  .mobile-json-production-page .json-asset-panel {
+    height: auto;
+    max-height: none;
+    overflow: visible;
   }
 }
 

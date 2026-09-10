@@ -86,7 +86,12 @@ function MobileAppShell() {
       <div className="mobile-page mobile-director-page" hidden={page !== "director"}>
         <DirectorPage mobile chatOnly requestedMessage={directorRequest} />
       </div>
-      <div className="mobile-page mobile-production-page" hidden={page !== "production"}>
+      <div
+        className={`mobile-page mobile-production-page${
+          project?.mode === "json_production" ? " mobile-json-production-page" : ""
+        }`}
+        hidden={page !== "production"}
+      >
         {project?.mode === "json_production" ? (
           <JsonProductionPage active={page === "production"} />
         ) : (
