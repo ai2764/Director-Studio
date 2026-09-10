@@ -1,9 +1,10 @@
 import { parseError } from "../../shared/api/client";
 import type { H3Provider } from "../production/api";
 import type {
+  JsonProductionAssetKind,
   JsonProductionDocument,
+  JsonProductionStoredAsset,
   JsonShotJobRecord,
-  ShotFileMaps,
 } from "./types";
 
 export type {
@@ -12,6 +13,7 @@ export type {
   JsonProductionDocument,
   JsonProductionPicture,
   JsonProductionShot,
+  JsonProductionStoredAsset,
   JsonShotJobRecord,
   ShotFileMaps,
 } from "./types";
@@ -41,24 +43,11 @@ export async function submitJsonShot(
   projectId: string,
   shotId: string,
   revision: number,
-  files: ShotFileMaps,
   h3Provider: H3Provider,
 ): Promise<JsonShotJobRecord> {
   const fd = new FormData();
   fd.append("revision", String(revision));
   fd.append("h3_provider", h3Provider);
-
-  const pictureIndexes = [...files.pictures.keys()].sort((a, b) => a - b);
-  for (const index of pictureIndexes) {
-    const file = files.pictures.get(index);
-    if (file) fd.append("pictures", file);
-  }
-
-  const audioIndexes = [...files.audio.keys()].sort((a, b) => a - b);
-  for (const index of audioIndexes) {
-    const file = files.audio.get(index);
-    if (file) fd.append("audios", file);
-  }
 
   const res = await fetch(
     `/api/projects/${projectId}/production-storyboard/shots/${shotId}/submit`,
@@ -66,6 +55,44 @@ export async function submitJsonShot(
   );
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
+}
+
+export async function listJsonShotAssets(
+  projectId: string,
+): Promise<JsonProductionStoredAsset[]> {
+  const res = await fetch(`/api/projects/${projectId}/production-storyboard/assets`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function putJsonShotAsset(
+  projectId: string,
+  shotId: string,
+  kind: JsonProductionAssetKind,
+  index: number,
+  file: File,
+): Promise<JsonProductionStoredAsset> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch(
+    `/api/projects/${projectId}/production-storyboard/shots/${encodeURIComponent(shotId)}/assets/${kind}/${index}`,
+    { method: "PUT", body: fd },
+  );
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function clearJsonShotAsset(
+  projectId: string,
+  shotId: string,
+  kind: JsonProductionAssetKind,
+  index: number,
+): Promise<void> {
+  const res = await fetch(
+    `/api/projects/${projectId}/production-storyboard/shots/${encodeURIComponent(shotId)}/assets/${kind}/${index}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) throw new Error(await parseError(res));
 }
 
 export async function listJsonShotJobs(

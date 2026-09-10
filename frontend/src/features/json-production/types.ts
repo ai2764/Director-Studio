@@ -39,9 +39,24 @@ export interface JsonProductionDocument {
   shots: JsonProductionShot[];
 }
 
+export type JsonProductionAssetKind = "picture" | "audio";
+
+export interface JsonProductionStoredAsset {
+  shot_id: string;
+  kind: JsonProductionAssetKind;
+  index: number;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  url: string;
+  slot_signature: string;
+}
+
+export type JsonProductionAssetValue = File | JsonProductionStoredAsset;
+
 export interface ShotFileMaps {
-  pictures: Map<number, File>;
-  audio: Map<number, File>;
+  pictures: Map<number, JsonProductionAssetValue>;
+  audio: Map<number, JsonProductionAssetValue>;
 }
 
 /** H3 job row as returned for JSON Production polling. */

@@ -284,12 +284,12 @@ export function validateShotReadiness(
   }
 
   for (const picture of shot.pictures) {
-    if (!(files.pictures.get(picture.index) instanceof File)) {
+    if (!files.pictures.has(picture.index)) {
       errors.push(`shot ${shot.id}: missing file for Picture ${picture.index}`);
     }
   }
   for (const audio of shot.audio) {
-    if (!(files.audio.get(audio.index) instanceof File)) {
+    if (!files.audio.has(audio.index)) {
       errors.push(`shot ${shot.id}: missing file for Audio ${audio.index}`);
     }
   }

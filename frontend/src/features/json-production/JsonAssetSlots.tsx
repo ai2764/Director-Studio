@@ -72,7 +72,8 @@ export function JsonAssetSlots({
       {shot.pictures.map((picture) => {
         const title = pictureSlotTitle(picture.index, picture.role);
         const file = files.pictures.get(picture.index) || null;
-        const preview = picturePreviews.get(picture.index);
+        const preview = picturePreviews.get(picture.index) || (file && !(file instanceof File) ? file.url : undefined);
+        const filename = file instanceof File ? file.name : file?.filename;
         return (
           <div
             key={`picture-${picture.index}`}
@@ -90,7 +91,7 @@ export function JsonAssetSlots({
               ) : null}
               <div className="json-asset-slot-footer">
                 {file ? (
-                  <div className="filename">{file.name}</div>
+                  <div className="filename">{filename}</div>
                 ) : (
                   <div className="muted tiny json-file-state">No file selected</div>
                 )}
@@ -136,12 +137,13 @@ export function JsonAssetSlots({
         shot.audio.map((audio) => {
           const title = audioSlotTitle(audio.index, audio.label);
           const file = files.audio.get(audio.index) || null;
+          const filename = file instanceof File ? file.name : file?.filename;
           return (
             <div key={`audio-${audio.index}`} className="field json-asset-slot">
               <span className="json-asset-slot-title">{title}</span>
               {file ? (
                 <div className="json-asset-file-row">
-                  <div className="filename">{file.name}</div>
+                  <div className="filename">{filename}</div>
                   <button
                     type="button"
                     className="btn ghost sm"

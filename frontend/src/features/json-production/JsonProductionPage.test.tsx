@@ -8,6 +8,11 @@ import { getStoryboard, listJsonShotJobs, putStoryboard, submitJsonShot } from "
 import { cancelH3Job, getH3ProviderStatus } from "../production/api";
 
 const projectState = vi.hoisted(() => ({ projectId: "prj_test" as string | null }));
+const stagedAssetApi = vi.hoisted(() => ({
+  list: vi.fn(),
+  put: vi.fn(),
+  clear: vi.fn(),
+}));
 
 vi.mock("../../shared/project/ProjectContext", () => ({
   useProject: () => ({ projectId: projectState.projectId }),
@@ -18,6 +23,9 @@ vi.mock("./api", () => ({
   putStoryboard: vi.fn(),
   submitJsonShot: vi.fn(),
   listJsonShotJobs: vi.fn(),
+  listJsonShotAssets: stagedAssetApi.list,
+  putJsonShotAsset: stagedAssetApi.put,
+  clearJsonShotAsset: stagedAssetApi.clear,
 }));
 
 vi.mock("../production/api", () => ({
@@ -116,6 +124,24 @@ function jsonFile(document: unknown, name = "board.json"): File {
   return new File([JSON.stringify(document)], name, { type: "application/json" });
 }
 
+function storedAssetFor(
+  shotId: string,
+  kind: "picture" | "audio",
+  index: number,
+  file: File,
+) {
+  return {
+    shot_id: shotId,
+    kind,
+    index,
+    filename: file.name,
+    content_type: file.type,
+    size_bytes: file.size,
+    url: `/api/files/projects/prj_test/json-production/assets/test/${kind}_${index}`,
+    slot_signature: `sig-${shotId}-${kind}-${index}`,
+  };
+}
+
 async function importPastedJson(text: string) {
   fireEvent.change(screen.getByLabelText("Paste JSON"), { target: { value: text } });
   fireEvent.click(screen.getByRole("button", { name: "Import JSON" }));
@@ -138,6 +164,11 @@ describe("JsonProductionPage import", () => {
     vi.mocked(getStoryboard).mockResolvedValue(EMPTY_DOCUMENT);
     vi.mocked(putStoryboard).mockResolvedValue(EMPTY_DOCUMENT);
     vi.mocked(listJsonShotJobs).mockResolvedValue([]);
+    stagedAssetApi.list.mockResolvedValue([]);
+    stagedAssetApi.put.mockImplementation(
+      async (_projectId, shotId, kind, index, file) => storedAssetFor(shotId, kind, index, file),
+    );
+    stagedAssetApi.clear.mockResolvedValue(undefined);
     vi.mocked(submitJsonShot).mockResolvedValue(jobRecord({ status: "queued" }));
     vi.mocked(cancelH3Job).mockResolvedValue(jobRecord({ status: "cancelled" }));
     vi.mocked(getH3ProviderStatus).mockResolvedValue({
@@ -297,6 +328,11 @@ describe("JsonProductionPage three-column workspace", () => {
       revision: document.revision + 1,
     }));
     vi.mocked(listJsonShotJobs).mockResolvedValue([]);
+    stagedAssetApi.list.mockResolvedValue([]);
+    stagedAssetApi.put.mockImplementation(
+      async (_projectId, shotId, kind, index, file) => storedAssetFor(shotId, kind, index, file),
+    );
+    stagedAssetApi.clear.mockResolvedValue(undefined);
     vi.mocked(submitJsonShot).mockResolvedValue(jobRecord({ status: "queued" }));
     vi.mocked(cancelH3Job).mockResolvedValue(jobRecord({ status: "cancelled" }));
     vi.mocked(getH3ProviderStatus).mockResolvedValue({
@@ -317,10 +353,82 @@ describe("JsonProductionPage three-column workspace", () => {
     fireEvent.change(screen.getByLabelText("Picture 2 · Layout"), {
       target: { files: [new File([new Uint8Array([2])], "layout.png", { type: "image/png" })] },
     });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Generate" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
 
     await waitFor(() => expect(submitJsonShot).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(submitJsonShot).mock.calls[0][4]).toBe("minimax");
+    expect(vi.mocked(submitJsonShot).mock.calls[0][3]).toBe("minimax");
+  });
+
+  it("restores staged picture files and previews after the page reloads", async () => {
+    stagedAssetApi.list.mockResolvedValue([
+      {
+        shot_id: "shot_001",
+        kind: "picture",
+        index: 1,
+        filename: "actor.png",
+        content_type: "image/png",
+        size_bytes: 101,
+        url: "/api/files/projects/prj_test/json-production/assets/a/picture_1.png",
+        slot_signature: "sig-actor",
+      },
+      {
+        shot_id: "shot_001",
+        kind: "picture",
+        index: 2,
+        filename: "layout.png",
+        content_type: "image/png",
+        size_bytes: 202,
+        url: "/api/files/projects/prj_test/json-production/assets/a/picture_2.png",
+        slot_signature: "sig-layout",
+      },
+    ]);
+
+    render(<JsonProductionPage active />);
+
+    expect(await screen.findByText("actor.png")).toBeTruthy();
+    const actorPreview = screen.getByRole("img", { name: "Picture 1 · Actor preview" });
+    expect(actorPreview.getAttribute("src")).toContain("picture_1.png");
+    expect(screen.getByText("layout.png")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Generate" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("persists a selected file immediately and clears the staged slot", async () => {
+    stagedAssetApi.put.mockResolvedValue({
+      shot_id: "shot_001",
+      kind: "picture",
+      index: 1,
+      filename: "actor.png",
+      content_type: "image/png",
+      size_bytes: 101,
+      url: "/api/files/projects/prj_test/json-production/assets/a/picture_1.png",
+      slot_signature: "sig-actor",
+    });
+    render(<JsonProductionPage active />);
+    await screen.findByRole("button", { name: /shot_001/ });
+    const file = new File([new Uint8Array([1])], "actor.png", { type: "image/png" });
+
+    fireEvent.change(screen.getByLabelText("Picture 1 · Actor"), {
+      target: { files: [file] },
+    });
+
+    expect(await screen.findByText("actor.png")).toBeTruthy();
+    expect(stagedAssetApi.put).toHaveBeenCalledWith(
+      "prj_test",
+      "shot_001",
+      "picture",
+      1,
+      file,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear Picture 1 · Actor" }));
+    await waitFor(() => expect(screen.queryByText("actor.png")).toBeNull());
+    expect(stagedAssetApi.clear).toHaveBeenCalledWith(
+      "prj_test",
+      "shot_001",
+      "picture",
+      1,
+    );
   });
 
   it("falls back to local H3 when the MiniMax API key is not configured", async () => {
@@ -503,6 +611,9 @@ describe("JsonProductionPage three-column workspace", () => {
       target: { files: [new File([new Uint8Array([1])], "actor.png", { type: "image/png" })] },
     });
 
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Edit shot JSON" }) as HTMLButtonElement).disabled).toBe(false),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Edit shot JSON" }));
     const editor = screen.getByLabelText("Shot JSON") as HTMLTextAreaElement;
     const edited = JSON.parse(editor.value) as JsonProductionShot;
@@ -584,8 +695,10 @@ describe("JsonProductionPage three-column workspace", () => {
 
     expect(screen.getByText("actor.png")).toBeTruthy();
     expect(screen.getByText("steps.wav")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Generate" }) as HTMLButtonElement).disabled).toBe(
-      false,
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Generate" }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
@@ -594,10 +707,7 @@ describe("JsonProductionPage three-column workspace", () => {
     expect(submitted[0]).toBe("prj_test");
     expect(submitted[1]).toBe("shot_002");
     expect(submitted[2]).toBe(1);
-    expect([...submitted[3].pictures.keys()]).toEqual([1, 2]);
-    expect(submitted[3].pictures.get(1)?.name).toBe("actor.png");
-    expect(submitted[3].pictures.get(2)?.name).toBe("layout.png");
-    expect([...submitted[3].audio.keys()]).toEqual([1]);
+    expect(submitted[3]).toBe("local");
 
     vi.mocked(listJsonShotJobs).mockClear();
     vi.mocked(listJsonShotJobs).mockResolvedValue([succeeded]);
@@ -702,10 +812,13 @@ describe("JsonProductionPage three-column workspace", () => {
     expect(screen.getByText("actor.png")).toBeTruthy();
     expect(screen.getByText("steps.wav")).toBeTruthy();
 
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Clear Picture 1 · Actor" }) as HTMLButtonElement).disabled).toBe(false),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Clear Picture 1 · Actor" }));
+    await waitFor(() => expect(screen.queryByText("actor.png")).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: /Clear Audio 1/ }));
-    expect(screen.queryByText("actor.png")).toBeNull();
-    expect(screen.queryByText("steps.wav")).toBeNull();
+    await waitFor(() => expect(screen.queryByText("steps.wav")).toBeNull());
   });
 
   it("clears file Maps, preview URLs, and jobs when the project changes", async () => {

@@ -221,6 +221,8 @@ Director Studio (React + FastAPI)
 
 Director Studio owns project state, workflow adapters, the job queue, and GPU coordination. ComfyUI MCP is the workflow transport layer: it submits completed API-format graphs to ComfyUI, monitors execution, and retrieves outputs. The LLM provider and ComfyUI remain separate services.
 
+JSON Production Picture and Audio selections are uploaded immediately into the current project under `data/projects/<project-id>/json-production/assets/`. Refreshing the page or opening the same project from another browser restores matching slots automatically. No browser storage, additional dependency, or environment setting is required. If a JSON replacement changes a slot's shot ID, type, index, role, or label, the old file is not reused for that changed slot.
+
 ## Bundled workflows
 
 Director Studio currently uses five ComfyUI workflow graphs:

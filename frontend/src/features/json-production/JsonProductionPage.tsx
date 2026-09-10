@@ -16,16 +16,30 @@ import {
   type H3Provider,
   type H3ProviderStatus,
 } from "../production/api";
-import { getStoryboard, listJsonShotJobs, putStoryboard, submitJsonShot } from "./api";
+import {
+  clearJsonShotAsset,
+  getStoryboard,
+  listJsonShotAssets,
+  listJsonShotJobs,
+  putJsonShotAsset,
+  putStoryboard,
+  submitJsonShot,
+} from "./api";
 import { JsonAssetSlots } from "./JsonAssetSlots";
 import { JsonPromptPanel } from "./JsonPromptPanel";
 import { JsonShotList } from "./JsonShotList";
-import type { JsonProductionDocument, JsonShotJobRecord, ShotFileMaps } from "./types";
+import type {
+  JsonProductionDocument,
+  JsonProductionAssetValue,
+  JsonProductionStoredAsset,
+  JsonShotJobRecord,
+  ShotFileMaps,
+} from "./types";
 import { parseShotJson, parseStoryboardJson, validateShotReadiness } from "./validation";
 
 const ACTIVE: JobStatus[] = ["queued", "uploading", "running"];
 
-type NestedFileMap = Map<string, Map<number, File>>;
+type NestedFileMap = Map<string, ShotFileMaps["pictures"]>;
 type NestedUrlMap = Map<string, Map<number, string>>;
 
 function emptyFiles(): ShotFileMaps {
@@ -43,13 +57,33 @@ function filesForShot(
   };
 }
 
-function setNestedFile(map: NestedFileMap, shotId: string, index: number, file: File | null): NestedFileMap {
+function setNestedFile(
+  map: NestedFileMap,
+  shotId: string,
+  index: number,
+  file: JsonProductionAssetValue | null,
+): NestedFileMap {
   const next = new Map(map);
   const slot = new Map(next.get(shotId) || []);
   if (file) slot.set(index, file);
   else slot.delete(index);
   next.set(shotId, slot);
   return next;
+}
+
+function mapsFromStoredAssets(assets: JsonProductionStoredAsset[]): {
+  pictures: NestedFileMap;
+  audio: NestedFileMap;
+} {
+  const pictures: NestedFileMap = new Map();
+  const audio: NestedFileMap = new Map();
+  for (const asset of assets) {
+    const target = asset.kind === "picture" ? pictures : audio;
+    const shotAssets = new Map(target.get(asset.shot_id) || []);
+    shotAssets.set(asset.index, asset);
+    target.set(asset.shot_id, shotAssets);
+  }
+  return { pictures, audio };
 }
 
 function revokeUrls(urls: NestedUrlMap) {
@@ -167,9 +201,15 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
     async (id: string) => {
       const gen = ++loadGenRef.current;
       try {
-        const doc = await getStoryboard(id);
+        const [doc, assets] = await Promise.all([
+          getStoryboard(id),
+          listJsonShotAssets(id),
+        ]);
         if (gen !== loadGenRef.current) return;
         applyStoryboard(doc);
+        const restored = mapsFromStoredAssets(assets);
+        setPictureFiles(restored.pictures);
+        setAudioFiles(restored.audio);
       } catch (e) {
         if (gen !== loadGenRef.current) return;
         setError(e instanceof Error ? e.message : String(e));
@@ -412,15 +452,55 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
     });
   };
 
-  const onPictureFile = (index: number, file: File | null) => {
-    if (!selected) return;
-    setPictureFiles((prev) => setNestedFile(prev, selected.id, index, file));
-    replacePicturePreview(selected.id, index, file);
+  const onPictureFile = async (index: number, file: File | null) => {
+    if (!projectId || !selected) return;
+    const previous = pictureFiles.get(selected.id)?.get(index) || null;
+    setError(null);
+    setBusy(true);
+    try {
+      if (file) {
+        setPictureFiles((prev) => setNestedFile(prev, selected.id, index, file));
+        replacePicturePreview(selected.id, index, file);
+        const saved = await putJsonShotAsset(
+          projectId, selected.id, "picture", index, file,
+        );
+        setPictureFiles((prev) => setNestedFile(prev, selected.id, index, saved));
+      } else {
+        await clearJsonShotAsset(projectId, selected.id, "picture", index);
+        setPictureFiles((prev) => setNestedFile(prev, selected.id, index, null));
+        replacePicturePreview(selected.id, index, null);
+      }
+    } catch (e) {
+      setPictureFiles((prev) => setNestedFile(prev, selected.id, index, previous));
+      replacePicturePreview(selected.id, index, null);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const onAudioFile = (index: number, file: File | null) => {
-    if (!selected) return;
-    setAudioFiles((prev) => setNestedFile(prev, selected.id, index, file));
+  const onAudioFile = async (index: number, file: File | null) => {
+    if (!projectId || !selected) return;
+    const previous = audioFiles.get(selected.id)?.get(index) || null;
+    setError(null);
+    setBusy(true);
+    try {
+      if (file) {
+        setAudioFiles((prev) => setNestedFile(prev, selected.id, index, file));
+        const saved = await putJsonShotAsset(
+          projectId, selected.id, "audio", index, file,
+        );
+        setAudioFiles((prev) => setNestedFile(prev, selected.id, index, saved));
+      } else {
+        await clearJsonShotAsset(projectId, selected.id, "audio", index);
+        setAudioFiles((prev) => setNestedFile(prev, selected.id, index, null));
+      }
+    } catch (e) {
+      setAudioFiles((prev) => setNestedFile(prev, selected.id, index, previous));
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const onGenerate = async () => {
@@ -434,7 +514,6 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
         projectId,
         selected.id,
         storyboard.revision,
-        files,
         h3Provider,
       );
       setJobsByShotId((prev) => {

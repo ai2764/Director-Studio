@@ -57,6 +57,7 @@ def client(tmp_path, monkeypatch):
     projects.mkdir()
     jobs.mkdir()
     library.mkdir()
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
     monkeypatch.setattr(settings, "projects_dir", projects)
     monkeypatch.setattr(settings, "jobs_dir", jobs)
     monkeypatch.setattr(settings, "library_root", library)
@@ -196,6 +197,148 @@ def _submit_shot(
 
 def _h3_jobs(*, project_id: str | None = None):
     return list_jobs(limit=50, pipeline_id="h3_ref2va", project_id=project_id)
+
+
+def _stage_asset(
+    client: TestClient,
+    project_id: str,
+    shot_id: str,
+    kind: str,
+    index: int,
+    filename: str,
+    data: bytes,
+    mime: str,
+):
+    return client.put(
+        f"/api/projects/{project_id}/production-storyboard/shots/"
+        f"{shot_id}/assets/{kind}/{index}",
+        files={"file": (filename, data, mime)},
+    )
+
+
+def test_staged_picture_is_listed_and_served_after_upload(client):
+    project = _create_project(client, mode="json_production")
+    _put_storyboard(client, project["id"], _one_picture_document())
+
+    uploaded = _stage_asset(
+        client,
+        project["id"],
+        "shot_001",
+        "picture",
+        1,
+        "lu.png",
+        PNG_BYTES,
+        "image/png",
+    )
+
+    assert uploaded.status_code == 200
+    asset = uploaded.json()
+    assert asset["shot_id"] == "shot_001"
+    assert asset["kind"] == "picture"
+    assert asset["index"] == 1
+    assert asset["filename"] == "lu.png"
+
+    listed = client.get(
+        f"/api/projects/{project['id']}/production-storyboard/assets"
+    )
+    assert listed.status_code == 200
+    assert listed.json() == [asset]
+
+    preview = client.get(asset["url"])
+    assert preview.status_code == 200
+    assert preview.content == PNG_BYTES
+
+
+def test_submit_uses_staged_assets_without_browser_reupload(
+    client, capture_pipeline_start
+):
+    project = _create_project(client, mode="json_production")
+    saved = _put_storyboard(client, project["id"], _one_picture_document())
+    staged = _stage_asset(
+        client,
+        project["id"],
+        "shot_001",
+        "picture",
+        1,
+        "lu.png",
+        PNG_BYTES,
+        "image/png",
+    )
+    assert staged.status_code == 200
+
+    response = _submit_shot(
+        client,
+        project["id"],
+        "shot_001",
+        revision=saved["revision"],
+    )
+
+    assert response.status_code == 200
+    assert capture_pipeline_start["images"]["ref_0"] == ("lu.png", PNG_BYTES)
+
+
+def test_changed_slot_definition_does_not_restore_or_submit_stale_asset(
+    client, capture_pipeline_start
+):
+    project = _create_project(client, mode="json_production")
+    saved = _put_storyboard(client, project["id"], _one_picture_document())
+    staged = _stage_asset(
+        client,
+        project["id"],
+        "shot_001",
+        "picture",
+        1,
+        "lu.png",
+        PNG_BYTES,
+        "image/png",
+    )
+    assert staged.status_code == 200
+
+    changed = _one_picture_document()
+    changed["shots"][0]["pictures"][0]["label"] = "Different approved identity"
+    saved = _put_storyboard(client, project["id"], changed)
+
+    listed = client.get(
+        f"/api/projects/{project['id']}/production-storyboard/assets"
+    )
+    assert listed.status_code == 200
+    assert listed.json() == []
+
+    submitted = _submit_shot(
+        client,
+        project["id"],
+        "shot_001",
+        revision=saved["revision"],
+    )
+    assert submitted.status_code == 400
+    assert "Picture 1" in submitted.json()["detail"]
+    assert capture_pipeline_start["calls"] == 0
+
+
+def test_clear_staged_asset_removes_it_from_project(client):
+    project = _create_project(client, mode="json_production")
+    _put_storyboard(client, project["id"], _one_picture_document())
+    staged = _stage_asset(
+        client,
+        project["id"],
+        "shot_001",
+        "picture",
+        1,
+        "lu.png",
+        PNG_BYTES,
+        "image/png",
+    )
+    assert staged.status_code == 200
+
+    cleared = client.delete(
+        f"/api/projects/{project['id']}/production-storyboard/shots/"
+        "shot_001/assets/picture/1"
+    )
+    assert cleared.status_code == 204
+    assert client.get(staged.json()["url"]).status_code == 404
+    assert client.get(
+        f"/api/projects/{project['id']}/production-storyboard/assets"
+    ).json() == []
 
 
 @pytest.fixture

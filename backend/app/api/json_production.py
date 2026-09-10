@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 
 from ..config import settings
 from ..core.h3.frames import frames_for_seconds
@@ -13,9 +14,14 @@ from ..core.jobs import create_job, start_pipeline_job
 from ..core.projects import (
     JsonProductionDocument,
     JsonProductionShot,
+    JsonProductionStoredAsset,
     Project,
+    delete_json_production_asset,
+    list_json_production_assets,
+    load_json_production_asset,
     load_json_production_document,
     load_project,
+    save_json_production_asset,
     save_json_production_document,
 )
 from ..core.projects.models import ProjectMode
@@ -94,6 +100,75 @@ async def _read_ordered_uploads(
     return payloads
 
 
+AssetKind = Literal["picture", "audio"]
+
+
+def _asset_kind(value: str) -> AssetKind:
+    kind = value.strip().lower()
+    if kind not in {"picture", "audio"}:
+        raise HTTPException(400, f"Unsupported asset kind: {value}")
+    return kind
+
+
+@router.get(
+    "/projects/{project_id}/production-storyboard/assets",
+    response_model=list[JsonProductionStoredAsset],
+)
+async def get_json_production_assets(
+    project_id: str,
+) -> list[JsonProductionStoredAsset]:
+    _require_json_project(project_id)
+    document = load_json_production_document(project_id)
+    return list_json_production_assets(project_id, document)
+
+
+@router.put(
+    "/projects/{project_id}/production-storyboard/shots/{shot_id}/assets/{kind}/{index}",
+    response_model=JsonProductionStoredAsset,
+)
+async def put_json_production_asset(
+    project_id: str,
+    shot_id: str,
+    kind: str,
+    index: int,
+    file: Annotated[UploadFile, File()],
+) -> JsonProductionStoredAsset:
+    _require_json_project(project_id)
+    document = load_json_production_document(project_id)
+    shot = _shot_or_404(document, shot_id)
+    selected_kind = _asset_kind(kind)
+    allowed = ALLOWED_IMAGE_EXT if selected_kind == "picture" else ALLOWED_AUDIO_EXT
+    payloads = await _read_ordered_uploads([file], allowed=allowed, field=selected_kind)
+    filename, data = payloads[0]
+    try:
+        return save_json_production_asset(
+            project_id,
+            shot,
+            selected_kind,
+            index,
+            filename=filename,
+            content_type=file.content_type or "application/octet-stream",
+            data=data,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.delete(
+    "/projects/{project_id}/production-storyboard/shots/{shot_id}/assets/{kind}/{index}",
+    status_code=204,
+)
+async def clear_json_production_asset(
+    project_id: str, shot_id: str, kind: str, index: int
+) -> Response:
+    _require_json_project(project_id)
+    document = load_json_production_document(project_id)
+    _shot_or_404(document, shot_id)
+    selected_kind = _asset_kind(kind)
+    delete_json_production_asset(project_id, shot_id, selected_kind, index)
+    return Response(status_code=204)
+
+
 @router.post(
     "/projects/{project_id}/production-storyboard/shots/{shot_id}/submit",
     response_model=H3Ref2VaJobResponse,
@@ -136,23 +211,43 @@ async def submit_json_shot(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
-    if len(pictures) != len(shot.pictures):
-        raise HTTPException(
-            400,
-            f"expected {len(shot.pictures)} pictures, got {len(pictures)}",
+    if pictures:
+        if len(pictures) != len(shot.pictures):
+            raise HTTPException(
+                400,
+                f"expected {len(shot.pictures)} pictures, got {len(pictures)}",
+            )
+        picture_payloads = await _read_ordered_uploads(
+            pictures, allowed=ALLOWED_IMAGE_EXT, field="pictures"
         )
-    if len(audios) != len(shot.audio):
-        raise HTTPException(
-            400,
-            f"expected {len(shot.audio)} audios, got {len(audios)}",
-        )
+    else:
+        picture_payloads = []
+        for slot in shot.pictures:
+            loaded = load_json_production_asset(
+                project_id, shot, "picture", slot.index
+            )
+            if loaded is None:
+                raise HTTPException(400, f"missing staged file for Picture {slot.index}")
+            asset, path = loaded
+            picture_payloads.append((asset.filename, path.read_bytes()))
 
-    picture_payloads = await _read_ordered_uploads(
-        pictures, allowed=ALLOWED_IMAGE_EXT, field="pictures"
-    )
-    audio_payloads = await _read_ordered_uploads(
-        audios, allowed=ALLOWED_AUDIO_EXT, field="audios"
-    )
+    if audios:
+        if len(audios) != len(shot.audio):
+            raise HTTPException(
+                400,
+                f"expected {len(shot.audio)} audios, got {len(audios)}",
+            )
+        audio_payloads = await _read_ordered_uploads(
+            audios, allowed=ALLOWED_AUDIO_EXT, field="audios"
+        )
+    else:
+        audio_payloads = []
+        for slot in shot.audio:
+            loaded = load_json_production_asset(project_id, shot, "audio", slot.index)
+            if loaded is None:
+                raise HTTPException(400, f"missing staged file for Audio {slot.index}")
+            asset, path = loaded
+            audio_payloads.append((asset.filename, path.read_bytes()))
 
     try:
         frames = frames_for_seconds(shot.duration_s)
