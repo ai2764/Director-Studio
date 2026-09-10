@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pytest
 
@@ -40,3 +41,41 @@ def test_runtime_override_beats_env(monkeypatch: pytest.MonkeyPatch):
     dm.set_director_model("ornith:35b", persist=False)
     assert dm.get_director_model() == "ornith:35b"
     assert dm.model_status()["source"] == "runtime"
+
+
+def test_model_selection_is_scoped_to_provider():
+    dm.set_director_model(
+        "qwen-local",
+        provider_id="ollama",
+        persist=True,
+    )
+
+    assert dm.get_director_model("ollama") == "qwen-local"
+    assert dm.get_director_model("lm-studio") == ""
+    assert json.loads(dm._persist_path().read_text(encoding="utf-8")) == {
+        "provider": "ollama",
+        "model": "qwen-local",
+    }
+
+
+def test_legacy_model_file_only_applies_to_ollama():
+    dm._persist_path().write_text(
+        json.dumps({"model": "legacy-qwen"}),
+        encoding="utf-8",
+    )
+
+    assert dm.get_director_model("ollama") == "legacy-qwen"
+    assert dm.get_director_model("openai-compatible") == ""
+
+
+def test_provider_specific_status_hides_another_provider_selection():
+    dm.set_director_model(
+        "studio-model",
+        provider_id="lm-studio",
+        persist=True,
+    )
+
+    assert dm.model_status("lm-studio")["model"] == "studio-model"
+    assert dm.model_status("lm-studio")["provider"] == "lm-studio"
+    assert dm.model_status("ollama")["model"] == ""
+    assert dm.model_status("ollama")["persisted"] is None

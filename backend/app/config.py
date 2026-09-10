@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     gpt_bridge_max_total_mb: int = 100
     gpt_bridge_action_delay_sec: float = 1.5
     gpt_bridge_job_cooldown_sec: float = 15.0
+
+    # Director LLM. Exactly one provider is active for the process.
+    llm_provider: Literal["ollama", "lm-studio", "openai-compatible"] = "ollama"
+    llm_base_url: str = ""
+    llm_api_key: str | None = None
+    llm_timeout_sec: float = 600.0
 
     # Local Ollama / Director agent (VRAM exclusive with Comfy)
     ollama_base_url: str = "http://127.0.0.1:11434"
