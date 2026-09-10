@@ -180,7 +180,7 @@ describe("App mode routing", () => {
     expect(screen.queryByTestId("json-production-page")).toBeNull();
   });
 
-  it("mounts JsonProductionPage for json_production projects on the Production tab", () => {
+  it("opens desktop JSON production directly without the general workflow tabs", () => {
     projectState.project = {
       id: "prj_json",
       name: "JSON board",
@@ -191,9 +191,12 @@ describe("App mode routing", () => {
       shot_ids: [],
     };
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Production" }));
 
     expect(screen.getByTestId("json-production-page")).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "Project workflow" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Assets" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Director" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Production" })).toBeNull();
     expect(screen.queryByTestId("production-page")).toBeNull();
   });
 

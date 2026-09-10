@@ -74,41 +74,51 @@ export function JsonAssetSlots({
         const file = files.pictures.get(picture.index) || null;
         const preview = picturePreviews.get(picture.index);
         return (
-          <div key={`picture-${picture.index}`} className="field json-asset-slot">
-            <span className="json-asset-slot-title">{title}</span>
-            <p className="field-hint">{picture.label}</p>
-            {preview ? (
-              <img className="json-asset-preview" src={preview} alt="" />
-            ) : null}
-            {file ? (
-              <div className="json-asset-file-row">
-                <div className="filename">{file.name}</div>
+          <div
+            key={`picture-${picture.index}`}
+            className="field json-asset-slot json-picture-slot"
+            role="group"
+            aria-label={`${title} reference`}
+          >
+            <div className="json-asset-slot-head">
+              <span className="json-asset-slot-title">{title}</span>
+              {file ? (
                 <button
                   type="button"
-                  className="btn ghost sm"
+                  className="btn ghost sm json-asset-clear"
+                  aria-label={`Clear ${title}`}
                   disabled={busy}
                   onClick={() => onPictureFile(picture.index, null)}
                 >
-                  {`Clear ${title}`}
+                  Clear
                 </button>
-              </div>
-            ) : (
-              <div className="muted tiny json-file-state">No file selected</div>
-            )}
-            <label className="json-upload-control">
-              <input
-                type="file"
-                aria-label={title}
-                accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
-                onChange={(e) => {
-                  const next = e.target.files?.[0] || null;
-                  e.target.value = "";
-                  if (!next) return;
-                  onPictureFile(picture.index, next);
-                }}
-              />
-              <span>{file ? "Replace file" : "Choose file"}</span>
-            </label>
+              ) : null}
+            </div>
+            <p className="field-hint">{picture.label}</p>
+            {preview ? (
+              <img className="json-asset-preview" src={preview} alt={`${title} preview`} />
+            ) : null}
+            <div className="json-asset-slot-footer">
+              {file ? (
+                <div className="filename">{file.name}</div>
+              ) : (
+                <div className="muted tiny json-file-state">No file selected</div>
+              )}
+              <label className="json-upload-control">
+                <input
+                  type="file"
+                  aria-label={title}
+                  accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                  onChange={(e) => {
+                    const next = e.target.files?.[0] || null;
+                    e.target.value = "";
+                    if (!next) return;
+                    onPictureFile(picture.index, next);
+                  }}
+                />
+                <span>{file ? "Replace file" : "Choose file"}</span>
+              </label>
+            </div>
           </div>
         );
       })}

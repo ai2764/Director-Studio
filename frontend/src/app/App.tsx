@@ -121,6 +121,8 @@ function AppShell() {
     comfy_error: string | null;
   } | null>(null);
   const { project } = useProject();
+  const jsonProductionMode = project?.mode === "json_production";
+  const activePage = jsonProductionMode && page !== "settings" ? "production" : page;
   const reviewMaterials = (shot: Shot, shotNumber: number) => {
     requestSequence.current += 1;
     setDirectorRequest(materialReviewRequest(shot, shotNumber, requestSequence.current));
@@ -134,7 +136,12 @@ function AppShell() {
   }, []);
 
   return (
-    <div className={`app${page === "director" ? " director-page-active" : ""}`} data-theme="oat-walnut">
+    <div
+      className={`app${activePage === "director" ? " director-page-active" : ""}${
+        jsonProductionMode ? " json-production-app" : ""
+      }`}
+      data-theme="oat-walnut"
+    >
       <header className="topbar" aria-label="Application header">
         <div className="topbar-row">
           <div className="brand">
@@ -148,20 +155,20 @@ function AppShell() {
             <ProjectPicker />
           </div>
 
-          <nav className="workflow-nav" aria-label="Project workflow">
+          {!jsonProductionMode ? <nav className="workflow-nav" aria-label="Project workflow">
             {NAV_ITEMS.map((item) => (
               <button
                 key={item.id}
                 type="button"
-                className={page === item.id ? "active" : ""}
+                className={activePage === item.id ? "active" : ""}
                 aria-label={item.label}
-                aria-current={page === item.id ? "page" : undefined}
+                aria-current={activePage === item.id ? "page" : undefined}
                 onClick={() => setPage(item.id)}
               >
                 {item.label}
               </button>
             ))}
-          </nav>
+          </nav> : null}
 
           <div
             className={`health ${health?.comfy_reachable ? "ok" : "bad"}`}
@@ -171,33 +178,33 @@ function AppShell() {
             <span className="dot" />
             <span className="health-label">ComfyUI</span>
           </div>
-          <button type="button" className="btn secondary topbar-settings" aria-current={page === "settings" ? "page" : undefined} onClick={() => { setSettingsVisited(true); setPage("settings"); }}>Settings</button>
+          <button type="button" className="btn secondary topbar-settings" aria-current={activePage === "settings" ? "page" : undefined} onClick={() => { setSettingsVisited(true); setPage("settings"); }}>Settings</button>
         </div>
       </header>
 
       {/* Keep pages mounted so in-flight job UI/polling survives tab switches */}
-      {settingsVisited ? <div className={page === "settings" ? "page-pane active" : "page-pane"} hidden={page !== "settings"}><WorkflowSettingsPage active={page === "settings"} /></div> : null}
+      {settingsVisited ? <div className={activePage === "settings" ? "page-pane active" : "page-pane"} hidden={activePage !== "settings"}><WorkflowSettingsPage active={activePage === "settings"} /></div> : null}
       <div
-        className={page === "assets" ? "page-pane active" : "page-pane"}
-        hidden={page !== "assets"}
+        className={activePage === "assets" ? "page-pane active" : "page-pane"}
+        hidden={activePage !== "assets"}
       >
         <AssetWorkspace />
       </div>
       <div
-        className={page === "director" ? "page-pane active" : "page-pane"}
-        hidden={page !== "director"}
+        className={activePage === "director" ? "page-pane active" : "page-pane"}
+        hidden={activePage !== "director"}
       >
         <DirectorPage requestedMessage={directorRequest} />
       </div>
       <div
-        className={page === "production" ? "page-pane active" : "page-pane"}
-        hidden={page !== "production"}
+        className={activePage === "production" ? "page-pane active" : "page-pane"}
+        hidden={activePage !== "production"}
       >
-        {project?.mode === "json_production" ? (
-          <JsonProductionPage active={page === "production"} />
+        {jsonProductionMode ? (
+          <JsonProductionPage active={activePage === "production"} />
         ) : (
           <ProductionPage
-            active={page === "production"}
+            active={activePage === "production"}
             onReviewMaterials={reviewMaterials}
           />
         )}

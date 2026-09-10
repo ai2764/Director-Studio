@@ -323,6 +323,26 @@ describe("JsonProductionPage three-column workspace", () => {
     expect(within(assets).getByText(/Audio 1 ·/)).toBeTruthy();
   });
 
+  it("groups each picture preview with only its own file actions", async () => {
+    render(<JsonProductionPage active />);
+    await screen.findByRole("button", { name: /shot_001/ });
+
+    fireEvent.change(screen.getByLabelText("Picture 1 · Actor"), {
+      target: { files: [new File([new Uint8Array([1])], "actor.png", { type: "image/png" })] },
+    });
+    fireEvent.change(screen.getByLabelText("Picture 2 · Layout"), {
+      target: { files: [new File([new Uint8Array([2])], "layout.png", { type: "image/png" })] },
+    });
+
+    const actor = screen.getByRole("group", { name: "Picture 1 · Actor reference" });
+    const layout = screen.getByRole("group", { name: "Picture 2 · Layout reference" });
+    expect(within(actor).getByRole("img", { name: "Picture 1 · Actor preview" })).toBeTruthy();
+    expect(within(actor).getByRole("button", { name: "Clear Picture 1 · Actor" })).toBeTruthy();
+    expect(within(actor).queryByRole("button", { name: "Clear Picture 2 · Layout" })).toBeNull();
+    expect(within(layout).getByRole("img", { name: "Picture 2 · Layout preview" })).toBeTruthy();
+    expect(within(layout).getByRole("button", { name: "Clear Picture 2 · Layout" })).toBeTruthy();
+  });
+
   it("keeps the prompt visible while the desktop inspector switches between references and output", async () => {
     render(<JsonProductionPage active />);
     await screen.findByRole("button", { name: /shot_001/ });
