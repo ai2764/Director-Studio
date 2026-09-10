@@ -32,3 +32,16 @@ ChatGPT does not need a separate prompt-writing skill installed for JSON export.
 4. Create and approve missing visual references.
 5. Cast ordered Picture and Audio slots for each shot.
 6. Export production-ready Director Studio JSON on explicit request.
+
+## Use in regular ChatGPT Chat
+
+To use ordinary Chat rather than Work/Codex, create a ChatGPT Project and paste
+[`CHATGPT_PROJECT_INSTRUCTIONS.md`](CHATGPT_PROJECT_INSTRUCTIONS.md) into Project
+Instructions. Add these files as Project Sources:
+
+- `skills/director-studio-filmmaker/references/visual-assets.md`
+- `skills/director-studio-filmmaker/references/production-json-contract.md`
+- `skills/director-studio-filmmaker/references/h3-ref2va-contract.md`
+
+Start a new **Chat** conversation inside that Project. No plugin mention or fixed
+opening sentence is required.
