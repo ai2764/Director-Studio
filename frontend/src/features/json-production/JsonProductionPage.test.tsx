@@ -336,8 +336,12 @@ describe("JsonProductionPage three-column workspace", () => {
 
     const actor = screen.getByRole("group", { name: "Picture 1 · Actor reference" });
     const layout = screen.getByRole("group", { name: "Picture 2 · Layout reference" });
-    expect(within(actor).getByRole("img", { name: "Picture 1 · Actor preview" })).toBeTruthy();
-    expect(within(actor).getByRole("button", { name: "Clear Picture 1 · Actor" })).toBeTruthy();
+    const actorPreview = within(actor).getByRole("img", { name: "Picture 1 · Actor preview" });
+    const actorMaterialRow = actorPreview.closest(".json-asset-slot-body") as HTMLElement | null;
+    expect(actorMaterialRow).toBeTruthy();
+    expect(within(actorMaterialRow!).getByText("actor.png")).toBeTruthy();
+    expect(within(actorMaterialRow!).getByText("Replace file")).toBeTruthy();
+    expect(within(actorMaterialRow!).getByRole("button", { name: "Clear Picture 1 · Actor" })).toBeTruthy();
     expect(within(actor).queryByRole("button", { name: "Clear Picture 2 · Layout" })).toBeNull();
     expect(within(layout).getByRole("img", { name: "Picture 2 · Layout preview" })).toBeTruthy();
     expect(within(layout).getByRole("button", { name: "Clear Picture 2 · Layout" })).toBeTruthy();

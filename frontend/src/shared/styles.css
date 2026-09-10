@@ -4400,8 +4400,7 @@ select {
   border-top: 1px solid var(--border);
 }
 
-.json-asset-slot-head,
-.json-asset-slot-footer {
+.json-asset-slot-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4418,12 +4417,37 @@ select {
   font-weight: 720;
 }
 
-.json-asset-clear {
-  flex: none;
+.json-asset-slot-body.has-preview {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0.75rem;
 }
 
 .json-asset-slot-footer {
-  margin-top: 0.6rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.json-asset-slot-body.has-preview .json-asset-slot-footer {
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.json-asset-slot-actions {
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.json-asset-clear {
+  flex: none;
 }
 
 .json-asset-slot-footer .filename,
@@ -4435,9 +4459,9 @@ select {
 }
 
 .json-asset-preview {
-  width: 100%;
-  height: auto;
-  max-height: none;
+  width: 120px;
+  height: 90px;
+  max-height: 90px;
   object-fit: contain;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -4754,9 +4778,16 @@ select {
   }
 
   .json-mobile-stage .json-asset-preview {
-    max-height: 15rem;
+    width: 88px;
+    height: 66px;
+    max-height: 66px;
     object-fit: contain;
     background: #18202a;
+  }
+
+  .json-mobile-stage .json-asset-slot-body.has-preview {
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 0.65rem;
   }
 
   .json-mobile-stage .json-output-content > .section-card-head {
