@@ -4,10 +4,13 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from typing import AsyncIterator, Literal, Protocol, Sequence
+from typing import TYPE_CHECKING, AsyncIterator, Literal, Protocol, Sequence
 
 from ...config import settings
 from .ollama_client import OllamaClient
+
+if TYPE_CHECKING:
+    from ..llm.provider import LLMProvider
 
 logger = logging.getLogger("director_studio.vram")
 
@@ -72,20 +75,27 @@ class VramOrchestrator:
     def __init__(
         self,
         *,
+        provider: "LLMProvider | None" = None,
         ollama: OllamaClient | None = None,
         comfy: ComfyFreeClient | None = None,
         models: Sequence[str] | None = None,
         policy: str = "exclusive",
         acquire_timeout_sec: float | None = None,
     ) -> None:
-        self.ollama = ollama or OllamaClient()
+        if provider is None:
+            from ..llm.ollama import OllamaLLMProvider
+
+            provider = OllamaLLMProvider(ollama or OllamaClient())
+        self.provider = provider
+        # Compatibility alias for older callers/tests while inference migrates.
+        self.ollama = provider.client
         self.comfy = comfy  # lazy default via _get_comfy if None
         if models is not None:
             self.models = list(models)
         else:
             from .director_model import get_director_model
 
-            self.models = [get_director_model()]
+            self.models = [get_director_model(provider.provider_id)]
         self.policy = policy or "exclusive"
         self.acquire_timeout_sec = (
             acquire_timeout_sec
@@ -169,16 +179,23 @@ class VramOrchestrator:
         return self.comfy
 
     async def release_llm(self) -> None:
-        """Unload configured Ollama models (best-effort)."""
+        """Release configured models through the active provider lifecycle."""
         # Always unload the *current* director model + any previously tracked names.
         from .director_model import get_director_model
 
-        names = list(dict.fromkeys([*(self.models or []), get_director_model()]))
-        await self.ollama.unload_models(names)
+        names = list(
+            dict.fromkeys(
+                [
+                    *(self.models or []),
+                    get_director_model(self.provider.provider_id),
+                ]
+            )
+        )
+        await self.provider.lifecycle.release(names)
         self._llm_ready = False
         if self.owner == "llm":
             self.owner = None
-        logger.info("Ollama unload requested for %s", names)
+        logger.info("%s LLM release requested for %s", self.provider.provider_id, names)
 
     async def release_comfy_models(self, *, require_ok: bool = False) -> dict | None:
         """
@@ -245,81 +262,28 @@ class VramOrchestrator:
         ``on_status`` is an optional async callable(str) for UI progress
         (e.g. "Loading ornith:35b onto the GPU…").
         """
-        if self.owner == "comfy":
+        local_gpu = self.provider.lifecycle.uses_local_gpu
+        if local_gpu and self.owner == "comfy":
             raise GPUBusyError("comfy")
-        if self.owner != "llm":
+        if local_gpu and self.owner != "llm":
             raise RuntimeError("ensure_llm_ready requires active llm_session (owner=llm)")
-        ok = await self.ollama.health()
-        if not ok:
-            raise RuntimeError("Ollama is not reachable at " + self.ollama.base_url)
 
         from .director_model import get_director_model
 
-        model = get_director_model()
+        model = get_director_model(self.provider.provider_id)
         # Keep unload list in sync with runtime model picker
         self.models = [model]
-
-        async def _status(msg: str) -> None:
-            logger.info("ensure_llm_ready: %s", msg)
-            if on_status is not None:
-                try:
-                    res = on_status(msg)
-                    if asyncio.iscoroutine(res) or asyncio.isfuture(res):
-                        await res  # type: ignore[func-returns-value]
-                except Exception:
-                    logger.exception("on_status failed")
-
-        # Never trust _llm_ready alone — Comfy unload / keep_alive=0 can desync it.
-        vram = await self.ollama.model_vram_bytes(model)
-        if vram > 0:
-            self._llm_ready = True
-            await _status(f"{model} ready on GPU ({vram / (1024**3):.1f} GB)")
-            return
-
-        self._llm_ready = False
-        await _status(f"Starting {model}…")
-
-        keep = "60m" if getattr(settings, "llm_keep_loaded", True) else "0"
         try:
-            await self.ollama.generate(
+            await self.provider.lifecycle.prepare(
                 model,
-                "ok",
-                keep_alive=keep,
-                options={"num_gpu": 999, "num_predict": 1},
+                on_status=on_status,
             )
         except Exception as exc:
             self._llm_ready = False
-            await _status(f"Load failed: {exc}")
             raise RuntimeError(
-                f"Failed to load Ollama model {model!r} onto GPU: {exc}"
+                f"Failed to prepare {self.provider.provider_id} model {model!r}: {exc}"
             ) from exc
-
-        vram = await self.ollama.model_vram_bytes(model)
-        if vram <= 0:
-            # Retry once after a short pause (Ollama sometimes reports ps late).
-            await asyncio.sleep(1.0)
-            vram = await self.ollama.model_vram_bytes(model)
-
-        if vram <= 0:
-            self._llm_ready = False
-            await _status(
-                f"Warning: {model} responded but size_vram=0; it may be running on CPU and will be slow"
-            )
-            logger.error(
-                "Ollama model %s is loaded but size_vram=0 (CPU only). "
-                "Check NVIDIA driver / restart Ollama after setting GPU access.",
-                model,
-            )
-            # Still mark ready so chat can proceed (slow) rather than hard-fail.
-            self._llm_ready = True
-        else:
-            self._llm_ready = True
-            await _status(f"{model} ready on GPU ({vram / (1024**3):.1f} GB)")
-            logger.info(
-                "Ollama model %s warmed on GPU (size_vram=%.1f GB)",
-                model,
-                vram / (1024**3),
-            )
+        self._llm_ready = True
 
     async def before_comfy_job(self, pipeline_id: str) -> None:
         """
@@ -331,22 +295,23 @@ class VramOrchestrator:
         """
         async with self._cv:
             await self._wait_until_free(want=f"comfy:{pipeline_id}")
-            # Always try unload — residency may have left weights in VRAM.
+            # Local runtimes must release weights before Comfy takes the GPU.
             was_ready = self._llm_ready
-            try:
-                await self.release_llm()
-            except Exception:
-                logger.exception("release_llm during before_comfy_job failed")
+            if self.provider.lifecycle.uses_local_gpu:
                 try:
-                    await self.ollama.unload_models(self.models)
+                    await self.release_llm()
                 except Exception:
-                    logger.exception("unload_models fallback failed")
-                self._llm_ready = False
+                    logger.exception("release_llm during before_comfy_job failed")
+                    self._llm_ready = False
+                    if self.provider.lifecycle.release_failure_is_fatal:
+                        raise
             self.owner = "comfy"
             self.comfy_pipeline = pipeline_id
             logger.info(
-                "GPU acquired by comfy pipeline=%s (ollama unloaded, was_ready=%s)",
+                "GPU acquired by comfy pipeline=%s (provider=%s released=%s, was_ready=%s)",
                 pipeline_id,
+                self.provider.provider_id,
+                self.provider.lifecycle.uses_local_gpu,
                 was_ready,
             )
 
@@ -402,6 +367,15 @@ class VramOrchestrator:
             except Exception:
                 logger.exception("llm_session on_status failed")
 
+        if not self.provider.lifecycle.uses_local_gpu:
+            async with self._cv:
+                if fail_if_generation_pending:
+                    reservations = self._generation_snapshot_unlocked()
+                    if reservations:
+                        raise GenerationActiveError(reservations)
+            yield self
+            return
+
         # Snapshot busy owner for user-visible wait reason
         busy = self.owner
         pipe = self.comfy_pipeline
@@ -451,11 +425,13 @@ def get_orchestrator() -> VramOrchestrator:
     """Process-wide singleton orchestrator."""
     global _orchestrator
     if _orchestrator is None:
+        from ..llm import get_llm_provider
         from .director_model import get_director_model
 
+        provider = get_llm_provider()
         _orchestrator = VramOrchestrator(
-            ollama=OllamaClient(),
-            models=[get_director_model()],
+            provider=provider,
+            models=[get_director_model(provider.provider_id)],
             policy=settings.vram_policy,
         )
     return _orchestrator

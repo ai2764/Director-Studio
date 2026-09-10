@@ -79,6 +79,17 @@ class OllamaLifecycle:
             keep_alive=keep,
             options={"num_gpu": 999, "num_predict": 1},
         )
+        vram = await self.client.model_vram_bytes(model)
+        if vram > 0:
+            await _emit_status(
+                on_status,
+                f"{model} ready on GPU ({vram / (1024**3):.1f} GB)",
+            )
+        else:
+            await _emit_status(
+                on_status,
+                f"Warning: {model} responded but size_vram=0; it may be running on CPU",
+            )
 
     async def release(self, models: Sequence[str]) -> None:
         await self.client.unload_models(models)
