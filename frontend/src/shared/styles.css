@@ -22,6 +22,21 @@
 /* Workflow setup shares the production workbench surfaces and binding typography. */
 .topbar-settings { flex: 0 0 auto; }
 .topbar-settings[aria-current="page"] { background: var(--accent-soft); border-color: var(--accent); }
+.settings-close-button {
+  width: 2.25rem;
+  height: 2.25rem;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.settings-close-button:hover { background: var(--accent-soft); color: var(--text); }
+.settings-close-button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 .h3-workflow-setup { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 24px; max-width: 1180px; margin: 0 auto; align-items: start; }
 .workflow-profile-rail { position: sticky; top: 96px; }
 .workflow-profile-name { display: block; font-size: 1.1rem; margin: 20px 0 8px; overflow-wrap: anywhere; }

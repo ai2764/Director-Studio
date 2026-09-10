@@ -114,6 +114,7 @@ function MobileAppShell() {
 function AppShell() {
   const [page, setPage] = useState<DesktopPage>("director");
   const [settingsVisited, setSettingsVisited] = useState(false);
+  const settingsReturnPage = useRef<Exclude<DesktopPage, "settings">>("director");
   const [directorRequest, setDirectorRequest] = useState<DirectorChatRequest | null>(null);
   const requestSequence = useRef(0);
   const [health, setHealth] = useState<{
@@ -123,6 +124,12 @@ function AppShell() {
   const { project } = useProject();
   const jsonProductionMode = project?.mode === "json_production";
   const activePage = jsonProductionMode && page !== "settings" ? "production" : page;
+  const openSettings = () => {
+    if (activePage !== "settings") settingsReturnPage.current = activePage;
+    setSettingsVisited(true);
+    setPage("settings");
+  };
+  const closeSettings = () => setPage(settingsReturnPage.current);
   const reviewMaterials = (shot: Shot, shotNumber: number) => {
     requestSequence.current += 1;
     setDirectorRequest(materialReviewRequest(shot, shotNumber, requestSequence.current));
@@ -178,12 +185,12 @@ function AppShell() {
             <span className="dot" />
             <span className="health-label">ComfyUI</span>
           </div>
-          <button type="button" className="btn secondary topbar-settings" aria-current={activePage === "settings" ? "page" : undefined} onClick={() => { setSettingsVisited(true); setPage("settings"); }}>Settings</button>
+          <button type="button" className="btn secondary topbar-settings" aria-current={activePage === "settings" ? "page" : undefined} onClick={openSettings}>Settings</button>
         </div>
       </header>
 
       {/* Keep pages mounted so in-flight job UI/polling survives tab switches */}
-      {settingsVisited ? <div className={activePage === "settings" ? "page-pane active" : "page-pane"} hidden={activePage !== "settings"}><WorkflowSettingsPage active={activePage === "settings"} /></div> : null}
+      {settingsVisited ? <div className={activePage === "settings" ? "page-pane active" : "page-pane"} hidden={activePage !== "settings"}><WorkflowSettingsPage active={activePage === "settings"} onClose={closeSettings} /></div> : null}
       <div
         className={activePage === "assets" ? "page-pane active" : "page-pane"}
         hidden={activePage !== "assets"}
@@ -218,6 +225,10 @@ export default function App() {
   const [narrowViewport, setNarrowViewport] = useState(
     () => window.matchMedia("(max-width: 840px)").matches,
   );
+
+  useEffect(() => {
+    document.title = "Director Studio";
+  }, []);
 
   useEffect(() => {
     if (forcedMobile) return;

@@ -36,7 +36,12 @@ vi.mock("../shared/project/ProjectPicker", () => ({
 }));
 
 vi.mock("../features/settings/WorkflowSettingsPage", () => ({
-  WorkflowSettingsPage: ({ active }: { active?: boolean }) => <h1 data-active={String(active)}>Workflow settings</h1>,
+  WorkflowSettingsPage: ({ active, onClose }: { active?: boolean; onClose?: () => void }) => (
+    <div>
+      <h1 data-active={String(active)}>Workflow settings</h1>
+      <button type="button" aria-label="Close settings" onClick={onClose}>×</button>
+    </div>
+  ),
 }));
 
 vi.mock("../shared/api/client", () => ({
@@ -131,6 +136,14 @@ vi.mock("../features/json-production/JsonProductionPage", () => ({
 describe("App mode routing", () => {
   afterEach(cleanup);
 
+  it("uses Director Studio as the browser title", () => {
+    document.title = "Director Studio · Casting";
+
+    render(<App />);
+
+    expect(document.title).toBe("Director Studio");
+  });
+
   it("opens desktop Settings outside the project workflow navigation", async () => {
     render(<App />);
     const settings = screen.getByRole("button", { name: "Settings" });
@@ -139,6 +152,17 @@ describe("App mode routing", () => {
     expect(await screen.findByRole("heading", { name: "Workflow settings" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Workflow settings" }).getAttribute("data-active")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Director" }));
+    expect(screen.queryByRole("heading", { name: "Workflow settings" })).toBeNull();
+  });
+
+  it("closes Settings back to the page that opened it", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Assets" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Close settings" }));
+
+    expect(screen.getByRole("button", { name: "Assets" }).getAttribute("aria-current")).toBe("page");
     expect(screen.queryByRole("heading", { name: "Workflow settings" })).toBeNull();
   });
 
