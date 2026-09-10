@@ -356,6 +356,8 @@ describe("JsonProductionPage three-column workspace", () => {
     expect(workspace?.firstElementChild).toBe(timeline);
 
     const inspector = screen.getByRole("navigation", { name: "Shot inspector" });
+    const separator = screen.getByRole("separator", { name: "Resize prompt and References or Output" });
+    expect(separator.getAttribute("aria-valuenow")).toBe("65");
     expect(within(inspector).getByRole("button", { name: "References" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByLabelText("Subject definitions")).toBeTruthy();
     expect(screen.getByText("Picture 1 · Actor")).toBeTruthy();
@@ -390,6 +392,7 @@ describe("JsonProductionPage three-column workspace", () => {
     expect(screen.queryByRole("button", { name: /shot_001/ })).toBeNull();
 
     const workflow = screen.getByRole("navigation", { name: "Shot workflow" });
+    expect(screen.queryByRole("separator", { name: "Resize prompt and References or Output" })).toBeNull();
     expect(within(workflow).getByRole("button", { name: "Prompt" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByLabelText("Subject definitions")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Generate" })).toBeTruthy();

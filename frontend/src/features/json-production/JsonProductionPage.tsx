@@ -8,6 +8,7 @@ import {
 } from "react";
 import { EMPTY_PROMPT_SECTIONS, type JobStatus, type PromptSections } from "../../shared/api/types";
 import { PageShell } from "../../shared/components/PageShell";
+import { ResizableWorkspace } from "../../shared/components/ResizableWorkspace";
 import { useProject } from "../../shared/project/ProjectContext";
 import { cancelH3Job } from "../production/api";
 import { getStoryboard, listJsonShotJobs, putStoryboard, submitJsonShot } from "./api";
@@ -664,9 +665,15 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
             }}
           />
           {selected ? (
-            <div className="json-desktop-workbench">
-              {promptPanel}
-              <section className="json-desktop-inspector">
+            <ResizableWorkspace
+              className="json-desktop-workbench json-resizable-workbench"
+              storageKey="ds.jsonProductionPromptWidth"
+              separatorLabel="Resize prompt and References or Output"
+              defaultSize={65}
+              minSize={42}
+              maxSize={76}
+              primary={promptPanel}
+              secondary={<section className="json-desktop-inspector">
                 <nav className="json-desktop-inspector-nav" aria-label="Shot inspector">
                   {(["references", "output"] as const).map((section) => (
                     <button
@@ -681,8 +688,8 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
                   ))}
                 </nav>
                 {assetPanel}
-              </section>
-            </div>
+              </section>}
+            />
           ) : (
             <div className="section-card empty-state-card json-prompt-panel">
               <p className="empty-copy">Select a shot from the list.</p>
