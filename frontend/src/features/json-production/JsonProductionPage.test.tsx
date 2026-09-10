@@ -345,6 +345,19 @@ describe("JsonProductionPage three-column workspace", () => {
     expect(screen.getByRole("button", { name: "Generate" })).toBeTruthy();
   });
 
+  it("renders the desktop shot timeline as compact numbered bookmarks", async () => {
+    render(<JsonProductionPage active />);
+
+    const timeline = await screen.findByRole("complementary", { name: "Shot timeline" });
+    const bookmarks = within(timeline).getAllByRole("button");
+
+    expect(bookmarks).toHaveLength(2);
+    expect(bookmarks[0].classList.contains("json-shot-bookmark")).toBe(true);
+    expect(within(bookmarks[0]).getByText("01")).toBeTruthy();
+    expect(within(bookmarks[1]).getByText("02")).toBeTruthy();
+    expect(bookmarks[0].querySelector(".json-shot-bookmark-status")).toBeTruthy();
+  });
+
   it("uses a compact three-step workflow on mobile while keeping Generate available", async () => {
     render(<JsonProductionPage active mobile />);
 

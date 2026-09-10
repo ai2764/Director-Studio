@@ -4046,34 +4046,45 @@ select {
 }
 
 .json-desktop-workspace .json-shot-panel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
   height: auto;
   max-height: none;
-  padding: 0.72rem 0.8rem 0.78rem;
+  padding: 0.48rem 0.7rem 0.52rem;
   overflow: hidden;
   border-color: var(--border);
   background: var(--panel);
 }
 
 .json-desktop-workspace .json-shot-panel .section-card-head {
-  margin-bottom: 0.55rem;
+  min-width: 4.5rem;
+  margin: 0;
 }
 
 .json-desktop-workspace .json-shot-list {
   display: flex;
   flex-direction: row;
-  gap: 0.5rem;
-  padding-bottom: 0.28rem;
+  gap: 0.38rem;
+  padding: 0.1rem 0 0.18rem;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
   scrollbar-width: thin;
 }
 
 .json-desktop-workspace .json-shot-item {
-  flex: 0 0 clamp(11.5rem, 17vw, 15rem);
-  min-height: 4.8rem;
-  padding: 0.65rem 0.72rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  flex: 0 0 clamp(10.5rem, 13vw, 12.5rem);
+  min-height: 3rem;
+  gap: 0.52rem;
+  padding: 0.38rem 0.58rem 0.42rem;
   border-color: var(--border);
+  border-radius: 7px 7px 3px 3px;
   background: var(--bg);
+  box-shadow: inset 0 -2px 0 var(--border);
 }
 
 .json-desktop-workspace .json-shot-item:hover {
@@ -4083,11 +4094,82 @@ select {
 .json-desktop-workspace .json-shot-item.selected {
   border-color: var(--accent);
   background: var(--accent-soft);
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: inset 0 -3px 0 var(--accent);
 }
 
-.json-desktop-workspace .json-shot-item .status-chip {
-  margin-top: auto;
+.json-shot-bookmark-index {
+  display: grid;
+  min-width: 1.7rem;
+  min-height: 1.7rem;
+  place-items: center;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 720;
+}
+
+.json-shot-bookmark.selected .json-shot-bookmark-index {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  color: var(--accent);
+}
+
+.json-shot-bookmark-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+.json-shot-bookmark .shot-table-title {
+  overflow: hidden;
+  font-size: 0.8rem;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.json-shot-bookmark-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: 0.64rem;
+  line-height: 1;
+}
+
+.json-shot-bookmark-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.26rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.json-shot-bookmark-status::before {
+  width: 0.4rem;
+  height: 0.4rem;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+  content: "";
+}
+
+.json-shot-bookmark-status[data-status="succeeded"]::before {
+  background: var(--ok);
+}
+
+.json-shot-bookmark-status[data-status="running"]::before,
+.json-shot-bookmark-status[data-status="queued"]::before,
+.json-shot-bookmark-status[data-status="uploading"]::before {
+  background: var(--info);
+}
+
+.json-shot-bookmark-status[data-status="failed"]::before,
+.json-shot-bookmark-status[data-status="missing files"]::before {
+  background: var(--danger);
 }
 
 .json-desktop-workbench {
