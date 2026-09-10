@@ -58,7 +58,8 @@ async def get_model(provider: LLMProvider = Depends(get_llm_provider)) -> dict:
         logger.warning("list %s models failed: %s", provider.provider_id, e)
         available = []
         reachable = False
-    if reachable and not str(status.get("model") or "").strip() and available:
+    selected = str(status.get("model") or "").strip()
+    if reachable and available and selected not in available:
         provider.select_model(available[0], persist=True)
         status = provider.model_status()
     return {
