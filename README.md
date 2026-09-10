@@ -411,47 +411,134 @@ pwsh -File scripts/build-legacy-portable.ps1
 
 Before distributing the result, extract the new zip, configure its `.env`, start ComfyUI and Ollama, and run one real job for every workflow you replaced. For an imported H3 profile, use the Settings Test step before activation, then submit a new Production job. Unit tests verify the graph contract and mapping; only a real ComfyUI run proves that all custom nodes, model files, tensor shapes, and output formats are compatible on the target installation.
 
-## Development setup
+## Run from source
 
-Windows PowerShell:
+Source development runs two Director Studio processes: the FastAPI backend on port `8790` and the Vite frontend on port `5173`. The selected Director LLM service and ComfyUI are separate processes and must already be running.
+
+### Prerequisites
+
+- [Git](https://git-scm.com/downloads).
+- [Python 3.11 or newer](https://www.python.org/downloads/) with `venv` and `pip`.
+- [Node.js 22](https://nodejs.org/en/download/archive/v22) and npm. Node 22 is the version exercised by CI.
+- [FFmpeg and FFprobe](https://ffmpeg.org/download.html) available on `PATH`.
+- One running Director LLM provider: Ollama, LM Studio, or an OpenAI-compatible endpoint.
+- A running ComfyUI instance for image generation and local H3 video. ComfyUI is not required when only testing Director chat against a remote LLM.
+
+Clone the repository, or skip this step if the source tree is already present:
+
+```text
+git clone https://github.com/ai2764/Director-Studio.git
+cd Director-Studio
+```
+
+### Windows 10/11
+
+Install Git, Python, Node.js, and FFmpeg using the links above or a trusted package manager. Confirm that each command is available in a new PowerShell window:
 
 ```powershell
-# Backend (from backend/)
-python -m pip install -r requirements.txt
-Copy-Item .env.example .env  # optional: customize local service settings
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8790 --reload
+git --version
+py -3 --version
+node --version
+npm --version
+ffmpeg -version
+ffprobe -version
+```
 
-# Frontend (from frontend/)
-npm install
+Create an isolated backend environment and install its dependencies:
+
+```powershell
+Set-Location backend
+py -3 -m venv .venv
+& .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+notepad .env
+```
+
+Choose one `DS_LLM_PROVIDER` configuration from [Director LLM providers](#director-llm-providers). Keep `DS_HOST=127.0.0.1` for normal local use and confirm that `DS_COMFY_BASE_URL` points to the running ComfyUI instance.
+
+Start the backend from the `backend` directory while the virtual environment remains active:
+
+```powershell
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8790 --reload
+```
+
+Open a second PowerShell window at the repository root and start the frontend:
+
+```powershell
+Set-Location frontend
+npm ci
 npm run dev
 ```
 
-Ubuntu shell:
+### Ubuntu Linux
+
+Ubuntu 24.04 provides a suitable Python version directly. On Ubuntu 22.04, install Python 3.11 or newer using a trusted package source or version manager before continuing. Install the remaining system dependencies and use the official [Node.js 22 downloads](https://nodejs.org/en/download/archive/v22) if the configured Ubuntu repository provides an older Node release:
 
 ```bash
-# From the repository root
 sudo apt-get update
-sudo apt-get install --yes ffmpeg python3-venv
+sudo apt-get install --yes git ffmpeg python3 python3-pip python3-venv
 
-# Backend
+python3 --version
+node --version
+npm --version
+ffmpeg -version
+ffprobe -version
+```
+
+Create the backend environment and configure it:
+
+```bash
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8790 --reload
+cp .env.example .env
+${EDITOR:-nano} .env
+```
 
-# Frontend, in another shell
+Choose one `DS_LLM_PROVIDER` configuration from [Director LLM providers](#director-llm-providers), then start the backend from the `backend` directory:
+
+```bash
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8790 --reload
+```
+
+Open a second terminal at the repository root and start the frontend:
+
+```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-- UI: http://127.0.0.1:5173  
-- API: http://127.0.0.1:8790/docs  
-- ComfyUI: http://127.0.0.1:8188 (local workflows are submitted through the installed Comfy MCP server)
-- Ollama (Director): http://127.0.0.1:11434  
+### Open the application
 
-> Note: default API port is **8790** (frontend Vite proxy points here).
+- UI: http://127.0.0.1:5173
+- API documentation: http://127.0.0.1:8790/docs
+- Health check: http://127.0.0.1:8790/api/health
+- Default ComfyUI endpoint: http://127.0.0.1:8188
+- Default Ollama endpoint: http://127.0.0.1:11434
+
+The frontend Vite server proxies `/api` requests to the backend on port `8790`. If the model picker is empty, verify the active provider and its `/v1/models` or Ollama model-list endpoint from the backend machine. If generation cannot start, verify ComfyUI and the `comfy-mcp` command inside the activated Python environment.
+
+For temporary LAN testing, set `DS_HOST=0.0.0.0`, start Uvicorn with `--host 0.0.0.0`, and run `npm run dev -- --host 0.0.0.0`. Allow ports `5173` and `8790` through the firewall only on a trusted private network. The development servers do not add authentication.
+
+### Run checks
+
+Backend, from `backend` with the virtual environment active:
+
+```text
+python -m pytest tests
+```
+
+Frontend, from `frontend`:
+
+```text
+npm test
+npm run build
+```
 
 ## Director & Production
 
