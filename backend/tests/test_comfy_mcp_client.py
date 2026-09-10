@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -36,6 +37,7 @@ class FakeToolSession:
         return None
 
 
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows entrypoint layout")
 def test_server_parameters_resolve_installed_windows_entrypoints(
     monkeypatch,
     tmp_path,

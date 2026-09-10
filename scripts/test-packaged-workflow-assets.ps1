@@ -9,8 +9,18 @@ if (-not (Test-Path -LiteralPath $resolvedExecutable -PathType Leaf)) {
     throw "Packaged executable does not exist: $resolvedExecutable"
 }
 
+$pythonCommand = Get-Command py -ErrorAction SilentlyContinue
+if ($null -eq $pythonCommand) {
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+}
+if ($null -eq $pythonCommand) {
+    $pythonCommand = Get-Command python3 -ErrorAction SilentlyContinue
+}
+if ($null -eq $pythonCommand) {
+    throw "Python is required to inspect the packaged executable."
+}
 $archiveListing = @(
-    py -m PyInstaller.utils.cliutils.archive_viewer -l $resolvedExecutable
+    & $pythonCommand.Source -m PyInstaller.utils.cliutils.archive_viewer -l $resolvedExecutable
 )
 if ($LASTEXITCODE -ne 0) {
     throw "Could not inspect packaged executable: $resolvedExecutable"
