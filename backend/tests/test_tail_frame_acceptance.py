@@ -225,33 +225,6 @@ async def test_nine_picture_overflow_keeps_tail_frame_reviewed_unselected(
     assert "lay_tail" in joined or "lref_tail" in joined
 
 
-@pytest.mark.parametrize(
-    "claim",
-    [
-        "<Picture 3> is the first frame of the next clip.",
-        "<Picture 3> is a last-frame socket for shot2.",
-        "<Picture 3> activates only at the beginning of the shot.",
-        "<Picture 3> keeps the corridor state for 0-3 seconds.",
-    ],
-)
-def test_prompt_validation_rejects_endpoint_and_time_window_claims(claim):
-    sections = PromptSections(
-        subject_definitions=claim,
-        summary="Kai continues through the doorway.",
-        retention_analysis="Hold attention on the door.",
-        detailed_description="0-6 seconds: Kai opens the door.",
-        overall_soundscape="Quiet rain.",
-        non_diegetic_music="No music.",
-    )
-    with pytest.raises(ValueError):
-        validate_h3_prompt(
-            compose_h3_prompt(sections),
-            [],
-            required_picture_indices=[3],
-            submitted_picture_indices=[3],
-        )
-
-
 def test_prompt_validation_allows_tail_frame_provenance_without_endpoint_claim():
     sections = PromptSections(
         subject_definitions=(

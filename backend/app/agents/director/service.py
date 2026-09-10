@@ -13,7 +13,6 @@ from ...config import settings
 from ...core.jobs import create_job, load_job, start_pipeline_job
 from ...core.library.store import load_asset
 from ...core.h3.prompt import (
-    validate_no_time_addressable_pictures,
     validate_required_picture_bindings,
     validate_tail_frame_transition_prompt,
 )
@@ -1828,7 +1827,6 @@ class DirectorService:
                 parsed = PromptSections(**parse_prompt_sections_json(value))
                 parsed = _apply_source_audio_contract(parsed, shot)
                 ordered_text = parsed.as_ordered_text()
-                validate_no_time_addressable_pictures(ordered_text)
                 validate_tail_frame_transition_prompt(parsed, selected_layouts)
                 validate_required_picture_bindings(
                     ordered_text,
