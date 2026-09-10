@@ -77,6 +77,7 @@ function upsertJob(list: JsonShotJobRecord[] | undefined, job: JsonShotJobRecord
 }
 
 type MobileSection = "prompt" | "references" | "output";
+type DesktopInspector = "references" | "output";
 
 export function JsonProductionPage({ active = true, mobile = false }: { active?: boolean; mobile?: boolean } = {}) {
   const { projectId } = useProject();
@@ -94,6 +95,7 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
   const [picturePreviews, setPicturePreviews] = useState<NestedUrlMap>(() => new Map());
   const [jobsByShotId, setJobsByShotId] = useState<Map<string, JsonShotJobRecord[]>>(() => new Map());
   const [mobileSection, setMobileSection] = useState<MobileSection>("prompt");
+  const [desktopInspector, setDesktopInspector] = useState<DesktopInspector>("references");
 
   const previewRef = useRef(picturePreviews);
   previewRef.current = picturePreviews;
@@ -511,9 +513,12 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
       busy={busy}
       onPictureFile={onPictureFile}
       onAudioFile={onAudioFile}
-      onGenerate={() => void onGenerate()}
+      onGenerate={() => {
+        if (!mobile) setDesktopInspector("output");
+        void onGenerate();
+      }}
       onCancel={() => void onCancel()}
-      view={mobile ? (mobileSection === "output" ? "output" : "references") : "all"}
+      view={mobile ? (mobileSection === "output" ? "output" : "references") : desktopInspector}
       showActions={!mobile}
     />
   ) : null;
@@ -648,18 +653,36 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
               </button>
             ) : null}
           </div>
-        </div> : <div className="json-production-grid">
+        </div> : <div className="json-desktop-workspace">
           <JsonShotList
             shots={storyboard!.shots}
             selectedId={selectedId}
             statusByShotId={statusByShotId}
-            onSelect={setSelectedId}
+            onSelect={(id) => {
+              setSelectedId(id);
+              setDesktopInspector("references");
+            }}
           />
           {selected ? (
-            <>
+            <div className="json-desktop-workbench">
               {promptPanel}
-              {assetPanel}
-            </>
+              <section className="json-desktop-inspector">
+                <nav className="json-desktop-inspector-nav" aria-label="Shot inspector">
+                  {(["references", "output"] as const).map((section) => (
+                    <button
+                      key={section}
+                      type="button"
+                      className={desktopInspector === section ? "active" : ""}
+                      aria-selected={desktopInspector === section}
+                      onClick={() => setDesktopInspector(section)}
+                    >
+                      {section.charAt(0).toUpperCase() + section.slice(1)}
+                    </button>
+                  ))}
+                </nav>
+                {assetPanel}
+              </section>
+            </div>
           ) : (
             <div className="section-card empty-state-card json-prompt-panel">
               <p className="empty-copy">Select a shot from the list.</p>

@@ -323,6 +323,28 @@ describe("JsonProductionPage three-column workspace", () => {
     expect(within(assets).getByText(/Audio 1 ·/)).toBeTruthy();
   });
 
+  it("keeps the prompt visible while the desktop inspector switches between references and output", async () => {
+    render(<JsonProductionPage active />);
+    await screen.findByRole("button", { name: /shot_001/ });
+
+    const timeline = screen.getByRole("complementary", { name: "Shot timeline" });
+    const workspace = timeline.closest(".json-desktop-workspace");
+    expect(workspace?.firstElementChild).toBe(timeline);
+
+    const inspector = screen.getByRole("navigation", { name: "Shot inspector" });
+    expect(within(inspector).getByRole("button", { name: "References" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByLabelText("Subject definitions")).toBeTruthy();
+    expect(screen.getByText("Picture 1 · Actor")).toBeTruthy();
+
+    fireEvent.click(within(inspector).getByRole("button", { name: "Output" }));
+
+    expect(within(inspector).getByRole("button", { name: "Output" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByLabelText("Subject definitions")).toBeTruthy();
+    expect(screen.queryByText("Picture 1 · Actor")).toBeNull();
+    expect(screen.getByText("No H3 job yet for this shot.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Generate" })).toBeTruthy();
+  });
+
   it("uses a compact three-step workflow on mobile while keeping Generate available", async () => {
     render(<JsonProductionPage active mobile />);
 
@@ -508,6 +530,7 @@ describe("JsonProductionPage three-column workspace", () => {
     expect(screen.getByRole("link", { name: /raw/i }).getAttribute("href")).toBe(
       "/api/files/jobs/job_json_1/raw.mp4",
     );
+    fireEvent.click(screen.getByRole("button", { name: "References" }));
     expect(screen.getByText("actor.png")).toBeTruthy();
     expect(screen.getByText("steps.wav")).toBeTruthy();
   });
@@ -557,6 +580,7 @@ describe("JsonProductionPage three-column workspace", () => {
 
     render(<JsonProductionPage active />);
     fireEvent.click(await screen.findByRole("button", { name: /shot_002/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Output" }));
 
     expect(await screen.findByRole("heading", { name: "Output v2" })).toBeTruthy();
     const player = document.querySelector("video.h3-preview") as HTMLVideoElement | null;

@@ -9,7 +9,7 @@ type Props = {
 
 export function JsonShotList({ shots, selectedId, statusByShotId, onSelect }: Props) {
   return (
-    <aside className="section-card compact-card json-shot-panel">
+    <aside className="section-card compact-card json-shot-panel" aria-label="Shot timeline">
       <div className="section-card-head">
         <h2 className="section-card-title">Shots</h2>
         <span className="muted tiny">{shots.length}</span>
