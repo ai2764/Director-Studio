@@ -83,8 +83,8 @@ class Settings(BaseSettings):
     vram_policy: str = "exclusive"  # exclusive: one of LLM/Comfy at a time, others queue
     # Max seconds to wait in GPU queue (Plan waits for H3, next gen waits for casting, …)
     vram_acquire_timeout_sec: float = 3600.0
-    # Multi-turn residency: keep Ollama loaded between chat/plan turns.
-    # Comfy jobs still unload Ollama in before_comfy_job / release_llm.
+    # Multi-turn residency: keep a local LLM loaded between chat/plan turns.
+    # Comfy jobs still release local LLMs before taking the GPU.
     llm_keep_loaded: bool = True
 
     @model_validator(mode="before")

@@ -41,7 +41,11 @@ class WakeResponse(BaseModel):
 
 
 class DirectorModelBody(BaseModel):
-    model: str = Field(..., min_length=1, description="Ollama model tag, e.g. ornith:35b")
+    model: str = Field(
+        ...,
+        min_length=1,
+        description="Model identifier from the active provider catalog.",
+    )
     persist: bool = Field(
         default=True,
         description="Write choice to data/director_model.json (survives process restart).",
@@ -189,11 +193,9 @@ async def vram_status() -> dict:
                 "loaded_instances": ollama_loaded,
             }
         )
-    # Re-sync flag with reality (process restart / external unload can desync it)
-    if ollama_vram > 0:
-        orch._llm_ready = True
-    elif orch._llm_ready and ollama_vram <= 0:
-        orch._llm_ready = False
+    # Legacy injected Ollama orchestrators do not expose lifecycle status.
+    if provider is None:
+        orch._llm_ready = ollama_vram > 0
     return {
         "provider": llm_runtime.get("provider", "ollama"),
         "owner": orch.owner,

@@ -2,9 +2,9 @@
 
 Local-first pre-production workspace for planning shots, managing reusable visual and voice assets, writing MiniMax H3 Ref2AV prompts, and generating media through ComfyUI.
 
-Director Studio keeps the planning Agent local through Ollama. Image and local video workflows run in ComfyUI through ComfyUI MCP; H3 video can alternatively be submitted to the official MiniMax API.
+Director Studio runs the planning Agent through one configured Ollama, LM Studio, or OpenAI-compatible provider. Image and local video workflows run in ComfyUI through ComfyUI MCP; H3 video can alternatively be submitted to the official MiniMax API.
 
-Core features include a typed asset library, actor and set workflows, conversational shot planning, editable Picture and Audio references, optional Layout studies, six-section H3 prompts, local/cloud video submission, durable jobs, and exclusive Ollama/ComfyUI VRAM coordination.
+Core features include a typed asset library, actor and set workflows, conversational shot planning, editable Picture and Audio references, optional Layout studies, six-section H3 prompts, local/cloud video submission, durable jobs, and exclusive local-LLM/ComfyUI VRAM coordination.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and extension points.
 
@@ -12,25 +12,25 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and exten
 
 | Layer | Tech |
 |-------|------|
-| Backend | FastAPI · pluggable pipelines · ComfyUI MCP · Ollama Director |
+| Backend | FastAPI · pluggable pipelines · ComfyUI MCP · provider-neutral Director LLM |
 | Frontend | Vite + React · feature folders |
 | Execution | ComfyUI through MCP (actor / scene / prop / Layout / local H3) · MiniMax H3 official API |
-| Planning LLM | Local Ollama (exclusive VRAM with Comfy) |
+| Planning LLM | Ollama · LM Studio · OpenAI-compatible Chat Completions |
 
 ## Windows portable installation
 
-The portable package runs Director Studio locally as one `DirectorStudio.exe`. The UI and backend are included; Ollama and ComfyUI remain external local services. The included installer creates a private Python environment for `comfy-cli` and `comfy-mcp`.
+The portable package runs Director Studio locally as one `DirectorStudio.exe`. The UI and backend are included; the selected LLM server and ComfyUI remain external services. The included installer creates a private Python environment for `comfy-cli` and `comfy-mcp`.
 
 ### 1. Install local prerequisites
 
 - Windows 10 22H2 or newer, x64.
-- [Ollama for Windows](https://ollama.com/download/windows). Install any compatible local model you want to use with Director, for example:
+- One Director LLM provider. Ollama remains the default. For [Ollama for Windows](https://ollama.com/download/windows), install any compatible local model, for example:
 
   ```powershell
   ollama pull <model-name>
   ```
 
-  Director reads the installed catalog from Ollama. With no saved selection it uses the first installed model; with no installed models it leaves the selection empty.
+  LM Studio and other OpenAI-compatible servers are configured below instead. Director reads the active provider's model catalog; choose the model in the Director dropdown.
 
 - [ComfyUI Desktop for Windows](https://docs.comfy.org/installation/desktop/windows), running at `http://127.0.0.1:8188`.
 - Python 3.10 or newer for the external Comfy command-line tools. Director Studio itself does not require a separate Python installation.
@@ -51,12 +51,33 @@ Set-Location C:\DirectorStudio
 notepad .env
 ```
 
-At minimum, confirm the local service URLs. When run, the installer writes its absolute MCP command paths automatically and replaces any prior values for those two path settings:
+At minimum, confirm the local service URLs. When run, the installer writes its absolute MCP command paths automatically and replaces any prior values for those two path settings. Choose exactly one LLM configuration:
 
 ```dotenv
 DS_COMFY_BASE_URL=http://127.0.0.1:8188
+
+# Ollama (default)
+DS_LLM_PROVIDER=ollama
 DS_OLLAMA_BASE_URL=http://127.0.0.1:11434
 ```
+
+For LM Studio, enable its local API server first. The model itself is selected from the Director dropdown, so it does not need to be named in `.env`:
+
+```dotenv
+DS_LLM_PROVIDER=lm-studio
+DS_LLM_BASE_URL=http://127.0.0.1:1234/v1
+# DS_LLM_API_KEY=lm-studio
+```
+
+For OpenAI or another service exposing the common OpenAI Chat Completions and Models endpoints (including llama.cpp, vLLM, LiteLLM, OpenRouter, and DeepSeek-compatible gateways):
+
+```dotenv
+DS_LLM_PROVIDER=openai-compatible
+DS_LLM_BASE_URL=https://api.openai.com/v1
+DS_LLM_API_KEY=replace-with-a-real-secret
+```
+
+An API key is optional for unauthenticated local servers. LM Studio model instances are unloaded before local ComfyUI generation and are loaded again by LM Studio on the next Director request. Remote providers do not participate in local GPU ownership.
 
 To use the official MiniMax API instead of local H3 generation, add your key and select the provider:
 
@@ -65,13 +86,13 @@ DS_H3_PROVIDER=minimax
 DS_H3_MINIMAX_API_KEY=your-secret-key
 ```
 
-Director Studio always coordinates local generation and Ollama with its built-in exclusive GPU lock. VRAM policy, queue timeout, and LLM residency use internal defaults and require no user configuration.
+Director Studio coordinates local generation with Ollama or LM Studio through its built-in exclusive GPU lock. VRAM policy, queue timeout, and LLM residency use internal defaults and require no user configuration.
 
 Do not publish `.env`; it may contain provider credentials. Projects and generated application state are stored in the adjacent `data` folder. Back up that folder before replacing or upgrading the package.
 
 ### 3. Start
 
-Start Ollama and ComfyUI first, then run:
+Start the configured LLM server and ComfyUI first, then run:
 
 ```powershell
 .\DirectorStudio.exe
@@ -106,13 +127,13 @@ Workflow changes apply only to jobs submitted after the switch. Queued and runni
 Browser UI
     ↕
 Director Studio (React + FastAPI)
-    ├─ Director Agent ↔ Ollama
+    ├─ Director Agent ↔ active LLM provider
     ├─ Jobs → ComfyUI MCP → ComfyUI
     ├─ Optional H3 jobs → MiniMax Official API
     └─ Projects, assets, prompts, and outputs → local data/
 ```
 
-Director Studio owns project state, workflow adapters, the job queue, and GPU coordination. ComfyUI MCP is the workflow transport layer: it submits completed API-format graphs to ComfyUI, monitors execution, and retrieves outputs. Ollama and ComfyUI remain separate local services.
+Director Studio owns project state, workflow adapters, the job queue, and GPU coordination. ComfyUI MCP is the workflow transport layer: it submits completed API-format graphs to ComfyUI, monitors execution, and retrieves outputs. The LLM provider and ComfyUI remain separate services.
 
 ## Bundled workflows
 
@@ -379,12 +400,16 @@ API: `/api/actors/*` · `GET /api/pipelines`
 | `DS_COMFY_MCP_ARGS` | empty | Optional extra command-line arguments passed to the MCP server process |
 | `DS_COMFY_MCP_COMFY_BIN` | `comfy` | comfy-cli executable used by the MCP server |
 | `DS_PORT` | `8790` | API port |
+| `DS_LLM_PROVIDER` | `ollama` | Active Director provider: `ollama`, `lm-studio`, or `openai-compatible` |
+| `DS_LLM_BASE_URL` | provider default | `/v1` base URL for LM Studio or an OpenAI-compatible server |
+| `DS_LLM_API_KEY` | empty | Optional credential for the active OpenAI-compatible endpoint |
+| `DS_LLM_TIMEOUT_SEC` | `600` | LLM request timeout in seconds |
 | `DS_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local Ollama for Director |
 | `DS_H3_MINIMAX_API_KEY` | empty | MiniMax API credential when `DS_H3_PROVIDER=minimax` |
 | `DS_H3_MINIMAX_MODEL` | `MiniMax-H3` | MiniMax H3 API model |
 | `DS_H3_MINIMAX_RESOLUTION` | `768P` | Requested MiniMax API output resolution |
 
-The Director model is not an environment default. Director Studio discovers the installed Ollama catalog, selects the first installed model when no prior choice exists, and persists subsequent model-picker selections under `data/director_model.json`. If Ollama has no models, the selection remains empty.
+The Director model is not required in the environment. Director Studio discovers the active provider's catalog, selects the first available model when no prior choice exists, and persists subsequent model-picker selections with their provider under `data/director_model.json`. If the provider returns no models, the selection remains empty.
 
 For source development, set values in `backend/.env` (prefix `DS_`). In the portable package, use the `.env` beside `DirectorStudio.exe`.
 

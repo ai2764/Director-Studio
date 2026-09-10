@@ -776,7 +776,7 @@ git commit -m "refactor: route director through active llm"
 - Documents exact environment values and observable verification commands.
 - Produces no new runtime interface.
 
-- [ ] **Step 1: Document the three provider configurations**
+- [x] **Step 1: Document the three provider configurations**
 
 Add a Director LLM configuration section with these executable examples:
 
@@ -798,19 +798,19 @@ DS_LLM_API_KEY=replace-with-a-real-secret
 
 Explain that model selection comes from the Director dropdown, LM Studio must have its server enabled, and local LM Studio models are unloaded before ComfyUI work and JIT-loaded on the next Director request.
 
-- [ ] **Step 2: Install backend dependencies in the active environment**
+- [x] **Step 2: Install backend dependencies in the active environment**
 
 Run: `cd backend; python -m pip install -r requirements.txt`
 
 Expected: exit 0 with an installed `openai` version in the allowed `>=3.9,<4` range.
 
-- [ ] **Step 3: Run the complete backend test suite**
+- [x] **Step 3: Run the complete backend test suite**
 
 Run: `cd backend; pytest -q`
 
 Expected: all tests pass with zero failures.
 
-- [ ] **Step 4: Run frontend regression tests and production build**
+- [x] **Step 4: Run frontend regression tests and production build**
 
 Run: `cd frontend; npm test -- --run`
 
@@ -820,7 +820,7 @@ Run: `cd frontend; npm run build`
 
 Expected: TypeScript and Vite build exit 0.
 
-- [ ] **Step 5: Run LM Studio catalog and chat acceptance**
+- [x] **Step 5: Run LM Studio catalog and chat acceptance**
 
 With LM Studio server running and the backend configured for `lm-studio`, run:
 
@@ -845,6 +845,14 @@ Invoke-RestMethod http://127.0.0.1:1234/api/v1/models
 ```
 
 Expected: the selected LLM has no loaded instance before ComfyUI begins. After generation, send another Director message and query again; expected: LM Studio JIT loads the selected model and the response completes.
+
+Execution note (2026-09-10): LM Studio was available locally on port 2345. The
+native and OpenAI model catalogs returned two LLMs; both direct client chat and
+the full Director `_make_chat_fn` path returned `Director ready`; native tool
+calling returned one normalized `get_status` call. Lifecycle status changed
+from unloaded to loaded after inference and back to unloaded after release.
+The LM Studio server was returned to its original stopped state. A real image
+attachment and a live ComfyUI job handoff remain manual acceptance items.
 
 - [ ] **Step 7: Inspect final diff and secrets**
 

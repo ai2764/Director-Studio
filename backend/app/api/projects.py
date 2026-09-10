@@ -1,7 +1,7 @@
 """Projects / Shots HTTP API — dual human gates + H3 Ref2AV submit.
 
 Human approve/reject/edit/submit paths work with the LLM cold.
-Gate 1 (layout approve) defaults to ``rewrite_prompt=false`` so no Ollama wake
+Gate 1 (layout approve) defaults to ``rewrite_prompt=false`` so no LLM wake
 is required; pass ``?rewrite_prompt=true`` (or body flag) to fill PromptSections
 via DirectorService (may take time while the LLM loads).
 """
@@ -227,7 +227,7 @@ class ApproveLayoutBody(BaseModel):
     """Optional body for layout approve.
 
     rewrite_prompt: when true, wakes LLM and rewrites six-section prompt
-    (slow / requires Ollama). Default is false (cold path).
+    (slow / requires the active LLM). Default is false (cold path).
     """
 
     rewrite_prompt: bool | None = None
@@ -589,7 +589,7 @@ async def _make_chat_fn(
         # Text-only keeps the combined prompt for /api/generate compatibility.
         use_images = list(images or [])
         prompt = user if use_images else f"{system}\n\n{user}"
-        # Multi-turn residency: keep Ollama loaded unless DS_LLM_KEEP_LOADED=false
+        # Multi-turn residency: keep a local LLM loaded unless disabled.
         keep = bool(getattr(settings, "llm_keep_loaded", True))
 
         async def _runtime(text: str) -> None:
@@ -640,7 +640,7 @@ async def _make_chat_fn(
                     }
 
             # Function calling, tool-result turns, and schema-constrained output
-            # all use Ollama's native chat API. Ordinary text chat can continue
+            # all use the provider's native chat API. Ordinary text chat can continue
             # through the streaming generate path below.
             if (
                 tools
@@ -1415,7 +1415,7 @@ async def approve_ref_frame_endpoint(
 ) -> Shot:
     """Gate 1: approve layout reference-frame.
 
-    Default ``rewrite_prompt=false`` — no Ollama required.
+    Default ``rewrite_prompt=false`` — no LLM required.
     Set query/body ``rewrite_prompt=true`` to call write_prompts_after_layout
     (may take time while the LLM loads).
     """

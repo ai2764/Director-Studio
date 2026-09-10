@@ -191,6 +191,7 @@ async def test_vram_status_uses_active_provider_lifecycle(monkeypatch):
 
     assert result["provider"] == "lm-studio"
     assert result["model"] == "catalog-model"
+    assert result["llm_ready"] is True
     assert result["llm_runtime"]["loaded_instances"] == ["instance-1"]
 
 
