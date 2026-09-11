@@ -6,6 +6,7 @@ import {
   useState,
   type ClipboardEvent as ReactClipboardEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { EMPTY_PROMPT_SECTIONS, type JobStatus, type PromptSections } from "../../shared/api/types";
 import { PageShell } from "../../shared/components/PageShell";
 import { ResizableWorkspace } from "../../shared/components/ResizableWorkspace";
@@ -119,7 +120,17 @@ function upsertJob(list: JsonShotJobRecord[] | undefined, job: JsonShotJobRecord
 type MobileSection = "prompt" | "references" | "output";
 type DesktopInspector = "references" | "output";
 
-export function JsonProductionPage({ active = true, mobile = false }: { active?: boolean; mobile?: boolean } = {}) {
+type JsonProductionPageProps = {
+  active?: boolean;
+  mobile?: boolean;
+  toolbarTarget?: HTMLElement | null;
+};
+
+export function JsonProductionPage({
+  active = true,
+  mobile = false,
+  toolbarTarget,
+}: JsonProductionPageProps = {}) {
   const { projectId } = useProject();
   const [storyboard, setStoryboard] = useState<JsonProductionDocument | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -596,7 +607,7 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
 
   const providerPicker = (
     <label className="h3-provider-picker json-h3-provider-picker">
-      <span>Provider</span>
+      <span>H3 Runner</span>
       <select
         aria-label="H3 provider"
         value={h3Provider}
@@ -618,6 +629,30 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
       </small>
     </label>
   );
+
+  const jsonFilePicker = (
+    <label className={mobile ? "field json-file-action" : "json-upload-control json-storyboard-upload"}>
+      <span>{mobile ? "Replace JSON" : "Import JSON"}</span>
+      <input
+        type="file"
+        aria-label="JSON file"
+        accept=".json,application/json"
+        disabled={!projectId || busy}
+        onChange={(e) => {
+          const file = e.target.files?.[0] || null;
+          e.target.value = "";
+          onJsonFile(file);
+        }}
+      />
+    </label>
+  );
+
+  const desktopToolbar = !mobile ? (
+    <div className="json-production-toolbar">
+      {providerPicker}
+      {jsonFilePicker}
+    </div>
+  ) : null;
 
   const promptPanel = selected ? (
     <JsonPromptPanel
@@ -665,10 +700,16 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
     />
   ) : null;
 
-  return (
+  return <>
+    {!mobile && toolbarTarget
+      ? createPortal(desktopToolbar, toolbarTarget)
+      : !mobile && toolbarTarget === undefined
+        ? <div className="json-production-toolbar-fallback">{desktopToolbar}</div>
+        : null}
     <PageShell
       title={mobile ? "JSON Production" : "Production"}
       className="json-production-page"
+      hideHeader={!mobile}
       subtitle={
         projectId ? (
           <>Import a storyboard JSON, attach Picture and Audio files, then Generate each shot on H3.</>
@@ -677,22 +718,7 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
         )
       }
       actions={
-        <div className="json-production-header-actions">
-          {!mobile ? providerPicker : null}
-          <label className="field json-file-action">
-            <span>{mobile ? "Replace JSON" : "JSON file"}</span>
-            <input
-              type="file"
-              accept=".json,application/json"
-              disabled={!projectId || busy}
-              onChange={(e) => {
-                const file = e.target.files?.[0] || null;
-                e.target.value = "";
-                onJsonFile(file);
-              }}
-            />
-          </label>
-        </div>
+        mobile ? <div className="json-production-header-actions">{jsonFilePicker}</div> : null
       }
     >
       {error ? <div className="banner error">{error}</div> : null}
@@ -844,5 +870,5 @@ export function JsonProductionPage({ active = true, mobile = false }: { active?:
         </div>
       )}
     </PageShell>
-  );
+  </>;
 }

@@ -4962,7 +4962,71 @@ select {
 }
 
 .app.json-production-app .topbar-project {
-  margin-right: auto;
+  margin-right: 0;
+}
+
+.json-production-topbar-tools {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+}
+
+.json-production-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.json-production-topbar-tools .json-h3-provider-picker {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.json-production-topbar-tools .json-h3-provider-picker > span {
+  flex: none;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 0.74rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.json-production-topbar-tools .json-h3-provider-picker select {
+  width: clamp(9.5rem, 13vw, 12rem);
+  min-height: 2.25rem;
+  padding: 0.38rem 1.85rem 0.38rem 0.62rem;
+  background: var(--bg-panel);
+  font-size: 0.78rem;
+}
+
+.json-production-topbar-tools .json-h3-provider-picker small {
+  display: none;
+}
+
+.json-production-topbar-tools .json-storyboard-upload {
+  min-height: 2.25rem;
+  padding: 0.38rem 0.72rem;
+  border-color: var(--border);
+  background: var(--bg-panel);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.json-production-topbar-tools .json-storyboard-upload:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.json-production-toolbar-fallback {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.75rem 1.4rem 0;
 }
 
 .app .topbar-row {

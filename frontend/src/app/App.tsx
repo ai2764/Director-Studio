@@ -116,6 +116,7 @@ function AppShell() {
   const [settingsVisited, setSettingsVisited] = useState(false);
   const settingsReturnPage = useRef<Exclude<DesktopPage, "settings">>("director");
   const [directorRequest, setDirectorRequest] = useState<DirectorChatRequest | null>(null);
+  const [jsonProductionToolbarTarget, setJsonProductionToolbarTarget] = useState<HTMLDivElement | null>(null);
   const requestSequence = useRef(0);
   const [health, setHealth] = useState<{
     comfy_reachable: boolean;
@@ -161,6 +162,14 @@ function AppShell() {
           <div className="topbar-project">
             <ProjectPicker />
           </div>
+
+          {jsonProductionMode ? (
+            <div
+              className="json-production-topbar-tools"
+              ref={setJsonProductionToolbarTarget}
+              aria-label="JSON production controls"
+            />
+          ) : null}
 
           {!jsonProductionMode ? <nav className="workflow-nav" aria-label="Project workflow">
             {NAV_ITEMS.map((item) => (
@@ -208,7 +217,10 @@ function AppShell() {
         hidden={activePage !== "production"}
       >
         {jsonProductionMode ? (
-          <JsonProductionPage active={activePage === "production"} />
+          <JsonProductionPage
+            active={activePage === "production"}
+            toolbarTarget={jsonProductionToolbarTarget}
+          />
         ) : (
           <ProductionPage
             active={activePage === "production"}

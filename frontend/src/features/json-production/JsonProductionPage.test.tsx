@@ -187,6 +187,18 @@ describe("JsonProductionPage import", () => {
     expect(screen.getByRole("button", { name: "Import JSON" })).toBeTruthy();
   });
 
+  it("moves desktop runner and JSON import into the application header", async () => {
+    const toolbarTarget = document.createElement("div");
+    document.body.appendChild(toolbarTarget);
+
+    render(<JsonProductionPage active toolbarTarget={toolbarTarget} />);
+
+    expect(await within(toolbarTarget).findByRole("combobox", { name: "H3 provider" })).toBeTruthy();
+    expect(within(toolbarTarget).getByLabelText("JSON file")).toBeTruthy();
+    expect(within(toolbarTarget).getByText("Import JSON")).toBeTruthy();
+    expect(document.querySelector(".json-production-page .page-shell-header")).toBeNull();
+  });
+
   it("captures a large clipboard payload without truncating it", async () => {
     const document = {
       ...twoShotDocument(),

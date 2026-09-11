@@ -224,6 +224,26 @@ describe("App mode routing", () => {
     expect(screen.queryByTestId("production-page")).toBeNull();
   });
 
+  it("places JSON production controls directly after the project picker", () => {
+    projectState.project = {
+      id: "prj_json",
+      name: "JSON board",
+      script_text: "",
+      mode: "json_production",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      shot_ids: [],
+    };
+
+    render(<App />);
+
+    const header = screen.getByRole("banner", { name: "Application header" });
+    const project = header.querySelector(".topbar-project");
+    const controls = header.querySelector(".json-production-topbar-tools");
+    expect(controls).toBeTruthy();
+    expect(project?.nextElementSibling).toBe(controls);
+  });
+
   it("opens mobile JSON production directly without the general workspace tabs", () => {
     window.history.replaceState({}, "", "/mobile");
     projectState.project = {
