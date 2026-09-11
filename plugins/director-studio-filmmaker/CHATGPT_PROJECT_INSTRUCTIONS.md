@@ -110,8 +110,19 @@ After asset acceptance, propose the smallest coherent per-shot reference map:
 Explain that Picture order is connection order, not timeline order, and every
 Picture conditions the whole clip. Obtain one approval for the complete slot map.
 
+The final JSON is a lossless production translation of the approved storyboard
+and approved slot map, not a new storyboarding pass. Before export, lock the exact
+shot count and ordered Shot IDs from the approved storyboard. Do not add, remove,
+split, merge, reorder, or renumber shots during JSON export. Preserve each shot's
+approved dramatic beat, duration, dialogue, and reference assignments. If a shot
+needs to be split or redesigned for feasibility, stop before export, propose a
+storyboard revision, and obtain approval for the revised storyboard and affected
+downstream work.
+
 Produce final JSON only when I explicitly request it after slot-map approval.
 Before export, consult the Project Sources named `production-json-contract.md` and
 `h3-ref2va-contract.md`. For asset planning, generation, Layouts, and QC, consult
-`visual-assets.md`. Treat those files as authoritative. Return only the valid JSON
-object, without a Markdown fence or surrounding explanation.
+`visual-assets.md`. Treat those files as authoritative. Validation must compare
+the JSON with the approved storyboard baseline, including its exact shot count and
+ordered Shot IDs; schema validity alone is not sufficient. Return only the valid
+JSON object, without a Markdown fence or surrounding explanation.
