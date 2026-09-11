@@ -4,18 +4,18 @@ const DEFAULT_SIZE = 55;
 const MIN_SIZE = 34;
 const MAX_SIZE = 66;
 
-function clamp(value: number) {
-  return Math.min(MAX_SIZE, Math.max(MIN_SIZE, Math.round(value)));
+function clamp(value: number, minSize: number, maxSize: number) {
+  return Math.min(maxSize, Math.max(minSize, Math.round(value)));
 }
 
-function initialSize(storageKey: string) {
+function initialSize(storageKey: string, defaultSize: number, minSize: number, maxSize: number) {
   try {
     const saved = Number(localStorage.getItem(storageKey));
-    return Number.isFinite(saved) && saved >= MIN_SIZE && saved <= MAX_SIZE
+    return Number.isFinite(saved) && saved >= minSize && saved <= maxSize
       ? saved
-      : DEFAULT_SIZE;
+      : defaultSize;
   } catch {
-    return DEFAULT_SIZE;
+    return defaultSize;
   }
 }
 
@@ -25,24 +25,30 @@ export function ResizableWorkspace({
   storageKey,
   separatorLabel,
   className = "",
+  defaultSize = DEFAULT_SIZE,
+  minSize = MIN_SIZE,
+  maxSize = MAX_SIZE,
 }: {
   primary: ReactNode;
   secondary: ReactNode;
   storageKey: string;
   separatorLabel: string;
   className?: string;
+  defaultSize?: number;
+  minSize?: number;
+  maxSize?: number;
 }) {
-  const [size, setSize] = useState(() => initialSize(storageKey));
+  const [size, setSize] = useState(() => initialSize(storageKey, defaultSize, minSize, maxSize));
 
   const updateSize = useCallback((next: number) => {
-    const clamped = clamp(next);
+    const clamped = clamp(next, minSize, maxSize);
     setSize(clamped);
     try {
       localStorage.setItem(storageKey, String(clamped));
     } catch {
       /* local persistence is optional */
     }
-  }, [storageKey]);
+  }, [maxSize, minSize, storageKey]);
 
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -72,12 +78,12 @@ export function ResizableWorkspace({
         role="separator"
         aria-label={separatorLabel}
         aria-orientation="vertical"
-        aria-valuemin={MIN_SIZE}
-        aria-valuemax={MAX_SIZE}
+        aria-valuemin={minSize}
+        aria-valuemax={maxSize}
         aria-valuenow={size}
         tabIndex={0}
         onPointerDown={startDrag}
-        onDoubleClick={() => updateSize(DEFAULT_SIZE)}
+        onDoubleClick={() => updateSize(defaultSize)}
         onKeyDown={(event) => {
           if (event.key === "ArrowLeft") {
             event.preventDefault();
@@ -87,10 +93,10 @@ export function ResizableWorkspace({
             updateSize(size + 2);
           } else if (event.key === "Home") {
             event.preventDefault();
-            updateSize(MIN_SIZE);
+            updateSize(minSize);
           } else if (event.key === "End") {
             event.preventDefault();
-            updateSize(MAX_SIZE);
+            updateSize(maxSize);
           }
         }}
       >

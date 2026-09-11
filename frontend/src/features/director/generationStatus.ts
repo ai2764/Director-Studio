@@ -10,6 +10,16 @@ export interface GenerationJobStatus {
 }
 
 export interface DirectorVramStatus {
+  provider?: string;
+  model?: string;
+  llm_runtime?: {
+    provider?: string;
+    model?: string;
+    ready?: boolean;
+    uses_local_gpu?: boolean;
+    loaded_instances?: unknown[];
+    error?: string;
+  };
   chat_locked: boolean;
   generation_count: number;
   generation_jobs: GenerationJobStatus[];

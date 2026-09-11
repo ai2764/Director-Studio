@@ -17,46 +17,70 @@ from ...config import settings
 
 logger = logging.getLogger("director_studio.director_model")
 
-_override: str | None = None
+_override: tuple[str, str] | None = None
 
 
 def _persist_path() -> Path:
     return settings.data_dir / "director_model.json"
 
 
-def _read_persisted() -> str | None:
+def _active_provider(provider_id: str | None = None) -> str:
+    return (provider_id or settings.llm_provider or "ollama").strip()
+
+
+def _read_persisted() -> tuple[str | None, str] | None:
     path = _persist_path()
     if not path.is_file():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        name = (data.get("model") or "").strip()
-        return name or None
+        name = str(data.get("model") or "").strip()
+        if not name:
+            return None
+        provider = str(data.get("provider") or "").strip() or None
+        return provider, name
     except Exception:
         logger.exception("failed to read %s", path)
         return None
 
 
-def _write_persisted(model: str) -> None:
+def _write_persisted(provider: str, model: str) -> None:
     path = _persist_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"model": model}, ensure_ascii=False, indent=2) + "\n",
+        json.dumps(
+            {"provider": provider, "model": model},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
 
 
-def get_director_model() -> str:
+def get_director_model(provider_id: str | None = None) -> str:
     """Model name used for plan / chat / wake / unload."""
-    if _override:
-        return _override
+    provider = _active_provider(provider_id)
+    if _override and _override[0] == provider:
+        return _override[1]
     persisted = _read_persisted()
     if persisted:
-        return persisted
-    return (settings.director_plan_model or "").strip()
+        persisted_provider, persisted_model = persisted
+        if persisted_provider == provider or (
+            persisted_provider is None and provider == "ollama"
+        ):
+            return persisted_model
+    if provider == "ollama":
+        return (settings.director_plan_model or "").strip()
+    return ""
 
 
-def set_director_model(model: str, *, persist: bool = True) -> str:
+def set_director_model(
+    model: str,
+    *,
+    provider_id: str | None = None,
+    persist: bool = True,
+) -> str:
     """
     Switch Director LLM at runtime.
 
@@ -67,9 +91,10 @@ def set_director_model(model: str, *, persist: bool = True) -> str:
     if not name:
         raise ValueError("model name must be non-empty")
 
-    _override = name
+    provider = _active_provider(provider_id)
+    _override = (provider, name)
     if persist:
-        _write_persisted(name)
+        _write_persisted(provider, name)
 
     # Keep VRAM orchestrator in sync (unload/warm the active model).
     try:
@@ -85,7 +110,11 @@ def set_director_model(model: str, *, persist: bool = True) -> str:
     return name
 
 
-def clear_director_model_override(*, remove_persisted: bool = False) -> str:
+def clear_director_model_override(
+    *,
+    provider_id: str | None = None,
+    remove_persisted: bool = False,
+) -> str:
     """Fall back to .env default (and optional delete of data/director_model.json)."""
     global _override
     _override = None
@@ -93,18 +122,29 @@ def clear_director_model_override(*, remove_persisted: bool = False) -> str:
         path = _persist_path()
         if path.is_file():
             path.unlink()
-    return get_director_model()
+    return get_director_model(provider_id)
 
 
-def model_status() -> dict[str, Any]:
+def model_status(provider_id: str | None = None) -> dict[str, Any]:
+    provider = _active_provider(provider_id)
+    persisted_state = _read_persisted()
+    persisted = None
+    if persisted_state:
+        persisted_provider, persisted_model = persisted_state
+        if persisted_provider == provider or (
+            persisted_provider is None and provider == "ollama"
+        ):
+            persisted = persisted_model
+    override = _override[1] if _override and _override[0] == provider else None
     return {
-        "model": get_director_model(),
-        "override": _override,
-        "persisted": _read_persisted(),
-        "env_default": settings.director_plan_model,
+        "provider": provider,
+        "model": get_director_model(provider),
+        "override": override,
+        "persisted": persisted,
+        "env_default": settings.director_plan_model if provider == "ollama" else "",
         "source": (
             "runtime"
-            if _override
-            else ("persisted" if _read_persisted() else "env")
+            if override
+            else ("persisted" if persisted else "env")
         ),
     }

@@ -2,9 +2,9 @@
 
 Local-first pre-production workspace for planning shots, managing reusable visual and voice assets, writing MiniMax H3 Ref2AV prompts, and generating media through ComfyUI.
 
-Director Studio keeps the planning Agent local through Ollama. Image and local video workflows run in ComfyUI through ComfyUI MCP; H3 video can alternatively be submitted to the official MiniMax API.
+Director Studio runs the planning Agent through one configured Ollama, LM Studio, or OpenAI-compatible provider. Image and local video workflows run in ComfyUI through ComfyUI MCP; H3 video can alternatively be submitted to the official MiniMax API.
 
-Core features include a typed asset library, actor and set workflows, conversational shot planning, editable Picture and Audio references, optional Layout studies, six-section H3 prompts, local/cloud video submission, durable jobs, and exclusive Ollama/ComfyUI VRAM coordination.
+Core features include a typed asset library, actor and set workflows, conversational shot planning, editable Picture and Audio references, optional Layout studies, six-section H3 prompts, local/cloud video submission, durable jobs, and exclusive local-LLM/ComfyUI VRAM coordination.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and extension points.
 
@@ -12,10 +12,10 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and exten
 
 | Layer | Tech |
 |-------|------|
-| Backend | FastAPI · pluggable pipelines · ComfyUI MCP · Ollama Director |
+| Backend | FastAPI · pluggable pipelines · ComfyUI MCP · provider-neutral Director LLM |
 | Frontend | Vite + React · feature folders |
 | Execution | ComfyUI through MCP (actor / scene / prop / Layout / local H3) · MiniMax H3 official API |
-| Planning LLM | Local Ollama (exclusive VRAM with Comfy) |
+| Planning LLM | Ollama · LM Studio · OpenAI-compatible Chat Completions |
 
 ## Platform support
 
@@ -37,18 +37,18 @@ An officially supported platform is exercised by its own CI build and packaged-r
 
 ## Windows portable installation
 
-The portable package runs Director Studio locally as one `DirectorStudio.exe`. The UI and backend are included; Ollama and ComfyUI remain external local services. The included installer creates a private Python environment for `comfy-cli` and `comfy-mcp`.
+The portable package runs Director Studio locally as one `DirectorStudio.exe`. The UI and backend are included; the selected LLM server and ComfyUI remain external services. The included installer creates a private Python environment for `comfy-cli` and `comfy-mcp`.
 
 ### 1. Install local prerequisites
 
 - Windows 10 22H2 or newer, x64.
-- [Ollama for Windows](https://ollama.com/download/windows). Install any compatible local model you want to use with Director, for example:
+- One Director LLM provider. Ollama remains the default. For [Ollama for Windows](https://ollama.com/download/windows), install any compatible local model, for example:
 
   ```powershell
   ollama pull <model-name>
   ```
 
-  Director reads the installed catalog from Ollama. With no saved selection it uses the first installed model; with no installed models it leaves the selection empty.
+  LM Studio and other OpenAI-compatible servers are configured below instead. Director reads the active provider's model catalog; choose the model in the Director dropdown.
 
 - [ComfyUI Desktop for Windows](https://docs.comfy.org/installation/desktop/windows), running at `http://127.0.0.1:8188`.
 - Python 3.10 or newer for the external Comfy command-line tools. Director Studio itself does not require a separate Python installation.
@@ -69,27 +69,71 @@ Set-Location C:\DirectorStudio
 notepad .env
 ```
 
-At minimum, confirm the local service URLs. When run, the installer writes its absolute MCP command paths automatically and replaces any prior values for those two path settings:
+At minimum, confirm the local service URLs. When run, the installer writes its absolute MCP command paths automatically and replaces any prior values for those two path settings.
+
+#### Director LLM providers
+
+`DS_LLM_PROVIDER` selects exactly one active Director provider. Do not set a model name in `.env`: Director Studio reads the provider's model catalog and exposes it in the Director model picker.
+
+| Provider | `DS_LLM_PROVIDER` | Model catalog | Local unload behavior |
+|----------|-------------------|---------------|-----------------------|
+| Ollama | `ollama` | Ollama API | Unloads before local ComfyUI jobs |
+| LM Studio | `lm-studio` | OpenAI-compatible `/v1/models` | Uses LM Studio's native unload endpoint |
+| OpenAI, llama.cpp, or another compatible service | `openai-compatible` | OpenAI-compatible `/v1/models` | No unload request is assumed |
+
+Choose one of these configurations. Ollama is the default:
 
 ```dotenv
 DS_COMFY_BASE_URL=http://127.0.0.1:8188
+
+# Ollama (default)
+DS_LLM_PROVIDER=ollama
 DS_OLLAMA_BASE_URL=http://127.0.0.1:11434
 ```
 
-To use the official MiniMax API instead of local H3 generation, add your key and select the provider:
+For LM Studio, enable its local API server first. The model itself is selected from the Director dropdown, so it does not need to be named in `.env`:
 
 ```dotenv
-DS_H3_PROVIDER=minimax
-DS_H3_MINIMAX_API_KEY=your-secret-key
+DS_LLM_PROVIDER=lm-studio
+DS_LLM_BASE_URL=http://127.0.0.1:1234/v1
 ```
 
-Director Studio always coordinates local generation and Ollama with its built-in exclusive GPU lock. VRAM policy, queue timeout, and LLM residency use internal defaults and require no user configuration.
+For the OpenAI API:
+
+```dotenv
+DS_LLM_PROVIDER=openai-compatible
+DS_LLM_BASE_URL=https://api.openai.com/v1
+DS_LLM_API_KEY=replace-with-your-api-key
+```
+
+For a local llama.cpp server exposing the OpenAI-compatible API:
+
+```dotenv
+DS_LLM_PROVIDER=openai-compatible
+DS_LLM_BASE_URL=http://127.0.0.1:8080/v1
+```
+
+The same `openai-compatible` setting works with vLLM, LiteLLM, OpenRouter, DeepSeek-compatible gateways, and most third-party services that implement Chat Completions plus Models. Replace the base URL with the provider's documented `/v1` endpoint and set `DS_LLM_API_KEY` only when that endpoint requires authentication.
+
+LM Studio model instances are unloaded before local ComfyUI generation and loaded again by LM Studio on the next Director request. Remote providers do not participate in local GPU ownership.
+
+To enable the official MiniMax API alongside local H3 generation, add your key. Production and JSON Production then offer a per-run **Local · ComfyUI** / **MiniMax · Official API** selector; `DS_H3_PROVIDER` only sets its initial choice:
+
+```dotenv
+DS_H3_MINIMAX_API_KEY=your-secret-key
+# Optional: make MiniMax the initial selector value.
+DS_H3_PROVIDER=minimax
+```
+
+Director Studio coordinates local generation with Ollama or LM Studio through its built-in exclusive GPU lock. VRAM policy, queue timeout, and LLM residency use internal defaults and require no user configuration.
 
 Do not publish `.env`; it may contain provider credentials. Projects and generated application state are stored in the adjacent `data` folder. Back up that folder before replacing or upgrading the package.
 
+Keep unauthenticated Ollama, LM Studio, llama.cpp, and ComfyUI endpoints bound to `127.0.0.1`. To open Director Studio itself to the LAN, set `DS_HOST=0.0.0.0`, allow the selected `DS_PORT` through the host firewall, and use only a trusted private network. This does not add authentication to Director Studio or to the upstream model servers.
+
 ### 3. Start
 
-Start Ollama and ComfyUI first, then run:
+Start the configured LLM server and ComfyUI first, then run:
 
 ```powershell
 .\DirectorStudio.exe
@@ -169,13 +213,15 @@ Workflow changes apply only to jobs submitted after the switch. Queued and runni
 Browser UI
     ↕
 Director Studio (React + FastAPI)
-    ├─ Director Agent ↔ Ollama
+    ├─ Director Agent ↔ active LLM provider
     ├─ Jobs → ComfyUI MCP → ComfyUI
     ├─ Optional H3 jobs → MiniMax Official API
     └─ Projects, assets, prompts, and outputs → local data/
 ```
 
-Director Studio owns project state, workflow adapters, the job queue, and GPU coordination. ComfyUI MCP is the workflow transport layer: it submits completed API-format graphs to ComfyUI, monitors execution, and retrieves outputs. Ollama and ComfyUI remain separate local services.
+Director Studio owns project state, workflow adapters, the job queue, and GPU coordination. ComfyUI MCP is the workflow transport layer: it submits completed API-format graphs to ComfyUI, monitors execution, and retrieves outputs. The LLM provider and ComfyUI remain separate services.
+
+JSON Production Picture and Audio selections are uploaded immediately into the current project under `data/projects/<project-id>/json-production/assets/`. Refreshing the page or opening the same project from another browser restores matching slots automatically. No browser storage, additional dependency, or environment setting is required. If a JSON replacement changes a slot's shot ID, type, index, role, or label, the old file is not reused for that changed slot.
 
 ## Bundled workflows
 
@@ -368,47 +414,134 @@ pwsh -File scripts/build-legacy-portable.ps1
 
 Before distributing the result, extract the new zip, configure its `.env`, start ComfyUI and Ollama, and run one real job for every workflow you replaced. For an imported H3 profile, use the Settings Test step before activation, then submit a new Production job. Unit tests verify the graph contract and mapping; only a real ComfyUI run proves that all custom nodes, model files, tensor shapes, and output formats are compatible on the target installation.
 
-## Development setup
+## Run from source
 
-Windows PowerShell:
+Source development runs two Director Studio processes: the FastAPI backend on port `8790` and the Vite frontend on port `5173`. The selected Director LLM service and ComfyUI are separate processes and must already be running.
+
+### Prerequisites
+
+- [Git](https://git-scm.com/downloads).
+- [Python 3.11 or newer](https://www.python.org/downloads/) with `venv` and `pip`.
+- [Node.js 22](https://nodejs.org/en/download/archive/v22) and npm. Node 22 is the version exercised by CI.
+- [FFmpeg and FFprobe](https://ffmpeg.org/download.html) available on `PATH`.
+- One running Director LLM provider: Ollama, LM Studio, or an OpenAI-compatible endpoint.
+- A running ComfyUI instance for image generation and local H3 video. ComfyUI is not required when only testing Director chat against a remote LLM.
+
+Clone the repository, or skip this step if the source tree is already present:
+
+```text
+git clone https://github.com/ai2764/Director-Studio.git
+cd Director-Studio
+```
+
+### Windows 10/11
+
+Install Git, Python, Node.js, and FFmpeg using the links above or a trusted package manager. Confirm that each command is available in a new PowerShell window:
 
 ```powershell
-# Backend (from backend/)
-python -m pip install -r requirements.txt
-Copy-Item .env.example .env  # optional: customize local service settings
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8790 --reload
+git --version
+py -3 --version
+node --version
+npm --version
+ffmpeg -version
+ffprobe -version
+```
 
-# Frontend (from frontend/)
-npm install
+Create an isolated backend environment and install its dependencies:
+
+```powershell
+Set-Location backend
+py -3 -m venv .venv
+& .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+notepad .env
+```
+
+Choose one `DS_LLM_PROVIDER` configuration from [Director LLM providers](#director-llm-providers). Keep `DS_HOST=127.0.0.1` for normal local use and confirm that `DS_COMFY_BASE_URL` points to the running ComfyUI instance.
+
+Start the backend from the `backend` directory while the virtual environment remains active:
+
+```powershell
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8790 --reload
+```
+
+Open a second PowerShell window at the repository root and start the frontend:
+
+```powershell
+Set-Location frontend
+npm ci
 npm run dev
 ```
 
-Ubuntu shell:
+### Ubuntu Linux
+
+Ubuntu 24.04 provides a suitable Python version directly. On Ubuntu 22.04, install Python 3.11 or newer using a trusted package source or version manager before continuing. Install the remaining system dependencies and use the official [Node.js 22 downloads](https://nodejs.org/en/download/archive/v22) if the configured Ubuntu repository provides an older Node release:
 
 ```bash
-# From the repository root
 sudo apt-get update
-sudo apt-get install --yes ffmpeg python3-venv
+sudo apt-get install --yes git ffmpeg python3 python3-pip python3-venv
 
-# Backend
+python3 --version
+node --version
+npm --version
+ffmpeg -version
+ffprobe -version
+```
+
+Create the backend environment and configure it:
+
+```bash
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8790 --reload
+cp .env.example .env
+${EDITOR:-nano} .env
+```
 
-# Frontend, in another shell
+Choose one `DS_LLM_PROVIDER` configuration from [Director LLM providers](#director-llm-providers), then start the backend from the `backend` directory:
+
+```bash
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8790 --reload
+```
+
+Open a second terminal at the repository root and start the frontend:
+
+```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-- UI: http://127.0.0.1:5173  
-- API: http://127.0.0.1:8790/docs  
-- ComfyUI: http://127.0.0.1:8188 (local workflows are submitted through the installed Comfy MCP server)
-- Ollama (Director): http://127.0.0.1:11434  
+### Open the application
 
-> Note: default API port is **8790** (frontend Vite proxy points here).
+- UI: http://127.0.0.1:5173
+- API documentation: http://127.0.0.1:8790/docs
+- Health check: http://127.0.0.1:8790/api/health
+- Default ComfyUI endpoint: http://127.0.0.1:8188
+- Default Ollama endpoint: http://127.0.0.1:11434
+
+The frontend Vite server proxies `/api` requests to the backend on port `8790`. If the model picker is empty, verify the active provider and its `/v1/models` or Ollama model-list endpoint from the backend machine. If generation cannot start, verify ComfyUI and the `comfy-mcp` command inside the activated Python environment.
+
+For temporary LAN testing, set `DS_HOST=0.0.0.0`, start Uvicorn with `--host 0.0.0.0`, and run `npm run dev -- --host 0.0.0.0`. Allow ports `5173` and `8790` through the firewall only on a trusted private network. The development servers do not add authentication.
+
+### Run checks
+
+Backend, from `backend` with the virtual environment active:
+
+```text
+python -m pytest tests
+```
+
+Frontend, from `frontend`:
+
+```text
+npm test
+npm run build
+```
 
 ## Director & Production
 
@@ -459,19 +592,24 @@ API: `/api/actors/*` · `GET /api/pipelines`
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `DS_COMFY_BASE_URL` | `http://127.0.0.1:8188` | ComfyUI |
-| `DS_H3_PROVIDER` | `local` | `local` = ComfyUI MCP; `minimax` = official cloud API |
+| `DS_H3_PROVIDER` | `local` | Initial H3 provider shown in Production and JSON Production; each run can override it |
 | `DS_COMFY_MCP_COMMAND` | `comfy-mcp` | ComfyUI MCP executable; Portable installer writes its absolute path |
 | `DS_COMFY_MCP_ARGS` | empty | Optional extra command-line arguments passed to the MCP server process |
 | `DS_COMFY_MCP_COMFY_BIN` | `comfy` | comfy-cli executable used by the MCP server |
+| `DS_HOST` | `127.0.0.1` | API bind address; use `0.0.0.0` only for an explicitly trusted LAN |
 | `DS_PORT` | `8790` | API port |
+| `DS_LLM_PROVIDER` | `ollama` | Active Director provider: `ollama`, `lm-studio`, or `openai-compatible` |
+| `DS_LLM_BASE_URL` | provider default | `/v1` base URL for LM Studio or an OpenAI-compatible server |
+| `DS_LLM_API_KEY` | empty | Optional credential for the active OpenAI-compatible endpoint |
+| `DS_LLM_TIMEOUT_SEC` | `600` | LLM request timeout in seconds |
 | `DS_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local Ollama for Director |
-| `DS_H3_MINIMAX_API_KEY` | empty | MiniMax API credential when `DS_H3_PROVIDER=minimax` |
+| `DS_H3_MINIMAX_API_KEY` | empty | MiniMax API credential; enables the official API option in H3 provider selectors |
 | `DS_H3_MINIMAX_MODEL` | `MiniMax-H3` | MiniMax H3 API model |
 | `DS_H3_MINIMAX_RESOLUTION` | `768P` | Requested MiniMax API output resolution |
 
-The Director model is not an environment default. Director Studio discovers the installed Ollama catalog, selects the first installed model when no prior choice exists, and persists subsequent model-picker selections under `data/director_model.json`. If Ollama has no models, the selection remains empty.
+The Director model is not required in the environment. Director Studio discovers the active provider's catalog, selects the first available model when no prior choice exists, and persists subsequent model-picker selections with their provider under `data/director_model.json`. If the provider returns no models, the selection remains empty. The catalog endpoint must be reachable from the Director Studio backend, not only from the browser.
 
-For source development, set values in `backend/.env` (prefix `DS_`). In the portable package, use the `.env` beside `DirectorStudio.exe`.
+For source development, set values in `backend/.env` (prefix `DS_`). In the portable package, use the `.env` beside `DirectorStudio.exe`. Both files are ignored by Git; keep real credentials out of README, issue reports, screenshots, and committed example files.
 
 ## Build the Windows portable package
 

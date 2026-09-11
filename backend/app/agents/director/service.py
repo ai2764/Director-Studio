@@ -13,7 +13,6 @@ from ...config import settings
 from ...core.jobs import create_job, load_job, start_pipeline_job
 from ...core.library.store import load_asset
 from ...core.h3.prompt import (
-    validate_no_time_addressable_pictures,
     validate_required_picture_bindings,
     validate_tail_frame_transition_prompt,
 )
@@ -50,7 +49,6 @@ from ...core.projects.store import (
 )
 from ...core.schemas import JobStatus, LibraryAsset
 from ...core.vram import get_director_model, get_orchestrator
-from ...core.vram.ollama_client import OllamaClient
 from .context_io import load_agent_context, save_agent_context
 from .visual_direction import analyze_ref_frame
 from .planner import (
@@ -1000,7 +998,17 @@ class DirectorService:
         if review_image is not None or tail_frame_redraw:
             direction_feedback = shot.feedback or ""
 
-        model = get_director_model()
+        runtime_provider = getattr(self.orchestrator, "provider", None)
+        model = (
+            get_director_model(runtime_provider.provider_id)
+            if runtime_provider is not None
+            else get_director_model()
+        )
+        vision_client = (
+            runtime_provider.client
+            if runtime_provider is not None
+            else getattr(self.plan_provider, "client", None)
+        )
         try:
             async with self.orchestrator.llm_session(release_on_exit=False):
                 await self.orchestrator.ensure_llm_ready()
@@ -1012,7 +1020,7 @@ class DirectorService:
                     review_image=review_image,
                     feedback=direction_feedback,
                     model=model,
-                    ollama=OllamaClient(),
+                    ollama=vision_client,
                 )
         except Exception as exc:
             await self.orchestrator.release_llm()
@@ -1828,7 +1836,6 @@ class DirectorService:
                 parsed = PromptSections(**parse_prompt_sections_json(value))
                 parsed = _apply_source_audio_contract(parsed, shot)
                 ordered_text = parsed.as_ordered_text()
-                validate_no_time_addressable_pictures(ordered_text)
                 validate_tail_frame_transition_prompt(parsed, selected_layouts)
                 validate_required_picture_bindings(
                     ordered_text,

@@ -15,6 +15,8 @@ type Props = {
   onAudioFile: (index: number, file: File | null) => void;
   onGenerate: () => void;
   onCancel: () => void;
+  view?: "all" | "references" | "output";
+  showActions?: boolean;
 };
 
 function titleCaseRole(role: JsonPictureRole): string {
@@ -29,15 +31,13 @@ export function audioSlotTitle(index: number, label: string): string {
   return label.trim() ? `Audio ${index} · ${label}` : `Audio ${index}`;
 }
 
-function outputLink(
-  job: JsonShotJobRecord,
-  keys: string[],
-  fallbackLabel: string,
-): { href: string; label: string } | null {
-  for (const key of keys) {
+function finalOutputLink(job: JsonShotJobRecord): { href: string; label: string } | null {
+  for (const key of ["video", "master", "enhanced"]) {
     const slot = job.outputs?.[key];
-    if (slot?.url) return { href: slot.url, label: slot.label || fallbackLabel };
+    if (slot?.url) return { href: slot.url, label: slot.label || "Output" };
   }
+  const fallback = Object.values(job.outputs || {}).find((slot) => slot?.url);
+  if (fallback?.url) return { href: fallback.url, label: fallback.label || "Output" };
   return null;
 }
 
@@ -54,56 +54,76 @@ export function JsonAssetSlots({
   onAudioFile,
   onGenerate,
   onCancel,
+  view = "all",
+  showActions = true,
 }: Props) {
   const jobActive = job ? ACTIVE.has(job.status) : false;
   const canGenerate =
     !busy && !promptDirty && !jobActive && readinessErrors.length === 0;
-  const enhanced = job ? outputLink(job, ["video", "enhanced"], "Enhanced") : null;
-  const raw = job ? outputLink(job, ["video_raw", "raw"], "Raw") : null;
+  const output = job ? finalOutputLink(job) : null;
 
   return (
     <section className="section-card compact-card json-asset-panel" aria-label="Shot assets">
+      {view !== "output" ? <div className="json-reference-content">
       <div className="section-card-head">
-        <h2 className="section-card-title">Assets</h2>
+        <h2 className="section-card-title">References</h2>
       </div>
 
       {shot.pictures.map((picture) => {
         const title = pictureSlotTitle(picture.index, picture.role);
         const file = files.pictures.get(picture.index) || null;
-        const preview = picturePreviews.get(picture.index);
+        const preview = picturePreviews.get(picture.index) || (file && !(file instanceof File) ? file.url : undefined);
+        const filename = file instanceof File ? file.name : file?.filename;
         return (
-          <div key={`picture-${picture.index}`} className="field json-asset-slot">
-            <span>{title}</span>
+          <div
+            key={`picture-${picture.index}`}
+            className="field json-asset-slot json-picture-slot"
+            role="group"
+            aria-label={`${title} reference`}
+          >
+            <div className="json-asset-slot-head">
+              <span className="json-asset-slot-title">{title}</span>
+            </div>
             <p className="field-hint">{picture.label}</p>
-            {preview ? (
-              <img className="json-asset-preview" src={preview} alt="" />
-            ) : null}
-            {file ? (
-              <div className="json-asset-file-row">
-                <div className="filename">{file.name}</div>
-                <button
-                  type="button"
-                  className="btn ghost sm"
-                  disabled={busy}
-                  onClick={() => onPictureFile(picture.index, null)}
-                >
-                  {`Clear ${title}`}
-                </button>
+            <div className={preview ? "json-asset-slot-body has-preview" : "json-asset-slot-body"}>
+              {preview ? (
+                <img className="json-asset-preview" src={preview} alt={`${title} preview`} />
+              ) : null}
+              <div className="json-asset-slot-footer">
+                {file ? (
+                  <div className="filename">{filename}</div>
+                ) : (
+                  <div className="muted tiny json-file-state">No file selected</div>
+                )}
+                <div className="json-asset-slot-actions">
+                  <label className="json-upload-control">
+                    <input
+                      type="file"
+                      aria-label={title}
+                      accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                      onChange={(e) => {
+                        const next = e.target.files?.[0] || null;
+                        e.target.value = "";
+                        if (!next) return;
+                        onPictureFile(picture.index, next);
+                      }}
+                    />
+                    <span>{file ? "Replace file" : "Choose file"}</span>
+                  </label>
+                  {file ? (
+                    <button
+                      type="button"
+                      className="btn ghost sm json-asset-clear"
+                      aria-label={`Clear ${title}`}
+                      disabled={busy}
+                      onClick={() => onPictureFile(picture.index, null)}
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
               </div>
-            ) : (
-              <div className="muted tiny">No file selected</div>
-            )}
-            <input
-              type="file"
-              aria-label={title}
-              accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
-              onChange={(e) => {
-                const next = e.target.files?.[0] || null;
-                e.target.value = "";
-                if (!next) return;
-                onPictureFile(picture.index, next);
-              }}
-            />
+            </div>
           </div>
         );
       })}
@@ -117,12 +137,13 @@ export function JsonAssetSlots({
         shot.audio.map((audio) => {
           const title = audioSlotTitle(audio.index, audio.label);
           const file = files.audio.get(audio.index) || null;
+          const filename = file instanceof File ? file.name : file?.filename;
           return (
             <div key={`audio-${audio.index}`} className="field json-asset-slot">
-              <span>{title}</span>
+              <span className="json-asset-slot-title">{title}</span>
               {file ? (
                 <div className="json-asset-file-row">
-                  <div className="filename">{file.name}</div>
+                  <div className="filename">{filename}</div>
                   <button
                     type="button"
                     className="btn ghost sm"
@@ -133,19 +154,22 @@ export function JsonAssetSlots({
                   </button>
                 </div>
               ) : (
-                <div className="muted tiny">No file selected</div>
+                <div className="muted tiny json-file-state">No file selected</div>
               )}
-              <input
-                type="file"
-                aria-label={title}
-                accept="audio/wav,audio/mpeg,audio/flac,audio/mp4,.wav,.mp3,.flac,.m4a"
-                onChange={(e) => {
-                  const next = e.target.files?.[0] || null;
-                  e.target.value = "";
-                  if (!next) return;
-                  onAudioFile(audio.index, next);
-                }}
-              />
+              <label className="json-upload-control">
+                <input
+                  type="file"
+                  aria-label={title}
+                  accept="audio/wav,audio/mpeg,audio/flac,audio/mp4,.wav,.mp3,.flac,.m4a"
+                  onChange={(e) => {
+                    const next = e.target.files?.[0] || null;
+                    e.target.value = "";
+                    if (!next) return;
+                    onAudioFile(audio.index, next);
+                  }}
+                />
+                <span>{file ? "Replace file" : "Choose file"}</span>
+              </label>
             </div>
           );
         })
@@ -161,7 +185,12 @@ export function JsonAssetSlots({
       {promptDirty ? (
         <p className="field-hint">Save prompt changes before generating.</p>
       ) : null}
+      </div> : null}
 
+      {view !== "references" ? <div className="json-output-content">
+      {view === "output" ? <div className="section-card-head">
+        <h2 className="section-card-title">Output</h2>
+      </div> : null}
       {job ? (
         <div className="run-job-box">
           <div className={`status-pill status-${job.status}`}>
@@ -175,32 +204,24 @@ export function JsonAssetSlots({
         <p className="field-hint">No H3 job yet for this shot.</p>
       )}
 
-      {enhanced || raw ? (
+      {output ? (
         <section className="json-output-panel" aria-label="Shot output">
           <div className="section-card-head">
             <h2 className="section-card-title">
               {outputVersion != null ? `Output v${outputVersion}` : "Output"}
             </h2>
           </div>
-          {enhanced ? (
-            <video className="h3-preview" controls playsInline src={enhanced.href} />
-          ) : null}
+          <video className="h3-preview" controls playsInline src={output.href} />
           <div className="json-job-outputs">
-            {enhanced ? (
-              <a className="btn secondary sm" href={enhanced.href} target="_blank" rel="noreferrer">
-                {enhanced.label}
-              </a>
-            ) : null}
-            {raw ? (
-              <a className="btn secondary sm" href={raw.href} target="_blank" rel="noreferrer">
-                {raw.label}
-              </a>
-            ) : null}
+            <a className="btn secondary sm" href={output.href} target="_blank" rel="noreferrer">
+              {output.label}
+            </a>
           </div>
         </section>
       ) : null}
+      </div> : null}
 
-      <div className="sticky-actions">
+      {showActions ? <div className="sticky-actions">
         <button
           type="button"
           className="btn primary"
@@ -214,7 +235,7 @@ export function JsonAssetSlots({
             Cancel
           </button>
         ) : null}
-      </div>
+      </div> : null}
     </section>
   );
 }

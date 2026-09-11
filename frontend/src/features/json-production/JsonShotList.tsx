@@ -9,27 +9,40 @@ type Props = {
 
 export function JsonShotList({ shots, selectedId, statusByShotId, onSelect }: Props) {
   return (
-    <aside className="section-card compact-card json-shot-panel">
+    <aside className="section-card compact-card json-shot-panel" aria-label="Shot timeline">
       <div className="section-card-head">
         <h2 className="section-card-title">Shots</h2>
         <span className="muted tiny">{shots.length}</span>
       </div>
       <div className="json-shot-list">
-        {shots.map((shot) => {
+        {shots.map((shot, index) => {
           const selected = shot.id === selectedId;
+          const status = statusByShotId.get(shot.id) || "idle";
           return (
             <button
               key={shot.id}
               type="button"
-              className={selected ? "json-shot-item selected" : "json-shot-item"}
+              className={
+                selected
+                  ? "json-shot-item json-shot-bookmark selected"
+                  : "json-shot-item json-shot-bookmark"
+              }
               aria-selected={selected}
+              aria-label={`${shot.id}: ${shot.title || shot.id}, ${shot.duration_s}s, ${status}`}
               onClick={() => onSelect(shot.id)}
             >
-              <div className="shot-table-title">{shot.title || shot.id}</div>
-              <div className="muted tiny">
-                {shot.id} · {shot.duration_s}s
-              </div>
-              <span className="status-chip">{statusByShotId.get(shot.id) || "idle"}</span>
+              <span className="json-shot-bookmark-index" aria-hidden="true">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+              <span className="json-shot-bookmark-copy">
+                <span className="shot-table-title">{shot.title || shot.id}</span>
+                <span className="json-shot-bookmark-meta">
+                  <span>{shot.duration_s}s</span>
+                  <span className="json-shot-bookmark-status" data-status={status}>
+                    {status}
+                  </span>
+                </span>
+              </span>
             </button>
           );
         })}

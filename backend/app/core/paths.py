@@ -50,6 +50,7 @@ def ensure_project_tree(project_id: str) -> Path:
             "| `shots/` | Per-shot JSON (status, refs, prompts) |\n"
             "| `library/` | Actors, scenes, layouts, costumes, props (images + asset.json) |\n"
             "| `jobs/` | Generation jobs (inputs/outputs) |\n"
+            "| `json-production/` | Persisted JSON Production Picture and Audio selections |\n"
             "| `agent/` | Director agent context |\n",
             encoding="utf-8",
         )

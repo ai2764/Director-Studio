@@ -1,14 +1,28 @@
+from .factory import ActiveProvider, get_llm_provider, reset_llm_provider
+from .lifecycle import LMStudioLifecycle, OllamaLifecycle, RemoteLifecycle
 from .ollama import OllamaLLMProvider
-from .provider import LLMProvider
+from .openai_compatible import OpenAICompatibleClient
+from .provider import (
+    LLMClient,
+    LLMLifecycle,
+    LLMProvider,
+    LLMResult,
+    UnsupportedLLMFeatureError,
+)
 
 
-def get_llm_provider() -> LLMProvider:
-    """Return the configured Director LLM provider.
-
-    Ollama is the only provider today; callers depend on the boundary so a remote
-    provider can be introduced without leaking its transport into Director APIs.
-    """
-    return OllamaLLMProvider()
-
-
-__all__ = ["LLMProvider", "OllamaLLMProvider", "get_llm_provider"]
+__all__ = [
+    "ActiveProvider",
+    "LLMClient",
+    "LLMLifecycle",
+    "LLMProvider",
+    "LLMResult",
+    "LMStudioLifecycle",
+    "OllamaLifecycle",
+    "OllamaLLMProvider",
+    "OpenAICompatibleClient",
+    "RemoteLifecycle",
+    "UnsupportedLLMFeatureError",
+    "get_llm_provider",
+    "reset_llm_provider",
+]

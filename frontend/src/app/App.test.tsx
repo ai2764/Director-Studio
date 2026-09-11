@@ -36,7 +36,12 @@ vi.mock("../shared/project/ProjectPicker", () => ({
 }));
 
 vi.mock("../features/settings/WorkflowSettingsPage", () => ({
-  WorkflowSettingsPage: ({ active }: { active?: boolean }) => <h1 data-active={String(active)}>Workflow settings</h1>,
+  WorkflowSettingsPage: ({ active, onClose }: { active?: boolean; onClose?: () => void }) => (
+    <div>
+      <h1 data-active={String(active)}>Workflow settings</h1>
+      <button type="button" aria-label="Close settings" onClick={onClose}>×</button>
+    </div>
+  ),
 }));
 
 vi.mock("../shared/api/client", () => ({
@@ -119,13 +124,25 @@ vi.mock("../features/production/ProductionPage", () => ({
   ),
 }));
 vi.mock("../features/json-production/JsonProductionPage", () => ({
-  JsonProductionPage: ({ active }: { active?: boolean }) => (
-    <div data-testid="json-production-page" data-active={String(Boolean(active))} />
+  JsonProductionPage: ({ active, mobile }: { active?: boolean; mobile?: boolean }) => (
+    <div
+      data-testid="json-production-page"
+      data-active={String(Boolean(active))}
+      data-mobile={String(Boolean(mobile))}
+    />
   ),
 }));
 
 describe("App mode routing", () => {
   afterEach(cleanup);
+
+  it("uses Director Studio as the browser title", () => {
+    document.title = "Director Studio · Casting";
+
+    render(<App />);
+
+    expect(document.title).toBe("Director Studio");
+  });
 
   it("opens desktop Settings outside the project workflow navigation", async () => {
     render(<App />);
@@ -135,6 +152,17 @@ describe("App mode routing", () => {
     expect(await screen.findByRole("heading", { name: "Workflow settings" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Workflow settings" }).getAttribute("data-active")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Director" }));
+    expect(screen.queryByRole("heading", { name: "Workflow settings" })).toBeNull();
+  });
+
+  it("closes Settings back to the page that opened it", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Assets" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Close settings" }));
+
+    expect(screen.getByRole("button", { name: "Assets" }).getAttribute("aria-current")).toBe("page");
     expect(screen.queryByRole("heading", { name: "Workflow settings" })).toBeNull();
   });
 
@@ -176,7 +204,7 @@ describe("App mode routing", () => {
     expect(screen.queryByTestId("json-production-page")).toBeNull();
   });
 
-  it("mounts JsonProductionPage for json_production projects on the Production tab", () => {
+  it("opens desktop JSON production directly without the general workflow tabs", () => {
     projectState.project = {
       id: "prj_json",
       name: "JSON board",
@@ -187,9 +215,39 @@ describe("App mode routing", () => {
       shot_ids: [],
     };
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Production" }));
 
     expect(screen.getByTestId("json-production-page")).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "Project workflow" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Assets" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Director" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Production" })).toBeNull();
+    expect(screen.queryByTestId("production-page")).toBeNull();
+  });
+
+  it("opens mobile JSON production directly without the general workspace tabs", () => {
+    window.history.replaceState({}, "", "/mobile");
+    projectState.project = {
+      id: "prj_json",
+      name: "JSON board",
+      script_text: "",
+      mode: "json_production",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      shot_ids: [],
+    };
+    render(<App />);
+
+    const jsonPage = screen.getByTestId("json-production-page");
+    expect(jsonPage).toBeTruthy();
+    expect(jsonPage.dataset.active).toBe("true");
+    expect(jsonPage.dataset.mobile).toBe("true");
+    expect(jsonPage.closest(".mobile-production-page")?.classList).toContain(
+      "mobile-json-production-page",
+    );
+    expect(screen.queryByRole("navigation", { name: "Mobile workspace" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Asset" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Director" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Production" })).toBeNull();
     expect(screen.queryByTestId("production-page")).toBeNull();
   });
 

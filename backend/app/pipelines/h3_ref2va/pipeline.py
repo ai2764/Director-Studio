@@ -12,7 +12,6 @@ from PIL import Image, UnidentifiedImageError
 
 from ...config import settings
 from ...core.h3.prompt import (
-    validate_no_time_addressable_pictures,
     validate_required_picture_bindings,
 )
 from ...core.library.audio import probe_audio
@@ -167,7 +166,6 @@ class H3Ref2VaPipeline(Pipeline):
         prompt_text = (p.get("prompt") or "").strip()
         if not prompt_text:
             raise ValueError("prompt is required")
-        validate_no_time_addressable_pictures(prompt_text)
         layout_picture_indices = p.get("layout_picture_indices") or []
         if not isinstance(layout_picture_indices, (list, tuple)):
             raise TypeError("layout_picture_indices must be a list")
@@ -251,8 +249,6 @@ class H3Ref2VaPipeline(Pipeline):
             raise ValueError("prompt is required")
         if len(prompt_text) > 7000:
             raise ValueError("MiniMax H3 API prompt must not exceed 7000 characters")
-        validate_no_time_addressable_pictures(prompt_text)
-
         image_keys = self._ordered_keys(p.get("image_keys"), inputs)
         if not image_keys:
             raise ValueError("at least one reference image is required")

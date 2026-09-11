@@ -40,6 +40,48 @@ class FakeComfy:
         self.free_calls += 1
 
 
+class FakeProvider:
+    def __init__(self, lifecycle, provider_id="test-provider"):
+        self.provider_id = provider_id
+        self.lifecycle = lifecycle
+        self.client = object()
+
+
+class FailingLocalLifecycle:
+    uses_local_gpu = True
+    release_failure_is_fatal = True
+
+    async def prepare(self, model, on_status=None):
+        del model, on_status
+
+    async def release(self, models):
+        del models
+        raise RuntimeError("unload failed")
+
+    async def status(self, model):
+        return {"model": model, "ready": False}
+
+
+class RecordingRemoteLifecycle:
+    uses_local_gpu = False
+    release_failure_is_fatal = False
+
+    def __init__(self):
+        self.prepared: list[str] = []
+        self.released: list[list[str]] = []
+
+    async def prepare(self, model, on_status=None):
+        self.prepared.append(model)
+        if on_status:
+            on_status(f"{model} remote ready")
+
+    async def release(self, models):
+        self.released.append(list(models))
+
+    async def status(self, model):
+        return {"model": model, "ready": True}
+
+
 def _orch(**kwargs) -> VramOrchestrator:
     ollama = kwargs.pop("ollama", FakeOllama())
     comfy = kwargs.pop("comfy", FakeComfy())
@@ -357,3 +399,59 @@ async def test_chat_llm_session_fails_without_warming_ollama_when_reserved():
     assert error.value.code == "GPU_GENERATION_ACTIVE"
     assert [item.job_id for item in error.value.reservations] == ["job_video"]
     assert ollama.ready_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_comfy_does_not_start_when_local_lifecycle_release_fails():
+    provider = FakeProvider(FailingLocalLifecycle(), provider_id="lm-studio")
+    orch = VramOrchestrator(
+        provider=provider,
+        comfy=FakeComfy(),
+        models=["studio-model"],
+    )
+
+    with pytest.raises(RuntimeError, match="unload failed"):
+        await orch.before_comfy_job("actor")
+
+    assert orch.owner is None
+    assert orch.comfy_pipeline is None
+
+
+@pytest.mark.asyncio
+async def test_remote_llm_session_does_not_free_comfy_or_claim_gpu(monkeypatch):
+    lifecycle = RecordingRemoteLifecycle()
+    comfy = FakeComfy()
+    provider = FakeProvider(lifecycle, provider_id="openai-compatible")
+    orch = VramOrchestrator(
+        provider=provider,
+        comfy=comfy,
+        models=["remote-model"],
+    )
+    monkeypatch.setattr(
+        "app.core.vram.director_model.get_director_model",
+        lambda provider_id=None: "remote-model",
+    )
+
+    async with orch.llm_session():
+        await orch.ensure_llm_ready()
+        assert orch.owner is None
+
+    assert comfy.free_calls == 0
+    assert lifecycle.prepared == ["remote-model"]
+    assert lifecycle.released == []
+
+
+@pytest.mark.asyncio
+async def test_remote_provider_does_not_receive_unload_before_comfy():
+    lifecycle = RecordingRemoteLifecycle()
+    provider = FakeProvider(lifecycle, provider_id="openai-compatible")
+    orch = VramOrchestrator(
+        provider=provider,
+        comfy=FakeComfy(),
+        models=["remote-model"],
+    )
+
+    await orch.before_comfy_job("h3_ref2va")
+
+    assert lifecycle.released == []
+    assert orch.owner == "comfy"

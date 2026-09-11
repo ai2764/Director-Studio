@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from app.api import director
+from app.config import settings
+from app.core.llm import get_llm_provider, reset_llm_provider
 
 
 class FakeProvider:
@@ -23,10 +25,10 @@ class FakeProvider:
 
 
 class EmptySelectionProvider(FakeProvider):
-    def __init__(self, available: list[str]) -> None:
+    def __init__(self, available: list[str], current: str = "") -> None:
         super().__init__()
         self.available = available
-        self.current = ""
+        self.current = current
 
     async def list_models(self) -> list[str]:
         return list(self.available)
@@ -86,3 +88,49 @@ async def test_director_leaves_model_empty_when_ollama_has_none() -> None:
     assert provider.selected is None
     assert result["model"] == ""
     assert result["available"] == []
+
+
+@pytest.mark.asyncio
+async def test_director_replaces_a_stale_model_with_first_available() -> None:
+    provider = EmptySelectionProvider(
+        ["current-first", "current-second"],
+        current="removed-model",
+    )
+
+    result = await director.get_model(provider=provider)
+
+    assert provider.selected == ("current-first", True)
+    assert result["model"] == "current-first"
+
+
+def test_factory_builds_one_active_lm_studio_provider(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_provider", "lm-studio")
+    monkeypatch.setattr(settings, "llm_base_url", "http://127.0.0.1:1234/v1")
+    monkeypatch.setattr(settings, "llm_api_key", None)
+    reset_llm_provider()
+    try:
+        first = get_llm_provider()
+        second = get_llm_provider()
+
+        assert first is second
+        assert first.provider_id == "lm-studio"
+        assert first.lifecycle.uses_local_gpu is True
+        assert first.lifecycle.release_failure_is_fatal is True
+        assert first.client.base_url == "http://127.0.0.1:1234/v1"
+    finally:
+        reset_llm_provider()
+
+
+def test_factory_defaults_generic_provider_to_openai_url(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_provider", "openai-compatible")
+    monkeypatch.setattr(settings, "llm_base_url", "")
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    reset_llm_provider()
+    try:
+        provider = get_llm_provider()
+
+        assert provider.provider_id == "openai-compatible"
+        assert provider.lifecycle.uses_local_gpu is False
+        assert provider.client.base_url == "https://api.openai.com/v1"
+    finally:
+        reset_llm_provider()

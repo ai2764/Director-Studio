@@ -22,6 +22,21 @@
 /* Workflow setup shares the production workbench surfaces and binding typography. */
 .topbar-settings { flex: 0 0 auto; }
 .topbar-settings[aria-current="page"] { background: var(--accent-soft); border-color: var(--accent); }
+.settings-close-button {
+  width: 2.25rem;
+  height: 2.25rem;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.settings-close-button:hover { background: var(--accent-soft); color: var(--text); }
+.settings-close-button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 .h3-workflow-setup { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 24px; max-width: 1180px; margin: 0 auto; align-items: start; }
 .workflow-profile-rail { position: sticky; top: 96px; }
 .workflow-profile-name { display: block; font-size: 1.1rem; margin: 20px 0 8px; overflow-wrap: anywhere; }
@@ -2902,6 +2917,13 @@ select {
   overflow: hidden;
 }
 
+.mobile-production-page.mobile-json-production-page {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
 .mobile-production-review {
   height: 100%;
   overflow-x: hidden;
@@ -4001,23 +4023,317 @@ select {
   }
 }
 
-/* —— JSON Production three-column workspace —— */
+/* —— JSON Production desktop workspace —— */
 
-.json-production-grid {
+.json-production-page {
+  --bg: #eef1f4;
+  --bg-elev: #e6eaf0;
+  --bg-panel: #ffffff;
+  --panel: #ffffff;
+  --border: #cdd4dd;
+  --border-strong: #9da9b7;
+  --text: #17212b;
+  --muted: #5d6977;
+  --accent: #a33f2b;
+  --accent-dim: #81311f;
+  --accent-soft: #f2ddd7;
+  --ok: #28734e;
+  --danger: #af3434;
+  --info: #356f9f;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (min-width: 901px) {
+  .json-production-page {
+    height: calc(100dvh - 57px);
+    flex: none;
+    overflow: hidden;
+  }
+}
+
+.json-desktop-workspace {
   flex: 1;
   display: grid;
-  grid-template-columns:
-    minmax(13rem, 0.8fr)
-    minmax(24rem, 1.7fr)
-    minmax(17rem, 1fr);
-  gap: 1rem;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.8rem;
   min-height: 0;
-  align-items: stretch;
+}
+
+.json-desktop-workspace .json-shot-panel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  height: auto;
+  max-height: none;
+  padding: 0.48rem 0.7rem 0.52rem;
+  overflow: hidden;
+  border-color: var(--border);
+  background: var(--panel);
+}
+
+.json-desktop-workspace .json-shot-panel .section-card-head {
+  min-width: 4.5rem;
+  margin: 0;
+}
+
+.json-desktop-workspace .json-shot-list {
+  display: flex;
+  flex-direction: row;
+  gap: 0.38rem;
+  padding: 0.1rem 0 0.18rem;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+.json-desktop-workspace .json-shot-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  flex: 0 0 clamp(10.5rem, 13vw, 12.5rem);
+  min-height: 3rem;
+  gap: 0.52rem;
+  padding: 0.38rem 0.58rem 0.42rem;
+  border-color: var(--border);
+  border-radius: 7px 7px 3px 3px;
+  background: var(--bg);
+  box-shadow: inset 0 -2px 0 var(--border);
+}
+
+.json-desktop-workspace .json-shot-item:hover {
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--panel));
+}
+
+.json-desktop-workspace .json-shot-item.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+
+.json-shot-bookmark-index {
+  display: grid;
+  min-width: 1.7rem;
+  min-height: 1.7rem;
+  place-items: center;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 720;
+}
+
+.json-shot-bookmark.selected .json-shot-bookmark-index {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  color: var(--accent);
+}
+
+.json-shot-bookmark-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+.json-shot-bookmark .shot-table-title {
+  overflow: hidden;
+  font-size: 0.8rem;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.json-shot-bookmark-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: 0.64rem;
+  line-height: 1;
+}
+
+.json-shot-bookmark-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.26rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.json-shot-bookmark-status::before {
+  width: 0.4rem;
+  height: 0.4rem;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+  content: "";
+}
+
+.json-shot-bookmark-status[data-status="succeeded"]::before {
+  background: var(--ok);
+}
+
+.json-shot-bookmark-status[data-status="running"]::before,
+.json-shot-bookmark-status[data-status="queued"]::before,
+.json-shot-bookmark-status[data-status="uploading"]::before {
+  background: var(--info);
+}
+
+.json-shot-bookmark-status[data-status="failed"]::before,
+.json-shot-bookmark-status[data-status="missing files"]::before {
+  background: var(--danger);
+}
+
+.json-desktop-workbench {
+  display: grid;
+  gap: 0;
+  min-height: 0;
+}
+
+.json-resizable-workbench > .resizable-pane {
+  display: flex;
+}
+
+.json-resizable-workbench > .resizable-pane > * {
+  width: 100%;
+}
+
+.json-desktop-workbench .json-prompt-panel {
+  height: 100%;
+  max-height: none;
+  border-color: var(--border);
+  background: var(--panel);
+}
+
+.json-desktop-inspector {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.json-desktop-inspector-nav {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 0 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.json-desktop-inspector-nav button {
+  min-height: 3rem;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.json-desktop-inspector-nav button:hover {
+  color: var(--text);
+}
+
+.json-desktop-inspector-nav button.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+}
+
+.json-desktop-inspector .json-asset-panel {
+  display: flex;
+  height: auto;
+  max-height: none;
+  flex: 1;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.json-desktop-inspector .json-reference-content,
+.json-desktop-inspector .json-output-content {
+  min-height: 0;
+  flex: 1;
+  padding: 0.9rem;
+  overflow: auto;
+}
+
+.json-desktop-inspector .sticky-actions {
+  position: static;
+  z-index: 2;
+  flex: none;
+  margin-top: auto;
+  padding: 0.72rem 0.9rem;
+  border-top: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 -8px 22px rgba(23, 33, 43, 0.07);
+  backdrop-filter: blur(10px);
+}
+
+.json-desktop-inspector .json-output-panel {
+  margin-top: 0.45rem;
+  padding-top: 0.75rem;
+}
+
+.json-desktop-inspector .h3-preview {
+  width: 100%;
+  max-height: min(48vh, 30rem);
+  border-radius: 8px;
+  background: #10161d;
+}
+
+.json-desktop-workspace .section-card-title {
+  color: var(--text);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+@media (min-width: 901px) and (max-width: 1120px) {
+  .json-desktop-workspace {
+    overflow: auto;
+  }
+
+  .json-desktop-workbench {
+    grid-template-columns: 1fr !important;
+    gap: 0.8rem;
+  }
+
+  .json-resizable-workbench > .resize-separator {
+    display: none;
+  }
+
+  .json-desktop-workbench .json-prompt-panel,
+  .json-desktop-inspector {
+    height: auto;
+    min-height: 32rem;
+    max-height: none;
+  }
 }
 
 @media (max-width: 900px) {
-  .json-production-grid {
-    grid-template-columns: 1fr;
+
+  .mobile-json-production-page .json-production-page {
+    flex: none;
+    min-height: 100%;
+  }
+
+  .mobile-json-production-page .json-shot-panel,
+  .mobile-json-production-page .json-prompt-panel,
+  .mobile-json-production-page .json-asset-panel {
+    height: auto;
+    max-height: none;
+    overflow: visible;
   }
 }
 
@@ -4029,6 +4345,21 @@ select {
 .json-production-page .json-file-action input[type="file"] {
   font-size: 0.78rem;
   padding: 0.4rem 0.5rem;
+}
+
+.json-production-header-actions {
+  display: flex;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.json-production-header-actions .json-h3-provider-picker {
+  min-width: 13rem;
+  margin-top: 0;
+}
+
+.json-production-header-actions .json-h3-provider-picker small {
+  white-space: nowrap;
 }
 
 .json-empty-import {
@@ -4105,13 +4436,78 @@ select {
   margin-top: 0;
 }
 
+.json-desktop-inspector .json-picture-slot + .json-picture-slot {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.json-asset-slot-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.json-asset-slot-head {
+  min-height: 2rem;
+}
+
+.json-asset-slot-title {
+  min-width: 0;
+  color: var(--text);
+  font-weight: 720;
+}
+
+.json-asset-slot-body.has-preview {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0.75rem;
+}
+
+.json-asset-slot-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.json-asset-slot-body.has-preview .json-asset-slot-footer {
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.json-asset-slot-actions {
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.json-asset-clear {
+  flex: none;
+}
+
+.json-asset-slot-footer .filename,
+.json-asset-slot-footer .json-file-state {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .json-asset-preview {
-  width: 100%;
-  max-height: 180px;
-  object-fit: cover;
+  width: 120px;
+  height: 90px;
+  max-height: 90px;
+  object-fit: contain;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: #0a0d11;
+  background: var(--bg);
   display: block;
 }
 
@@ -4147,6 +4543,372 @@ select {
   max-height: min(42vh, 360px);
 }
 
+.json-upload-control {
+  position: relative;
+  display: inline-flex;
+  width: fit-content;
+  min-height: 2.45rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 680;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.json-upload-control input[type="file"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.json-upload-control:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* Mobile JSON Production: a high-contrast, one-shot-at-a-time control surface. */
+.json-production-mobile-app {
+  --bg: #eef1f4;
+  --bg-elev: #e6eaf0;
+  --bg-panel: #ffffff;
+  --panel: #ffffff;
+  --border: #cdd4dd;
+  --border-strong: #9da9b7;
+  --text: #17212b;
+  --muted: #5d6977;
+  --accent: #a33f2b;
+  --accent-dim: #81311f;
+  --accent-soft: #f2ddd7;
+  --ok: #28734e;
+  --danger: #af3434;
+  --info: #356f9f;
+  color: var(--text);
+}
+
+.json-production-mobile-app .mobile-topbar {
+  gap: 0;
+  padding-bottom: 0.55rem;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 1px 0 rgba(23, 33, 43, 0.05);
+}
+
+@media (max-width: 900px) {
+  .mobile-json-production-page .json-production-page {
+    min-height: 100%;
+    padding: 0.75rem 0.8rem 0;
+    color: var(--text);
+    background: var(--bg);
+  }
+
+  .mobile-json-production-page .page-shell-header {
+    align-items: center;
+    flex-wrap: nowrap;
+    margin-bottom: 0.75rem;
+  }
+
+  .mobile-json-production-page .page-shell-title {
+    font-size: 1.12rem;
+    letter-spacing: -0.02em;
+  }
+
+  .mobile-json-production-page .page-shell-sub {
+    display: none;
+  }
+
+  .mobile-json-production-page .page-shell-actions {
+    flex-shrink: 0;
+  }
+
+  .mobile-json-production-page .json-file-action {
+    min-width: 0;
+  }
+
+  .mobile-json-production-page .json-file-action > span {
+    display: inline-flex;
+    min-height: 2.35rem;
+    align-items: center;
+    padding: 0.5rem 0.72rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--accent);
+    font-size: 0.76rem;
+    font-weight: 720;
+  }
+
+  .mobile-json-production-page .json-file-action input[type="file"] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .json-mobile-workspace {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  .json-mobile-control-deck {
+    position: sticky;
+    top: -0.75rem;
+    z-index: 8;
+    margin: -0.1rem -0.8rem 0;
+    padding: 0.1rem 0.8rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    background: rgba(238, 241, 244, 0.96);
+    backdrop-filter: blur(12px);
+  }
+
+  .json-mobile-control-deck .json-h3-provider-picker {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 0.25rem 0.6rem;
+    margin-top: 0.55rem;
+  }
+
+  .json-mobile-control-deck .json-h3-provider-picker small {
+    grid-column: 2;
+  }
+
+  .json-mobile-shot-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 0.6rem;
+  }
+
+  .json-mobile-shot-picker {
+    display: grid;
+    min-width: 0;
+    gap: 0.28rem;
+  }
+
+  .json-mobile-shot-picker > span {
+    color: var(--muted);
+    font-size: 0.68rem;
+    font-weight: 680;
+  }
+
+  .json-mobile-shot-picker select {
+    width: 100%;
+    min-height: 2.65rem;
+    padding: 0.5rem 2.1rem 0.5rem 0.7rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 9px;
+    background: var(--panel);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.86rem;
+    font-weight: 680;
+  }
+
+  .json-mobile-status {
+    display: inline-flex;
+    min-height: 2.65rem;
+    align-items: center;
+    padding: 0.45rem 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .json-mobile-status-ready,
+  .json-mobile-status-succeeded {
+    border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
+    color: var(--ok);
+  }
+
+  .json-mobile-status-running,
+  .json-mobile-status-queued,
+  .json-mobile-status-uploading {
+    border-color: color-mix(in srgb, var(--info) 35%, var(--border));
+    color: var(--info);
+  }
+
+  .json-mobile-status-missing,
+  .json-mobile-status-dirty {
+    color: #8a5b19;
+  }
+
+  .json-mobile-workflow-nav {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0;
+    margin-top: 0.68rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .json-mobile-workflow-nav button {
+    min-height: 2.45rem;
+    border: 0;
+    border-bottom: 3px solid transparent;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  .json-mobile-workflow-nav button.active {
+    border-bottom-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .json-mobile-stage {
+    min-height: 0;
+    padding: 0.85rem 0 6.25rem;
+  }
+
+  .json-mobile-stage .section-card {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .json-mobile-stage .section-card-title {
+    color: var(--text);
+    font-size: 0.9rem;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  .json-mobile-stage .field textarea {
+    border-color: var(--border);
+    background: var(--panel);
+    color: var(--text);
+  }
+
+  .json-mobile-stage .field textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+
+  .json-mobile-stage .json-shot-editor textarea {
+    min-height: 24rem;
+  }
+
+  .json-mobile-stage .json-asset-slot {
+    margin: 0 0 0.65rem;
+    padding: 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel);
+  }
+
+  .json-mobile-stage .json-asset-slot-title {
+    color: var(--text);
+    font-size: 0.84rem;
+    font-weight: 720;
+  }
+
+  .json-mobile-stage .json-file-state {
+    color: var(--muted);
+  }
+
+  .json-mobile-stage .json-upload-control {
+    width: 100%;
+    border-color: var(--border-strong);
+    background: var(--bg-elev);
+    color: var(--text);
+  }
+
+  .json-mobile-stage .json-asset-preview {
+    width: 88px;
+    height: 66px;
+    max-height: 66px;
+    object-fit: contain;
+    background: #18202a;
+  }
+
+  .json-mobile-stage .json-asset-slot-body.has-preview {
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 0.65rem;
+  }
+
+  .json-mobile-stage .json-output-content > .section-card-head {
+    margin-bottom: 0.75rem;
+  }
+
+  .json-mobile-stage .json-output-panel {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .json-mobile-stage .json-output-panel > .section-card-head {
+    display: none;
+  }
+
+  .json-mobile-stage .h3-preview {
+    width: 100%;
+    max-height: none;
+    border-radius: 10px;
+    background: #10161d;
+  }
+
+  .json-mobile-generate-bar {
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin: 0 -0.8rem;
+    padding: 0.68rem 0.8rem calc(0.68rem + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.97);
+    box-shadow: 0 -8px 24px rgba(23, 33, 43, 0.08);
+  }
+
+  .json-mobile-generate-bar > div {
+    display: grid;
+    min-width: 0;
+    flex: 1;
+    gap: 0.08rem;
+  }
+
+  .json-mobile-generate-bar strong {
+    color: var(--text);
+    font-size: 0.78rem;
+  }
+
+  .json-mobile-generate-bar span {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.68rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .json-mobile-generate-bar .btn {
+    min-height: 2.6rem;
+    flex-shrink: 0;
+  }
+
+  .json-mobile-generate-bar .btn.primary {
+    background: var(--accent);
+    color: #ffffff;
+  }
+}
+
 /* Oat & Walnut: a quiet, warm production desk shared by the workspace surfaces. */
 .app {
   --bg: #cfc6b9;
@@ -4174,6 +4936,33 @@ select {
   position: sticky;
   background: rgba(221, 212, 199, 0.96);
   box-shadow: 0 1px 0 rgba(52, 44, 39, 0.05);
+}
+
+.app.json-production-app {
+  --bg: #eef1f4;
+  --bg-elev: #e6eaf0;
+  --bg-panel: #ffffff;
+  --panel: #ffffff;
+  --border: #cdd4dd;
+  --border-strong: #9da9b7;
+  --text: #17212b;
+  --muted: #5d6977;
+  --accent: #a33f2b;
+  --accent-dim: #81311f;
+  --accent-soft: #f2ddd7;
+  --ok: #28734e;
+  --danger: #af3434;
+  --info: #356f9f;
+}
+
+.app.json-production-app .topbar {
+  border-bottom-color: var(--border);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 1px 0 rgba(23, 33, 43, 0.05);
+}
+
+.app.json-production-app .topbar-project {
+  margin-right: auto;
 }
 
 .app .topbar-row {
@@ -5547,6 +6336,21 @@ select {
 .app textarea,
 .app select {
   background: #f0e8dc;
+}
+
+.app .json-production-page input,
+.app .json-production-page textarea,
+.app .json-production-page select {
+  border-color: var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.app .json-production-page input:focus,
+.app .json-production-page textarea:focus,
+.app .json-production-page select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 @media (max-width: 1120px) {

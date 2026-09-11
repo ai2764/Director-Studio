@@ -41,6 +41,31 @@ def test_audio_tags_must_reference_submitted_audio_but_may_repeat():
         validate_h3_prompt(text + " <Audio 3>", [], audio_count=2)
 
 
+def test_allows_picture_references_inside_timed_action_descriptions():
+    sections = PromptSections(
+        subject_definitions=(
+            "<Picture 1> defines the rocket design. "
+            "<Picture 2> defines the launch composition."
+        ),
+        summary="A rocket launches into the sky.",
+        retention_analysis="Retain both references throughout the clip.",
+        detailed_description=(
+            "0.0-1.5s: The rocket stands in the composition established by "
+            "<Picture 2> as its engines ignite. 1.5-3.3s: The rocket lifts "
+            "while retaining the silhouette defined by <Picture 1>."
+        ),
+        overall_soundscape="A rising engine roar.",
+        non_diegetic_music="No music.",
+    )
+
+    validate_h3_prompt(
+        compose_h3_prompt(sections),
+        [],
+        required_picture_indices=[1, 2],
+        submitted_picture_indices=[1, 2],
+    )
+
+
 def test_requires_every_selected_layout_picture_binding():
     from app.core.h3.prompt import validate_required_picture_bindings
 
@@ -73,193 +98,6 @@ def test_rejects_picture_tag_not_in_submitted_picture_set():
             [],
             submitted_picture_indices=[1, 2],
         )
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "Use <Picture 5> from 0-3s, then switch to <Picture 6>.",
-        "At 3 seconds switch to <Picture 6>.",
-        "At 3 seconds, <Picture 6> activates.",
-        "At 3 seconds, <Picture 6> takes over.",
-        "<Picture 5> is shown from 0–3 seconds.",
-        "<Picture 5> is used during 0-3 seconds.",
-        "<Picture 6> switches at 3 seconds.",
-        "Switch from <Picture 5> to <Picture 6> at 3 seconds.",
-    ],
-)
-def test_rejects_time_addressable_picture_claims(text):
-    from app.core.h3.prompt import validate_no_time_addressable_pictures
-
-    with pytest.raises(ValueError, match="Pictures condition the whole clip"):
-        validate_no_time_addressable_pictures(text)
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        (
-            "<Picture 4> depicts the closed empty doorway, confirming that "
-            "the opening state (0–3 s) contains only one person."
-        ),
-        (
-            "<Picture 4> excludes Kai from this reference so that the first "
-            "three seconds remain single-occupant."
-        ),
-        (
-            "<Picture 4> establishes the doorway geometry. This Layout keeps "
-            "Kai absent during the first three seconds."
-        ),
-    ],
-)
-def test_rejects_semantic_time_assignment_to_picture_or_layout(text):
-    """A Picture cannot be evidence for a timed state, even in natural prose."""
-    from app.core.h3.prompt import validate_no_time_addressable_pictures
-
-    with pytest.raises(ValueError, match="Pictures condition the whole clip"):
-        validate_no_time_addressable_pictures(text)
-
-
-def test_rejects_semantic_time_assignment_later_in_picture_binding_paragraph():
-    """A long binding paragraph cannot hide a timed claim several sentences later."""
-    from app.core.h3.prompt import validate_no_time_addressable_pictures
-
-    binding = (
-        "<Picture 4> (lay_d08b2ee0c505, Layout): Composition and blocking "
-        "reference. It locks the static wide framing, Mei's seated position, "
-        "the table scale, eyeline height, and room geometry. It depicts the "
-        "closed empty doorway behind Mei, confirming that the opening state "
-        "(0–3 s) contains only one person. Kai is deliberately excluded from "
-        "this reference so that the first three seconds remain single-occupant."
-    )
-
-    with pytest.raises(ValueError, match="Pictures condition the whole clip"):
-        validate_no_time_addressable_pictures(binding)
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "<Picture 4> keeps Kai absent from 0-3 seconds.",
-        "<Picture 4> ensures Kai is absent during 0-3 seconds.",
-        "<Picture 4> confirms an empty doorway for 0-3 seconds.",
-        (
-            "<Picture 4> establishes the doorway geometry for the whole clip. "
-            "This Layout guarantees Kai remains absent from 0-3 seconds."
-        ),
-        (
-            "<Picture 4> establishes the doorway geometry for the whole clip. "
-            "This reference establishes an empty-door state during the first "
-            "three seconds."
-        ),
-    ],
-)
-def test_rejects_reference_subject_controlling_timed_state(text):
-    """Reference subjects cannot keep/ensure/confirm a state for a time window."""
-    from app.core.h3.prompt import validate_no_time_addressable_pictures
-
-    with pytest.raises(ValueError, match="Pictures condition the whole clip"):
-        validate_no_time_addressable_pictures(text)
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "<Picture 4> controls the empty-door state for 0-3 seconds.",
-        "<Picture 4> locks Kai out of frame during the first three seconds.",
-        (
-            "This scene uses <Picture 4>. This Layout defines an empty-door "
-            "state for 0-3 seconds."
-        ),
-        "During the first three seconds, <Picture 4> keeps Kai absent.",
-        "For 0-3 seconds, <Picture 4> depicts an empty doorway.",
-    ],
-)
-def test_rejects_explicit_reference_timed_state_in_any_sentence_order(text):
-    """Controller, state assignment, and time window may occur in any order."""
-    from app.core.h3.prompt import validate_no_time_addressable_pictures
-
-    with pytest.raises(ValueError, match="Pictures condition the whole clip"):
-        validate_no_time_addressable_pictures(text)
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "<Picture 4> shows the empty doorway until 3 seconds.",
-        "This Layout represents Kai's absence before 3 seconds.",
-        "<Picture 4> is the empty-door reference after 3 seconds.",
-    ],
-)
-def test_rejects_any_explicit_reference_with_a_timing_window(text):
-    from app.core.h3.prompt import validate_no_time_addressable_pictures
-
-    with pytest.raises(ValueError, match="Pictures condition the whole clip"):
-        validate_no_time_addressable_pictures(text)
-
-
-def test_allows_timed_pronoun_action_without_explicit_reference_controller():
-    """Do not infer that an unrelated sentence's `it` means the Picture."""
-    from app.core.h3.prompt import validate_no_time_addressable_pictures
-
-    validate_no_time_addressable_pictures(
-        "<Picture 4> establishes the room. A wall clock appears behind Mei; "
-        "it keeps ticking for 0-3 seconds."
-    )
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        (
-            "<Picture 4> establishes the room while Kai enters during the "
-            "first three seconds."
-        ),
-        (
-            "<Picture 4> establishes the room; Kai enters during the first "
-            "three seconds."
-        ),
-    ],
-)
-def test_allows_independent_timed_action_in_while_or_semicolon_clause(text):
-    """Timing in an independent clause does not time-address the Picture."""
-    from app.core.h3.prompt import validate_no_time_addressable_pictures
-
-    validate_no_time_addressable_pictures(text)
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "<Picture 4> shows the room while Kai waits until 3 seconds.",
-        "<Picture 4> represents the room; Kai exits after 3 seconds.",
-    ],
-)
-def test_allows_until_before_after_in_independent_action_clause(text):
-    from app.core.h3.prompt import validate_no_time_addressable_pictures
-
-    validate_no_time_addressable_pictures(text)
-
-
-def test_allows_action_timing_separate_from_picture_grounding():
-    from app.core.h3.prompt import validate_no_time_addressable_pictures
-
-    validate_no_time_addressable_pictures(
-        "<Picture 5> establishes the doorway geometry. "
-        "From 0-3 seconds, Chen walks through the doorway."
-    )
-    validate_no_time_addressable_pictures(
-        "<Picture 5> establishes the doorway geometry. "
-        "At 3 seconds, Chen walks through the doorway."
-    )
-    validate_no_time_addressable_pictures(
-        "<Picture 5> establishes the doorway geometry and the empty doorway "
-        "shown in the reference. From 0–3 seconds, Kai remains out of frame."
-    )
-    validate_no_time_addressable_pictures(
-        "<Picture 5> establishes whole-clip doorway geometry. "
-        "Action timeline: during the first three seconds, Kai remains out of frame."
-    )
 
 
 def _tail_transition_sections(detailed_description: str) -> PromptSections:
@@ -318,41 +156,13 @@ def test_rejects_missing_or_neutralized_tail_frame_handoff(detailed_description)
         )
 
 
-@pytest.mark.parametrize(
-    ("subject_definitions", "error"),
-    [
-        (
-            "At 3 seconds switch to <Picture 1>.",
-            "Pictures condition the whole clip",
-        ),
-        (
-            "At 3 seconds, <Picture 1> activates.",
-            "Pictures condition the whole clip",
-        ),
-        (
-            "<Picture 1> is shown from 0-5 seconds.",
-            "Pictures condition the whole clip",
-        ),
-        (
-            "Switch from <Picture 1> to <Picture 2> at 3 seconds.",
-            "Pictures condition the whole clip",
-        ),
-        (
-            "The doorway remains coherent.",
-            "missing selected Layout binding: <Picture 1>",
-        ),
-    ],
-)
-def test_pipeline_enforces_layout_picture_prompt_contract(
-    subject_definitions,
-    error,
-):
+def test_pipeline_enforces_required_layout_picture_binding():
     from app.core.schemas import JobRecord, JobStatus
     from app.pipelines.h3_ref2va.pipeline import H3Ref2VaPipeline
 
     prompt = compose_h3_prompt(
         PromptSections(
-            subject_definitions=subject_definitions,
+            subject_definitions="The doorway remains coherent.",
             summary="One coherent doorway scene.",
             retention_analysis="Retain geography.",
             detailed_description="From 0-5 seconds, Chen enters.",
@@ -377,7 +187,10 @@ def test_pipeline_enforces_layout_picture_prompt_contract(
         updated_at="2026-08-25T00:00:00+00:00",
     )
 
-    with pytest.raises(ValueError, match=error):
+    with pytest.raises(
+        ValueError,
+        match="missing selected Layout binding: <Picture 1>",
+    ):
         H3Ref2VaPipeline().build_prompt(
             job,
             uploaded_images={"ref_0": "layout.png"},

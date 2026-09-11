@@ -1,8 +1,8 @@
 from fastapi import APIRouter
 
 from ..core.comfy import ComfyClient
+from ..core.llm import get_llm_provider
 from ..core.schemas import HealthResponse
-from ..core.vram.ollama_client import OllamaClient
 
 router = APIRouter(tags=["system"])
 
@@ -18,7 +18,11 @@ async def health() -> HealthResponse:
     except Exception as e:
         comfy_error = str(e)
 
-    ollama_reachable = await OllamaClient().health()
+    provider = get_llm_provider()
+    try:
+        llm_reachable = await provider.client.health()
+    except Exception:
+        llm_reachable = False
 
     return HealthResponse(
         ok=True,
@@ -26,6 +30,9 @@ async def health() -> HealthResponse:
         comfy_error=comfy_error,
         details={
             "comfy": details.get("system", {}) if details else {},
-            "ollama_reachable": ollama_reachable,
+            "llm": {
+                "provider": provider.provider_id,
+                "reachable": llm_reachable,
+            },
         },
     )

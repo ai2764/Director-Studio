@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     gpt_bridge_action_delay_sec: float = 1.5
     gpt_bridge_job_cooldown_sec: float = 15.0
 
+    # Director LLM. Exactly one provider is active for the process.
+    llm_provider: Literal["ollama", "lm-studio", "openai-compatible"] = "ollama"
+    llm_base_url: str = ""
+    llm_api_key: str | None = None
+    llm_timeout_sec: float = 600.0
+
     # Local Ollama / Director agent (VRAM exclusive with Comfy)
     ollama_base_url: str = "http://127.0.0.1:11434"
     director_plan_model: str = ""
@@ -77,8 +83,8 @@ class Settings(BaseSettings):
     vram_policy: str = "exclusive"  # exclusive: one of LLM/Comfy at a time, others queue
     # Max seconds to wait in GPU queue (Plan waits for H3, next gen waits for casting, …)
     vram_acquire_timeout_sec: float = 3600.0
-    # Multi-turn residency: keep Ollama loaded between chat/plan turns.
-    # Comfy jobs still unload Ollama in before_comfy_job / release_llm.
+    # Multi-turn residency: keep a local LLM loaded between chat/plan turns.
+    # Comfy jobs still release local LLMs before taking the GPU.
     llm_keep_loaded: bool = True
 
     @model_validator(mode="before")

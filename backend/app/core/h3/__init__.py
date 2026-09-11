@@ -5,7 +5,6 @@ from .prompt import (
     SECTION_KEYS,
     compose_h3_prompt,
     validate_h3_prompt,
-    validate_no_time_addressable_pictures,
     validate_required_picture_bindings,
 )
 
@@ -15,6 +14,5 @@ __all__ = [
     "frames_for_seconds",
     "frames_for_audio_seconds",
     "validate_h3_prompt",
-    "validate_no_time_addressable_pictures",
     "validate_required_picture_bindings",
 ]

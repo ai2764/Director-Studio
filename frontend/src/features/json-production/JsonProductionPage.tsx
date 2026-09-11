@@ -1,18 +1,45 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent as ReactClipboardEvent,
+} from "react";
 import { EMPTY_PROMPT_SECTIONS, type JobStatus, type PromptSections } from "../../shared/api/types";
 import { PageShell } from "../../shared/components/PageShell";
+import { ResizableWorkspace } from "../../shared/components/ResizableWorkspace";
 import { useProject } from "../../shared/project/ProjectContext";
-import { cancelH3Job } from "../production/api";
-import { getStoryboard, listJsonShotJobs, putStoryboard, submitJsonShot } from "./api";
+import {
+  cancelH3Job,
+  getH3ProviderStatus,
+  type H3Provider,
+  type H3ProviderStatus,
+} from "../production/api";
+import {
+  clearJsonShotAsset,
+  getStoryboard,
+  listJsonShotAssets,
+  listJsonShotJobs,
+  putJsonShotAsset,
+  putStoryboard,
+  submitJsonShot,
+} from "./api";
 import { JsonAssetSlots } from "./JsonAssetSlots";
 import { JsonPromptPanel } from "./JsonPromptPanel";
 import { JsonShotList } from "./JsonShotList";
-import type { JsonProductionDocument, JsonShotJobRecord, ShotFileMaps } from "./types";
+import type {
+  JsonProductionDocument,
+  JsonProductionAssetValue,
+  JsonProductionStoredAsset,
+  JsonShotJobRecord,
+  ShotFileMaps,
+} from "./types";
 import { parseShotJson, parseStoryboardJson, validateShotReadiness } from "./validation";
 
 const ACTIVE: JobStatus[] = ["queued", "uploading", "running"];
 
-type NestedFileMap = Map<string, Map<number, File>>;
+type NestedFileMap = Map<string, ShotFileMaps["pictures"]>;
 type NestedUrlMap = Map<string, Map<number, string>>;
 
 function emptyFiles(): ShotFileMaps {
@@ -30,13 +57,33 @@ function filesForShot(
   };
 }
 
-function setNestedFile(map: NestedFileMap, shotId: string, index: number, file: File | null): NestedFileMap {
+function setNestedFile(
+  map: NestedFileMap,
+  shotId: string,
+  index: number,
+  file: JsonProductionAssetValue | null,
+): NestedFileMap {
   const next = new Map(map);
   const slot = new Map(next.get(shotId) || []);
   if (file) slot.set(index, file);
   else slot.delete(index);
   next.set(shotId, slot);
   return next;
+}
+
+function mapsFromStoredAssets(assets: JsonProductionStoredAsset[]): {
+  pictures: NestedFileMap;
+  audio: NestedFileMap;
+} {
+  const pictures: NestedFileMap = new Map();
+  const audio: NestedFileMap = new Map();
+  for (const asset of assets) {
+    const target = asset.kind === "picture" ? pictures : audio;
+    const shotAssets = new Map(target.get(asset.shot_id) || []);
+    shotAssets.set(asset.index, asset);
+    target.set(asset.shot_id, shotAssets);
+  }
+  return { pictures, audio };
 }
 
 function revokeUrls(urls: NestedUrlMap) {
@@ -69,7 +116,10 @@ function upsertJob(list: JsonShotJobRecord[] | undefined, job: JsonShotJobRecord
   return next;
 }
 
-export function JsonProductionPage({ active = true }: { active?: boolean } = {}) {
+type MobileSection = "prompt" | "references" | "output";
+type DesktopInspector = "references" | "output";
+
+export function JsonProductionPage({ active = true, mobile = false }: { active?: boolean; mobile?: boolean } = {}) {
   const { projectId } = useProject();
   const [storyboard, setStoryboard] = useState<JsonProductionDocument | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -84,12 +134,40 @@ export function JsonProductionPage({ active = true }: { active?: boolean } = {})
   const [audioFiles, setAudioFiles] = useState<NestedFileMap>(() => new Map());
   const [picturePreviews, setPicturePreviews] = useState<NestedUrlMap>(() => new Map());
   const [jobsByShotId, setJobsByShotId] = useState<Map<string, JsonShotJobRecord[]>>(() => new Map());
+  const [mobileSection, setMobileSection] = useState<MobileSection>("prompt");
+  const [desktopInspector, setDesktopInspector] = useState<DesktopInspector>("references");
+  const [h3ProviderStatus, setH3ProviderStatus] = useState<H3ProviderStatus | null>(null);
+  const [h3Provider, setH3Provider] = useState<H3Provider>("local");
 
   const previewRef = useRef(picturePreviews);
   previewRef.current = picturePreviews;
   const jobsRef = useRef(jobsByShotId);
   jobsRef.current = jobsByShotId;
   const loadGenRef = useRef(0);
+
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    getH3ProviderStatus()
+      .then((status) => {
+        if (cancelled) return;
+        setH3ProviderStatus(status);
+        setH3Provider(
+          status.default_provider === "minimax" && !status.minimax_configured
+            ? "local"
+            : status.default_provider,
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setH3ProviderStatus(null);
+          setH3Provider("local");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active]);
 
   const resetWorkspace = useCallback(() => {
     revokeUrls(previewRef.current);
@@ -123,9 +201,15 @@ export function JsonProductionPage({ active = true }: { active?: boolean } = {})
     async (id: string) => {
       const gen = ++loadGenRef.current;
       try {
-        const doc = await getStoryboard(id);
+        const [doc, assets] = await Promise.all([
+          getStoryboard(id),
+          listJsonShotAssets(id),
+        ]);
         if (gen !== loadGenRef.current) return;
         applyStoryboard(doc);
+        const restored = mapsFromStoredAssets(assets);
+        setPictureFiles(restored.pictures);
+        setAudioFiles(restored.audio);
       } catch (e) {
         if (gen !== loadGenRef.current) return;
         setError(e instanceof Error ? e.message : String(e));
@@ -245,6 +329,18 @@ export function JsonProductionPage({ active = true }: { active?: boolean } = {})
     void file.text().then((text) => importJsonText(text));
   };
 
+  const onPasteJson = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = event.clipboardData.getData("text/plain");
+    if (!pasted) return;
+    event.preventDefault();
+    const textarea = event.currentTarget;
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? start;
+    setPasteText(
+      `${textarea.value.slice(0, start)}${pasted}${textarea.value.slice(end)}`,
+    );
+  };
+
   const onSavePrompt = async () => {
     if (!projectId || !storyboard || !selected) return;
     setError(null);
@@ -356,15 +452,55 @@ export function JsonProductionPage({ active = true }: { active?: boolean } = {})
     });
   };
 
-  const onPictureFile = (index: number, file: File | null) => {
-    if (!selected) return;
-    setPictureFiles((prev) => setNestedFile(prev, selected.id, index, file));
-    replacePicturePreview(selected.id, index, file);
+  const onPictureFile = async (index: number, file: File | null) => {
+    if (!projectId || !selected) return;
+    const previous = pictureFiles.get(selected.id)?.get(index) || null;
+    setError(null);
+    setBusy(true);
+    try {
+      if (file) {
+        setPictureFiles((prev) => setNestedFile(prev, selected.id, index, file));
+        replacePicturePreview(selected.id, index, file);
+        const saved = await putJsonShotAsset(
+          projectId, selected.id, "picture", index, file,
+        );
+        setPictureFiles((prev) => setNestedFile(prev, selected.id, index, saved));
+      } else {
+        await clearJsonShotAsset(projectId, selected.id, "picture", index);
+        setPictureFiles((prev) => setNestedFile(prev, selected.id, index, null));
+        replacePicturePreview(selected.id, index, null);
+      }
+    } catch (e) {
+      setPictureFiles((prev) => setNestedFile(prev, selected.id, index, previous));
+      replacePicturePreview(selected.id, index, null);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const onAudioFile = (index: number, file: File | null) => {
-    if (!selected) return;
-    setAudioFiles((prev) => setNestedFile(prev, selected.id, index, file));
+  const onAudioFile = async (index: number, file: File | null) => {
+    if (!projectId || !selected) return;
+    const previous = audioFiles.get(selected.id)?.get(index) || null;
+    setError(null);
+    setBusy(true);
+    try {
+      if (file) {
+        setAudioFiles((prev) => setNestedFile(prev, selected.id, index, file));
+        const saved = await putJsonShotAsset(
+          projectId, selected.id, "audio", index, file,
+        );
+        setAudioFiles((prev) => setNestedFile(prev, selected.id, index, saved));
+      } else {
+        await clearJsonShotAsset(projectId, selected.id, "audio", index);
+        setAudioFiles((prev) => setNestedFile(prev, selected.id, index, null));
+      }
+    } catch (e) {
+      setAudioFiles((prev) => setNestedFile(prev, selected.id, index, previous));
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const onGenerate = async () => {
@@ -374,7 +510,12 @@ export function JsonProductionPage({ active = true }: { active?: boolean } = {})
     setError(null);
     setBusy(true);
     try {
-      const job = await submitJsonShot(projectId, selected.id, storyboard.revision, files);
+      const job = await submitJsonShot(
+        projectId,
+        selected.id,
+        storyboard.revision,
+        h3Provider,
+      );
       setJobsByShotId((prev) => {
         const next = new Map(prev);
         next.set(selected.id, upsertJob(next.get(selected.id), job));
@@ -420,6 +561,10 @@ export function JsonProductionPage({ active = true }: { active?: boolean } = {})
     storyboard?.revision ?? null,
   );
   const selectedJob = selectedGeneration?.job ?? null;
+  const selectedJobActive = selectedJob ? ACTIVE.includes(selectedJob.status) : false;
+  const canGenerate = Boolean(
+    selected && !busy && !promptDirty && !selectedJobActive && readinessErrors.length === 0,
+  );
 
   const statusByShotId = useMemo(() => {
     const map = new Map<string, string>();
@@ -439,10 +584,90 @@ export function JsonProductionPage({ active = true }: { active?: boolean } = {})
   }, [storyboard, jobsByShotId, pictureFiles, audioFiles, selectedId, promptDirty]);
 
   const hasShots = (storyboard?.shots.length ?? 0) > 0;
+  const mobileReadinessText = selectedJobActive
+    ? `${selectedJob!.status} on H3`
+    : promptDirty
+      ? "Save prompt first"
+      : readinessErrors.length
+        ? `${readinessErrors.length} files missing`
+        : selectedJob?.status === "succeeded"
+          ? "Output ready"
+          : "Ready to generate";
+
+  const providerPicker = (
+    <label className="h3-provider-picker json-h3-provider-picker">
+      <span>Provider</span>
+      <select
+        aria-label="H3 provider"
+        value={h3Provider}
+        disabled={busy || selectedJobActive}
+        onChange={(event) => setH3Provider(event.target.value as H3Provider)}
+      >
+        <option value="local">Local · ComfyUI</option>
+        <option value="minimax" disabled={!h3ProviderStatus?.minimax_configured}>
+          MiniMax · Official API
+          {h3ProviderStatus && !h3ProviderStatus.minimax_configured
+            ? " · not configured"
+            : ""}
+        </option>
+      </select>
+      <small>
+        {h3Provider === "minimax"
+          ? `Official API · ${h3ProviderStatus?.minimax_resolution || "768P"}`
+          : "Active local workflow"}
+      </small>
+    </label>
+  );
+
+  const promptPanel = selected ? (
+    <JsonPromptPanel
+      shot={selected}
+      draftPrompt={draftPrompt}
+      promptDirty={promptDirty}
+      busy={busy}
+      jsonEditing={shotJsonEditing}
+      shotJson={shotJsonText}
+      onChangePrompt={(next) => {
+        setDraftPrompt(next);
+        setPromptDirty(true);
+      }}
+      onSave={() => void onSavePrompt()}
+      onEditJson={onEditShotJson}
+      onChangeShotJson={setShotJsonText}
+      onSaveShotJson={() => void onSaveShotJson()}
+      onCancelShotJson={() => {
+        setShotJsonEditing(false);
+        setShotJsonText("");
+        setError(null);
+      }}
+    />
+  ) : null;
+
+  const assetPanel = selected ? (
+    <JsonAssetSlots
+      shot={selected}
+      files={selectedFiles}
+      picturePreviews={picturePreviews.get(selected.id) || new Map()}
+      readinessErrors={readinessErrors}
+      promptDirty={promptDirty}
+      job={selectedJob}
+      outputVersion={selectedGeneration?.version ?? null}
+      busy={busy}
+      onPictureFile={onPictureFile}
+      onAudioFile={onAudioFile}
+      onGenerate={() => {
+        if (!mobile) setDesktopInspector("output");
+        void onGenerate();
+      }}
+      onCancel={() => void onCancel()}
+      view={mobile ? (mobileSection === "output" ? "output" : "references") : desktopInspector}
+      showActions={!mobile}
+    />
+  ) : null;
 
   return (
     <PageShell
-      title="Production"
+      title={mobile ? "JSON Production" : "Production"}
       className="json-production-page"
       subtitle={
         projectId ? (
@@ -452,19 +677,22 @@ export function JsonProductionPage({ active = true }: { active?: boolean } = {})
         )
       }
       actions={
-        <label className="field json-file-action">
-          <span>JSON file</span>
-          <input
-            type="file"
-            accept=".json,application/json"
-            disabled={!projectId || busy}
-            onChange={(e) => {
-              const file = e.target.files?.[0] || null;
-              e.target.value = "";
-              onJsonFile(file);
-            }}
-          />
-        </label>
+        <div className="json-production-header-actions">
+          {!mobile ? providerPicker : null}
+          <label className="field json-file-action">
+            <span>{mobile ? "Replace JSON" : "JSON file"}</span>
+            <input
+              type="file"
+              accept=".json,application/json"
+              disabled={!projectId || busy}
+              onChange={(e) => {
+                const file = e.target.files?.[0] || null;
+                e.target.value = "";
+                onJsonFile(file);
+              }}
+            />
+          </label>
+        </div>
       }
     >
       {error ? <div className="banner error">{error}</div> : null}
@@ -484,9 +712,13 @@ export function JsonProductionPage({ active = true }: { active?: boolean } = {})
               rows={12}
               value={pasteText}
               onChange={(e) => setPasteText(e.target.value)}
+              onPaste={onPasteJson}
               spellCheck={false}
             />
           </label>
+          <div className="field-hint json-paste-count" aria-live="polite">
+            {pasteText.length} characters
+          </div>
           <button
             type="button"
             className="btn primary"
@@ -497,51 +729,113 @@ export function JsonProductionPage({ active = true }: { active?: boolean } = {})
           </button>
         </div>
       ) : (
-        <div className="json-production-grid">
+        mobile ? <div className="json-mobile-workspace">
+          <div className="json-mobile-control-deck">
+          <div className="json-mobile-shot-bar">
+            <label className="json-mobile-shot-picker">
+              <span>Shot</span>
+              <select
+                aria-label="Current shot"
+                value={selectedId || ""}
+                onChange={(event) => setSelectedId(event.target.value)}
+              >
+                {storyboard!.shots.map((shot, index) => (
+                  <option key={shot.id} value={shot.id}>
+                    {`${index + 1}/${storyboard!.shots.length} · ${shot.title || shot.id} · ${shot.duration_s}s`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className={`json-mobile-status json-mobile-status-${promptDirty ? "dirty" : selectedJob?.status || (readinessErrors.length ? "missing" : "ready")}`}>
+              {promptDirty
+                ? "Save prompt"
+                : selectedJobActive
+                  ? selectedJob!.status
+                  : readinessErrors.length
+                    ? `${readinessErrors.length} missing`
+                    : "Ready"}
+            </span>
+          </div>
+
+          {providerPicker}
+
+          <nav className="json-mobile-workflow-nav" aria-label="Shot workflow">
+            {(["prompt", "references", "output"] as const).map((section) => (
+              <button
+                key={section}
+                type="button"
+                className={mobileSection === section ? "active" : ""}
+                aria-selected={mobileSection === section}
+                onClick={() => setMobileSection(section)}
+              >
+                {section.charAt(0).toUpperCase() + section.slice(1)}
+              </button>
+            ))}
+          </nav>
+          </div>
+
+          <div className="json-mobile-stage">
+            {mobileSection === "prompt" ? promptPanel : assetPanel}
+          </div>
+
+          <div className="json-mobile-generate-bar">
+            <div>
+              <strong>{mobileReadinessText}</strong>
+              <span>{selected?.title || selected?.id}</span>
+            </div>
+            <button
+              type="button"
+              className="btn primary"
+              disabled={!canGenerate}
+              onClick={() => {
+                setMobileSection("output");
+                void onGenerate();
+              }}
+            >
+              {selectedJobActive ? "Running…" : "Generate"}
+            </button>
+            {selectedJobActive ? (
+              <button type="button" className="btn danger" disabled={busy} onClick={() => void onCancel()}>
+                Cancel
+              </button>
+            ) : null}
+          </div>
+        </div> : <div className="json-desktop-workspace">
           <JsonShotList
             shots={storyboard!.shots}
             selectedId={selectedId}
             statusByShotId={statusByShotId}
-            onSelect={setSelectedId}
+            onSelect={(id) => {
+              setSelectedId(id);
+              setDesktopInspector("references");
+            }}
           />
           {selected ? (
-            <>
-              <JsonPromptPanel
-                shot={selected}
-                draftPrompt={draftPrompt}
-                promptDirty={promptDirty}
-                busy={busy}
-                jsonEditing={shotJsonEditing}
-                shotJson={shotJsonText}
-                onChangePrompt={(next) => {
-                  setDraftPrompt(next);
-                  setPromptDirty(true);
-                }}
-                onSave={() => void onSavePrompt()}
-                onEditJson={onEditShotJson}
-                onChangeShotJson={setShotJsonText}
-                onSaveShotJson={() => void onSaveShotJson()}
-                onCancelShotJson={() => {
-                  setShotJsonEditing(false);
-                  setShotJsonText("");
-                  setError(null);
-                }}
-              />
-              <JsonAssetSlots
-                shot={selected}
-                files={selectedFiles}
-                picturePreviews={picturePreviews.get(selected.id) || new Map()}
-                readinessErrors={readinessErrors}
-                promptDirty={promptDirty}
-                job={selectedJob}
-                outputVersion={selectedGeneration?.version ?? null}
-                busy={busy}
-                onPictureFile={onPictureFile}
-                onAudioFile={onAudioFile}
-                onGenerate={() => void onGenerate()}
-                onCancel={() => void onCancel()}
-              />
-            </>
+            <ResizableWorkspace
+              className="json-desktop-workbench json-resizable-workbench"
+              storageKey="ds.jsonProductionPromptWidth"
+              separatorLabel="Resize prompt and References or Output"
+              defaultSize={65}
+              minSize={42}
+              maxSize={76}
+              primary={promptPanel}
+              secondary={<section className="json-desktop-inspector">
+                <nav className="json-desktop-inspector-nav" aria-label="Shot inspector">
+                  {(["references", "output"] as const).map((section) => (
+                    <button
+                      key={section}
+                      type="button"
+                      className={desktopInspector === section ? "active" : ""}
+                      aria-selected={desktopInspector === section}
+                      onClick={() => setDesktopInspector(section)}
+                    >
+                      {section.charAt(0).toUpperCase() + section.slice(1)}
+                    </button>
+                  ))}
+                </nav>
+                {assetPanel}
+              </section>}
+            />
           ) : (
             <div className="section-card empty-state-card json-prompt-panel">
               <p className="empty-copy">Select a shot from the list.</p>

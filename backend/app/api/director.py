@@ -32,6 +32,7 @@ class WakeBody(BaseModel):
 
 class WakeResponse(BaseModel):
     ok: bool
+    provider: str
     model: str
     project_id: str | None = None
     last_phase: str | None = None
@@ -40,7 +41,11 @@ class WakeResponse(BaseModel):
 
 
 class DirectorModelBody(BaseModel):
-    model: str = Field(..., min_length=1, description="Ollama model tag, e.g. ornith:35b")
+    model: str = Field(
+        ...,
+        min_length=1,
+        description="Model identifier from the active provider catalog.",
+    )
     persist: bool = Field(
         default=True,
         description="Write choice to data/director_model.json (survives process restart).",
@@ -58,7 +63,8 @@ async def get_model(provider: LLMProvider = Depends(get_llm_provider)) -> dict:
         logger.warning("list %s models failed: %s", provider.provider_id, e)
         available = []
         reachable = False
-    if reachable and not str(status.get("model") or "").strip() and available:
+    selected = str(status.get("model") or "").strip()
+    if reachable and available and selected not in available:
         provider.select_model(available[0], persist=True)
         status = provider.model_status()
     return {
@@ -90,13 +96,14 @@ async def put_model(
 @router.post("/director/wake", response_model=WakeResponse)
 async def wake_director(body: WakeBody | None = None) -> WakeResponse:
     """
-    Wake local Ollama plan model after Comfy generation.
+    Prepare the active Director LLM after Comfy generation.
 
     Use before the next plan / rewrite_prompt turn when VRAM was given to Comfy.
     """
     body = body or WakeBody()
     orch = get_orchestrator()
-    model = get_director_model()
+    provider = getattr(orch, "provider", None) or get_llm_provider()
+    model = str(provider.model_status().get("model") or "").strip()
     agent_reply: str | None = None
     last_phase: str | None = None
 
@@ -118,7 +125,7 @@ async def wake_director(body: WakeBody | None = None) -> WakeResponse:
                     },
                     ensure_ascii=False,
                 )
-                agent_reply = await orch.ollama.generate(
+                agent_reply = await provider.client.generate(
                     model,
                     "You are the Director Studio local agent. "
                     "Acknowledge context reload in one short sentence.\n"
@@ -132,6 +139,7 @@ async def wake_director(body: WakeBody | None = None) -> WakeResponse:
 
     return WakeResponse(
         ok=True,
+        provider=provider.provider_id,
         model=model,
         project_id=body.project_id,
         last_phase=last_phase,
@@ -143,26 +151,59 @@ async def wake_director(body: WakeBody | None = None) -> WakeResponse:
 @router.get("/director/vram")
 async def vram_status() -> dict:
     orch = get_orchestrator()
-    model = get_director_model()
+    provider = getattr(orch, "provider", None)
+    model = (
+        str(provider.model_status().get("model") or "").strip()
+        if provider is not None
+        else get_director_model()
+    )
     reservations = await orch.generation_reservations()
     ollama_vram = 0
     ollama_loaded: list[dict] = []
-    try:
-        ollama_loaded = await orch.ollama.loaded_models()
-        ollama_vram = await orch.ollama.model_vram_bytes(model)
-    except Exception:
-        pass
-    # Re-sync flag with reality (process restart / external unload can desync it)
-    if ollama_vram > 0:
-        orch._llm_ready = True
-    elif orch._llm_ready and ollama_vram <= 0:
-        orch._llm_ready = False
+    llm_runtime: dict = {
+        "provider": getattr(provider, "provider_id", "ollama"),
+        "model": model,
+        "ready": bool(orch._llm_ready),
+        "loaded_instances": [],
+    }
+    if provider is not None:
+        try:
+            llm_runtime = await provider.lifecycle.status(model)
+        except Exception as exc:
+            llm_runtime = {
+                **llm_runtime,
+                "ready": False,
+                "error": str(exc),
+            }
+        orch._llm_ready = bool(llm_runtime.get("ready"))
+        if provider.provider_id == "ollama":
+            ollama_vram = int(llm_runtime.get("size_vram") or 0)
+            ollama_loaded = list(llm_runtime.get("loaded_instances") or [])
+    else:
+        # Compatibility for older injected orchestrators.
+        try:
+            ollama_loaded = await orch.ollama.loaded_models()
+            ollama_vram = await orch.ollama.model_vram_bytes(model)
+        except Exception:
+            pass
+        llm_runtime.update(
+            {
+                "ready": ollama_vram > 0,
+                "size_vram": ollama_vram,
+                "loaded_instances": ollama_loaded,
+            }
+        )
+    # Legacy injected Ollama orchestrators do not expose lifecycle status.
+    if provider is None:
+        orch._llm_ready = ollama_vram > 0
     return {
+        "provider": llm_runtime.get("provider", "ollama"),
         "owner": orch.owner,
         "comfy_pipeline": orch.comfy_pipeline,
         "policy": orch.policy,
         "models": list(orch.models),
         "model": model,
+        "llm_runtime": llm_runtime,
         "llm_ready": orch._llm_ready,
         "llm_keep_loaded": bool(getattr(settings, "llm_keep_loaded", True)),
         "ollama_size_vram": ollama_vram,
