@@ -1,0 +1,25 @@
+{
+  "name": "director-studio-filmmaker",
+  "version": "0.1.0+codex.20260910050127",
+  "description": "Develop narrative videos from story idea to production-ready Director Studio JSON.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Director Studio Filmmaker",
+    "shortDescription": "Create Director Studio films from story to JSON.",
+    "longDescription": "Develop a story and script, direct the storyboard, plan or generate visual references and Layouts, cast shot assets, and export validated JSON for Director Studio.",
+    "developerName": "Local developer",
+    "category": "Creativity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Help me develop a film for Director Studio from an idea.",
+      "Turn my script into a Director Studio storyboard.",
+      "Plan the assets and Layouts, then export Director Studio JSON."
+    ]
+  }
+}
