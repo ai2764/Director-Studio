@@ -23,6 +23,18 @@ class PackageFlavor:
 
 
 FLAVORS = {
+    "macos-arm64": PackageFlavor(
+        "Director-Studio-macOS-arm64",
+        "DirectorStudio",
+        ("install-tools.sh", "launch.sh", "Launch.command", "Install-Tools.command"),
+        "tar",
+    ),
+    "macos-x86_64": PackageFlavor(
+        "Director-Studio-macOS-x86_64",
+        "DirectorStudio",
+        ("install-tools.sh", "launch.sh", "Launch.command", "Install-Tools.command"),
+        "tar",
+    ),
     "windows": PackageFlavor(
         "Director-Studio-Legacy-Windows-x64",
         "DirectorStudio.exe",
