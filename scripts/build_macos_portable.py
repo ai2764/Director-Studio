@@ -88,7 +88,7 @@ def main() -> int:
             "--workpath", str(work / "pyinstaller"), "--distpath", str(work / "bin"),
             str(repo / "backend" / "packaging" / "director-studio-legacy.spec"))
         executable = work / "bin" / "DirectorStudio"
-        run("lipo", "-verify_arch", architecture, str(executable))
+        run("lipo", str(executable), "-verify_arch", architecture)
         run("codesign", "--verify", "--strict", str(executable))
         package = work / flavor.name
         stage_package(repo, executable, package)
