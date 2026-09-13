@@ -78,7 +78,9 @@ def main() -> int:
         subprocess.run(command, cwd=cwd, check=True)
 
     run("npm", "ci", cwd=repo / "frontend")
-    run("npm", "test", "--", "--run", cwd=repo / "frontend")
+    # Intel hosted Macs are slower under parallel jsdom workers. Keep all
+    # assertions while bounding contention and allowing cold DOM initialization.
+    run("npm", "test", "--", "--run", "--maxWorkers=2", "--testTimeout=15000", cwd=repo / "frontend")
     run("npm", "run", "build", cwd=repo / "frontend")
     run(sys.executable, "-m", "pytest", "-q", cwd=repo / "backend")
 
