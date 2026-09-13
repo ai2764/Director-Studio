@@ -158,13 +158,15 @@ Choose `arm64` for Apple Silicon (M-series chips) or `x86_64` for Intel, on macO
 
 The launcher includes the standard Apple Silicon and Intel Homebrew paths, including when started from Finder. If Python is installed elsewhere, run `DS_PYTHON_EXE=/absolute/path/to/python3 ./install-tools.sh` with Python 3.11 or newer.
 
+On Intel Macs, installing the optional Comfy tools currently builds the `cryptography` dependency from source. First run `brew install rust pkg-config openssl@3`; Homebrew's Xcode Command Line Tools must also be installed. If OpenSSL is not detected, run `OPENSSL_DIR="$(brew --prefix openssl@3)" ./install-tools.sh` in Terminal. These build tools are not required to run the included `DirectorStudio` executable. See the [cryptography installation guide](https://cryptography.io/en/latest/installation/).
+
 Current builds use an ad-hoc signature, without an Apple Developer ID or notarization. If macOS blocks the downloaded launcher or executable, attempt to open it, then allow that specific item in **System Settings → Privacy & Security → Open Anyway**. Do this only for a package you trust; do not disable Gatekeeper globally.
 
 Mac support covers Director Studio itself. Local generation also requires ComfyUI workflows, custom nodes, and models compatible with your Mac hardware; Windows/CUDA-only nodes are not made compatible by this package. Configure a compatible remote ComfyUI server or the official MiniMax API when appropriate.
 
 ### Build the Mac package
 
-On a Mac matching the desired architecture, with Node.js 22 and Python 3.13:
+On a Mac matching the desired architecture, with Node.js 22 and Python 3.13 (Intel also needs the Rust/OpenSSL build tools described above):
 
 ```bash
 brew install ffmpeg
