@@ -116,9 +116,18 @@ def _stop_process_group(
         os.killpg(process_group_id, signal.SIGTERM)
     except ProcessLookupError:
         pass
+    except PermissionError:
+        process.poll()
+        if _group_exists(process_group_id):
+            raise
     else:
         deadline = time.monotonic() + _PROCESS_GROUP_TIMEOUT_SEC
-        while _group_exists(process_group_id) and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
+            # Reap the leader while waiting. On macOS a zombie-only group
+            # can still exist but reject SIGKILL with EPERM.
+            process.poll()
+            if not _group_exists(process_group_id):
+                break
             time.sleep(0.05)
 
         if _group_exists(process_group_id):
@@ -126,6 +135,10 @@ def _stop_process_group(
                 os.killpg(process_group_id, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                process.poll()
+                if _group_exists(process_group_id):
+                    raise
 
     try:
         process.wait(timeout=_PROCESS_GROUP_TIMEOUT_SEC)

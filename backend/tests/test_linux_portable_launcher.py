@@ -53,9 +53,17 @@ def test_launcher_opens_healthy_ui_and_stops_child(tmp_path: Path, system: str, 
     (package / "launch.sh").chmod(0o755)
     (package / ".env").write_text(f'DS_PORT="{port}"\n', encoding="utf-8")
     (api_dir / "health").write_text("ok\n", encoding="utf-8")
+    (package / "fixture_server.py").write_text(
+        "import os, socket\n"
+        "from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler\n"
+        # Avoid slow macOS runner reverse DNS; this fixture needs only loopback.
+        "socket.getfqdn = lambda host: host\n"
+        "ThreadingHTTPServer(('127.0.0.1', int(os.environ['DS_PORT'])), SimpleHTTPRequestHandler).serve_forever()\n",
+        encoding="utf-8",
+    )
     (package / "DirectorStudio").write_text(
         "#!/usr/bin/env bash\n"
-        'exec python3 -m http.server "$DS_PORT" --bind 127.0.0.1\n',
+        'exec python3 fixture_server.py\n',
         encoding="utf-8",
     )
     (package / "DirectorStudio").chmod(0o755)
