@@ -2,6 +2,10 @@
 set -euo pipefail
 
 root_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# Finder starts .command files without the user's Homebrew shell environment.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+fi
 executable="$root_dir/DirectorStudio"
 if [[ ! -x "$executable" ]]; then
   echo "DirectorStudio is missing or is not executable: $executable" >&2
@@ -47,7 +51,9 @@ while (( SECONDS < deadline )); do
     fi
   fi
   if curl --fail --silent --show-error "$url/api/health" >/dev/null 2>&1; then
-    if command -v xdg-open >/dev/null 2>&1; then
+    if [[ "$(uname -s)" == "Darwin" ]] && command -v open >/dev/null 2>&1; then
+      open "$url" >/dev/null 2>&1 || echo "Open $url in your browser."
+    elif command -v xdg-open >/dev/null 2>&1; then
       xdg-open "$url" >/dev/null 2>&1 || echo "Open $url in your browser."
     else
       echo "Open $url in your browser."

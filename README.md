@@ -24,14 +24,16 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and exten
 | Windows 10/11 x64 | Yes | Yes | Officially supported and tested |
 | Ubuntu 22.04/24.04 x86_64 | Yes | Yes | Officially supported and tested |
 | Other Linux distributions | Not published | Likely compatible | Best effort; not covered by CI |
-| macOS | No | Not tested | Unsupported |
+| macOS 15 or newer, Apple Silicon / Intel | Yes (separate builds) | Yes | Native CI builds and packaged-runtime checks |
 
-Windows and Ubuntu use the same application code and project format. Only the platform entry points, private tool-environment paths, process handling, and package format differ:
+Windows, Ubuntu, and macOS use the same application code and project format. Only the platform entry points, private tool-environment paths, process handling, and package format differ:
 
 | Platform | Install tools | Start Portable | Release artifact |
 |----------|---------------|----------------|------------------|
 | Windows | `Install-Tools.cmd` | `DirectorStudio.exe` | `Director-Studio-Legacy-Windows-x64.zip` |
 | Ubuntu | `./install-tools.sh` | `./launch.sh` | `Director-Studio-Linux-x86_64.tar.gz` |
+| macOS Apple Silicon | `Install-Tools.command` | `Launch.command` | `Director-Studio-macOS-arm64.tar.gz` |
+| macOS Intel | `Install-Tools.command` | `Launch.command` | `Director-Studio-macOS-x86_64.tar.gz` |
 
 An officially supported platform is exercised by its own CI build and packaged-runtime checks. “Best effort” means the source may run there, but releases are not built or verified for that platform.
 
@@ -144,6 +146,37 @@ Start the configured LLM server and ComfyUI first, then run:
 - Health check: http://127.0.0.1:8790/api/health
 
 If the MCP process cannot start, verify both configured executable paths. You can run `comfy --help` to check the Comfy CLI; do not use `comfy-mcp --help`, because that entry point starts the stdio server. If a workflow fails, load the same workflow in ComfyUI and confirm its custom nodes and models are installed.
+
+## macOS portable installation
+
+Choose `arm64` for Apple Silicon (M-series chips) or `x86_64` for Intel, on macOS 15 or newer. These are native portable executables with the frontend and Python runtime included. A separate Python installation is only needed for the optional local Comfy command-line tools. Ollama, LM Studio, and ComfyUI remain external services.
+
+1. Extract the complete `.tar.gz` in Finder into a writable folder, for example `~/Applications/Director-Studio-macOS-arm64`. Keep all extracted files together; `data/` will be created beside `DirectorStudio`. Back up `data/` and `.env` before upgrading.
+2. Install [Homebrew](https://brew.sh/) if needed, then run `brew install ffmpeg python`. `ffmpeg` supplies both `ffmpeg` and `ffprobe` for audio references and video frame extraction.
+3. Edit the included `.env` to select your LLM provider and ComfyUI URL, using the provider configuration examples above. Double-click `Install-Tools.command` to install the private Comfy MCP tools when using local ComfyUI.
+4. Start your configured services, then double-click `Launch.command`. It opens `http://127.0.0.1:8790` after the backend is healthy. Keep the Terminal window open while using Director Studio; press Control-C there to stop it. You can also run `./launch.sh` or `./DirectorStudio` from Terminal.
+
+The launcher includes the standard Apple Silicon and Intel Homebrew paths, including when started from Finder. If Python is installed elsewhere, run `DS_PYTHON_EXE=/absolute/path/to/python3 ./install-tools.sh` with Python 3.11 or newer.
+
+Current builds use an ad-hoc signature, without an Apple Developer ID or notarization. If macOS blocks the downloaded launcher or executable, attempt to open it, then allow that specific item in **System Settings → Privacy & Security → Open Anyway**. Do this only for a package you trust; do not disable Gatekeeper globally.
+
+Mac support covers Director Studio itself. Local generation also requires ComfyUI workflows, custom nodes, and models compatible with your Mac hardware; Windows/CUDA-only nodes are not made compatible by this package. Configure a compatible remote ComfyUI server or the official MiniMax API when appropriate.
+
+### Build the Mac package
+
+On a Mac matching the desired architecture, with Node.js 22 and Python 3.13:
+
+```bash
+brew install ffmpeg
+python3.13 -m venv .venv-build
+source .venv-build/bin/activate
+python -m pip install -r backend/requirements.txt -r backend/requirements-build.txt
+python scripts/build_macos_portable.py
+```
+
+The builder runs frontend/backend tests, freezes the application, verifies its architecture and signature, checks archive contents, and starts the extracted package to check health, web pages, and the built-in H3 profile. Outputs are `dist/Director-Studio-macOS-<arch>.tar.gz` and its `.sha256` checksum. Build staging is temporary and does not remove existing release folders or user data.
+
+The **macOS Portable** GitHub Actions workflow builds both architectures on native macOS 15 runners. Run it manually from Actions, or use a `v*` tag to attach verified packages to a release. Windows and Linux cannot generate this PyInstaller Mac executable directly.
 
 ## Linux portable installation
 

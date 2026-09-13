@@ -148,10 +148,10 @@ def _verification_environment(port: int) -> dict[str, str]:
 def verify_runtime(
     package_root: Path, port: int, timeout_sec: float
 ) -> dict[str, Any]:
-    """Run and verify a Linux package without mutating its source directory."""
+    """Run and verify a POSIX package without mutating its source directory."""
     process: subprocess.Popen[bytes] | None = None
     process_group_id: int | None = None
-    with tempfile.TemporaryDirectory(prefix="director-studio-linux-verify-") as temp:
+    with tempfile.TemporaryDirectory(prefix="director-studio-posix-verify-") as temp:
         runtime_root = Path(temp) / "package"
         shutil.copytree(package_root, runtime_root)
         executable = runtime_root / "DirectorStudio"
@@ -230,7 +230,7 @@ def verify_runtime(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Verify a packaged Linux Director Studio runtime"
+        description="Verify a packaged Linux or macOS Director Studio runtime"
     )
     parser.add_argument("--package-root", type=Path, required=True)
     parser.add_argument("--port", type=int, required=True)
@@ -240,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = verify_runtime(args.package_root, args.port, args.timeout_sec)
     except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
-        print(f"Linux portable runtime verification failed: {exc}", file=sys.stderr)
+        print(f"POSIX portable runtime verification failed: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(result, sort_keys=True))
     return 0
