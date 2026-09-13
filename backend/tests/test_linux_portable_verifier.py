@@ -61,6 +61,10 @@ def _write_healthy_executable(
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import socket
+
+# The fake server only needs loopback; macOS runner reverse DNS can take 30s.
+socket.getfqdn = lambda host: host
 
 os.mkdir("data")
 NON_200_PATH = PLACEHOLDER
@@ -240,6 +244,27 @@ def test_stop_process_group_reaps_child_when_group_disappears(
     verifier._stop_process_group(process, 123)  # type: ignore[arg-type]
 
     assert process.wait_calls == [verifier._PROCESS_GROUP_TIMEOUT_SEC]
+
+
+def test_stop_process_group_reaps_zombie_before_escalating(monkeypatch):
+    class ZombieProcess:
+        reaped = False
+
+        def poll(self):
+            self.reaped = True
+            return -15
+
+        def wait(self, *, timeout):
+            return -15
+
+    process = ZombieProcess()
+    signals = []
+    monkeypatch.setattr(verifier.signal, "SIGKILL", 9, raising=False)
+    monkeypatch.setattr(verifier, "os", SimpleNamespace(name="posix", killpg=lambda pgid, sig: signals.append(sig)))
+    monkeypatch.setattr(verifier, "_group_exists", lambda pgid: not process.reaped)
+    monkeypatch.setattr(verifier, "_PROCESS_GROUP_TIMEOUT_SEC", 0.01)
+    verifier._stop_process_group(process, 123)
+    assert signals == [verifier.signal.SIGTERM]
 
 
 def test_stop_process_group_never_kills_child_directly_when_reap_times_out(

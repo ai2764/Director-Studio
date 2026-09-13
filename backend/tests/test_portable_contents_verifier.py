@@ -150,7 +150,7 @@ def test_embedded_policy_still_rejects_private_pem():
         verifier.verify_embedded_entries(entries)
 
 
-@pytest.mark.parametrize("platform", ["windows", "linux"])
+@pytest.mark.parametrize("platform", ["windows", "linux", "macos-arm64", "macos-x86_64"])
 def test_clean_package_requires_platform_files(tmp_path: Path, platform: str):
     flavor = verifier.FLAVORS[platform]
     package = tmp_path / flavor.name

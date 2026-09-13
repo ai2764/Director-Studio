@@ -39,7 +39,8 @@ def _base_env(bin_dir: Path) -> dict[str, str]:
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX process semantics")
-def test_launcher_opens_healthy_ui_and_stops_child(tmp_path: Path) -> None:
+@pytest.mark.parametrize("system,opener", [("Linux", "xdg-open"), ("Darwin", "open")])
+def test_launcher_opens_healthy_ui_and_stops_child(tmp_path: Path, system: str, opener: str) -> None:
     port = _free_port()
     package = tmp_path / "package with spaces"
     bin_dir = package / "bin"
@@ -52,19 +53,29 @@ def test_launcher_opens_healthy_ui_and_stops_child(tmp_path: Path) -> None:
     (package / "launch.sh").chmod(0o755)
     (package / ".env").write_text(f'DS_PORT="{port}"\n', encoding="utf-8")
     (api_dir / "health").write_text("ok\n", encoding="utf-8")
+    (package / "fixture_server.py").write_text(
+        "import os, socket\n"
+        "from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler\n"
+        # Avoid slow macOS runner reverse DNS; this fixture needs only loopback.
+        "socket.getfqdn = lambda host: host\n"
+        "ThreadingHTTPServer(('127.0.0.1', int(os.environ['DS_PORT'])), SimpleHTTPRequestHandler).serve_forever()\n",
+        encoding="utf-8",
+    )
     (package / "DirectorStudio").write_text(
         "#!/usr/bin/env bash\n"
-        'exec python3 -m http.server "$DS_PORT" --bind 127.0.0.1\n',
+        'exec python3 fixture_server.py\n',
         encoding="utf-8",
     )
     (package / "DirectorStudio").chmod(0o755)
     open_capture = tmp_path / "opened-url"
-    (bin_dir / "xdg-open").write_text(
+    (bin_dir / "uname").write_text(f"#!/usr/bin/env bash\necho {system}\n", encoding="utf-8")
+    (bin_dir / "uname").chmod(0o755)
+    (bin_dir / opener).write_text(
         "#!/usr/bin/env bash\n"
         'printf "%s\\n" "$1" > "$OPEN_CAPTURE"\n',
         encoding="utf-8",
     )
-    (bin_dir / "xdg-open").chmod(0o755)
+    (bin_dir / opener).chmod(0o755)
 
     environment = _base_env(bin_dir)
     environment["OPEN_CAPTURE"] = str(open_capture)

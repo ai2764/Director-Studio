@@ -116,9 +116,18 @@ def _stop_process_group(
         os.killpg(process_group_id, signal.SIGTERM)
     except ProcessLookupError:
         pass
+    except PermissionError:
+        process.poll()
+        if _group_exists(process_group_id):
+            raise
     else:
         deadline = time.monotonic() + _PROCESS_GROUP_TIMEOUT_SEC
-        while _group_exists(process_group_id) and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
+            # Reap the leader while waiting. On macOS a zombie-only group
+            # can still exist but reject SIGKILL with EPERM.
+            process.poll()
+            if not _group_exists(process_group_id):
+                break
             time.sleep(0.05)
 
         if _group_exists(process_group_id):
@@ -126,6 +135,10 @@ def _stop_process_group(
                 os.killpg(process_group_id, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                process.poll()
+                if _group_exists(process_group_id):
+                    raise
 
     try:
         process.wait(timeout=_PROCESS_GROUP_TIMEOUT_SEC)
@@ -148,10 +161,10 @@ def _verification_environment(port: int) -> dict[str, str]:
 def verify_runtime(
     package_root: Path, port: int, timeout_sec: float
 ) -> dict[str, Any]:
-    """Run and verify a Linux package without mutating its source directory."""
+    """Run and verify a POSIX package without mutating its source directory."""
     process: subprocess.Popen[bytes] | None = None
     process_group_id: int | None = None
-    with tempfile.TemporaryDirectory(prefix="director-studio-linux-verify-") as temp:
+    with tempfile.TemporaryDirectory(prefix="director-studio-posix-verify-") as temp:
         runtime_root = Path(temp) / "package"
         shutil.copytree(package_root, runtime_root)
         executable = runtime_root / "DirectorStudio"
@@ -230,7 +243,7 @@ def verify_runtime(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Verify a packaged Linux Director Studio runtime"
+        description="Verify a packaged Linux or macOS Director Studio runtime"
     )
     parser.add_argument("--package-root", type=Path, required=True)
     parser.add_argument("--port", type=int, required=True)
@@ -240,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = verify_runtime(args.package_root, args.port, args.timeout_sec)
     except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
-        print(f"Linux portable runtime verification failed: {exc}", file=sys.stderr)
+        print(f"POSIX portable runtime verification failed: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(result, sort_keys=True))
     return 0

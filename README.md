@@ -24,14 +24,18 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and exten
 | Windows 10/11 x64 | Yes | Yes | Officially supported and tested |
 | Ubuntu 22.04/24.04 x86_64 | Yes | Yes | Officially supported and tested |
 | Other Linux distributions | Not published | Likely compatible | Best effort; not covered by CI |
-| macOS | No | Not tested | Unsupported |
+| macOS 15 or newer, Apple Silicon / Intel | Yes (separate builds) | Yes | Tested on macOS 15 VMs; see [verification scope](#macos-verification-scope) |
 
-Windows and Ubuntu use the same application code and project format. Only the platform entry points, private tool-environment paths, process handling, and package format differ:
+Windows, Ubuntu, and macOS use the same application code and project format. Only the platform entry points, private tool-environment paths, process handling, and package format differ:
+
+The macOS port adds packaging, launch/install scripts, and platform-specific verification. It uses the existing React frontend and FastAPI backend without changes to application business logic. ComfyUI, model servers, and GPU workflow compatibility are separate from the application package.
 
 | Platform | Install tools | Start Portable | Release artifact |
 |----------|---------------|----------------|------------------|
 | Windows | `Install-Tools.cmd` | `DirectorStudio.exe` | `Director-Studio-Legacy-Windows-x64.zip` |
 | Ubuntu | `./install-tools.sh` | `./launch.sh` | `Director-Studio-Linux-x86_64.tar.gz` |
+| macOS Apple Silicon | `Install-Tools.command` | `Launch.command` | `Director-Studio-macOS-arm64.tar.gz` |
+| macOS Intel | `Install-Tools.command` | `Launch.command` | `Director-Studio-macOS-x86_64.tar.gz` |
 
 An officially supported platform is exercised by its own CI build and packaged-runtime checks. “Best effort” means the source may run there, but releases are not built or verified for that platform.
 
@@ -144,6 +148,72 @@ Start the configured LLM server and ComfyUI first, then run:
 - Health check: http://127.0.0.1:8790/api/health
 
 If the MCP process cannot start, verify both configured executable paths. You can run `comfy --help` to check the Comfy CLI; do not use `comfy-mcp --help`, because that entry point starts the stdio server. If a workflow fails, load the same workflow in ComfyUI and confirm its custom nodes and models are installed.
+
+## macOS portable installation
+
+Choose `arm64` for Apple Silicon (M-series chips) or `x86_64` for Intel, on macOS 15 or newer. Both packages include the native executable, frontend, and Python runtime. A separate Python installation is only needed for the Comfy command-line tools. Ollama, LM Studio, and ComfyUI remain external services.
+
+### 1. Download and extract
+
+Download the matching `.tar.gz` and `.sha256` files from a [release](https://github.com/ai2764/Director-Studio/releases) that includes Mac assets. For builds not yet released, open a successful [macOS Portable workflow run](https://github.com/ai2764/Director-Studio/actions/workflows/macos-portable.yml) and download `director-studio-macos-arm64` or `director-studio-macos-x86_64` from its **Artifacts** section. Unzip that artifact to obtain the package and checksum; CI artifacts are retained for seven days.
+
+With both files in the same directory, verify the checksum before extracting. For Apple Silicon (replace `arm64` with `x86_64` for Intel):
+
+```bash
+shasum -a 256 -c Director-Studio-macOS-arm64.tar.gz.sha256
+tar -xzf Director-Studio-macOS-arm64.tar.gz
+cd Director-Studio-macOS-arm64
+```
+
+You can also extract the archive in Finder. Keep the complete extracted folder in a writable location, for example `~/Applications/Director-Studio-macOS-arm64`; `data/` will be created beside `DirectorStudio`. Back up `data/` and `.env` before upgrading.
+
+### 2. Install external tools
+
+Install [Homebrew](https://brew.sh/) if needed, then run `brew install ffmpeg`. This supplies both `ffmpeg` and `ffprobe` for audio references and video frame extraction.
+
+For ComfyUI integration, install Python 3.11 or newer (`brew install python`), then double-click `Install-Tools.command`. This creates `tools/venv` and writes its MCP executable paths to the package's `.env`. The same tools connect to either a local or remote ComfyUI server. If you already have compatible MCP tools, configure their paths instead. The installer is not needed when using only Director chat and the official MiniMax API.
+
+**Intel prerequisite:** before running the Comfy tools installer, run `brew install rust pkg-config openssl@3`; Homebrew's Xcode Command Line Tools must also be installed. The current Intel dependency installation builds `cryptography` from source. If OpenSSL is not detected, run `OPENSSL_DIR="$(brew --prefix openssl@3)" ./install-tools.sh` in Terminal. These build tools are not needed to run the included executable. See the [cryptography installation guide](https://cryptography.io/en/latest/installation/).
+
+The launch and install scripts include the standard Apple Silicon and Intel Homebrew paths. For Python installed elsewhere, run `DS_PYTHON_EXE=/absolute/path/to/python3 ./install-tools.sh`.
+
+### 3. Configure services
+
+Edit the package's `.env` using the shared [Director LLM provider settings](#director-llm-providers). In Terminal, `open -e .env` opens it in TextEdit; in Finder, press **Command-Shift-.** to show hidden files. Set `DS_COMFY_BASE_URL` to your ComfyUI server when using it. Keep credentials in `.env`, and preserve that file with `data/` across upgrades.
+
+Local generation requires ComfyUI workflows, custom nodes, and models compatible with your Mac hardware. Configure a compatible remote ComfyUI server or the official MiniMax API when a workflow needs hardware or nodes unavailable on your Mac.
+
+### 4. Start Director Studio
+
+Start your configured services, then double-click `Launch.command`. It opens `http://127.0.0.1:8790` after the backend is healthy. Keep its Terminal window open while using Director Studio; press **Control-C** there to stop it. You can also run `./launch.sh` from the package directory, or `./DirectorStudio` to start without automatically opening a browser.
+
+Current builds have an ad-hoc signature and are not Apple Developer ID signed or notarized. If macOS blocks the downloaded launcher or executable, attempt to open it, then allow that specific item in **System Settings → Privacy & Security → Open Anyway**. Allow only a package you trust. If executable permissions were lost while transferring the extracted files, run `chmod +x DirectorStudio Launch.command Install-Tools.command launch.sh install-tools.sh` in the package directory.
+
+### macOS verification scope
+
+The [macOS workflow](https://github.com/ai2764/Director-Studio/actions/workflows/macos-portable.yml) builds and tests both architectures in separate macOS 15 virtual machines. CI verifies:
+
+- The frontend and backend automated test suites, plus shell syntax, launcher behavior, and package safety checks.
+- The executable's CPU architecture and ad-hoc signature, archive contents, and launch permissions.
+- Startup of the executable from the extracted archive, `/api/health`, `/`, `/mobile`, `/docs`, and the built-in H3 profile.
+
+These checks do not cover Finder double-click behavior, first-download Gatekeeper prompts, or real generation through ComfyUI, a local GPU, or a model provider. The CI machines have no configured ComfyUI or LLM server; a healthy Director Studio process does not mean those external services are reachable. Desktop installation and real generation still require manual acceptance on the target setup. Newer macOS versions are not currently covered by the CI matrix.
+
+### Build the Mac package
+
+On a Mac matching the desired architecture, with Node.js 22 and Python 3.13 (Intel also needs the Rust/OpenSSL build tools described above):
+
+```bash
+brew install ffmpeg
+python3.13 -m venv .venv-build
+source .venv-build/bin/activate
+python -m pip install -r backend/requirements.txt -r backend/requirements-build.txt
+python scripts/build_macos_portable.py
+```
+
+The builder runs frontend/backend tests, freezes the application, verifies its architecture and signature, checks archive contents, and starts the extracted package to check health, web pages, and the built-in H3 profile. Outputs are `dist/Director-Studio-macOS-<arch>.tar.gz` and its `.sha256` checksum. Build staging is temporary and does not remove existing release folders or user data.
+
+The **macOS Portable** GitHub Actions workflow builds both architectures on native macOS 15 runners. Run it manually from Actions, or use a `v*` tag to attach verified packages to a release. Windows and Linux cannot generate this PyInstaller Mac executable directly.
 
 ## Linux portable installation
 
@@ -516,6 +586,37 @@ npm ci
 npm run dev
 ```
 
+### macOS
+
+Use macOS 15 or newer and install the shared prerequisites. The following Homebrew setup matches the Python and Node versions used in CI:
+
+```bash
+brew install python@3.13 node@22 ffmpeg
+export PATH="$(brew --prefix node@22)/bin:$PATH"
+```
+
+On Intel, also install `rust`, `pkg-config`, and `openssl@3` as described in [Install external tools](#2-install-external-tools). From the repository root, create the backend environment:
+
+```bash
+cd backend
+python3.13 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+test -f .env || cp .env.example .env
+${EDITOR:-nano} .env
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8790 --reload
+```
+
+Select your provider in `backend/.env` before starting Uvicorn. In a second terminal at the repository root, start the frontend:
+
+```bash
+export PATH="$(brew --prefix node@22)/bin:$PATH"
+cd frontend
+npm ci
+npm run dev
+```
+
 ### Open the application
 
 - UI: http://127.0.0.1:5173
@@ -609,7 +710,7 @@ API: `/api/actors/*` · `GET /api/pipelines`
 
 The Director model is not required in the environment. Director Studio discovers the active provider's catalog, selects the first available model when no prior choice exists, and persists subsequent model-picker selections with their provider under `data/director_model.json`. If the provider returns no models, the selection remains empty. The catalog endpoint must be reachable from the Director Studio backend, not only from the browser.
 
-For source development, set values in `backend/.env` (prefix `DS_`). In the portable package, use the `.env` beside `DirectorStudio.exe`. Both files are ignored by Git; keep real credentials out of README, issue reports, screenshots, and committed example files.
+For source development, set values in `backend/.env` (prefix `DS_`). In a portable package, use the `.env` beside `DirectorStudio.exe` on Windows or `DirectorStudio` on macOS/Linux. Both files are ignored by Git; keep real credentials out of README, issue reports, screenshots, and committed example files.
 
 ## Build the Windows portable package
 
