@@ -73,8 +73,11 @@ and Audio label must resolve to a real user-provided or user-approved asset.
 
 Before formatting the final object, confirm that every shot's requested actions,
 camera changes, dialogue, and state transitions can plausibly fit its duration.
-Split or revise an overloaded shot rather than exporting an internally valid but
-unproducible instruction.
+The approved storyboard is the production baseline. Its shot count, ordered Shot
+IDs, durations, dramatic beats, and dialogue must survive export unchanged. If a
+shot is overloaded or needs to be split, merged, added, removed, reordered, or
+renumbered, stop the export and propose that as a storyboard revision. Resume
+only after the user approves the revised storyboard and affected downstream work.
 
 Across all six prompt fields:
 
@@ -87,3 +90,52 @@ Across all six prompt fields:
 - all action timing fits `duration_s`;
 - every string in `dialogue` appears exactly once, unchanged;
 - JSON contains no comments, trailing commas, placeholders, or extra prose.
+
+## Serialization Safety
+
+Schema and contract checks do not prove that the final text is valid JSON. The
+export candidate must be serialized once and treated as one immutable artifact.
+
+When an execution tool can parse the candidate:
+
+1. Construct the complete production object from the approved production state.
+2. Serialize it as JSON and save or retain that exact serialized text.
+3. Parse the exact same text or file bytes. Do not manually retype, paste,
+   reconstruct, normalize, or repair a second copy inside validator code.
+4. Compare the parsed artifact with the approved storyboard and slot-map
+   baseline, including exact shot count and ordered Shot IDs.
+5. If parsing or contract validation fails, repair the source object, serialize a
+   new revision, and validate that new artifact from the beginning.
+6. Return the already validated serialized text without editing it afterward.
+
+For an uploaded or generated `.json` file, validation targets that exact file.
+When reporting file-level validation, identify the filename and SHA-256 so the
+validated artifact is unambiguous. A validator run against an embedded,
+retranscribed copy does not validate the original file.
+
+When no execution tool can parse the exact artifact, perform a careful contract
+review but do not call it mechanical, strict, parser, runtime, or file-level
+validation. If the user asks whether it was mechanically validated, report
+`NOT MECHANICALLY VALIDATED` and make Director Studio import the authoritative
+check. Do not insert this status or any other prose into the JSON export itself.
+
+All double quotes inside JSON strings must be escaped by the serializer. Dialogue
+may be phrased without decorative quotation marks in a prompt while preserving
+the approved line exactly once:
+
+```json
+{
+  "detailed_description": "4-6 seconds: Mia speaks the line Hello?, then listens."
+}
+```
+
+If quotation marks are needed, the serialized JSON must escape them:
+
+```json
+{
+  "detailed_description": "4-6 seconds: Mia calls, \"Hello?\", then listens."
+}
+```
+
+An object that satisfies the schema but whose exact exported text cannot be
+parsed is a failed export.

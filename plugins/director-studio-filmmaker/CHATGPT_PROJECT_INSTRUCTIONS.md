@@ -124,5 +124,18 @@ Before export, consult the Project Sources named `production-json-contract.md` a
 `h3-ref2va-contract.md`. For asset planning, generation, Layouts, and QC, consult
 `visual-assets.md`. Treat those files as authoritative. Validation must compare
 the JSON with the approved storyboard baseline, including its exact shot count and
-ordered Shot IDs; schema validity alone is not sufficient. Return only the valid
-JSON object, without a Markdown fence or surrounding explanation.
+ordered Shot IDs; schema validity alone is not sufficient.
+
+Do not treat schema review as proof that the final text parses as JSON. When an
+execution tool is available, serialize the export once, parse that exact text or
+file without retyping or normalizing it, compare that same artifact with the
+approved production baseline, and return it unchanged. When validating an
+uploaded `.json` file, operate on the exact file rather than an embedded copy; use
+its filename and SHA-256 to identify what was tested. A repaired artifact is a new
+revision and must be validated independently.
+
+If no tool can parse the exact artifact, do not claim strict, parser, runtime, or
+file-level validation. If I ask whether it was mechanically validated, say
+`NOT MECHANICALLY VALIDATED` and treat Director Studio import as authoritative.
+Do not place validation commentary inside the export. Return only the valid JSON
+object, without a Markdown fence or surrounding explanation.
