@@ -4,7 +4,7 @@ set -euo pipefail
 root_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # Finder starts .command files without the user's Homebrew shell environment.
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+  export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 fi
 executable="$root_dir/DirectorStudio"
 if [[ ! -x "$executable" ]]; then

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -93,6 +94,7 @@ def test_non_x86_64_host_is_rejected():
     "candidate",
     ["/", REPO_ROOT, REPO_ROOT.parent / "outside-linux-build"],
 )
+@pytest.mark.skipif(sys.platform == "darwin", reason="Linux cleanup requires GNU realpath; macOS builder uses temporary staging")
 def test_cleanup_rejects_unsafe_generated_paths(candidate: Path | str):
     result = _run_sourced("remove_generated_directory \"$1\"", candidate)
 
@@ -126,6 +128,7 @@ def test_copied_linux_wrappers_are_required_and_executable(tmp_path: Path):
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="Linux cleanup requires GNU realpath; macOS builder uses temporary staging")
 def test_test_mode_only_loads_helpers_without_running_build_commands():
     result = _run_sourced(
         'command -v npm >/dev/null && command -v python >/dev/null; '

@@ -3,7 +3,7 @@ set -euo pipefail
 
 root_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+  export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 fi
 python_bin="${DS_PYTHON_EXE:-}"
 if [[ -z "$python_bin" ]]; then
