@@ -6,9 +6,9 @@ import pytest
 def test_order_and_dialogue():
     sections = PromptSections(
         subject_definitions="A",
-        summary="B\n<Subject 1> (S1): <d>[Chinese] 几点？</d>",
+        summary="B",
         retention_analysis="C",
-        detailed_description="D",
+        detailed_description="<Subject 1> (S1): <d>[Chinese] 几点？</d>",
         overall_soundscape="E",
         non_diegetic_music="F",
     )

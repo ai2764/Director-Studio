@@ -803,7 +803,7 @@ def test_replace_shot_materials_rejects_more_than_nine_pictures(client, api_env)
     assert response.status_code == 422
 
 
-def test_delete_layout_removes_shot_binding_and_generated_asset(client, api_env):
+def test_delete_layout_removes_shot_binding_but_keeps_asset_in_library(client, api_env):
     project = create_project("Delete Layout", "A door opens.")
     asset = _seed_layout(api_env["library"], "lay_delete_me")
     shot = Shot(
@@ -848,7 +848,7 @@ def test_delete_layout_removes_shot_binding_and_generated_asset(client, api_env)
     assert body["refs"] == []
     assert body["layout_asset_id"] is None
     assert body["layout_review_status"] is None
-    assert not (api_env["library"] / "layouts" / asset.id).exists()
+    assert (api_env["library"] / "layouts" / asset.id).exists()
 
 
 def test_delete_current_layout_keeps_history_without_reactivating_it(client, api_env):
@@ -904,7 +904,7 @@ def test_delete_current_layout_keeps_history_without_reactivating_it(client, api
     assert body["layout_asset_id"] is None
     assert body["refs"] == []
     assert (api_env["library"] / "layouts" / previous.id).exists()
-    assert not (api_env["library"] / "layouts" / current.id).exists()
+    assert (api_env["library"] / "layouts" / current.id).exists()
 
 
 def test_delete_layout_preserves_asset_referenced_by_another_project(client, api_env):
@@ -954,6 +954,68 @@ def test_delete_layout_preserves_asset_referenced_by_another_project(client, api
 
     assert response.status_code == 200
     assert (api_env["library"] / "layouts" / shared.id).exists()
+
+
+def test_delete_layout_from_library_detaches_active_shot_references(client, api_env):
+    project = create_project("Delete Layout asset", "A door opens.")
+    actor = _seed_actor(api_env["library"], "act_keep_after_layout_delete")
+    layout = _seed_layout(api_env["library"], "lay_delete_from_library")
+    shot = Shot(
+        id="sht_library_layout_delete",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Keep the actor",
+        script_beat="The door opens.",
+        duration_s=6,
+        status=ShotStatus.needs_review,
+        layout_asset_id=layout.id,
+        layout_review_status="usable",
+        layout_refs=[
+            LayoutReference(
+                id="lref_library_delete",
+                asset_id=layout.id,
+                job_status="succeeded",
+                review_status=LayoutReviewStatus.usable,
+                selected_for_h3=True,
+            )
+        ],
+        refs=[
+            ShotRef(
+                role=RefRole.actor,
+                asset_id=actor.id,
+                picture_index=1,
+                file_key="master",
+            ),
+            ShotRef(
+                role=RefRole.layout_ref_frame,
+                asset_id=layout.id,
+                picture_index=2,
+                file_key="layout",
+            ),
+        ],
+        meta={
+            "prompt_picture_signature": "old-picture-signature",
+            "prompt_layout_signature": "old-layout-signature",
+        },
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+
+    response = client.delete(f"/api/library/layouts/{layout.id}")
+
+    assert response.status_code == 200
+    assert not (api_env["library"] / "layouts" / layout.id).exists()
+    persisted = load_shot(project.id, shot.id)
+    assert persisted is not None
+    assert [(ref.asset_id, ref.picture_index) for ref in persisted.refs] == [
+        (actor.id, 1)
+    ]
+    assert persisted.layout_refs == []
+    assert persisted.layout_asset_id is None
+    assert persisted.layout_review_status is None
+    assert persisted.meta["prompt_picture_signature"] == ""
+    assert persisted.meta["prompt_layout_signature"] == ""
+    assert persisted.meta["material_review_pending"] is True
 
 
 def test_director_chat_history_is_persisted_and_reloaded(client, monkeypatch):
@@ -1957,7 +2019,7 @@ def test_approve_shot_and_submit_h3(client, api_env, monkeypatch):
             ),
             summary="summary",
             retention_analysis="retention",
-            detailed_description='Actor says "Hello" and walks in.',
+            detailed_description='Actor (S1) says <d>[English] Hello</d> and walks in.',
             overall_soundscape="sound",
             non_diegetic_music="music",
         ),

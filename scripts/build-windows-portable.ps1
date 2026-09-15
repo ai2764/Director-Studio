@@ -1,5 +1,8 @@
 param(
-    [int]$VerificationPort = 18790
+    [int]$VerificationPort = 18790,
+    [string]$NodeArchive = "",
+    [string]$PythonArchive = "",
+    [string]$PipWheel = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,7 +13,7 @@ $buildRoot = Join-Path $repoRoot "build"
 $pyinstallerRoot = Join-Path $buildRoot "pyinstaller"
 $pyinstallerDist = Join-Path $buildRoot "pyinstaller-dist"
 $distRoot = Join-Path $repoRoot "dist"
-$packageName = "Director-Studio-Legacy-Windows-x64"
+$packageName = "Director-Studio-Windows-x64"
 $packageRoot = Join-Path $distRoot $packageName
 $zipPath = Join-Path $distRoot "$packageName.zip"
 
@@ -21,6 +24,19 @@ function Remove-GeneratedDirectory([string]$Path) {
     }
     if (Test-Path -LiteralPath $Path) {
         Remove-Item -LiteralPath $Path -Recurse -Force
+    }
+}
+
+function Clear-GeneratedDirectory([string]$Path) {
+    $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not $resolvedPath.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to clear a directory outside the repository: $Path"
+    }
+    if (Test-Path -LiteralPath $resolvedPath) {
+        Get-ChildItem -LiteralPath $resolvedPath -Force | Remove-Item -Recurse -Force
+    }
+    else {
+        New-Item -ItemType Directory -Path $resolvedPath -Force | Out-Null
     }
 }
 
@@ -47,6 +63,11 @@ try {
         tests/test_llm_provider.py `
         tests/test_packaged_runtime_paths.py `
         tests/test_portable_runtime_paths.py `
+        tests/test_stage_windows_harness.py `
+        tests/test_stage_windows_comfy.py `
+        tests/test_portable_comfy.py `
+        tests/test_verify_bundled_harness.py `
+        tests/test_verify_bundled_comfy.py `
         -q
     if ($LASTEXITCODE -ne 0) { throw "backend packaging tests failed" }
     py -m PyInstaller --version
@@ -65,7 +86,14 @@ pwsh -NoProfile -File (Join-Path $PSScriptRoot "test-portable-verifier-slow-heal
 if ($LASTEXITCODE -ne 0) { throw "portable verifier slow-health test failed" }
 
 Remove-GeneratedDirectory $buildRoot
-Remove-GeneratedDirectory $distRoot
+Clear-GeneratedDirectory $packageRoot
+if (Test-Path -LiteralPath $zipPath) {
+    $resolvedZip = [System.IO.Path]::GetFullPath($zipPath)
+    if (-not $resolvedZip.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to remove an archive outside the repository: $zipPath"
+    }
+    Remove-Item -LiteralPath $resolvedZip -Force
+}
 New-Item -ItemType Directory -Path $pyinstallerRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $pyinstallerDist -Force | Out-Null
 New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
@@ -92,13 +120,39 @@ pwsh -NoProfile -File (Join-Path $PSScriptRoot "test-packaged-director-guides.ps
 if ($LASTEXITCODE -ne 0) { throw "packaged Director guide test failed" }
 
 Copy-Item -LiteralPath $builtExe -Destination (Join-Path $packageRoot "DirectorStudio.exe")
-Copy-Item -LiteralPath (Join-Path $repoRoot "Install-Tools.cmd") -Destination (Join-Path $packageRoot "Install-Tools.cmd")
-Copy-Item -LiteralPath (Join-Path $repoRoot "Install-Tools.py") -Destination (Join-Path $packageRoot "Install-Tools.py")
-Copy-Item -LiteralPath (Join-Path $repoRoot "portable-tools-requirements.txt") -Destination (Join-Path $packageRoot "portable-tools-requirements.txt")
 Copy-Item -LiteralPath (Join-Path $backendRoot ".env.example") -Destination (Join-Path $packageRoot ".env")
 Copy-Item -LiteralPath (Join-Path $repoRoot "README.md") -Destination (Join-Path $packageRoot "README.md")
 
-pwsh -NoProfile -File (Join-Path $PSScriptRoot "verify-legacy-portable.ps1") `
+$stageArguments = @(
+    (Join-Path $PSScriptRoot "stage_windows_harness.py"),
+    "--repo-root", $repoRoot,
+    "--destination", $packageRoot
+)
+if ($NodeArchive) {
+    $stageArguments += @("--node-archive", $NodeArchive)
+}
+& py @stageArguments
+if ($LASTEXITCODE -ne 0) { throw "Harness runtime staging failed" }
+
+$comfyStageArguments = @(
+    (Join-Path $PSScriptRoot "stage_windows_comfy.py"),
+    "--repo-root", $repoRoot,
+    "--destination", $packageRoot
+)
+if ($PythonArchive) {
+    $comfyStageArguments += @("--python-archive", $PythonArchive)
+}
+if ($PipWheel) {
+    $comfyStageArguments += @("--pip-wheel", $PipWheel)
+}
+& py @comfyStageArguments
+if ($LASTEXITCODE -ne 0) { throw "Comfy MCP runtime staging failed" }
+
+py (Join-Path $PSScriptRoot "verify_bundled_comfy.py") `
+    --package-root $packageRoot
+if ($LASTEXITCODE -ne 0) { throw "Comfy first-launch bootstrap verification failed" }
+
+pwsh -NoProfile -File (Join-Path $PSScriptRoot "verify-windows-portable.ps1") `
     -PackageRoot $packageRoot `
     -Port $VerificationPort
 if ($LASTEXITCODE -ne 0) { throw "Portable package verification failed" }
@@ -117,11 +171,29 @@ $archiveEntries = @(tar.exe -tf $zipPath)
 if ($LASTEXITCODE -ne 0) { throw "Portable zip listing failed" }
 $requiredArchiveEntries = @(
     "$packageName/DirectorStudio.exe",
-    "$packageName/Install-Tools.cmd",
-    "$packageName/Install-Tools.py",
-    "$packageName/portable-tools-requirements.txt",
     "$packageName/.env",
-    "$packageName/README.md"
+    "$packageName/README.md",
+    "$packageName/runtime/node/node.exe",
+    "$packageName/runtime/node/LICENSE",
+    "$packageName/harness/dist/server.js",
+    "$packageName/harness/package.json",
+    "$packageName/harness/THIRD_PARTY_LICENSES.json",
+    "$packageName/harness/node_modules/@koromix/koffi-win32-x64/win32_x64/koffi.node",
+    "$packageName/portable-manifest.json",
+    "$packageName/runtime/python/python.exe",
+    "$packageName/runtime/python/python3.dll",
+    "$packageName/runtime/python/python313.dll",
+    "$packageName/runtime/python/python313.zip",
+    "$packageName/runtime/python/python313._pth",
+    "$packageName/runtime/python/comfy.exe",
+    "$packageName/runtime/python/Lib/site-packages/pip/__init__.py",
+    "$packageName/runtime/python/Lib/site-packages/pip-25.1.1.dist-info/METADATA",
+    "$packageName/runtime/python/Lib/site-packages/pip-25.1.1.dist-info/licenses/LICENSE.txt",
+    "$packageName/runtime/python/Lib/site-packages/sitecustomize.py",
+    "$packageName/runtime/comfy-bootstrap.json",
+    "$packageName/runtime/comfy-requirements.lock",
+    "$packageName/THIRD_PARTY_LICENSES/python.txt",
+    "$packageName/THIRD_PARTY_LICENSES/pip.txt"
 )
 foreach ($requiredEntry in $requiredArchiveEntries) {
     if ($archiveEntries -notcontains $requiredEntry) {

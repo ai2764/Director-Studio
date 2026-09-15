@@ -26,6 +26,7 @@ from ....core.projects.transitions import (
 from ....core.schemas import JobStatus
 from ..intent import (
     layout_activation_mode,
+    material_review_target_shot_id,
     resolve_shot,
     validate_gpt_generation_prompt,
 )
@@ -421,6 +422,17 @@ async def handle_layout_tool(
         )
 
     elif name == "queue_ref_frame" or name == "ref_frame":
+        material_review_target = material_review_target_shot_id(user_feedback)
+        if material_review_target and (
+            args.get("shot_id") != material_review_target
+            or args.get("shot_index") is not None
+            or args.get("title") is not None
+            or args.get("all")
+        ):
+            raise ValueError(
+                "Material review Layout generation is restricted to the changed Shot "
+                f"{material_review_target}"
+            )
         force = bool(args.get("force") or args.get("regen") or args.get("redo"))
         has_layout_brief = any(
             key in args
@@ -632,6 +644,17 @@ async def handle_layout_tool(
             shots = refresh_shots()
 
     elif name in ("write_prompt", "rewrite_prompt", "write_prompts"):
+        material_review_target = material_review_target_shot_id(user_feedback)
+        if material_review_target and (
+            args.get("shot_id") != material_review_target
+            or args.get("shot_index") is not None
+            or args.get("title") is not None
+            or args.get("all")
+        ):
+            raise ValueError(
+                "Material review is restricted to the changed Shot "
+                f"{material_review_target}"
+            )
         shot = resolve_shot(
             shots,
             shot_id=args.get("shot_id"),
@@ -649,17 +672,27 @@ async def handle_layout_tool(
                 "skipped duplicate write_prompt."
             )
             return True
-        actions.append(f"write_prompt:{shot.id}")
         await runtime.emit(
-            on_progress, "status", f"Writing the six-section H3 prompt for {shot.title}…"
+            on_progress, "status", f"Reviewing current references and preparing the H3 prompt for {shot.title}…"
         )
         try:
             s2 = await svc.write_prompts_after_layout(shot.id)
-            notes.append(f"Prompt written for **{s2.title}**")
+            actions.append(f"write_prompt:{shot.id}")
+            review = (s2.meta or {}).get("material_review") or {}
+            decision = review.get("decision") or {}
+            notes.append(f"Prompt prepared for **{s2.title}**"
+                         + (f"; all {len(review['references'])} references reviewed. {decision.get('reason', '')}" if review else ""))
+            if result_payloads is not None:
+                result_payloads.append({"ok": True, "shot_id": s2.id,
+                                        "brief_changed": s2.script_beat != shot.script_beat,
+                                        "prompt_changed": s2.prompt_sections != shot.prompt_sections,
+                                        "reviewed_picture_indices": [r["picture_index"] for r in review.get("references", [])]})
             touched.add(s2.id)
         except Exception as e:
             logger.exception("write_prompt tool failed")
             notes.append(f"Prompt writing failed: {e}")
+            if result_payloads is not None:
+                result_payloads.append({"ok": False, "shot_id": shot.id, "error": str(e)})
 
     elif name == "reject_layout" or name == "reject":
         shot = resolve_shot(

@@ -8,6 +8,7 @@ from ....core.media.clip_generations import ClipGenerationAmbiguous
 from ....core.media import tail_frame
 from ....core.projects.models import Project, Shot
 from ....core.projects.store import load_shot
+from ..intent import material_review_target_shot_id
 
 
 async def handle_media_tool(
@@ -23,8 +24,19 @@ async def handle_media_tool(
     touched: set[str],
     result_payloads: list[dict[str, Any]] | None,
     images: list[Any] | None,
+    user_feedback: str,
 ) -> bool:
     if name in {"get_status", "status"}:
+        shot_id = args.get("shot_id")
+        if shot_id:
+            selected = next((shot for shot in shots if shot.id == shot_id), None)
+            if result_payloads is not None:
+                result_payloads.append(
+                    {"ok": True, "shot": selected.model_dump(mode="json")}
+                    if selected else {"ok": False, "error": "Shot not found in this project"}
+                )
+            notes.append(f"Read Shot {shot_id}." if selected else "Shot not found in this project.")
+            return True
         actions.append("status")
         notes.append(runtime.status_summary(project, shots))
         return True
@@ -33,6 +45,12 @@ async def handle_media_tool(
 
     source_shot_id = str(args.get("source_shot_id") or "").strip()
     target_shot_id = str(args.get("target_shot_id") or "").strip()
+    material_review_target = material_review_target_shot_id(user_feedback)
+    if material_review_target and target_shot_id != material_review_target:
+        raise ValueError(
+            "Material review tail-frame extraction is restricted to the changed Shot "
+            f"{material_review_target}"
+        )
     if not source_shot_id or not target_shot_id:
         notes.append("extract_clip_tail_frame: specify source_shot_id and target_shot_id")
         return True

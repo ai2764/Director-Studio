@@ -174,7 +174,11 @@ Output rules:
 - Express all action timing as seconds (for example, "0–2 seconds"); never label
   second ranges as frames or write ambiguous ranges such as "Frame 0–2". Every
   interval must stay inside duration_s, and its stated length must match its endpoints.
-- Each dialogue line must appear exactly once in the full prompt package (usually in detailed_description).
+- Put spoken dialogue only in detailed_description as <d>[Language] exact words</d>.
+  Keep speaker IDs, actions, and delivery outside <d>. Preserve shot.dialogue in order,
+  including repetitions explicitly present in the script; never add an extra performance.
+  Do not quote or repeat dialogue in subject_definitions, summary, retention_analysis,
+  overall_soundscape, or non_diegetic_music. Describe those sections without the spoken words.
 """
 
 # Backward-compatible name used by existing Director integrations.

@@ -75,7 +75,7 @@ export function ShotMaterialEditor({
   shotNumber: number;
   onClose: () => void;
   onOpenImage: (url: string) => void;
-  onSaved?: (shot: Shot) => void;
+  onSaved?: (shot: Shot, message: string, notifyAgent: boolean) => void;
 }) {
   const [assets, setAssets] = useState<LibraryAsset[]>([]);
   const [materials, setMaterials] = useState<ShotMaterialSelection[]>(() =>
@@ -88,6 +88,8 @@ export function ShotMaterialEditor({
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [filter, setFilter] = useState<LibraryKind | "all">("all");
+  const [confirming, setConfirming] = useState(false);
+  const [message, setMessage] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -115,6 +117,23 @@ export function ShotMaterialEditor({
 
   const assetById = new Map(assets.map((asset) => [asset.id, asset]));
   const selectedKeys = new Set(materials.map(materialKey));
+  const originalMaterials = normalizeMaterials(
+    [...shot.refs]
+      .sort((a, b) => a.picture_index - b.picture_index)
+      .map(({ role, asset_id, file_key }) => ({ role, asset_id, file_key })),
+  );
+  const originalKeys = originalMaterials.map(materialKey);
+  const currentKeys = materials.map(materialKey);
+  const addedCount = currentKeys.filter((key) => !originalKeys.includes(key)).length;
+  const removedCount = originalKeys.filter((key) => !currentKeys.includes(key)).length;
+  const reorderedCount = currentKeys.filter((key, index) => (
+    originalKeys.includes(key) && originalKeys.indexOf(key) !== index
+  )).length;
+  const hasChanges = (
+    addedCount > 0
+    || removedCount > 0
+    || reorderedCount > 0
+  );
   const remove = (index: number) => {
     setMaterials((current) => current.filter((_, candidate) => candidate !== index));
   };
@@ -129,12 +148,12 @@ export function ShotMaterialEditor({
     if (selectedKeys.has(materialKey(next))) return;
     setMaterials((current) => normalizeMaterials([...current, next]));
   };
-  const save = async () => {
+  const save = async (notifyAgent: boolean) => {
     setSaving(true);
     setError("");
     try {
       const updated = await replaceShotMaterials(shot.id, normalizeMaterials(materials));
-      onSaved?.(updated);
+      onSaved?.(updated, message.trim(), notifyAgent);
       onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -154,10 +173,40 @@ export function ShotMaterialEditor({
         <header className="shot-material-editor-header">
           <div>
             <span>Shot {String(shotNumber).padStart(2, "0")}</span>
-            <h2>{shot.title}</h2>
+            <h2>{confirming ? "Review reference changes" : shot.title}</h2>
           </div>
           <button type="button" aria-label="Close material editor" onClick={onClose}>×</button>
         </header>
+        {confirming ? (
+          <div className="shot-material-save-review">
+            <div>
+              <span>Reference delta</span>
+              <strong>{shot.title}</strong>
+            </div>
+            <dl aria-label="Reference change summary">
+              <div><dt>Added</dt><dd>{addedCount}</dd></div>
+              <div><dt>Removed</dt><dd>{removedCount}</dd></div>
+              <div><dt>Reordered</dt><dd>{reorderedCount}</dd></div>
+            </dl>
+            <label>
+              <span>Message to Agent (optional)</span>
+              <textarea
+                autoFocus
+                rows={5}
+                value={message}
+                onChange={(event) => setMessage(event.target.value)}
+                placeholder="Describe what changed creatively, what must stay, or the next action you want."
+                disabled={saving}
+              />
+            </label>
+            {error ? <div className="banner error">{error}</div> : null}
+            <p>
+              Agent will review every current Picture together with your message,
+              then decide whether the brief or H3 prompt should change.
+            </p>
+          </div>
+        ) : (
+          <>
         <div className="shot-material-editor-toolbar">
           <div className="shot-material-editor-count">Pictures {materials.length} / 9</div>
           <p>Layout uses the same Picture budget. Audio stays separate.</p>
@@ -278,12 +327,41 @@ export function ShotMaterialEditor({
             })}
           </div>
         </div>
+          </>
+        )}
         <footer className="shot-material-editor-actions">
-          <span>Saving changes opens Director to review the selected Pictures.</span>
-          <button type="button" className="btn secondary" onClick={onClose} disabled={saving}>Cancel</button>
-          <button type="button" className="btn primary" onClick={() => void save()} disabled={saving}>
-            {saving ? "Saving…" : "Save changes"}
-          </button>
+          {confirming ? (
+            <>
+              <span>Save directly, or notify Agent for a reference review.</span>
+              <button
+                type="button"
+                className="btn secondary"
+                onClick={() => setConfirming(false)}
+                disabled={saving}
+              >
+                Back
+              </button>
+              <button type="button" className="btn secondary" onClick={() => void save(false)} disabled={saving}>
+                {saving ? "Saving…" : "Save"}
+              </button>
+              <button type="button" className="btn primary shot-material-notify-button" onClick={() => void save(true)} disabled={saving}>
+                {saving ? "Saving…" : "Save & send to Agent"}
+              </button>
+            </>
+          ) : (
+            <>
+              <span>Review the changes with Agent before they are saved.</span>
+              <button type="button" className="btn secondary" onClick={onClose} disabled={saving}>Cancel</button>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => setConfirming(true)}
+                disabled={saving || !hasChanges}
+              >
+                Save changes
+              </button>
+            </>
+          )}
         </footer>
       </section>
     </div>

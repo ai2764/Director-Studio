@@ -256,6 +256,13 @@ class OllamaClient:
         done_reason = str(_value(response, "done_reason", "") or "")
         if done_reason:
             result["done_reason"] = done_reason
+        usage = {}
+        for source, target in (("prompt_eval_count", "input_tokens"), ("eval_count", "output_tokens")):
+            count = _value(response, source)
+            if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                usage[target] = count
+        if usage:
+            result["usage"] = usage
         return result
 
     async def _chat_http_legacy(

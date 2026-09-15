@@ -7,6 +7,7 @@ param(
     [switch]$PortsOnly,
     [switch]$Force,
     [int]$BackendPort = 8790,
+    [int]$HarnessPort = 8791,
     [int]$FrontendPort = 5173
 )
 
@@ -68,11 +69,13 @@ Write-Host "=== Director Studio kill ===" -ForegroundColor White
 
 if (-not $PortsOnly) {
     Stop-FromPidFile "backend"
+    Stop-FromPidFile "harness"
     Stop-FromPidFile "frontend"
 }
 
 if ($PortsOnly -or $Force) {
     Stop-ListenersOnPort -Port $BackendPort -Label "backend"
+    Stop-ListenersOnPort -Port $HarnessPort -Label "harness"
     Stop-ListenersOnPort -Port $FrontendPort -Label "frontend"
 }
 

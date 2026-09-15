@@ -87,7 +87,7 @@ def _full_voice_prompt() -> PromptSections:
         subject_definitions="<Audio 1> defines Mia's voice identity.",
         summary="Mia speaks.",
         retention_analysis="The reply holds attention.",
-        detailed_description="Mia says: Go now.",
+        detailed_description="Mia says: <d>[English] Go now.</d>",
         overall_soundscape="Quiet room tone.",
         non_diegetic_music="None.",
     )
@@ -297,7 +297,7 @@ def test_submit_rejects_native_audio_instead_of_using_private_lock(
                 subject_definitions="Mia",
                 summary="Mia speaks.",
                 retention_analysis="Hold attention.",
-                detailed_description="Mia says: Go now.",
+                detailed_description="Mia says: <d>[English] Go now.</d>",
                 overall_soundscape="Exact source audio.",
                 non_diegetic_music="None.",
             ),

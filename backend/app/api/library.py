@@ -18,6 +18,7 @@ from ..core.library.store import (
     write_asset,
 )
 from ..core.projects.store import list_projects, list_shots, save_shot
+from ..core.projects.layouts import sync_selected_layout_refs
 from ..core.schemas import LibraryAsset
 
 router = APIRouter(tags=["library"])
@@ -43,6 +44,68 @@ class BulkAssignBody(BaseModel):
 class UpdateLibraryMetadataBody(BaseModel):
     name: str | None = None
     notes: str | None = None
+
+
+def _detach_layout_asset(asset_id: str) -> int:
+    """Remove a Library Layout from every Shot before deleting its files."""
+    affected = 0
+    for project in list_projects():
+        for shot in list_shots(project.id):
+            removed_picture_refs = [
+                ref
+                for ref in shot.refs
+                if ref.role.value == "layout_ref_frame" and ref.asset_id == asset_id
+            ]
+            remaining_layouts = [
+                layout for layout in shot.layout_refs if layout.asset_id != asset_id
+            ]
+            if (
+                not removed_picture_refs
+                and len(remaining_layouts) == len(shot.layout_refs)
+                and shot.layout_asset_id != asset_id
+            ):
+                continue
+
+            remaining_refs = [
+                ref
+                for ref in shot.refs
+                if not (
+                    ref.role.value == "layout_ref_frame"
+                    and ref.asset_id == asset_id
+                )
+            ]
+            remaining_refs = [
+                ref.model_copy(update={"picture_index": index})
+                for index, ref in enumerate(
+                    sorted(remaining_refs, key=lambda item: item.picture_index),
+                    start=1,
+                )
+            ]
+            update: dict[str, object] = {
+                "refs": remaining_refs,
+                "layout_refs": remaining_layouts,
+            }
+            if shot.layout_asset_id == asset_id or not remaining_layouts:
+                update.update(
+                    {
+                        "layout_asset_id": None,
+                        "layout_review_status": None,
+                        "ref_frame_job_id": None,
+                    }
+                )
+            working = shot.model_copy(update=update)
+            if remaining_layouts:
+                working = sync_selected_layout_refs(working)
+
+            if removed_picture_refs or shot.layout_asset_id == asset_id:
+                meta = dict(working.meta or {})
+                meta["prompt_picture_signature"] = ""
+                meta["prompt_layout_signature"] = ""
+                meta["material_review_pending"] = True
+                working = working.model_copy(update={"meta": meta})
+            save_shot(working)
+            affected += 1
+    return affected
 
 
 def _safe_upload_name(name: str | None) -> str:
@@ -244,8 +307,16 @@ async def delete_library_asset(kind: str, asset_id: str) -> dict:
     """Delete a library asset and all of its files (same-group outputs)."""
     if kind not in KINDS:
         raise HTTPException(400, f"unknown kind: {kind}")
+    if load_asset(kind, asset_id) is None:
+        raise HTTPException(404, "not found")
+    detached_from_shots = _detach_layout_asset(asset_id) if kind == "layouts" else 0
     try:
         delete_asset(kind, asset_id)
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
-    return {"ok": True, "kind": kind, "id": asset_id}
+    return {
+        "ok": True,
+        "kind": kind,
+        "id": asset_id,
+        "detached_from_shots": detached_from_shots,
+    }

@@ -9,6 +9,7 @@ class LLMResult(TypedDict, total=False):
     thinking: str
     tool_calls: list[dict[str, Any]]
     finish_reason: str
+    usage: dict[str, int]
 
 
 class UnsupportedLLMFeatureError(RuntimeError):

@@ -17,11 +17,12 @@ function materialReviewRequest(
   shot: Shot,
   shotNumber: number,
   sequence: number,
+  message = "",
 ): DirectorChatRequest {
   return {
     id: `material-review-${shot.id}-${sequence}`,
     projectId: shot.project_id,
-    message: materialReviewMessage(shot, shotNumber),
+    message: materialReviewMessage(shot, shotNumber, message),
   };
 }
 
@@ -32,9 +33,9 @@ function MobileAppShell() {
   const { project } = useProject();
   const jsonProductionMode = project?.mode === "json_production";
   const activePage = jsonProductionMode ? "production" : page;
-  const reviewMaterials = (shot: Shot, shotNumber: number) => {
+  const reviewMaterials = (shot: Shot, shotNumber: number, message: string) => {
     requestSequence.current += 1;
-    setDirectorRequest(materialReviewRequest(shot, shotNumber, requestSequence.current));
+    setDirectorRequest(materialReviewRequest(shot, shotNumber, requestSequence.current, message));
     setPage("director");
   };
 
@@ -131,9 +132,9 @@ function AppShell() {
     setPage("settings");
   };
   const closeSettings = () => setPage(settingsReturnPage.current);
-  const reviewMaterials = (shot: Shot, shotNumber: number) => {
+  const reviewMaterials = (shot: Shot, shotNumber: number, message: string) => {
     requestSequence.current += 1;
-    setDirectorRequest(materialReviewRequest(shot, shotNumber, requestSequence.current));
+    setDirectorRequest(materialReviewRequest(shot, shotNumber, requestSequence.current, message));
     setPage("director");
   };
 

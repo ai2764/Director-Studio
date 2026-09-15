@@ -164,7 +164,7 @@ export function ProductionPage({
 }: {
   active?: boolean;
   mobile?: boolean;
-  onReviewMaterials?: (shot: Shot, shotNumber: number) => void;
+  onReviewMaterials?: (shot: Shot, shotNumber: number, message: string) => void;
 } = {}) {
   const { projectId } = useProject();
   const [shots, setShots] = useState<Shot[]>([]);
@@ -712,9 +712,11 @@ export function ProductionPage({
             shotNumber={selectedNumber}
             onClose={() => setMaterialEditorOpen(false)}
             onOpenImage={setPreviewUrl}
-            onSaved={(updated) => {
+            onSaved={(updated, message, notifyAgent) => {
               replaceShot(updated);
-              onReviewMaterials?.(updated, selectedNumber);
+              if (notifyAgent) {
+                onReviewMaterials?.(updated, selectedNumber, message);
+              }
             }}
           />
         ) : null}
