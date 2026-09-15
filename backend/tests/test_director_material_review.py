@@ -127,6 +127,45 @@ async def test_all_nine_refs_reviewed_before_brief_and_prompt_save(material_shot
 
 
 @pytest.mark.asyncio
+async def test_first_prompt_reviews_refs_without_pending_flag_and_reuses_evidence(material_shot):
+    project, shot, _, _ = material_shot
+    shot = shot.model_copy(update={"meta": {}, "prompt_sections": PromptSections()})
+    save_shot(shot)
+    orch = Orchestrator()
+    provider = Provider(orch)
+    svc = DirectorService(plan_provider=provider, orchestrator=orch)
+    first = await svc.write_prompts_after_layout(shot.id)
+    assert len(first.meta["material_review"]["references"]) == 9
+    await svc.write_prompts_after_layout(shot.id)
+    assert len(provider.visual) == 9
+
+
+@pytest.mark.asyncio
+async def test_inspect_library_asset_before_planning_is_read_only(material_shot):
+    project, shot, _, _ = material_shot
+    empty_project = create_project("No storyboard yet", "")
+    orch = Orchestrator()
+    provider = Provider(orch)
+    svc = DirectorService(plan_provider=provider, orchestrator=orch)
+    from app.agents.director.harness_runtime import BackendTurn
+    turn = BackendTurn(empty_project.id, "Inspect the gear before planning", svc, None)
+    await turn.dispatch("context", {})
+    result = await turn.dispatch("tool", {"call_id": "inspect", "name": "inspect_asset",
+        "arguments": {"asset_id": "prop_review_1", "file_key": "selected"}})
+    assert result["ok"], result
+    assert result["observation"]["description"] == "Observed detail 1"
+    assert result["observation"]["file_key"] == "selected"
+    assert result["observation"]["content_sha256"]
+    assert load_shot(project.id, shot.id) == shot
+    from app.core.projects.store import list_shots, load_project
+    assert list_shots(empty_project.id) == []
+    assert load_project(empty_project.id) == empty_project
+    missing = await turn.dispatch("tool", {"call_id": "missing", "name": "inspect_asset",
+        "arguments": {"asset_id": "prop_review_1", "file_key": "missing"}})
+    assert not missing["ok"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("fault", ["empty", "truncated", "unreadable", "vision_error", "conflict", "missing_file"])
 async def test_incomplete_review_preserves_old_brief_prompt_and_pending(material_shot, fault):
     project, shot, _, files = material_shot
@@ -141,6 +180,29 @@ async def test_incomplete_review_preserves_old_brief_prompt_and_pending(material
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("changed_during_inspection", [False, True])
+async def test_inspection_can_read_same_file_again_after_content_change(material_shot, changed_during_inspection):
+    project, _, _, files = material_shot
+    from app.agents.director.harness_runtime import BackendTurn
+    def change(*_):
+        Image.effect_noise((640, 480), 75).convert("RGB").save(files[0])
+    orch = Orchestrator()
+    provider = Provider(orch, mutate=change if changed_during_inspection else None)
+    turn = BackendTurn(project.id, "Inspect current image", DirectorService(plan_provider=provider, orchestrator=orch), None)
+    await turn.dispatch("context", {})
+    args = {"asset_id": "prop_review_1", "file_key": "selected"}
+    first = await turn.dispatch("tool", {"call_id": "first", "name": "inspect_asset", "arguments": args})
+    assert first["ok"] is not changed_during_inspection
+    provider.mutate = None
+    change()
+    second = await turn.dispatch("tool", {"call_id": "second", "name": "inspect_asset", "arguments": args})
+    assert second["ok"], second
+    assert len(provider.visual) == 2
+    replay = await turn.dispatch("tool", {"call_id": "second", "name": "inspect_asset", "arguments": args})
+    assert not replay["ok"]
+
+
+@pytest.mark.asyncio
 async def test_review_can_preserve_brief_and_valid_prompt(material_shot):
     project, shot, _, _ = material_shot
     orch = Orchestrator()
@@ -151,6 +213,30 @@ async def test_review_can_preserve_brief_and_valid_prompt(material_shot):
     assert updated.script_beat == shot.script_beat
     assert updated.prompt_sections == shot.prompt_sections
     assert not updated.meta["material_review_pending"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stale", [False, True])
+async def test_storyboard_validator_receives_only_current_visual_evidence(material_shot, stale):
+    _, _, _, files = material_shot
+    from app.agents.director.service import _script_hash
+    project = create_project("Observed props", "A gear rests on a table.")
+    orch = Orchestrator()
+    provider = Provider(orch)
+    svc = DirectorService(plan_provider=provider, orchestrator=orch)
+    await svc.inspect_asset(project.id, "prop_review_1", "selected")
+    if stale:
+        Image.effect_noise((640, 480), 75).convert("RGB").save(files[0])
+    async def validate(system, user, **kwargs):
+        provider.text.append((system, user))
+        return '{"valid":true,"issues":[]}'
+    provider.complete = validate
+    draft = dict(scene_id="room", title="Gear", script_beat=project.script_text,
+                 shot_type="close-up", camera_angle="eye level", camera_motion="locked-off",
+                 composition="gear centered", duration_s=6, dialogue=[],
+                 asset_matches=[dict(role="prop", asset_id="prop_review_1", file_key="selected", picture_index=1)])
+    await svc.save_storyboard(project.id, [draft], _script_hash(project.script_text))
+    assert ("Observed detail 1" in provider.text[-1][1]) is not stale
 
 
 @pytest.mark.asyncio

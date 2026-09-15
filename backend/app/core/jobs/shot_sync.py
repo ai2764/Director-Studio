@@ -269,7 +269,11 @@ def _find_ref_frame_layout(
 
         # Old jobs had only the shot-level binding. Params may identify an
         # unbound shot during very early runner persistence.
-        if not layout_ref_id and shot.ref_frame_job_id in {None, job.id}:
+        exact_target = shot.id == shot_id and shot.project_id == project_id
+        if not layout_ref_id and (
+            shot.ref_frame_job_id == job.id
+            or (exact_target and shot.ref_frame_job_id is None)
+        ):
             return shot, None
     return None, None
 

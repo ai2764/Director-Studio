@@ -8,6 +8,7 @@ from typing import Iterable, NamedTuple
 from unittest.mock import AsyncMock
 
 import pytest
+from PIL import Image
 
 from app.config import settings
 from app.core.projects import LayoutBrief, LayoutSourceRef, RefRole
@@ -161,7 +162,7 @@ def _one_shot_plan_json(
 def _seed_actor_asset(library_root: Path, asset_id: str = "act_testasset01") -> LibraryAsset:
     adir = library_root / "actors" / asset_id
     adir.mkdir(parents=True, exist_ok=True)
-    (adir / "master.png").write_bytes(b"fake-png-bytes")
+    Image.effect_noise((128, 128), 30).convert("RGB").save(adir / "master.png")
     asset = LibraryAsset(
         id=asset_id,
         kind="actors",
@@ -180,7 +181,7 @@ def _seed_actor_asset(library_root: Path, asset_id: str = "act_testasset01") -> 
 def _seed_scene_asset(library_root: Path, asset_id: str = "scn_testscene01") -> LibraryAsset:
     adir = library_root / "scenes" / asset_id
     adir.mkdir(parents=True, exist_ok=True)
-    (adir / "master.png").write_bytes(b"fake-scene-png")
+    Image.effect_noise((128, 128), 30).convert("RGB").save(adir / "master.png")
     asset = LibraryAsset(
         id=asset_id,
         kind="scenes",
@@ -254,7 +255,7 @@ def _seed_layout_source_asset(
     adir = library_root / kind / asset_id
     adir.mkdir(parents=True, exist_ok=True)
     filename = f"{file_key}.png"
-    (adir / filename).write_bytes(f"{asset_id}-image".encode() * 400)
+    Image.effect_noise((128, 128), 30).convert("RGB").save(adir / filename)
     meta = {"review_status": review_status} if review_status else {}
     asset = LibraryAsset(
         id=asset_id,
@@ -505,7 +506,7 @@ async def test_plan_writes_shots_and_context(director_dirs):
 
 
 @pytest.mark.asyncio
-async def test_plan_and_h3_writer_request_different_guides(director_dirs):
+async def test_plan_and_h3_writer_request_different_guides(director_dirs, enable_reference_review):
     from app.agents.director.service import DirectorService
 
     _seed_actor_asset(director_dirs["library"])
@@ -513,7 +514,7 @@ async def test_plan_and_h3_writer_request_different_guides(director_dirs):
     project = create_project("Stage guides", "INT. CAFE - DAY\nActor enters.")
     sections_json = json.dumps(
         {
-            "subject_definitions": "S1 is the actor.",
+            "subject_definitions": "S1 is the actor in <Picture 1>. <Picture 2> defines the cafe.",
             "summary": "The actor enters the cafe.",
             "retention_analysis": "Keep the planned blocking.",
             "detailed_description": "A measured entrance across the room. (S1) says <d>[English] Hello there.</d>",
@@ -531,6 +532,7 @@ async def test_plan_and_h3_writer_request_different_guides(director_dirs):
 
     await svc.plan_project(project.id)
     shot = list_shots(project.id)[0]
+    enable_reference_review(provider)
     await svc.write_prompts_after_layout(shot.id)
 
     assert provider.calls[0].guides == ("script-planning",)
@@ -2237,7 +2239,7 @@ async def test_planner_retries_on_bad_json_then_blocks(director_dirs):
 
 
 @pytest.mark.asyncio
-async def test_write_prompts_after_layout(director_dirs):
+async def test_write_prompts_after_layout(director_dirs, enable_reference_review):
     from app.agents.director.context_io import save_agent_context
     from app.agents.director.service import DirectorService
     from app.core.projects.models import RefRole, ShotRef
@@ -2257,7 +2259,8 @@ async def test_write_prompts_after_layout(director_dirs):
         files={"fullbody_threeview": "threeview.png"},
         meta={"description": "beige trench coat over a charcoal top"},
     )
-    (actor_dir / "threeview.png").write_bytes(b"actor-image" * 300)
+    Image.effect_noise((128, 128), 30).convert("RGB").save(actor_dir / "threeview.png")
+    _seed_layout_source_asset(director_dirs["library"], kind="layouts", asset_id="lay_approved01", name="Layout", file_key="layout")
     (actor_dir / "asset.json").write_text(
         actor_asset.model_dump_json(indent=2), encoding="utf-8"
     )
@@ -2303,7 +2306,7 @@ async def test_write_prompts_after_layout(director_dirs):
     sections_json = json.dumps(
         {
             "subject_definitions": (
-                "S1 is the lead. <Picture 2> controls the spatial layout."
+                "S1 is the lead in <Picture 1>. <Picture 2> controls the spatial layout."
             ),
             "summary": "A short cafe walk-in.",
             "retention_analysis": "Retain the actor and Layout continuity.",
@@ -2313,6 +2316,7 @@ async def test_write_prompts_after_layout(director_dirs):
         }
     )
     provider = FakePlanProvider(response=sections_json)
+    enable_reference_review(provider)
     orch = RecordingOrchestrator()
     svc = DirectorService(plan_provider=provider, orchestrator=orch)
 
@@ -2441,6 +2445,7 @@ async def test_write_prompts_visually_analyzes_a_new_layout_once(director_dirs):
 @pytest.mark.asyncio
 async def test_write_prompts_grounds_explicit_active_layout_set_and_stores_signature(
     director_dirs,
+    enable_reference_review,
 ):
     from app.agents.director.service import DirectorService
     from app.core.projects.layouts import LayoutReference, LayoutReviewStatus
@@ -2448,6 +2453,9 @@ async def test_write_prompts_grounds_explicit_active_layout_set_and_stores_signa
     from app.core.projects.store import save_project
 
     project = create_project("Multi Layout Prompt", "Chen enters.")
+    _seed_actor_asset(director_dirs["library"], "act_chen")
+    for asset_id in ("lay_before", "lay_after"):
+        _seed_layout_source_asset(director_dirs["library"], kind="layouts", asset_id=asset_id, name="Layout", file_key="layout")
     shot = Shot(
         id="sht_prompt_multi",
         project_id=project.id,
@@ -2491,7 +2499,7 @@ async def test_write_prompts_grounds_explicit_active_layout_set_and_stores_signa
     response = json.dumps(
         {
             "subject_definitions": (
-                "<Picture 2> controls the empty doorway geography and composition; "
+                "<Picture 1> defines Chen. <Picture 2> controls the empty doorway geography and composition; "
                 "<Picture 3> controls Chen's compatible post-entry blocking."
             ),
             "summary": "Two compatible states in one coherent doorway composition.",
@@ -2502,6 +2510,7 @@ async def test_write_prompts_grounds_explicit_active_layout_set_and_stores_signa
         }
     )
     provider = FakePlanProvider(response=response)
+    enable_reference_review(provider)
     svc = DirectorService(
         plan_provider=provider,
         orchestrator=RecordingOrchestrator(),
@@ -2530,12 +2539,13 @@ async def test_write_prompts_grounds_explicit_active_layout_set_and_stores_signa
 
 
 @pytest.mark.asyncio
-async def test_write_prompts_rejects_missing_selected_layout_binding(director_dirs):
+async def test_write_prompts_rejects_missing_selected_layout_binding(director_dirs, enable_reference_review):
     from app.agents.director.service import DirectorService
     from app.core.projects.layouts import LayoutReference, LayoutReviewStatus
     from app.core.projects.store import save_project
 
     project = create_project("Missing Binding", "Chen enters.")
+    _seed_layout_source_asset(director_dirs["library"], kind="layouts", asset_id="lay_before", name="Layout", file_key="layout")
     shot = Shot(
         id="sht_prompt_missing_binding",
         project_id=project.id,
@@ -2567,6 +2577,7 @@ async def test_write_prompts_rejects_missing_selected_layout_binding(director_di
         }
     )
     provider = FakePlanProvider(responses=[invalid, invalid])
+    enable_reference_review(provider)
     svc = DirectorService(
         plan_provider=provider,
         orchestrator=RecordingOrchestrator(),

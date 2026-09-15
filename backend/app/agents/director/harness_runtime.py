@@ -108,6 +108,8 @@ class BackendTurn:
                     tools.append(replacement)
         if self.terminal_failure:
             tools = []
+        elif self.storyboard_failed and self.budget.exhausted:
+            tools = [tool for tool in tools if tool["function"]["name"] in {"get_status", "inspect_asset"}]
         state = (gpt_generation_context_blob(project, shots, self.message)
                  if explicit_gpt_image_intent(self.message) and not actor_design_intent(self.message)
                  else project_context_blob(project, shots, message=self.message, focused=True))
@@ -123,6 +125,8 @@ class BackendTurn:
                 "state. Do not alter the script, storyboard, dialogue, references, or Layouts "
                 "to work around it in this turn."
             )
+        elif self.storyboard_failed and self.budget.exhausted:
+            system += "\nStoryboard revision budget exhausted after failed saves. Read state if needed, then explain the unresolved issue. No further project changes this turn."
         system = with_director_skill(system, guides=director_chat_guides(
             project, include_visual_qc=bool(self.images), current_message=self.message,
         ))
@@ -283,7 +287,7 @@ class BackendTurn:
         if errors:
             return {"ok": False, "error": errors[0].message}
         project, shots, version = self.snapshot()
-        if name != "get_status" and (
+        if name not in {"get_status", "inspect_asset"} and (
             (version, raw_fingerprint) in self.calls
             or (version, fingerprint) in self.calls
         ):
@@ -343,13 +347,25 @@ class BackendTurn:
                 "\n\nA text-form tool call appeared after the failure, but it was not "
                 "executed and did not change project state."
             )
-        if "save_storyboard" in self.actions:
-            reply = f"Storyboard saved: {len(shots)} shots."
+        if self.terminal_failure:
+            saved = f"Storyboard saved: {len(shots)} shots. " if "save_storyboard" in self.actions else ""
+            completed = [action.split(":", 1)[1] for action in self.actions if action.startswith("write_prompt:")]
+            prompt_status = f"Prompts saved for: {', '.join(completed)}. " if completed else ""
+            reply = saved + prompt_status + self.terminal_failure + (
+                "\n\nA text-form tool call appeared after the failure, but it was not executed "
+                "and did not change project state." if "not executed" in reply else ""
+            )
+        elif "save_storyboard" in self.actions:
+            # Keep the model's explanation and partial-work details. A successful
+            # save is only one operation, not proof that the entire turn finished.
+            reply = f"Storyboard saved: {len(shots)} shots.\n\n" + reply
         elif "append_shot" in self.actions and _claims_completed_storyboard(reply):
             count = self.actions.count("append_shot")
             reply = f"Appended {count} new shot{'s' if count != 1 else ''} at the end."
-        elif self.storyboard_failed or _claims_completed_storyboard(reply):
+        elif self.storyboard_failed and "append_shot" not in self.actions:
             reply = "Storyboard was not saved. " + (" ".join(self.notes) or "No successful storyboard operation was confirmed.")
+        elif _claims_completed_storyboard(reply):
+            reply = "No storyboard save was confirmed in this turn."
         images = self.result_images + _layout_images(shots, only_shot_ids=self.touched) if self.touched else self.result_images
         return ChatResult(reply=reply, project=project, shots=shots, actions=self.actions,
                           images=images, thinking=result.get("thinking", ""), steps=self.notes)

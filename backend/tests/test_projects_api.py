@@ -94,7 +94,7 @@ def _fresh_layout_prompt_meta(shot: Shot) -> dict:
 def _seed_layout(library_root: Path, asset_id: str = "lay_testlayout01") -> LibraryAsset:
     adir = library_root / "layouts" / asset_id
     adir.mkdir(parents=True, exist_ok=True)
-    (adir / "layout.png").write_bytes(b"fake-layout-png" * 200)  # >2KB for resolve
+    Image.effect_noise((128, 128), 30).convert("RGB").save(adir / "layout.png")
     asset = LibraryAsset(
         id=asset_id,
         kind="layouts",
@@ -113,7 +113,7 @@ def _seed_layout(library_root: Path, asset_id: str = "lay_testlayout01") -> Libr
 def _seed_actor(library_root: Path, asset_id: str = "act_testactor01") -> LibraryAsset:
     adir = library_root / "actors" / asset_id
     adir.mkdir(parents=True, exist_ok=True)
-    (adir / "master.png").write_bytes(b"fake-actor-png" * 200)  # >2KB for resolve
+    Image.effect_noise((128, 128), 30).convert("RGB").save(adir / "master.png")
     asset = LibraryAsset(
         id=asset_id,
         kind="actors",
@@ -139,7 +139,7 @@ def _seed_image_reference(
     adir = library_root / kind / asset_id
     adir.mkdir(parents=True, exist_ok=True)
     filename = f"{file_key}.png"
-    (adir / filename).write_bytes(b"reference-image" * 200)
+    Image.effect_noise((128, 128), 30).convert("RGB").save(adir / filename)
     asset = LibraryAsset(
         id=asset_id,
         kind=kind,
@@ -1411,6 +1411,7 @@ async def test_inserted_approved_layout_survives_prompt_write_and_h3_submit(
     client,
     api_env,
     monkeypatch,
+    enable_reference_review,
 ):
     _seed_actor(api_env["library"])
     project = create_project("Inserted Layout H3", "Chen crosses the doorway.")
@@ -1435,10 +1436,12 @@ async def test_inserted_approved_layout_survives_prompt_write_and_h3_submit(
     project.shot_ids = [shot.id]
     save_project(project)
 
+    png = io.BytesIO()
+    Image.effect_noise((128, 128), 30).convert("RGB").save(png, format="PNG")
     inserted_response = client.post(
         f"/api/shots/{shot.id}/layout/insert",
         data={"name": "approved still", "approve": "true"},
-        files={"file": ("approved.png", b"approved-layout" * 400, "image/png")},
+        files={"file": ("approved.png", png.getvalue(), "image/png")},
     )
     assert inserted_response.status_code == 200, inserted_response.text
     inserted_asset_id = inserted_response.json()["layout_asset_id"]
@@ -1455,7 +1458,7 @@ async def test_inserted_approved_layout_survives_prompt_write_and_h3_submit(
         return __import__("json").dumps(
             {
                 "subject_definitions": (
-                    "<Picture 2> controls the inserted doorway composition."
+                    "<Picture 1> defines Chen. <Picture 2> controls the inserted doorway composition."
                 ),
                 "summary": "One continuous doorway scene.",
                 "retention_analysis": "Retain Chen and the inserted geography.",
@@ -1466,6 +1469,7 @@ async def test_inserted_approved_layout_survives_prompt_write_and_h3_submit(
         )
 
     monkeypatch.setattr(provider, "complete", return_inserted_layout_prompt)
+    enable_reference_review(provider)
     written = await client.app.state.director_service.write_prompts_after_layout(
         shot.id
     )
@@ -2200,7 +2204,7 @@ def test_submit_h3_rejects_locked_source_audio_for_official_providers(
 
 
 def test_submit_refreshes_prompt_when_layout_provenance_is_stale(
-    client, api_env, monkeypatch
+    client, api_env, monkeypatch, enable_reference_review
 ):
     _seed_layout(api_env["library"])
     project = create_project("P", "script")
@@ -2253,6 +2257,7 @@ def test_submit_refreshes_prompt_when_layout_provenance_is_stale(
         return json.dumps(fresh_sections)
 
     monkeypatch.setattr(provider, "complete", return_fresh_sections)
+    enable_reference_review(provider)
 
     started: list[dict] = []
 
@@ -2277,6 +2282,7 @@ def test_submit_refreshes_prompt_when_picture_materials_changed(
     client,
     api_env,
     monkeypatch,
+    enable_reference_review,
 ):
     actor = _seed_actor(api_env["library"], "act_changed_material")
     project = create_project("Changed materials", "The Agent waits.")
@@ -2321,6 +2327,7 @@ def test_submit_refreshes_prompt_when_picture_materials_changed(
         )
 
     monkeypatch.setattr(provider, "complete", return_material_prompt)
+    enable_reference_review(provider)
     started: list[dict] = []
 
     async def capture_start(job, *, images=None):
@@ -2339,7 +2346,7 @@ def test_submit_refreshes_prompt_when_picture_materials_changed(
 
 
 def test_submit_syncs_explicit_multi_layout_set_and_refreshes_stale_signature(
-    client, api_env, monkeypatch
+    client, api_env, monkeypatch, enable_reference_review
 ):
     _seed_actor(api_env["library"])
     _seed_layout(api_env["library"], "lay_before")
@@ -2401,7 +2408,7 @@ def test_submit_syncs_explicit_multi_layout_set_and_refreshes_stale_signature(
         return __import__("json").dumps(
             {
                 "subject_definitions": (
-                    "<Picture 2> controls empty-doorway geography; "
+                    "<Picture 1> defines Chen. <Picture 2> controls empty-doorway geography; "
                     "<Picture 3> controls the compatible two-person blocking."
                 ),
                 "summary": "Compatible states of one continuous doorway scene.",
@@ -2413,6 +2420,7 @@ def test_submit_syncs_explicit_multi_layout_set_and_refreshes_stale_signature(
         )
 
     monkeypatch.setattr(provider, "complete", return_layout_grounded_sections)
+    enable_reference_review(provider)
     started: list[dict] = []
 
     async def capture_start(job, *, images=None):
@@ -2444,7 +2452,7 @@ def test_submit_syncs_explicit_multi_layout_set_and_refreshes_stale_signature(
 
 
 def test_submit_uses_existing_layout_even_when_legacy_selection_is_false(
-    client, api_env, monkeypatch
+    client, api_env, monkeypatch, enable_reference_review
 ):
     _seed_actor(api_env["library"])
     _seed_layout(api_env["library"], "lay_old")
@@ -2498,7 +2506,7 @@ def test_submit_uses_existing_layout_even_when_legacy_selection_is_false(
         return __import__("json").dumps(
             {
                 "subject_definitions": (
-                    "Chen's identity remains stable. "
+                    "<Picture 1> defines Chen's identity. "
                     "<Picture 2> controls the composition."
                 ),
                 "summary": "Chen remains alone in one continuous shot.",
@@ -2510,6 +2518,7 @@ def test_submit_uses_existing_layout_even_when_legacy_selection_is_false(
         )
 
     monkeypatch.setattr(provider, "complete", return_layout_sections)
+    enable_reference_review(provider)
     started: list[dict] = []
 
     async def capture_start(job, *, images=None):
@@ -2541,6 +2550,7 @@ async def test_legacy_deselect_removes_the_current_layout_from_h3(
     client,
     api_env,
     monkeypatch,
+    enable_reference_review,
 ):
     from app.agents.director.context_io import (
         load_agent_context,
@@ -2621,7 +2631,7 @@ async def test_legacy_deselect_removes_the_current_layout_from_h3(
     ) -> str:
         provider.calls.append((system, user))
         has_layout = '\"role\": \"layout_ref_frame\"' in user
-        subject = "Chen, the room, and recorder remain coherent."
+        subject = "<Picture 1> defines Chen, <Picture 2> the room, <Picture 3> the recorder."
         if has_layout:
             subject += " <Picture 4> controls the room composition."
         return __import__("json").dumps(
@@ -2636,6 +2646,7 @@ async def test_legacy_deselect_removes_the_current_layout_from_h3(
         )
 
     monkeypatch.setattr(provider, "complete", return_sections)
+    enable_reference_review(provider)
     await client.app.state.director_service.write_prompts_after_layout(shot.id)
 
     saved = load_agent_context(project.id)

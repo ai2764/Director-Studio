@@ -462,10 +462,18 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     function_tool(
         "write_prompt",
-        "Prepare the six-section H3 production prompt for one shot. When its references changed, "
-        "the backend visually reviews every current Picture first, decides whether the Creative brief "
+        "Prepare the six-section H3 production prompt for one shot. The backend ensures visual evidence "
+        "for every current Picture, reviewing new or changed references first, decides whether the Creative brief "
         "and prompt need changes, and preserves old drafts if review is incomplete or needs a user choice.",
         dict(SHOT_SELECTOR),
+    ),
+    function_tool(
+        "inspect_asset",
+        "Read one exact Library image before casting or answering visual questions, even with no Shots. "
+        "Returns visual observations, metadata conflicts and content hash, not image bytes. "
+        "Use when appearance is unknown or names/descriptions may be misleading; does not change the asset or project.",
+        {"asset_id": {"type": "string", "minLength": 1}, "file_key": {"type": "string", "minLength": 1}},
+        required=["asset_id", "file_key"],
     ),
     function_tool(
         "get_status",
@@ -539,6 +547,7 @@ def director_tool_schemas(
             "revise_ref_frame",
             "write_prompt",
             "get_status",
+            "inspect_asset",
         }
         tools = [
             tool

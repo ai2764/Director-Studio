@@ -140,6 +140,13 @@ async def execute_tools(
         await runtime.emit(on_progress, "status", f"Executing: {name}…")
 
         try:
+            if name == "inspect_asset":
+                observation = await svc.inspect_asset(project_id, args["asset_id"], args["file_key"])
+                if result_payloads is not None:
+                    result_payloads.append({"ok": True, "observation": observation})
+                actions.append(f"inspect_asset:{args['asset_id']}:{args['file_key']}")
+                notes.append(f"Inspected {args['asset_id']}/{args['file_key']}: {observation['description']}")
+                continue
             if await handle_library_tool(
                 name=name,
                 args=args,

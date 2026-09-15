@@ -864,7 +864,7 @@ def test_patch_shot_refs_tool_only_accepts_exact_reference_updates():
     assert set(patch_schema["properties"]) == {"shot_id", "refs"}
     assert patch_schema["required"] == ["shot_id", "refs"]
     assert patch_schema["additionalProperties"] is False
-    assert set(parameters["$defs"]["AssetMatchDraft"]["properties"]) == {
+    assert set(parameters["$defs"]["OrderedAssetMatchDraft"]["properties"]) == {
         "role",
         "asset_id",
         "file_key",

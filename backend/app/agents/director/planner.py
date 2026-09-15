@@ -42,7 +42,8 @@ class PlanProvider(Protocol):
 class AssetMatchDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role: str
+    role: str = Field(json_schema_extra={"enum": [r.value for r in RefRole] + ["layout"]},
+                      description="Asset kind binding, not its visual job. Use actor even for an actor's wardrobe_ref file.")
     asset_id: str
     file_key: str | None = None
     picture_index: int | None = Field(default=None, ge=1, le=9)
@@ -259,13 +260,17 @@ class ShotRevisionSubmission(BaseModel):
         return self
 
 
+class OrderedAssetMatchDraft(AssetMatchDraft):
+    picture_index: int = Field(ge=1, le=9)
+
+
 class ShotRefsPatch(BaseModel):
     """One exact image-reference replacement for an existing shot."""
 
     model_config = ConfigDict(extra="forbid")
 
     shot_id: str
-    refs: list[AssetMatchDraft] = Field(max_length=9)
+    refs: list[OrderedAssetMatchDraft] = Field(max_length=9)
 
     @field_validator("shot_id")
     @classmethod

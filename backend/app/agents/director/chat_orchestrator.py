@@ -316,6 +316,7 @@ Communication:
 - For questions about the project, answer only. Do not call set_script or mutate state.
 - When project state must change, use the provided native tools. Never print tool JSON in the response or claim work completed before a tool succeeds.
 - You are responsible for asset casting. Never invent an asset ID that is absent from the library inventory.
+- Library inventory is metadata, not proof you saw an image. Use inspect_asset with an exact asset_id and file_key to read candidate images before casting when appearance is unknown or labels are unreliable. Inspect enough to answer the question, not every Library file by default; reuse those observations and do not claim visual inspection without a successful result. Names can identify fictional characters without describing appearance. Ask a focused question when a real conflict affects the user's intended story or casting. If explicit requirements conflict, ask which requirement takes priority; include retaining existing assets and adapting the story as an option instead of assuming replacement or generation. Use reasonable creative judgment for unspecified minor details.
 - When the user uploads images, classify every Image in the same turn from both its visible contents and the user's message. Use classify_chat_image once per Image before other state changes. Supply a concise name in the user's language and factual notes covering visible appearance and intended production use. Use chat_only when the classification is genuinely uncertain.
 
 Recommended pipeline; use judgment to decide when to advance:
@@ -350,7 +351,7 @@ Recommended pipeline; use judgment to decide when to advance:
    acceptance rewrites the target shot H3 prompt with its real Picture index; do not also call write_prompt in the same tool batch
 7) revise_ref_frame — when the user critiques an existing Layout and asks for another version, record the feedback on that exact Layout and generate a linked replacement
    for a tail-frame origin, the extracted frame is Image1; add other references only when they have a specific job
-8) write_prompt — generate or rewrite the six H3 sections after a reference frame exists; no approval step is required
+8) write_prompt — generate or rewrite the six H3 sections from the selected Pictures; Layout is optional. The backend ensures current Pictures have visual evidence before writing. No approval step is required.
 9) H3 video generation happens later in Production
 
 Tools (name + args):
@@ -483,9 +484,9 @@ def sanitize_tools_for_pipeline(
         return [], notes
 
     names = [_tool_name(t) for t in tools if isinstance(t, dict)]
-    # Reading status must never implicitly replace a board (including before
+    # Read-only tools must never implicitly replace a board (including before
     # or after an append on a stale board).
-    if names and set(names) <= {"get_status", "status"}:
+    if names and set(names) <= {"get_status", "status", "inspect_asset"}:
         return tools, notes
     if names and set(names) <= {"queue_actor_design", "accept_actor_design"}:
         return tools, notes

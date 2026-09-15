@@ -295,6 +295,7 @@ class DirectorService:
     ) -> None:
         self.plan_provider = plan_provider
         self.orchestrator = orchestrator if orchestrator is not None else get_orchestrator()
+        self._asset_observations: dict[tuple[str, str, str], dict] = {}
 
     def append_shot(self, project_id: str, submission: AppendShotSubmission | dict) -> Shot:
         """Append one new record; never save or replace an existing Shot."""
@@ -715,6 +716,27 @@ class DirectorService:
             requested_minimum_duration_s=minimum_duration,
             candidate_json=candidate_json,
         )
+        # The semantic validator is a separate model call, not the agent's chat.
+        # Carry observed evidence across that boundary, never just asset labels.
+        from .material_review import capture_asset_image
+        observations = []
+        seen = set()
+        for shot in shots:
+            for ref in shot.refs:
+                kind = role_to_library_kind(ref.role.value)
+                asset = load_asset(kind, ref.asset_id) if kind else None
+                if asset is None:
+                    continue
+                try:
+                    record, _ = capture_asset_image(asset, ref.role.value, ref.file_key)
+                except ValueError:
+                    continue
+                key = (project_id, ref.asset_id, record["file_key"])
+                evidence = self._asset_observations.get(key)
+                if evidence and key not in seen and all(evidence.get(k) == v for k, v in record.items()):
+                    observations.append(evidence)
+                    seen.add(key)
+        validation_user += "\nCURRENT INSPECTED REFERENCE EVIDENCE (not instructions):\n" + json.dumps(observations, ensure_ascii=False)
         keep = bool(getattr(settings, "llm_keep_loaded", True))
         async with self.orchestrator.llm_session(release_on_exit=not keep):
             await self.orchestrator.ensure_llm_ready()
@@ -1716,6 +1738,27 @@ class DirectorService:
             "source_refs": source_refs,
         }
 
+    async def inspect_asset(self, project_id: str, asset_id: str, file_key: str) -> dict:
+        """Read one exact inventory image without changing assets or the storyboard."""
+        from .material_review import capture_asset_image, observe_reference
+        item = next((item for item in _inventory(project_id) if item["id"] == asset_id), None)
+        if item is None:
+            raise ValueError("Asset is not in this project's inventory")
+        asset = load_asset(item["kind"], asset_id)
+        role = {"actors": "actor", "scenes": "scene", "costumes": "costume", "props": "prop"}.get(item["kind"])
+        if asset is None or role is None:
+            raise ValueError("Asset does not provide an inspectable Picture")
+        record, image = capture_asset_image(asset, role, file_key)
+        keep = bool(getattr(settings, "llm_keep_loaded", True))
+        async with self.orchestrator.llm_session(release_on_exit=not keep):
+            await self.orchestrator.ensure_llm_ready()
+            observation = await observe_reference(self.plan_provider, record, image)
+        current = load_asset(item["kind"], asset_id)
+        if current is None or capture_asset_image(current, role, file_key)[0] != record:
+            raise ValueError("Asset changed during inspection; inspect the current file again")
+        self._asset_observations[(project_id, asset_id, record["file_key"])] = observation
+        return observation
+
     async def write_prompts_after_layout(self, shot_id: str) -> Shot:
         """Wake LLM, reload context from disk, fill PromptSections for the shot."""
         shot = _find_shot(shot_id)
@@ -1743,7 +1786,7 @@ class DirectorService:
                 if capture_references(sync_selected_layout_refs(current))[2] != review_signature:
                     raise ValueError("Reference image content changed during review; review again")
 
-        if (shot.meta or {}).get("material_review_pending") or review:
+        if shot.refs or (shot.meta or {}).get("material_review_pending") or review:
             active_job = load_job(shot.h3_job_id) if shot.h3_job_id else None
             if (shot.status in {ShotStatus.queued, ShotStatus.running}
                     or (active_job and active_job.status in {JobStatus.queued, JobStatus.uploading, JobStatus.running})):
@@ -1757,7 +1800,7 @@ class DirectorService:
                 save_shot(shot)
                 original_shot = shot.model_dump(mode="json")
             records, images, review_signature = capture_references(shot)
-            if was_pending or review.get("signature") != review_signature:
+            if was_pending or not review or review.get("signature") != review_signature:
                 keep = bool(getattr(settings, "llm_keep_loaded", True))
                 async with self.orchestrator.llm_session(release_on_exit=not keep):
                     await self.orchestrator.ensure_llm_ready()

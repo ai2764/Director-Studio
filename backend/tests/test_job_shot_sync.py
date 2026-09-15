@@ -89,6 +89,18 @@ def isolated_data(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.mark.parametrize("missing_target", [False, True])
+def test_unowned_ref_frame_job_never_claims_an_unbound_shot(isolated_data, missing_target):
+    project = create_project("Unrelated project", "A greenhouse")
+    shot = _make_shot(project.id)
+    job = _succeeded_ref_frame_job(isolated_data, shot_id="missing", project_id=project.id)
+    if not missing_target:
+        job = job.model_copy(update={"params": {"description": "A separate layout"}})
+    on_pipeline_job_terminal(job)
+    assert load_shot(project.id, shot.id) == shot
+    assert not list(settings.library_root.rglob("asset.json"))
+
+
 def test_ref_frame_succeeded_promotes_layout_to_qc_and_shot_to_needs_review(isolated_data):
     """A generated reference frame owns QC on its Layout, not on the Shot."""
     project = create_project("Sync C1", "INT. CAFE")
