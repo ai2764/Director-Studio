@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -336,6 +337,12 @@ class BackendTurn:
     def finish(self, result):
         project, shots, _ = self.snapshot()
         reply = result["reply"]
+        if self.terminal_failure and re.search(r"<tool_call\b", reply, re.IGNORECASE):
+            reply = re.split(r"<tool_call\b", reply, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+            reply = (reply or self.terminal_failure) + (
+                "\n\nA text-form tool call appeared after the failure, but it was not "
+                "executed and did not change project state."
+            )
         if "save_storyboard" in self.actions:
             reply = f"Storyboard saved: {len(shots)} shots."
         elif "append_shot" in self.actions and _claims_completed_storyboard(reply):

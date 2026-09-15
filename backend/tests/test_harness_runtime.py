@@ -724,6 +724,18 @@ async def test_failed_prompt_write_makes_remainder_of_turn_explain_only(
     assert refreshed["tools"] == []
     assert "explain" in refreshed["system"].lower()
 
+    finished = turn.finish(
+        {
+            "reply": (
+                "The prompt could not be saved.\n\n"
+                "<tool_call><function=write_prompt>fake</function></tool_call>"
+            ),
+            "thinking": "",
+        }
+    )
+    assert "<tool_call>" not in finished.reply
+    assert "not executed" in finished.reply.lower()
+
 
 def test_missing_optional_layout_recommends_prompt_not_layout(tmp_projects_dir):
     from app.agents.director.chat_context import project_context_blob

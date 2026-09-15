@@ -142,6 +142,27 @@ def test_unquoted_screenplay_speaker_label_is_not_spoken_words():
     )
 
 
+@pytest.mark.parametrize(
+    "dialogue",
+    [
+        "NORA\nIf it is dying, I am bringing it in.",
+        "NORA (V.O.)\nIf it is dying, I am bringing it in.",
+    ],
+)
+def test_multiline_screenplay_speaker_cue_is_not_spoken_words(dialogue):
+    validate_h3_prompt(
+        compose_h3_prompt(
+            prompt(
+                detailed_description=(
+                    '[Shot 1] Nora says <d>[English] '
+                    'If it is dying, I am bringing it in.</d>'
+                )
+            )
+        ),
+        [dialogue],
+    )
+
+
 def test_language_tag_accidentally_saved_in_storyboard_is_not_spoken_words():
     validate_h3_prompt(
         compose_h3_prompt(

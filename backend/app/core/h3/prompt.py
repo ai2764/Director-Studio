@@ -117,7 +117,15 @@ def _dialogue_text(text: str) -> str:
 
 def _spoken_dialogue_text(text: str) -> str:
     """Return only the authored words from a screenplay-style dialogue row."""
-    value = _dialogue_text(text)
+    raw = re.sub(r"^\[[^\[\]\n]+\]\s*", "", str(text).strip())
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if len(lines) > 1 and re.fullmatch(
+        r"[A-Z][A-Z0-9 .'-]*(?:\s*\([^()\n]{1,24}\))?",
+        lines[0],
+    ):
+        value = _dialogue_text(" ".join(lines[1:]))
+    else:
+        value = _dialogue_text(raw)
     value = re.sub(r"^\[[^\[\]\n]+\]\s*", "", value)
     labelled = re.fullmatch(r"[^:：\n]{1,64}\s*[:：]\s*(.+)", value)
     if labelled:
