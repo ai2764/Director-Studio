@@ -134,9 +134,9 @@ def test_fill_validates_prompt_when_dialogue_provided():
 def test_fill_wires_audios_and_preserves_unicode():
     prompt = (
         "subject_definitions:\n<Audio 1> defines the speaker voice.\n"
-        "summary:\nB\n你去地铁站？\n"
+        "summary:\nB\n"
         "retention_analysis:\nC\n"
-        "detailed_description:\nD\n"
+        "detailed_description:\n(S1) says <d>[Chinese] 你去地铁站？</d>\n"
         "overall_soundscape:\nE\n"
         "non_diegetic_music:\nF"
     )

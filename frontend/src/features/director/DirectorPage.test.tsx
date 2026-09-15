@@ -10,6 +10,7 @@ import {
   chatWithDirectorStream,
   getDirectorChatSession,
   getDirectorModel,
+  compactDirectorContext,
   getDirectorVramStatus,
   getProject,
   queueRefFrame,
@@ -60,6 +61,8 @@ vi.mock("./api", () => ({
     available: ["qwen3.6:27b"],
   }),
   getDirectorVramStatus: vi.fn(),
+  getDirectorRuntime: vi.fn().mockResolvedValue({ runtime: "harness" }),
+  compactDirectorContext: vi.fn().mockResolvedValue({ compacted: true, before_tokens: 12000, after_tokens: 3000, session_id: "native" }),
   getProject: vi.fn(),
   queueRefFrame: vi.fn(),
   replaceShotMaterials: vi.fn(),
@@ -163,6 +166,19 @@ describe("Director shot actions", () => {
       configurable: true,
       value: vi.fn(),
     });
+  });
+
+  it("preserves the draft and never sends chat after manual compaction", async () => {
+    render(<DirectorPage />);
+    const button = await screen.findByRole("button", { name: "Compact context" });
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    const draft = screen.getByPlaceholderText(/Talk to the Director/) as HTMLTextAreaElement;
+    fireEvent.change(draft, { target: { value: "Continue the unfinished shot" } });
+    fireEvent.click(button);
+    await screen.findByText(/12,000.*3,000/);
+    expect(draft.value).toBe("Continue the unfinished shot");
+    expect(compactDirectorContext).toHaveBeenCalledWith("prj_test", expect.any(AbortSignal));
+    expect(chatWithDirectorStream).not.toHaveBeenCalled();
   });
 
   it("shows a read-only bypass notice for JSON Production projects and calls no Agent APIs", async () => {
@@ -578,7 +594,7 @@ describe("Director shot actions", () => {
 
     expect(screen.getByText("Needs prompt", { selector: ".status-chip" })).toBeTruthy();
     expect(screen.queryByText("needs_review")).toBeNull();
-    expect(screen.getByRole("button", { name: "Generate reference frame" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Discuss a Layout" })).toBeTruthy();
     const promptAction = screen.getByRole("button", { name: "Write H3 prompt · Shot 02" });
     const shortcutRow = promptAction.closest(".chat-chips");
     expect(shortcutRow).toBeTruthy();
@@ -809,14 +825,42 @@ describe("Director shot actions", () => {
     expect(screen.getByText("no preview")).toBeTruthy();
   });
 
-  it("regenerates a reference frame directly from the shot action", async () => {
+  it("discusses a missing Layout before any generation is queued", async () => {
     render(<DirectorPage />);
     await screen.findByRole("heading", { name: "1. Corridor walk-in" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Generate reference frame" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discuss a Layout" }));
 
-    await waitFor(() => expect(queueRefFrame).toHaveBeenCalledWith(testShot.id));
-    expect(await screen.findByText(/Queued.*reference frame/i)).toBeTruthy();
+    await waitFor(() => expect(chatWithDirectorStream).toHaveBeenCalledWith(
+      "prj_test",
+      expect.stringMatching(/shot "Corridor walk-in" \(sht_1\).*do not queue generation yet/is),
+      expect.any(Array),
+      expect.any(Object),
+      [],
+      expect.any(AbortSignal),
+    ));
+    expect(queueRefFrame).not.toHaveBeenCalled();
+  });
+
+  it("keeps usage diagnostics visible after an incomplete turn", async () => {
+    vi.mocked(chatWithDirectorStream).mockImplementationOnce(async (_id, _message, _history, handlers) => {
+      handlers?.onContextUsage?.({
+        call_id: "failed-call", sequence: 1, purpose: "turn", provider: "ollama", model: "qwen",
+        status: "output_truncated", context_window: 32768, output_limit: 4096, input_budget: 28672,
+        estimated_input_tokens: 22000, estimated_parts: { system: 8000, conversation: 10000, tools: 4000, format: 0 },
+        image_count: 0, input_tokens: 28939, output_tokens: 4096, reasoning_tokens: null,
+        thinking_chars: 17000, content_chars: 0, tool_calls: 0, finish_reason: "length", elapsed_ms: 50000,
+      });
+      throw new Error("Harness INCOMPLETE_TURN");
+    });
+    render(<DirectorPage />);
+    await screen.findByRole("heading", { name: "1. Corridor walk-in" });
+    fireEvent.change(screen.getByPlaceholderText(/Talk to the Director/), { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText(/Something went wrong/);
+    expect(screen.getAllByText(/Output truncated/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/28,939/).length).toBeGreaterThan(0);
+    expect((screen.getByPlaceholderText(/Talk to the Director/) as HTMLTextAreaElement).disabled).toBe(false);
   });
 
   it("renders the Director interface in English", async () => {

@@ -18,6 +18,33 @@ logger = logging.getLogger("director_studio.api.director")
 router = APIRouter(tags=["director"])
 
 
+@router.get("/director/runtime")
+async def director_runtime(check_sidecar: bool = False) -> dict:
+    """Cheap diagnostics: never wakes a model or contacts a generation provider."""
+    from urllib.parse import urlsplit
+
+    result = {
+        "runtime": settings.director_agent_runtime,
+        "harness_port": urlsplit(settings.harness_base_url).port if settings.director_agent_runtime == "harness" else None,
+    }
+    if check_sidecar and settings.director_agent_runtime == "harness":
+        import httpx
+
+        result["sidecar_ready"] = False
+        try:
+            async with httpx.AsyncClient(trust_env=False, timeout=2) as client:
+                response = await client.get(
+                    settings.harness_base_url + "/health",
+                    headers={"Authorization": f"Bearer {settings.harness_internal_token}"},
+                )
+                response.raise_for_status()
+                health = response.json()
+                result["sidecar_ready"] = health.get("ok") is True and health.get("service") == "director-studio-harness" and health.get("protocol") == 1
+        except (httpx.HTTPError, ValueError, AttributeError):
+            pass
+    return result
+
+
 class WakeBody(BaseModel):
     project_id: str | None = None
     keep: bool = Field(

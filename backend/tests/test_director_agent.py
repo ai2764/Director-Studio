@@ -516,7 +516,7 @@ async def test_plan_and_h3_writer_request_different_guides(director_dirs):
             "subject_definitions": "S1 is the actor.",
             "summary": "The actor enters the cafe.",
             "retention_analysis": "Keep the planned blocking.",
-            "detailed_description": "A measured entrance across the room.",
+            "detailed_description": "A measured entrance across the room. (S1) says <d>[English] Hello there.</d>",
             "overall_soundscape": "Quiet cafe room tone.",
             "non_diegetic_music": "None.",
         }
@@ -2307,7 +2307,7 @@ async def test_write_prompts_after_layout(director_dirs):
             ),
             "summary": "A short cafe walk-in.",
             "retention_analysis": "Retain the actor and Layout continuity.",
-            "detailed_description": "Actor enters and says Hello.",
+            "detailed_description": "Actor enters and (S1) says <d>[English] Hello.</d>",
             "overall_soundscape": "Cafe ambience.",
             "non_diegetic_music": "Soft piano.",
         }
@@ -2399,7 +2399,9 @@ async def test_write_prompts_visually_analyzes_a_new_layout_once(director_dirs):
 
     class VisionPlanProvider(FakePlanProvider):
         def __init__(self) -> None:
-            super().__init__(responses=[sections_json, sections_json])
+            super().__init__(responses=[json.dumps({"brief": None, "rewrite_prompt": True,
+                                                   "reason": "Use the observed composition.", "blocking_question": None}),
+                                        sections_json, sections_json])
             self.visual_calls: list[tuple[str, list[str]]] = []
 
         async def complete_with_images(
@@ -2411,10 +2413,10 @@ async def test_write_prompts_visually_analyzes_a_new_layout_once(director_dirs):
             guides: Iterable[str] = (),
         ) -> str:
             self.visual_calls.append((user, images))
-            return (
+            return json.dumps({"readable": True, "concerns": [], "description": (
                 "Wide eye-level composition; Agent seated in the left third, "
                 "empty ivory chair in the right third, interior window upper-right."
-            )
+            )})
 
     provider = VisionPlanProvider()
     svc = DirectorService(
@@ -2428,12 +2430,12 @@ async def test_write_prompts_visually_analyzes_a_new_layout_once(director_dirs):
     assert len(provider.visual_calls) == 1
     assert provider.visual_calls[0][1]
     assert "Agent seated in the left third" in provider.calls[0].user
-    analysis = first.meta["layout_visual_analyses"][layout_asset.id]
-    assert "empty ivory chair" in analysis["analysis"]
+    analysis = first.meta["material_review"]["references"][0]
+    assert "empty ivory chair" in analysis["description"]
     assert first.meta["prompt_picture_signature"]
     assert first.meta["material_review_pending"] is False
     assert "material_changes" not in first.meta
-    assert second.meta["layout_visual_analyses"] == first.meta["layout_visual_analyses"]
+    assert second.meta["material_review"] == first.meta["material_review"]
 
 
 @pytest.mark.asyncio

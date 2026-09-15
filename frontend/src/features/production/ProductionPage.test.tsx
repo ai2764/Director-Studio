@@ -352,9 +352,39 @@ describe("ProductionPage prompt refresh", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Edit materials" }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove Picture 1 · act_mia" }));
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    fireEvent.change(screen.getByLabelText("Message to Agent (optional)"), {
+      target: { value: "Keep the corridor geography unchanged." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save & send to Agent" }));
 
     expect(await screen.findByText("No references attached.")).toBeTruthy();
-    expect(onReviewMaterials).toHaveBeenCalledWith(updated, 1);
+    expect(onReviewMaterials).toHaveBeenCalledWith(
+      updated,
+      1,
+      "Keep the corridor geography unchanged.",
+    );
+  });
+
+  it("saves mobile Production material changes without notifying the Agent", async () => {
+    const onReviewMaterials = vi.fn();
+    const withReference = {
+      ...shot(generatedPrompt),
+      refs: [
+        { role: "actor" as const, asset_id: "act_mia", picture_index: 1, file_key: "master" },
+      ],
+    };
+    vi.mocked(getProject).mockResolvedValue(detail(withReference));
+    const updated = { ...withReference, refs: [] };
+    replaceShotMaterialsMock.mockResolvedValueOnce(updated);
+    render(<ProductionPage active mobile onReviewMaterials={onReviewMaterials} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit materials" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Picture 1 · act_mia" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("No references attached.")).toBeTruthy();
+    expect(onReviewMaterials).not.toHaveBeenCalled();
   });
 
   it("runs a ready Shot from the mobile Production result surface", async () => {

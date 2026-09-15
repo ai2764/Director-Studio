@@ -2,13 +2,16 @@
 # Spawns fully detached children so THIS terminal stays interactive.
 #
 # Usage:
-#   .\start.ps1
+#   .\start.ps1                       # Harness Sidecar by default
+#   .\start.ps1 -AgentRuntime legacy  # Explicit fallback
 #   .\start.ps1 -BackendOnly
 #   .\start.ps1 -FrontendOnly
 
 param(
     [switch]$BackendOnly,
     [switch]$FrontendOnly,
+    [ValidateSet('', 'legacy', 'harness')][string]$AgentRuntime = '',
+    [ValidateRange(1, 65535)][int]$HarnessPort = 8791,
     [int]$BackendPort = 8790,
     [int]$FrontendPort = 5173
 )
@@ -18,6 +21,7 @@ $Root = $PSScriptRoot
 $RunDir = Join-Path $Root ".run"
 $BackendDir = Join-Path $Root "backend"
 $FrontendDir = Join-Path $Root "frontend"
+. (Join-Path $Root 'scripts/harness-launcher.ps1')
 
 New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
 
@@ -102,7 +106,8 @@ function Start-DetachedProcess {
         [Parameter(Mandatory)][string]$WorkingDirectory,
         [Parameter(Mandatory)][string]$LogOut,
         [Parameter(Mandatory)][string]$LogErr,
-        [Parameter(Mandatory)][string]$PidFile
+        [Parameter(Mandatory)][string]$PidFile,
+        [hashtable]$ChildEnvironment
     )
 
     # Truncate logs
@@ -158,10 +163,22 @@ function Start-DetachedProcess {
     $cmdLine = '/c cd /d "' + $WorkingDirectory + '" && "' + $FilePath + '" ' + $argString +
         ' > "' + $LogOut + '" 2> "' + $LogErr + '"'
 
-    $p = Start-Process -FilePath "cmd.exe" `
-        -ArgumentList $cmdLine `
-        -WindowStyle Hidden `
-        -PassThru
+    if ($null -ne $ChildEnvironment) {
+        $childInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $childInfo.FileName = $env:ComSpec
+        $childInfo.Arguments = $cmdLine
+        $childInfo.UseShellExecute = $false
+        $childInfo.CreateNoWindow = $true
+        $childInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        $childInfo.EnvironmentVariables.Clear()
+        foreach ($key in $ChildEnvironment.Keys) { $childInfo.EnvironmentVariables[$key] = $ChildEnvironment[$key] }
+        $p = [System.Diagnostics.Process]::Start($childInfo)
+    } else {
+        $p = Start-Process -FilePath "cmd.exe" `
+            -ArgumentList $cmdLine `
+            -WindowStyle Hidden `
+            -PassThru
+    }
 
     if (-not $p) { throw "Start-Process returned null for $FilePath" }
     Set-Content -Path $PidFile -Value $p.Id -Encoding ascii
@@ -193,6 +210,7 @@ function Start-Backend {
         -LogErr $logErr `
         -PidFile $pidFile
 
+    $script:StartedBackendProcessId = $processId
     Write-Host "[backend] pid=$processId  logs: $logOut" -ForegroundColor Green
     Write-Host "[backend] API docs: http://127.0.0.1:$BackendPort/docs"
 }
@@ -239,8 +257,57 @@ function Start-Frontend {
 Write-Host "=== Director Studio start ===" -ForegroundColor White
 Write-Host "root: $Root"
 
-if (-not $FrontendOnly) { Start-Backend }
-if (-not $BackendOnly) { Start-Frontend }
+$runtime = Resolve-AgentRuntime $AgentRuntime (Join-Path $BackendDir '.env')
+$script:StartedHarnessProcessId = $null
+$script:StartedBackendProcessId = $null
+$savedEnvironment = @{}
+foreach ($key in @('DS_DIRECTOR_AGENT_RUNTIME', 'DS_HARNESS_INTERNAL_TOKEN', 'DS_HARNESS_PORT', 'DS_HARNESS_BASE_URL')) {
+    $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+}
+try {
+    if (-not $FrontendOnly) {
+        $env:DS_DIRECTOR_AGENT_RUNTIME = $runtime
+        Write-Host "[director] agent runtime: $runtime"
+        if ($runtime -eq 'harness') {
+            if ($HarnessPort -eq $BackendPort -or $HarnessPort -eq $FrontendPort) { throw 'Harness must use a separate port.' }
+            if (Test-PortInUse $BackendPort) {
+                $active = Invoke-RestMethod -Uri "http://127.0.0.1:$BackendPort/api/director/runtime" -TimeoutSec 3
+                if ($active.runtime -ne 'harness' -or $active.harness_port -ne $HarnessPort) {
+                    throw 'An existing backend has a different runtime. Stop it before switching.'
+                }
+            }
+            $env:DS_HARNESS_INTERNAL_TOKEN = Get-HarnessToken $RunDir
+            $env:DS_HARNESS_PORT = "$HarnessPort"
+            $env:DS_HARNESS_BASE_URL = "http://127.0.0.1:$HarnessPort"
+            Start-Harness
+        } elseif (Test-PortInUse $BackendPort) {
+            try {
+                $active = Invoke-RestMethod -Uri "http://127.0.0.1:$BackendPort/api/director/runtime" -TimeoutSec 3
+                if ($active.runtime -eq 'harness') { throw 'Stop the Harness backend before switching to legacy.' }
+            } catch {
+                if ($_.Exception.Message -like '*Stop the Harness*') { throw }
+                # Older legacy backends do not expose runtime diagnostics.
+            }
+        }
+        Start-Backend
+        if ($runtime -eq 'harness') { Wait-HarnessBackend }
+    }
+    if (-not $BackendOnly) { Start-Frontend }
+} catch {
+    if ($script:StartedBackendProcessId) {
+        & taskkill /PID $script:StartedBackendProcessId /T /F 2>$null | Out-Null
+        Remove-Item -LiteralPath (Join-Path $RunDir 'backend.pid') -ErrorAction SilentlyContinue
+    }
+    if ($script:StartedHarnessProcessId) {
+        & taskkill /PID $script:StartedHarnessProcessId /T /F 2>$null | Out-Null
+        Remove-Item -LiteralPath (Join-Path $RunDir 'harness.pid') -ErrorAction SilentlyContinue
+    }
+    throw
+} finally {
+    foreach ($key in $savedEnvironment.Keys) {
+        [Environment]::SetEnvironmentVariable($key, $savedEnvironment[$key], 'Process')
+    }
+}
 
 Write-Host ""
 Write-Host "Done. Terminal is free — you can keep typing here." -ForegroundColor Green

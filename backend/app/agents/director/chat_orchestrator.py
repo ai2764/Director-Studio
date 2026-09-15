@@ -322,7 +322,8 @@ Recommended pipeline; use judgment to decide when to advance:
 1) set_script — save a new or revised story supplied by the user
 2) review_asset_coverage — before first storyboarding or after a script change, inspect the script and available file_keys; recommend only useful missing actor angles, scene angles/zones, props, costumes, or future Layout states. Explain why each would help. This is advisory: the user may skip it, and storyboard tools remain available.
 3) revise_shot — for an authored-field change to exactly one Shot, update only the supplied fields and preserve all other Shots, refs, voices, and Layouts. If the same request also asks for a rewritten production prompt, call revise_shot then write_prompt
-   save_storyboard — reserve complete storyboard replacement for first authoring, Shot count/order changes, or coordinated multi-Shot revisions; save against PROJECT_STATE.script_hash, copy each existing Shot's id into shot_id unchanged, and omit shot_id only for genuinely new Shots
+   append_shot — when the user asks to add one Shot at the end, submit ONLY the new Shot with expected_script_hash=PROJECT_STATE.script_hash and expected_last_shot_id=PROJECT_STATE.last_shot_id. Python assigns its ID. Never rewrite the script or resubmit existing Shots for this request, even when the old plan is stale. On tail mismatch inspect current state; do not blindly retry with a refreshed tail.
+   save_storyboard — reserve complete storyboard replacement for first authoring, explicit removal/reordering, or coordinated multi-Shot revisions; use append_shot for end additions. Save against PROJECT_STATE.script_hash, copy each existing Shot's id into shot_id unchanged, and omit shot_id only for genuinely new Shots
    candidates are checked before replacement; if the tool returns observed issues, revise your own complete payload and resubmit
    each chat turn permits up to three automatic save_storyboard submissions; a new user turn starts with a fresh budget and may continue the discussion
    proposed storyboards may be discussed without persistence; only a validated save_storyboard result persists, and discussion does not require an approval gate or an immediate save
@@ -336,7 +337,7 @@ Recommended pipeline; use judgment to decide when to advance:
    after the user confirms, define the new Layout's purpose, exact continuity state, and timing, select 1–3 real source assets from PROJECT_STATE, and call queue_ref_frame with explicit purpose, state_description, time_hint, source_refs, and activation_mode="append"
    ordinary generation or regeneration uses activation_mode="replace"; append only when the user explicitly asks to keep the existing Layout and add another compatible state in the same continuous Shot
    multiple active Layouts all condition the entire H3 clip; never describe an appended Layout as beginning at a timestamp, and recommend a separate Shot when early subject leakage would break the beat
-   when PROJECT_STATE marks a target Shot material_review_pending, audit its current refs and material_changes before calling write_prompt: identify missing critical subjects or scenes and incompatible active Layout states; if a blocking issue exists, ask one concrete question and do not call write_prompt. A three-view Actor or Scene board is allowed as a Picture and is not a problem by itself.
+   when PROJECT_STATE marks a target Shot material_review_pending, use write_prompt for that exact Shot to run the backend's complete per-Picture visual review and brief/prompt decision. Metadata alone or a partial chat attachment set is not a completed review. If it reports missing images or a blocking creative question, report the unresolved issue; do not claim success or blindly repeat the call. A three-view Actor or Scene board is allowed as a Picture and is not a problem by itself.
    choose source_refs for what the new frame must establish: for example, add the entering actor or newly introduced prop alongside a scene/Layout source that preserves spatial continuity; never add sources merely to fill slots
    when the user explicitly chooses GPT/ChatGPT image generation, use queue_gpt_ref_frame; when no provider is specified, default to the local queue_ref_frame tool
    a question about GPT capability is not a generation request; answer it without calling either generation tool
@@ -357,6 +358,7 @@ Tools (name + args):
 - review_asset_coverage  {"expected_script_hash":"...","status":"reviewed|skipped","recommendations":[],"notes":"..."}
 - save_storyboard  {"expected_script_hash":"...","shots":[complete ShotDraft objects]}  // preserve PROJECT_STATE Shot ids in shot_id; omit only for new Shots
 - revise_shot  {"shot_id":"...","script_beat":"..."}  // partial authored fields for exactly one Shot; follow with write_prompt when requested
+- append_shot  {"expected_script_hash":"...","expected_last_shot_id":"...","shot":{...}}  // exactly one NEW Shot at the end; null tail only for an empty board
 - patch_shot_refs  {"updates":[{"shot_id":"...","refs":[complete ordered Picture bindings]}]}
 - set_shot_scene_ref  {"shot_id":"...","scene_asset_id":"...","file_key":"..."}  // exact human override; never infer a replacement file_key
 - plan_shots  {}  // compatibility shortcut; prefer save_storyboard for natural authoring/revision
@@ -481,10 +483,14 @@ def sanitize_tools_for_pipeline(
         return [], notes
 
     names = [_tool_name(t) for t in tools if isinstance(t, dict)]
+    # Reading status must never implicitly replace a board (including before
+    # or after an append on a stale board).
+    if names and set(names) <= {"get_status", "status"}:
+        return tools, notes
     if names and set(names) <= {"queue_actor_design", "accept_actor_design"}:
         return tools, notes
     has_set = any(n in _SCRIPT_TOOLS for n in names)
-    has_plan = any(n in _PLAN_TOOLS or n in _STORYBOARD_TOOLS for n in names)
+    has_plan = any(n in _PLAN_TOOLS or n in _STORYBOARD_TOOLS or n == "append_shot" for n in names)
     has_image = any(n in _IMAGE_TOOLS for n in names)
 
     script = (project.script_text or "").strip()
@@ -514,7 +520,7 @@ def sanitize_tools_for_pipeline(
 
     names2 = [_tool_name(t) for t in out]
     has_set = any(n in _SCRIPT_TOOLS for n in names2)
-    has_plan = any(n in _PLAN_TOOLS or n in _STORYBOARD_TOOLS for n in names2)
+    has_plan = any(n in _PLAN_TOOLS or n in _STORYBOARD_TOOLS or n == "append_shot" for n in names2)
 
     # After set_script or stale/missing shots, ensure plan_shots runs this turn
     must_inject_plan = (has_set or shots_stale or (bool(script) and not shots)) and not has_plan
@@ -1042,6 +1048,9 @@ async def orchestrate_chat(
         if "save_storyboard" in acts:
             shot_count = len(sh)
             r = f"Storyboard saved: {shot_count} shot{'s' if shot_count != 1 else ''}."
+        elif "append_shot" in acts and _claims_completed_storyboard(r):
+            count = acts.count("append_shot")
+            r = f"Appended {count} new shot{'s' if count != 1 else ''} at the end."
         elif (
             storyboard_save_attempted
             or storyboard_save_blocked

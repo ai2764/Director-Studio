@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .runtime_paths import runtime_paths
@@ -86,6 +86,26 @@ class Settings(BaseSettings):
     # Multi-turn residency: keep a local LLM loaded between chat/plan turns.
     # Comfy jobs still release local LLMs before taking the GPU.
     llm_keep_loaded: bool = True
+
+    director_agent_runtime: Literal["legacy", "harness"] = "legacy"
+    harness_managed: bool = True
+    harness_base_url: str = "http://127.0.0.1:8791"
+    harness_internal_token: str = Field(default="", repr=False)
+    harness_turn_timeout_sec: float = Field(default=1800, gt=0, le=7200)
+    harness_max_steps: int = Field(default=12, ge=1, le=32)
+    harness_max_tool_calls: int = Field(default=64, ge=1, le=64)
+
+    @field_validator("harness_base_url")
+    @classmethod
+    def _loopback_sidecar(cls, value: str) -> str:
+        from urllib.parse import urlsplit
+
+        url = urlsplit(value)
+        if (url.scheme != "http" or url.hostname != "127.0.0.1"
+                or url.username or url.password or url.path not in {"", "/"}
+                or url.query or url.fragment or url.port is None):
+            raise ValueError("Harness URL must be http://127.0.0.1:<port>")
+        return value.rstrip("/")
 
     @model_validator(mode="before")
     @classmethod

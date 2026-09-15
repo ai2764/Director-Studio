@@ -103,6 +103,12 @@ try {
         "(^|/)[^/]*\.test\.[^/]*$"
     )
     foreach ($entry in $entries) {
+        if (
+            $entry -match "(^|/)harness/node_modules/" -or
+            $entry -match "(^|/)runtime/python/Lib/site-packages/"
+        ) {
+            continue
+        }
         foreach ($pattern in $forbiddenZipPatterns) {
             if ($entry -match $pattern) {
                 throw "Portable zip contains forbidden external or test state: $entry"

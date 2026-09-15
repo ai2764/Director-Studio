@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import io
+import json
 import os
 import stat
 import subprocess
@@ -27,7 +29,51 @@ def _package_fixture(tmp_path: Path, flavor):
     package = tmp_path / flavor.name
     package.mkdir()
     for name in verifier.required_package_files(flavor):
-        (package / name).write_bytes(b"fixture")
+        path = package / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if name == "portable-manifest.json":
+            path.write_text(
+                json.dumps(
+                    {
+                        "entrypoint": "harness/dist/server.js",
+                        "format": 1,
+                        "harness": {
+                            "package_lock_sha256": hashlib.sha256(
+                                (REPO_ROOT / "harness" / "package-lock.json").read_bytes()
+                            ).hexdigest(),
+                            "version": "0.1.0",
+                        },
+                        "node": {
+                            "archive_sha256": "1177b4137ba5adaa56354ae40f1080c7450e8ae09cecb47da459d1c52ac99f97",
+                            "version": "22.23.2",
+                        },
+                        "python": {
+                            "archive_sha256": "90b4e5b9898b72d744650524bff92377c367f44bd5fbd09e3148656c080ad907",
+                            "version": "3.13.14",
+                        },
+                        "comfy_bootstrap": {
+                            "pip_version": "25.1.1",
+                            "pip_wheel_sha256": "2913a38a2abf4ea6b64ab507bd9e967f3b53dc1ede74b01b0931e1ce548751af",
+                            "requirements_lock_sha256": hashlib.sha256(
+                                (REPO_ROOT / "packaging" / "windows-comfy-requirements.lock").read_bytes()
+                            ).hexdigest(),
+                            "packages": {
+                                "comfy-cli": "1.20.0",
+                                "comfy-mcp": "0.10.0",
+                            },
+                        },
+                        "platform": "win-x64",
+                    }
+                ),
+                encoding="utf-8",
+            )
+        elif name == "harness/package.json":
+            path.write_text(
+                json.dumps({"name": "director-studio-harness-sidecar", "version": "0.1.0"}),
+                encoding="utf-8",
+            )
+        else:
+            path.write_bytes(b"fixture")
     return package
 
 
@@ -153,11 +199,142 @@ def test_embedded_policy_still_rejects_private_pem():
 @pytest.mark.parametrize("platform", ["windows", "linux", "macos-arm64", "macos-x86_64"])
 def test_clean_package_requires_platform_files(tmp_path: Path, platform: str):
     flavor = verifier.FLAVORS[platform]
-    package = tmp_path / flavor.name
-    package.mkdir()
-    for name in verifier.required_package_files(flavor):
-        (package / name).write_text("fixture", encoding="utf-8")
+    package = _package_fixture(tmp_path, flavor)
     verifier.verify_package_tree(package, flavor)
+
+
+def test_windows_package_requires_bundled_harness_runtime():
+    windows = verifier.FLAVORS["windows"]
+
+    assert windows.name == "Director-Studio-Windows-x64"
+    assert "runtime/node/node.exe" in verifier.required_package_files(windows)
+    assert "harness/dist/server.js" in verifier.required_package_files(windows)
+    assert "portable-manifest.json" in verifier.required_package_files(windows)
+    assert "runtime/python/python.exe" in verifier.required_package_files(windows)
+    assert "runtime/python/comfy.exe" in verifier.required_package_files(windows)
+    assert "runtime/python/Lib/site-packages/pip/__init__.py" in verifier.required_package_files(windows)
+    assert "runtime/comfy-bootstrap.json" in verifier.required_package_files(windows)
+    assert "runtime/python/Lib/site-packages/sitecustomize.py" in verifier.required_package_files(windows)
+    assert "runtime/comfy-requirements.lock" in verifier.required_package_files(windows)
+    assert "THIRD_PARTY_LICENSES/pip.txt" in verifier.required_package_files(windows)
+    assert "runtime/python/Lib/site-packages/comfy_mcp/__init__.py" not in verifier.required_package_files(windows)
+    assert "THIRD_PARTY_LICENSES/comfy-mcp.txt" not in verifier.required_package_files(windows)
+    assert "Install-Tools.cmd" not in verifier.required_package_files(windows)
+    assert "Install-Tools.py" not in verifier.required_package_files(windows)
+    assert "portable-tools-requirements.txt" not in verifier.required_package_files(windows)
+    assert "runtime/node/node.exe" not in verifier.required_package_files(
+        verifier.FLAVORS["linux"]
+    )
+    assert "runtime/python/python.exe" not in verifier.required_package_files(
+        verifier.FLAVORS["linux"]
+    )
+
+
+@pytest.mark.parametrize("package_name", ["setuptools", "wheel", "uv"])
+def test_windows_package_rejects_python_build_tools(
+    tmp_path: Path, package_name: str
+) -> None:
+    flavor = verifier.FLAVORS["windows"]
+    package = _package_fixture(tmp_path, flavor)
+    forbidden = package / "runtime" / "python" / "Lib" / "site-packages" / package_name
+    forbidden.mkdir(parents=True)
+    (forbidden / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="build tool"):
+        verifier.verify_package_tree(package, flavor)
+
+
+@pytest.mark.parametrize("package_name", ["comfy_mcp", "comfy_cli"])
+def test_windows_package_rejects_first_launch_dependencies(
+    tmp_path: Path, package_name: str
+) -> None:
+    flavor = verifier.FLAVORS["windows"]
+    package = _package_fixture(tmp_path, flavor)
+    module = package / "runtime/python/Lib/site-packages" / package_name / "__init__.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("# must be downloaded on first launch", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="first-launch dependency"):
+        verifier.verify_package_tree(package, flavor)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["Install-Tools.cmd", "Install-Tools.py", "portable-tools-requirements.txt"],
+)
+def test_windows_package_rejects_obsolete_manual_installer(
+    tmp_path: Path, filename: str
+) -> None:
+    flavor = verifier.FLAVORS["windows"]
+    package = _package_fixture(tmp_path, flavor)
+    (package / filename).write_text("obsolete", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="obsolete Windows installer"):
+        verifier.verify_package_tree(package, flavor)
+
+
+def test_windows_archive_policy_accepts_site_packages_directory_entry() -> None:
+    verifier._validate_package_content_path(
+        ("runtime", "python", "Lib", "site-packages"),
+        label="archive",
+        flavor=verifier.FLAVORS["windows"],
+    )
+
+
+def test_cli_can_verify_staged_package_before_archive_creation(tmp_path: Path):
+    flavor = verifier.FLAVORS["windows"]
+    package = _package_fixture(tmp_path, flavor)
+
+    assert verifier.main(
+        ["--platform", "windows", "--package-root", str(package)]
+    ) == 0
+
+
+def test_windows_package_rejects_missing_koffi_binary(tmp_path: Path):
+    flavor = verifier.FLAVORS["windows"]
+    package = _package_fixture(tmp_path, flavor)
+    (package / verifier.WINDOWS_KOFFI_BINARY).unlink()
+
+    with pytest.raises(ValueError, match="Koffi"):
+        verifier.verify_package_tree(package, flavor)
+
+
+@pytest.mark.parametrize("package_name", ["tsx", "typescript", "vitest", "@vitest/runner"])
+def test_windows_package_rejects_development_dependencies(
+    tmp_path: Path,
+    package_name: str,
+):
+    flavor = verifier.FLAVORS["windows"]
+    package = _package_fixture(tmp_path, flavor)
+    forbidden = package / "harness" / "node_modules" / package_name / "package.json"
+    forbidden.parent.mkdir(parents=True, exist_ok=True)
+    forbidden.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="development package"):
+        verifier.verify_package_tree(package, flavor)
+
+
+def test_windows_package_rejects_wrong_runtime_manifest(tmp_path: Path):
+    flavor = verifier.FLAVORS["windows"]
+    package = _package_fixture(tmp_path, flavor)
+    manifest = package / "portable-manifest.json"
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["platform"] = "linux-x86_64"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="manifest platform"):
+        verifier.verify_package_tree(package, flavor)
+
+
+def test_linux_package_rejects_harness_runtime_content(tmp_path: Path):
+    flavor = verifier.FLAVORS["linux"]
+    package = _package_fixture(tmp_path, flavor)
+    entry = package / "harness" / "dist" / "server.js"
+    entry.parent.mkdir(parents=True)
+    entry.write_text("fixture", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Harness runtime"):
+        verifier.verify_package_tree(package, flavor)
 
 
 @pytest.mark.parametrize(
@@ -300,8 +477,8 @@ def test_archive_rejects_members_outside_package_root(tmp_path: Path):
 
 
 @pytest.mark.parametrize("member_name, message", [
-    ("/Director-Studio-Legacy-Windows-x64/extra", "absolute"),
-    ("Director-Studio-Legacy-Windows-x64/../extra", "traversal"),
+    ("/Director-Studio-Windows-x64/extra", "absolute"),
+    ("Director-Studio-Windows-x64/../extra", "traversal"),
 ])
 def test_archive_rejects_unsafe_member_paths(
     tmp_path: Path, member_name: str, message: str

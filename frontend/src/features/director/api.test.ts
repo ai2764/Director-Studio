@@ -12,6 +12,25 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("delivers usage before a terminal SSE error", async () => {
+  const usage = { call_id: "call-1", status: "output_truncated", input_tokens: 28939, output_tokens: 4096 };
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(
+        `data: ${JSON.stringify({ type: "context_usage", data: usage })}\n\n` +
+        'data: {"type":"error","message":"Harness INCOMPLETE_TURN"}\n\n',
+      ));
+      controller.close();
+    },
+  });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, body: stream }));
+  const observed: unknown[] = [];
+  await expect(chatWithDirectorStream("prj_test", "hello", [], {
+    onContextUsage: (value) => observed.push(value),
+  })).rejects.toThrow("INCOMPLETE_TURN");
+  expect(observed).toEqual([usage]);
+});
+
 it("uses multipart transport when Director chat includes images", async () => {
   const payload = {
     type: "result",

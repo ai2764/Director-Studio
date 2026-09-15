@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import stat
 import subprocess
@@ -20,6 +21,7 @@ class PackageFlavor:
     executable: str
     wrappers: tuple[str, ...]
     archive_kind: Literal["zip", "tar"]
+    bundled_harness: bool = False
 
 
 FLAVORS = {
@@ -36,10 +38,11 @@ FLAVORS = {
         "tar",
     ),
     "windows": PackageFlavor(
-        "Director-Studio-Legacy-Windows-x64",
+        "Director-Studio-Windows-x64",
         "DirectorStudio.exe",
-        ("Install-Tools.cmd",),
+        (),
         "zip",
+        True,
     ),
     "linux": PackageFlavor(
         "Director-Studio-Linux-x86_64",
@@ -48,6 +51,55 @@ FLAVORS = {
         "tar",
     ),
 }
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_WINDOWS_RUNTIME_CONFIG = json.loads(
+    (_REPO_ROOT / "packaging" / "windows-harness-runtime.json").read_text(
+        encoding="utf-8"
+    )
+)
+WINDOWS_KOFFI_BINARY = str(_WINDOWS_RUNTIME_CONFIG["koffi_binary"])
+_WINDOWS_NODE_VERSION = str(_WINDOWS_RUNTIME_CONFIG["node_version"])
+_WINDOWS_NODE_SHA256 = str(_WINDOWS_RUNTIME_CONFIG["node_sha256"])
+_WINDOWS_COMFY_CONFIG = json.loads(
+    (_REPO_ROOT / "packaging" / "windows-comfy-runtime.json").read_text(
+        encoding="utf-8"
+    )
+)
+_WINDOWS_COMFY_LOCK_SHA256 = hashlib.sha256(
+    (_REPO_ROOT / "packaging" / "windows-comfy-requirements.lock").read_bytes()
+).hexdigest()
+_WINDOWS_HARNESS_FILES = (
+    "runtime/node/node.exe",
+    "runtime/node/LICENSE",
+    "harness/dist/server.js",
+    "harness/package.json",
+    "harness/THIRD_PARTY_LICENSES.json",
+    WINDOWS_KOFFI_BINARY,
+    "portable-manifest.json",
+)
+_WINDOWS_COMFY_FILES = (
+    "runtime/python/python.exe",
+    "runtime/python/python3.dll",
+    "runtime/python/python313.dll",
+    "runtime/python/python313.zip",
+    "runtime/python/python313._pth",
+    "runtime/python/comfy.exe",
+    "runtime/python/Lib/site-packages/pip/__init__.py",
+    "runtime/python/Lib/site-packages/pip-25.1.1.dist-info/METADATA",
+    "runtime/python/Lib/site-packages/pip-25.1.1.dist-info/licenses/LICENSE.txt",
+    "runtime/python/Lib/site-packages/sitecustomize.py",
+    "runtime/comfy-bootstrap.json",
+    "runtime/comfy-requirements.lock",
+    "THIRD_PARTY_LICENSES/python.txt",
+    "THIRD_PARTY_LICENSES/pip.txt",
+)
+_WINDOWS_FORBIDDEN_DEV_PACKAGES = (
+    "harness/node_modules/tsx",
+    "harness/node_modules/typescript",
+    "harness/node_modules/vitest",
+    "harness/node_modules/@vitest",
+)
 
 REQUIRED_EMBEDDED = {
     "workflows/qwen_actor_asset_workbench.api.json",
@@ -81,13 +133,21 @@ _DRIVE_PATH_PATTERN = re.compile(r"^[A-Za-z]:/")
 
 
 def required_package_files(flavor: PackageFlavor) -> tuple[str, ...]:
-    return (
-        flavor.executable,
-        *flavor.wrappers,
+    installer_files = () if flavor.bundled_harness else (
         "Install-Tools.py",
         "portable-tools-requirements.txt",
+    )
+    common = (
+        flavor.executable,
+        *flavor.wrappers,
+        *installer_files,
         ".env",
         "README.md",
+    )
+    return common + (
+        _WINDOWS_HARNESS_FILES + _WINDOWS_COMFY_FILES
+        if flavor.bundled_harness
+        else ()
     )
 
 
@@ -158,6 +218,152 @@ def _validate_content_path(parts: tuple[str, ...], *, label: str) -> None:
         raise ValueError(f"{label} contains credential-like file: {parts[-1]}")
 
 
+def _is_under(parts: tuple[str, ...], prefix: str) -> bool:
+    normalized = "/".join(part.lower() for part in parts)
+    expected = prefix.lower()
+    return normalized == expected or normalized.startswith(expected + "/")
+
+
+def _validate_package_content_path(
+    parts: tuple[str, ...],
+    *,
+    label: str,
+    flavor: PackageFlavor,
+) -> None:
+    if flavor.bundled_harness and parts[0].lower() in {
+        "install-tools.cmd",
+        "install-tools.py",
+        "portable-tools-requirements.txt",
+    }:
+        raise ValueError(f"{label} contains obsolete Windows installer: {parts[0]}")
+    if not flavor.bundled_harness and parts[0].lower() in {"harness", "runtime"}:
+        raise ValueError(f"{label} contains unsupported Harness runtime content")
+    if flavor.bundled_harness and _is_under(parts, "harness/node_modules"):
+        for forbidden in _WINDOWS_FORBIDDEN_DEV_PACKAGES:
+            if _is_under(parts, forbidden):
+                raise ValueError(
+                    f"{label} contains development package: {forbidden}"
+                )
+        return
+    if flavor.bundled_harness and _is_under(
+        parts, "runtime/python/Lib/site-packages"
+    ):
+        if len(parts) == 4 or (len(parts) == 5 and parts[4] == "directory"):
+            return
+        package_name = parts[4].lower()
+        if package_name == "sitecustomize.py" and len(parts) == 5:
+            return
+        if package_name.split("-", 1)[0] in {"comfy_mcp", "comfy_cli"}:
+            raise ValueError(
+                f"{label} contains first-launch dependency: {parts[4]}"
+            )
+        if package_name.split("-", 1)[0] in {"setuptools", "wheel", "uv"}:
+            raise ValueError(f"{label} contains Python build tool: {parts[4]}")
+        if package_name != "pip" and not package_name.startswith("pip-"):
+            raise ValueError(f"{label} contains unexpected bootstrap package: {parts[4]}")
+        dependency_parts = tuple(part.lower() for part in parts[4:])
+        if any(part in {"test", "tests", "__pycache__"} for part in dependency_parts[:-1]):
+            raise ValueError(f"{label} contains forbidden test or cache directory")
+        filename = dependency_parts[-1]
+        if filename.startswith("test_") or ".test." in filename:
+            raise ValueError(f"{label} contains forbidden test content: {parts[-1]}")
+        if Path(filename).suffix in _CREDENTIAL_SUFFIXES and not (
+            len(dependency_parts) >= 2
+            and dependency_parts[-2:] == ("certifi", "cacert.pem")
+        ):
+            raise ValueError(f"{label} contains credential-like file: {parts[-1]}")
+        return
+    _validate_content_path(parts, label=label)
+
+
+def _contains_absolute_value(value: object) -> bool:
+    if isinstance(value, dict):
+        return any(_contains_absolute_value(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_absolute_value(item) for item in value)
+    if not isinstance(value, str):
+        return False
+    normalized = value.replace("\\", "/")
+    return normalized.startswith("/") or bool(_DRIVE_PATH_PATTERN.match(normalized))
+
+
+def verify_portable_manifest(root: Path) -> None:
+    manifest_path = root / "portable-manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"portable manifest is unreadable: {exc}") from exc
+    if manifest.get("format") != 1:
+        raise ValueError("portable manifest format is unsupported")
+    if manifest.get("platform") != "win-x64":
+        raise ValueError("portable manifest platform must be win-x64")
+    if manifest.get("entrypoint") != "harness/dist/server.js":
+        raise ValueError("portable manifest Harness entrypoint is invalid")
+    node = manifest.get("node")
+    harness = manifest.get("harness")
+    python = manifest.get("python")
+    comfy_bootstrap = manifest.get("comfy_bootstrap")
+    if not all(
+        isinstance(section, dict)
+        for section in (node, harness, python, comfy_bootstrap)
+    ):
+        raise ValueError("portable manifest runtime sections are invalid")
+    if node.get("version") != _WINDOWS_NODE_VERSION:
+        raise ValueError("portable manifest Node version does not match runtime config")
+    if node.get("archive_sha256") != _WINDOWS_NODE_SHA256:
+        raise ValueError("portable manifest Node checksum does not match runtime config")
+    expected_lock = hashlib.sha256(
+        (_REPO_ROOT / "harness" / "package-lock.json").read_bytes()
+    ).hexdigest()
+    if harness.get("package_lock_sha256") != expected_lock:
+        raise ValueError("portable manifest Harness lock checksum is invalid")
+    try:
+        package = json.loads(
+            (root / "harness" / "package.json").read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"packaged Harness metadata is unreadable: {exc}") from exc
+    if harness.get("version") != package.get("version"):
+        raise ValueError("portable manifest Harness version does not match package")
+    if python.get("version") != _WINDOWS_COMFY_CONFIG["python_version"]:
+        raise ValueError("portable manifest Python version does not match runtime config")
+    if python.get("archive_sha256") != _WINDOWS_COMFY_CONFIG["python_sha256"]:
+        raise ValueError("portable manifest Python checksum does not match runtime config")
+    if comfy_bootstrap.get("pip_version") != _WINDOWS_COMFY_CONFIG["pip_version"]:
+        raise ValueError("portable manifest pip version does not match runtime config")
+    if comfy_bootstrap.get("pip_wheel_sha256") != _WINDOWS_COMFY_CONFIG["pip_sha256"]:
+        raise ValueError("portable manifest pip checksum does not match runtime config")
+    if comfy_bootstrap.get("requirements_lock_sha256") != _WINDOWS_COMFY_LOCK_SHA256:
+        raise ValueError("portable manifest Comfy lock checksum is invalid")
+    if comfy_bootstrap.get("packages") != {
+        "comfy-cli": _WINDOWS_COMFY_CONFIG["comfy_cli_version"],
+        "comfy-mcp": _WINDOWS_COMFY_CONFIG["comfy_mcp_version"],
+    }:
+        raise ValueError("portable manifest Comfy package versions are invalid")
+    for digest in (
+        node.get("archive_sha256"),
+        harness.get("package_lock_sha256"),
+        python.get("archive_sha256"),
+        comfy_bootstrap.get("pip_wheel_sha256"),
+        comfy_bootstrap.get("requirements_lock_sha256"),
+    ):
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("portable manifest contains an invalid digest")
+    if _contains_absolute_value(manifest):
+        raise ValueError("portable manifest contains an absolute path")
+
+
+def verify_windows_harness_runtime(root: Path) -> None:
+    if not (root / WINDOWS_KOFFI_BINARY).is_file():
+        raise ValueError("Windows Harness Koffi binary is missing")
+    for forbidden in _WINDOWS_FORBIDDEN_DEV_PACKAGES:
+        if (root / forbidden).exists():
+            raise ValueError(f"package contains development package: {forbidden}")
+    for emitted in (root / "harness" / "dist").glob("*.test.js"):
+        raise ValueError(f"package contains compiled Harness test: {emitted.name}")
+    verify_portable_manifest(root)
+
+
 def verify_embedded_entries(entries: set[str]) -> None:
     normalized = {_normalize_path(entry) for entry in entries}
     missing = REQUIRED_EMBEDDED - normalized
@@ -188,6 +394,8 @@ def _verify_env_has_no_active_secrets(env_path: Path) -> None:
 def verify_package_tree(root: Path, flavor: PackageFlavor) -> None:
     if not root.is_dir():
         raise ValueError(f"package root does not exist: {root}")
+    if flavor.bundled_harness and not (root / WINDOWS_KOFFI_BINARY).is_file():
+        raise ValueError("Windows Harness Koffi binary is missing")
     missing = [name for name in required_package_files(flavor) if not (root / name).is_file()]
     if missing:
         raise ValueError(f"package is missing required files: {', '.join(missing)}")
@@ -198,10 +406,14 @@ def verify_package_tree(root: Path, flavor: PackageFlavor) -> None:
         if path.is_symlink():
             raise ValueError(f"package contains links: {relative.as_posix()}")
         if path.is_dir():
-            _validate_content_path(parts + ("directory",), label="package")
+            _validate_package_content_path(
+                parts + ("directory",), label="package", flavor=flavor
+            )
         else:
-            _validate_content_path(parts, label="package")
+            _validate_package_content_path(parts, label="package", flavor=flavor)
     _verify_env_has_no_active_secrets(root / ".env")
+    if flavor.bundled_harness:
+        verify_windows_harness_runtime(root)
 
 
 def _hash_stream(stream) -> str:
@@ -219,7 +431,9 @@ def _verify_archive_names(names: Iterable[str], flavor: PackageFlavor) -> tuple[
         if parts[0] != flavor.name:
             raise ValueError(f"archive member is outside the top-level package: {name}")
         if len(parts) > 1:
-            _validate_content_path(parts[1:], label="archive")
+            _validate_package_content_path(
+                parts[1:], label="archive", flavor=flavor
+            )
         normalized_names.append("/".join(parts))
     if normalized_names.count(executable_name) != 1:
         raise ValueError(f"archive must contain exactly one {flavor.executable}")
@@ -330,18 +544,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify a portable Director Studio package")
     parser.add_argument("--platform", choices=sorted(FLAVORS), required=True)
     parser.add_argument("--package-root", type=Path, required=True)
-    parser.add_argument("--executable", type=Path, required=True)
-    parser.add_argument("--archive", type=Path, required=True)
+    parser.add_argument("--executable", type=Path)
+    parser.add_argument("--archive", type=Path)
     args = parser.parse_args(argv)
 
     try:
         flavor = FLAVORS[args.platform]
         verify_package_tree(args.package_root, flavor)
-        with args.executable.open("rb") as built, (args.package_root / flavor.executable).open("rb") as packaged:
-            if _hash_stream(built) != _hash_stream(packaged):
-                raise ValueError("package executable differs from the inspected build")
-        verify_embedded_entries(_embedded_entries(args.executable))
-        verify_archive(args.archive, args.package_root, flavor)
+        if (args.executable is None) != (args.archive is None):
+            raise ValueError("--executable and --archive must be supplied together")
+        if args.executable is not None and args.archive is not None:
+            with args.executable.open("rb") as built, (args.package_root / flavor.executable).open("rb") as packaged:
+                if _hash_stream(built) != _hash_stream(packaged):
+                    raise ValueError("package executable differs from the inspected build")
+            verify_embedded_entries(_embedded_entries(args.executable))
+            verify_archive(args.archive, args.package_root, flavor)
     except (OSError, ValueError, tarfile.TarError, zipfile.BadZipFile) as exc:
         print(f"Portable package verification failed: {exc}", file=sys.stderr)
         return 1

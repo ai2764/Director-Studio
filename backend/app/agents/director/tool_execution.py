@@ -211,6 +211,7 @@ async def execute_tools(
                 touched=touched,
                 result_payloads=result_payloads,
                 images=images,
+                user_feedback=user_feedback,
             ):
                 continue
             if await handle_casting_tool(

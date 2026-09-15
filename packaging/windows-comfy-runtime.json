@@ -1,0 +1,14 @@
+{
+  "platform": "windows",
+  "arch": "x64",
+  "python_version": "3.13.14",
+  "python_archive": "python-3.13.14-embed-amd64.zip",
+  "python_url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-embed-amd64.zip",
+  "python_sha256": "90b4e5b9898b72d744650524bff92377c367f44bd5fbd09e3148656c080ad907",
+  "pip_version": "25.1.1",
+  "pip_wheel": "pip-25.1.1-py3-none-any.whl",
+  "pip_url": "https://files.pythonhosted.org/packages/29/a2/d40fb2460e883eca5199c62cfc2463fd261f760556ae6290f88488c362c0/pip-25.1.1-py3-none-any.whl",
+  "pip_sha256": "2913a38a2abf4ea6b64ab507bd9e967f3b53dc1ede74b01b0931e1ce548751af",
+  "comfy_mcp_version": "0.10.0",
+  "comfy_cli_version": "1.20.0"
+}

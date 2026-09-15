@@ -164,12 +164,55 @@ export interface ChatResponse {
   steps?: string[];
 }
 
+export interface ChatCompactionResult {
+  compacted: boolean;
+  before_tokens: number;
+  after_tokens: number;
+  session_id: string;
+}
+
+export async function getDirectorRuntime(signal?: AbortSignal): Promise<{ runtime: string }> {
+  const res = await fetch("/api/director/runtime", { signal });
+  if (!res.ok) throw await directorResponseError(res);
+  return res.json();
+}
+
+export async function compactDirectorContext(projectId: string, signal?: AbortSignal): Promise<ChatCompactionResult> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/chat/compact`, { method: "POST", signal });
+  if (!res.ok) throw await directorResponseError(res);
+  return res.json();
+}
+
 export interface ChatStreamHandlers {
+  onContextUsage?: (usage: ContextUsage) => void;
   onStatus?: (text: string) => void;
   onRuntime?: (text: string) => void;
   onThink?: (text: string) => void;
   onToken?: (text: string) => void;
   onTool?: (text: string) => void;
+}
+
+export interface ContextUsage {
+  call_id: string;
+  sequence: number;
+  purpose: "turn" | "compaction";
+  provider: string;
+  model: string;
+  status: "running" | "completed" | "output_truncated" | "context_overflow" | "failed" | "cancelled";
+  context_window: number | null;
+  input_budget: number | null;
+  output_limit: number | null;
+  estimated_input_tokens: number;
+  estimated_parts: { system: number; conversation: number; tools: number; format: number };
+  image_count: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  reasoning_tokens: number | null;
+  thinking_chars: number | null;
+  content_chars: number | null;
+  tool_calls: number | null;
+  finish_reason: string | null;
+  elapsed_ms: number;
 }
 
 export async function chatWithDirector(
@@ -235,7 +278,7 @@ export async function chatWithDirectorStream(
       message?: string;
       code?: string;
       generation_count?: number;
-      data?: ChatResponse;
+      data?: ChatResponse | ContextUsage;
     };
     try {
       ev = JSON.parse(raw);
@@ -248,7 +291,8 @@ export async function chatWithDirectorStream(
     else if (t === "think" && ev.text) handlers.onThink?.(ev.text);
     else if (t === "token" && ev.text) handlers.onToken?.(ev.text);
     else if (t === "tool" && ev.text) handlers.onTool?.(ev.text);
-    else if (t === "result" && ev.data) finalResult = ev.data;
+    else if (t === "context_usage" && ev.data) handlers.onContextUsage?.(ev.data as ContextUsage);
+    else if (t === "result" && ev.data) finalResult = ev.data as ChatResponse;
     else if (t === "error") {
       streamError = ev.code
         ? new DirectorChatError(

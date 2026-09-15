@@ -6,6 +6,8 @@ import {
 import { ResizableWorkspace } from "../../shared/components/ResizableWorkspace";
 import { useProject } from "../../shared/project/ProjectContext";
 import { ShotWorkspace } from "./ShotWorkspace";
+import { ContextUsagePanel } from "./ContextUsage";
+import { ContextCompaction } from "./ContextCompaction";
 import { MobileShotDrawer } from "./MobileShotDrawer";
 import {
   cancelDirectorChatSession,
@@ -16,9 +18,9 @@ import {
   getDirectorModel,
   getDirectorVramStatus,
   getProject,
-  queueRefFrame,
   setDirectorModel,
   type ChatMessage,
+  type ContextUsage,
   type DirectorChatSessionStatus,
 } from "./api";
 import {
@@ -195,6 +197,8 @@ function DirectorAgentWorkspace({
   const [liveRuntime, setLiveRuntime] = useState("");
   const [liveThink, setLiveThink] = useState("");
   const [liveTokens, setLiveTokens] = useState("");
+  const [contextUsage, setContextUsage] = useState<ContextUsage[]>([]);
+  const [compactingContext, setCompactingContext] = useState(false);
   const [llmModel, setLlmModel] = useState<string>("");
   const [llmOptions, setLlmOptions] = useState<string[]>([]);
   const [llmProvider, setLlmProvider] = useState("LLM provider");
@@ -203,13 +207,15 @@ function DirectorAgentWorkspace({
   const [chatSession, setChatSession] = useState<DirectorChatSessionStatus>(IDLE_CHAT_SESSION);
   const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
   const chatAbortRef = useRef<AbortController | null>(null);
+  const usageProjectRef = useRef(projectId);
+  usageProjectRef.current = projectId;
   const chatLogRef = useRef<HTMLDivElement | null>(null);
   const seenLayouts = useRef<Set<string>>(new Set());
   const shotRevision = useRef(0);
   const handledRequestId = useRef<string | null>(null);
   const generationLocked = vramStatus?.chat_locked === true;
   const chatActive = chatSession.active;
-  const chatDisabled = busy || generationLocked || chatActive || !llmModel;
+  const chatDisabled = busy || compactingContext || generationLocked || chatActive || !llmModel;
 
   const addChatImages = (files: FileList | null) => {
     if (!files?.length) return;
@@ -312,6 +318,7 @@ function DirectorAgentWorkspace({
     try {
       const st = await setDirectorModel(model, true);
       setLlmModel(st.model);
+      setContextUsage([]);
       if (st.available?.length) setLlmOptions(st.available);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -329,6 +336,7 @@ function DirectorAgentWorkspace({
   useEffect(() => {
     seenLayouts.current = new Set();
     setLoadedProjectId(null);
+    setContextUsage([]);
     setChatSession(IDLE_CHAT_SESSION);
     if (!projectId) {
       replaceShots([]);
@@ -503,6 +511,7 @@ function DirectorAgentWorkspace({
     const optimisticMessageId = `director-local-${Date.now()}-${Math.random()}`;
     setDraft("");
     const requestMessage = message;
+    setContextUsage([]);
     setPendingImages([]);
     setMessages((m) => [
       ...m,
@@ -531,6 +540,13 @@ function DirectorAgentWorkspace({
     });
     try {
       const handlers = {
+        onContextUsage: (usage: ContextUsage) => {
+          if (chatAbortRef.current !== controller || controller.signal.aborted || usageProjectRef.current !== projectId) return;
+          setContextUsage((calls) => {
+            const existing = calls.findIndex((call) => call.call_id === usage.call_id);
+            return (existing < 0 ? [...calls, usage] : calls.map((call, index) => index === existing ? usage : call)).slice(-64);
+          });
+        },
         onStatus: (t: string) => setLiveStatus((s) => [...s.slice(-40), t]),
         onRuntime: (t: string) => setLiveRuntime(t),
         onThink: (t: string) => setLiveThink((prev) => prev + t),
@@ -605,6 +621,11 @@ function DirectorAgentWorkspace({
       if (chatAbortRef.current === controller) {
         chatAbortRef.current = null;
       }
+      if (usageProjectRef.current === projectId) {
+        setContextUsage((calls) => calls.map((call) => call.status === "running"
+          ? { ...call, status: controller.signal.aborted ? "cancelled" : "failed" }
+          : call));
+      }
       setChatSession(IDLE_CHAT_SESSION);
       setBusy(false);
       setLiveStatus([]);
@@ -647,40 +668,6 @@ function DirectorAgentWorkspace({
     void send(requestedMessage.message);
   }, [requestedMessage, projectId, loadedProjectId, chatDisabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const regenerateReferenceFrame = async (shot: Shot) => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    setLiveStatus([`Queueing reference frame: ${shot.title}`]);
-    try {
-      const updated = await queueRefFrame(shot.id);
-      if (updated.length) {
-        const byId = new Map(updated.map((item) => [item.id, item]));
-        shotRevision.current += 1;
-        setShots((current) => current.map((item) => byId.get(item.id) || item));
-      }
-      setMessages((current) => [
-        ...current,
-        {
-          role: "assistant",
-          content: updated.length
-            ? `Queued the reference frame for ${shot.title}. When generation finishes, it will appear in the Layout collection for review.`
-            : `A reference-frame job for ${shot.title} is already running.`,
-        },
-      ]);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      setError(message);
-      setMessages((current) => [
-        ...current,
-        { role: "assistant", content: `Could not queue the reference frame: ${message}` },
-      ]);
-    } finally {
-      setBusy(false);
-      setLiveStatus([]);
-    }
-  };
-
   const updateShot = (updated: Shot) => {
     shotRevision.current += 1;
     setShots((current) => current.map((shot) => shot.id === updated.id ? updated : shot));
@@ -689,7 +676,10 @@ function DirectorAgentWorkspace({
   const chips = [
     { label: "Project status", text: "status" },
     { label: "Plan shots", text: "plan" },
-    { label: "Generate references", text: "reference frame all" },
+    {
+      label: "Discuss Layouts",
+      text: "I want to discuss whether any shots would benefit from optional Layout studies. Ask what visual states I want before proposing sources. Do not queue generation yet.",
+    },
   ];
   const selectedShotIndex = Math.max(0, shots.findIndex((shot) => shot.id === selectedShotId));
   const selectedShot = shots[selectedShotIndex] ?? null;
@@ -738,6 +728,10 @@ function DirectorAgentWorkspace({
               </select>
             </label>
           </div>
+          <ContextUsagePanel calls={contextUsage} />
+          {projectId ? <ContextCompaction key={projectId} projectId={projectId}
+            disabled={busy || generationLocked || chatActive || llmBusy || !llmModel}
+            onBusyChange={setCompactingContext} /> : null}
         </div>
 
         {mobile && !chatOnly ? (
@@ -934,7 +928,6 @@ function DirectorAgentWorkspace({
     <ShotWorkspace
       shots={shots}
       busy={busy}
-      onRegenerate={(shot) => void regenerateReferenceFrame(shot)}
       onSend={(message) => void send(message)}
       onSelectShot={(shot) => setSelectedShotId(shot.id)}
       onShotUpdated={updateShot}

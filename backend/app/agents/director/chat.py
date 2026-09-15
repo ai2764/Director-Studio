@@ -128,6 +128,17 @@ async def handle_chat(
     user_image_captions: list[str] | None = None,
 ) -> ChatResult:
     """Preserve the public chat entry point while delegating orchestration."""
+    from ...config import settings
+
+    if settings.director_agent_runtime == "harness":
+        from .harness_runtime import handle_harness_chat
+
+        return await handle_harness_chat(
+            project_id=project_id, message=message, svc=svc, chat_fn=chat_fn,
+            history=history, on_progress=on_progress,
+            user_images_b64=user_images_b64,
+            user_image_captions=user_image_captions,
+        )
     return await orchestrate_chat(
         project_id=project_id,
         message=message,

@@ -106,7 +106,7 @@ vi.mock("../features/production/ProductionPage", () => ({
   }: {
     active?: boolean;
     mobile?: boolean;
-    onReviewMaterials?: (shot: Shot, shotNumber: number) => void;
+    onReviewMaterials?: (shot: Shot, shotNumber: number, message: string) => void;
   }) => (
     <main
       aria-label={mobile ? "Mobile production review" : "Desktop production workspace"}
@@ -116,7 +116,11 @@ vi.mock("../features/production/ProductionPage", () => ({
     >
       <button
         type="button"
-        onClick={() => onReviewMaterials?.({ id: "sht_3", title: "Taking the Chair" } as Shot, 3)}
+        onClick={() => onReviewMaterials?.(
+          { id: "sht_3", title: "Taking the Chair" } as Shot,
+          3,
+          "Keep the new chair reference.",
+        )}
       >
         Simulate material save
       </button>
@@ -311,6 +315,9 @@ describe("App mode routing", () => {
     expect(screen.getByTestId("director-page").textContent).toContain(
       "Shot 03 references changed",
     );
+    expect(screen.getByTestId("director-page").textContent).toContain(
+      "Keep the new chair reference.",
+    );
   });
 
   it("opens mobile Director chat with a saved-material review request", () => {
@@ -322,6 +329,9 @@ describe("App mode routing", () => {
     expect(screen.getByRole("button", { name: "Director" }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByTestId("director-page").textContent).toContain(
       "Shot 03 references changed",
+    );
+    expect(screen.getByTestId("director-page").textContent).toContain(
+      "Keep the new chair reference.",
     );
   });
 

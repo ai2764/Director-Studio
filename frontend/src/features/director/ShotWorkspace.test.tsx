@@ -47,7 +47,21 @@ describe("ShotWorkspace", () => {
     const updated = {
       ...selected,
       refs: [selected.refs[0]],
-      meta: { material_review_pending: true },
+      meta: {
+        material_review_pending: true,
+        material_changes: {
+          added: [],
+          removed: [
+            {
+              role: "layout_ref_frame",
+              asset_id: "lay_1",
+              file_key: "layout",
+              picture_index: 2,
+            },
+          ],
+          reordered: [],
+        },
+      },
     };
     replaceShotMaterialsMock.mockResolvedValue(updated);
     const onSend = vi.fn();
@@ -56,7 +70,6 @@ describe("ShotWorkspace", () => {
       <ShotWorkspace
         shots={[selected]}
         busy={false}
-        onRegenerate={vi.fn()}
         onSend={onSend}
         onOpenImage={vi.fn()}
       />,
@@ -65,10 +78,14 @@ describe("ShotWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit materials" }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove Picture 2 · lay_1" }));
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    fireEvent.change(screen.getByLabelText("Message to Agent (optional)"), {
+      target: { value: "The actor should now enter from frame left." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save & send to Agent" }));
 
     await waitFor(() => {
-      expect(onSend).toHaveBeenCalledWith(expect.stringContaining(
-        "Shot 01 references changed",
+      expect(onSend).toHaveBeenCalledWith(expect.stringMatching(
+        /Shot 01 references changed[\s\S]*"removed"[\s\S]*lay_1[\s\S]*The actor should now enter from frame left\./,
       ));
     });
   });
@@ -78,7 +95,6 @@ describe("ShotWorkspace", () => {
       <ShotWorkspace
         shots={[shot("s1", "Arrival"), shot("s2", "Reveal")]}
         busy={false}
-        onRegenerate={vi.fn()}
         onSend={vi.fn()}
         onOpenImage={vi.fn()}
       />,
@@ -88,6 +104,56 @@ describe("ShotWorkspace", () => {
     const board = screen.getByRole("img", { name: "Storyboard shot board" });
     expect(board.getAttribute("src")).toBe("/storyboard-shot-board.png");
     expect(screen.queryByText("Project storyboard")).toBeNull();
+  });
+
+  it("saves material changes without starting an Agent review", async () => {
+    const selected = shot("s1", "Arrival");
+    selected.refs = [
+      { role: "actor", asset_id: "act_1", file_key: "master", picture_index: 1 },
+    ];
+    const updated = { ...selected, refs: [] };
+    replaceShotMaterialsMock.mockResolvedValue(updated);
+    const onSend = vi.fn();
+
+    render(
+      <ShotWorkspace
+        shots={[selected]}
+        busy={false}
+        onSend={onSend}
+        onOpenImage={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit materials" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Picture 1 · act_1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(replaceShotMaterialsMock).toHaveBeenCalledWith("s1", []);
+      expect(screen.queryByRole("dialog", { name: "Edit Shot 01 materials" })).toBeNull();
+    });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("treats a missing Layout as optional and starts a Director discussion", () => {
+    const onSend = vi.fn();
+    render(
+      <ShotWorkspace
+        shots={[shot("s1", "Arrival")]}
+        busy={false}
+        onSend={onSend}
+        onOpenImage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Layout is optional for H3.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Generate reference frame" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Discuss a Layout" }));
+
+    expect(onSend).toHaveBeenCalledWith(expect.stringMatching(
+      /shot "Arrival" \(s1\).*do not queue generation yet/is,
+    ));
   });
 
   it("does not show an optional Layout issue as a blocking error when the H3 prompt is ready", () => {
@@ -110,7 +176,6 @@ describe("ShotWorkspace", () => {
       <ShotWorkspace
         shots={[selected]}
         busy={false}
-        onRegenerate={vi.fn()}
         onSend={vi.fn()}
         onOpenImage={vi.fn()}
       />,
@@ -125,7 +190,6 @@ describe("ShotWorkspace", () => {
       <ShotWorkspace
         shots={[shot("s1", "Arrival"), shot("s2", "Reveal")]}
         busy={false}
-        onRegenerate={vi.fn()}
         onSend={vi.fn()}
         onOpenImage={vi.fn()}
       />,
@@ -154,7 +218,6 @@ describe("ShotWorkspace", () => {
       <ShotWorkspace
         shots={[shot("s1", "Arrival")]}
         busy={false}
-        onRegenerate={vi.fn()}
         onSend={vi.fn()}
         onOpenImage={vi.fn()}
       />,
@@ -193,7 +256,6 @@ describe("ShotWorkspace", () => {
       <ShotWorkspace
         shots={[selected]}
         busy={false}
-        onRegenerate={vi.fn()}
         onSend={vi.fn()}
         onOpenImage={vi.fn()}
       />,
@@ -212,7 +274,6 @@ describe("ShotWorkspace", () => {
       <ShotWorkspace
         shots={[shot("s1", "Arrival"), shot("s2", "Reveal")]}
         busy={false}
-        onRegenerate={vi.fn()}
         onSend={vi.fn()}
         onOpenImage={vi.fn()}
       />,
@@ -256,7 +317,6 @@ describe("ShotWorkspace", () => {
       <ShotWorkspace
         shots={[selected]}
         busy={false}
-        onRegenerate={vi.fn()}
         onSend={vi.fn()}
         onOpenImage={vi.fn()}
       />,

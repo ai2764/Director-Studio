@@ -8,6 +8,7 @@ from typing import Any, Callable
 from ....core.projects.models import AssetCoverageReview, Project, Shot
 from ....core.projects.store import save_project
 from ..planner import (
+    AppendShotSubmission,
     ShotRefsPatchSubmission,
     ShotRevisionSubmission,
     ShotSceneRefSelection,
@@ -82,6 +83,14 @@ async def handle_project_tool(
         )
         return True
 
+    if name == "append_shot":
+        shot = svc.append_shot(project_id, AppendShotSubmission.model_validate(args))
+        actions.append("append_shot")
+        if result_payloads is not None:
+            result_payloads.append({"ok": True, "shot": storyboard_snapshot([shot])["shots"][0]})
+        notes.append(f"Appended one Shot ({shot.id}) at the end; all existing Shots and production state were preserved.")
+        return True
+
     if name == "save_storyboard":
         submission = StoryboardSubmission.model_validate(args)
         persisted = await svc.save_storyboard(
@@ -118,7 +127,12 @@ async def handle_project_tool(
         persisted = svc.revise_shot(project_id, revision)
         actions.append("revise_shot")
         if result_payloads is not None:
-            result_payloads.append({"storyboard": storyboard_snapshot(persisted)})
+            # Report the saved target, not a full board per edit (quadratic in
+            # batch size). The complete storyboard remains in the project store.
+            revised = next(shot for shot in persisted if shot.id == revision.shot_id)
+            result_payloads.append(
+                {"ok": True, "shot": storyboard_snapshot([revised])["shots"][0]}
+            )
         notes.append(
             f"Revised exactly one Shot ({revision.shot_id}); neighboring Shots, "
             "references, and Layouts were preserved. Its stale prompt and active "
@@ -149,7 +163,6 @@ async def handle_project_tool(
         if not (project.script_text or "").strip():
             notes.append("Cannot plan shots: the project has no script")
             return True
-        actions.append("plan")
         try:
             await svc.plan_project(project_id)
         except Exception as exc:
@@ -163,6 +176,7 @@ async def handle_project_tool(
                 "Retry or inspect the Ollama output."
             )
         else:
+            actions.append("plan")
             titles = ", ".join(shot.title for shot in shots[:6])
             extra = f": {titles}" if titles else ""
             notes.append(

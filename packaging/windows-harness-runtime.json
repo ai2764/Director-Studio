@@ -1,0 +1,9 @@
+{
+  "platform": "windows",
+  "arch": "x64",
+  "node_version": "22.23.2",
+  "node_archive": "node-v22.23.2-win-x64.zip",
+  "node_url": "https://nodejs.org/download/release/v22.23.2/node-v22.23.2-win-x64.zip",
+  "node_sha256": "1177b4137ba5adaa56354ae40f1080c7450e8ae09cecb47da459d1c52ac99f97",
+  "koffi_binary": "harness/node_modules/@koromix/koffi-win32-x64/win32_x64/koffi.node"
+}

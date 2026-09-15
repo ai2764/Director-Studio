@@ -280,12 +280,23 @@ class OpenAICompatibleClient:
                     "arguments": arguments if isinstance(arguments, dict) else {},
                 }
             )
-        return {
+        result: LLMResult = {
             "content": str(message.content or ""),
             "thinking": _reasoning(message),
             "tool_calls": normalized_calls,
             "finish_reason": str(choice.finish_reason or ""),
         }
+        usage = {}
+        for source, target in (("prompt_tokens", "input_tokens"), ("completion_tokens", "output_tokens")):
+            count = _value(response.usage, source)
+            if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                usage[target] = count
+        reasoning = _value(_value(response.usage, "completion_tokens_details"), "reasoning_tokens")
+        if isinstance(reasoning, int) and not isinstance(reasoning, bool) and reasoning >= 0:
+            usage["reasoning_tokens"] = reasoning
+        if usage:
+            result["usage"] = usage
+        return result
 
     @staticmethod
     def _text(result: LLMResult) -> str:

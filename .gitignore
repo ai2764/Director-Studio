@@ -15,6 +15,7 @@ htmlcov/
 
 node_modules/
 frontend/dist/
+harness/dist/
 /build/
 /dist/
 .DS_Store

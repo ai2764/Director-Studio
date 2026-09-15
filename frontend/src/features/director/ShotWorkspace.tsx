@@ -83,7 +83,6 @@ function ReferenceThumb({ refItem, onOpen }: { refItem: ShotRef; onOpen: (url: s
 export function ShotWorkspace({
   shots,
   busy,
-  onRegenerate,
   onSend,
   onSelectShot,
   onShotUpdated,
@@ -91,7 +90,6 @@ export function ShotWorkspace({
 }: {
   shots: Shot[];
   busy: boolean;
-  onRegenerate: (shot: Shot) => void;
   onSend: (message: string) => void;
   onSelectShot?: (shot: Shot) => void;
   onShotUpdated?: (shot: Shot) => void;
@@ -260,14 +258,18 @@ export function ShotWorkspace({
                     />
                   ) : (
                     <div className="shot-document-empty">
-                      <p>No visual Layout has been generated for this Shot.</p>
+                      <p>Layout is optional for H3.</p>
                       <button
                         type="button"
                         className="mode-chip"
-                        disabled={busy || (selected.status === "ref_frame_pending" && Boolean(selected.ref_frame_job_id))}
-                        onClick={() => onRegenerate(selected)}
+                        disabled={busy}
+                        onClick={() => onSend(
+                          `I want to discuss whether a reference frame would help shot "${selected.title}" (${selected.id}). ` +
+                          "No Layout exists for this shot. Ask what distinct visual state I want and which references should control it. " +
+                          "Do not queue generation yet; start the discussion with me."
+                        )}
                       >
-                        Generate reference frame
+                        Discuss a Layout
                       </button>
                     </div>
                   )}
@@ -309,9 +311,11 @@ export function ShotWorkspace({
               shotNumber={selectedIndex + 1}
               onClose={() => setMaterialEditorOpen(false)}
               onOpenImage={onOpenImage}
-              onSaved={(updated) => {
+              onSaved={(updated, message, notifyAgent) => {
                 onShotUpdated?.(updated);
-                onSend(materialReviewMessage(updated, selectedIndex + 1));
+                if (notifyAgent) {
+                  onSend(materialReviewMessage(updated, selectedIndex + 1, message));
+                }
               }}
             />
           ) : null}
