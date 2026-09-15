@@ -18,7 +18,7 @@ from .chat_orchestrator import (
     _claims_completed_storyboard, _layout_images, _requested_minimum_duration_s,
     sanitize_tools_for_pipeline,
 )
-from .harness_client import HarnessClient
+from .harness_client import HarnessClient, HarnessError
 from .intent import actor_design_intent, explicit_gpt_image_intent
 from .planner import AppendShotSubmission, ShotRevisionSubmission
 from .tool_schema import director_chat_guides, director_tool_schemas, IMAGE_TOOLS
@@ -57,8 +57,9 @@ class BackendTurn:
         self.notes: list[str] = []
         self.budget = _StoryboardSubmissionBudget()
         self.call_ids: set[str] = set()
-        self.calls: set[str] = set()
+        self.calls: set[tuple[str, str]] = set()
         self.storyboard_failed = False
+        self.terminal_failure: str | None = None
         self.expected_state: str | None = None
         self.local_generation_receipt: str | None = None
         self.offered_context: dict | None = None
@@ -69,8 +70,12 @@ class BackendTurn:
         if project is None:
             raise ValueError("Project not found")
         shots = list_shots(self.project_id)
+        project_state = project.model_dump(mode="json")
+        # Store writes refresh this display timestamp even for a semantic no-op.
+        # Dedupe and stale-inference authority follow content, not filesystem time.
+        project_state.pop("updated_at", None)
         version = hashlib.sha256(json.dumps(
-            [project.model_dump(mode="json"), [s.model_dump(mode="json") for s in shots]],
+            [project_state, [s.model_dump(mode="json") for s in shots]],
             sort_keys=True, ensure_ascii=False,
         ).encode()).hexdigest()
         return project, shots, version
@@ -83,6 +88,25 @@ class BackendTurn:
             allow_save_storyboard=not self.budget.exhausted,
             include_chat_image_import=pending,
         )
+        if not pending and _needs_fresh_storyboard(project, shots):
+            tools = [
+                tool for tool in tools
+                if tool["function"]["name"] not in IMAGE_TOOLS
+            ]
+            if not any(tool["function"]["name"] == "save_storyboard" for tool in tools):
+                catalog = director_tool_schemas(
+                    project,
+                    current_message="",
+                    allow_save_storyboard=not self.budget.exhausted,
+                )
+                replacement = next(
+                    (tool for tool in catalog if tool["function"]["name"] == "save_storyboard"),
+                    None,
+                )
+                if replacement is not None:
+                    tools.append(replacement)
+        if self.terminal_failure:
+            tools = []
         state = (gpt_generation_context_blob(project, shots, self.message)
                  if explicit_gpt_image_intent(self.message) and not actor_design_intent(self.message)
                  else project_context_blob(project, shots, message=self.message, focused=True))
@@ -91,6 +115,13 @@ class BackendTurn:
             system += "\nInspect the images attached by the backend."
             if self.uploads:
                 system += " Classify every uploaded image before unrelated changes."
+        if self.terminal_failure:
+            system += (
+                "\nA derived prompt operation already failed after its bounded internal "
+                "repair attempts. Explain the confirmed failure and the unchanged project "
+                "state. Do not alter the script, storyboard, dialogue, references, or Layouts "
+                "to work around it in this turn."
+            )
         system = with_director_skill(system, guides=director_chat_guides(
             project, include_visual_qc=bool(self.images), current_message=self.message,
         ))
@@ -213,9 +244,11 @@ class BackendTurn:
         name, args, call_id = params.get("name"), params.get("arguments"), params.get("call_id")
         if not isinstance(name, str) or not isinstance(args, dict) or not isinstance(call_id, str) or not call_id:
             return {"ok": False, "error": "Tool name, object arguments and call_id are required"}
-        fingerprint = json.dumps([name, args], sort_keys=True, ensure_ascii=False)
-        if call_id in self.call_ids or (name != "get_status" and fingerprint in self.calls):
+        if call_id in self.call_ids:
             return {"ok": False, "error": "Repeated call rejected. Inspect the existing outcome; do not replay a mutation."}
+        if self.terminal_failure:
+            return {"ok": False, "retryable": False, "error": self.terminal_failure}
+        fingerprint = json.dumps([name, args], sort_keys=True, ensure_ascii=False)
         # One model step may request many legitimate shot edits. Keep its
         # inference limit separate from this bounded per-turn admission budget.
         if len(self.call_ids) >= settings.harness_max_tool_calls:
@@ -232,8 +265,6 @@ class BackendTurn:
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
             fingerprint = json.dumps([name, args], sort_keys=True, ensure_ascii=False)
-            if fingerprint in self.calls:
-                return {"ok": False, "error": "Repeated append rejected; inspect the saved Shot before continuing."}
         if name == "revise_shot":
             try:
                 # Use the same partial-update model as the business handler;
@@ -247,12 +278,15 @@ class BackendTurn:
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
             fingerprint = json.dumps([name, args], sort_keys=True, ensure_ascii=False)
-            if fingerprint in self.calls:
-                return {"ok": False, "error": "Repeated call rejected. Inspect the existing outcome; do not replay a mutation."}
         errors = list(Draft202012Validator(schema["parameters"]).iter_errors(args))
         if errors:
             return {"ok": False, "error": errors[0].message}
         project, shots, version = self.snapshot()
+        if name != "get_status" and (
+            (version, raw_fingerprint) in self.calls
+            or (version, fingerprint) in self.calls
+        ):
+            return {"ok": False, "error": "Repeated call rejected. Inspect the existing outcome; do not replay a mutation."}
         if self.expected_state is not None and version != self.expected_state:
             return {"ok": False, "error": "Project changed since inference. Refresh context and reconsider the call."}
         if self.storyboard_failed and name in IMAGE_TOOLS:
@@ -267,7 +301,7 @@ class BackendTurn:
         before = len(self.actions)
         # Only execution makes a mutation's outcome potentially unknown. Schema,
         # availability and stale-state rejections are safe for fresh inference to repair.
-        self.calls.update((raw_fingerprint, fingerprint))
+        self.calls.update(((version, raw_fingerprint), (version, fingerprint)))
         notes, touched = await _run_tools(
             project_id=self.project_id, tools=[requested], svc=self.svc,
             actions=self.actions, on_progress=self.on_progress, result_payloads=payloads,
@@ -283,6 +317,13 @@ class BackendTurn:
             result.update(ok=False, error="No successful operation confirmed. " + " ".join(notes))
         if name == "save_storyboard":
             self.storyboard_failed = not result["ok"]
+        if name == "write_prompt" and not result["ok"]:
+            failure = str(result.get("error") or "Prompt generation failed.")
+            self.terminal_failure = (
+                "Prompt generation did not complete after bounded internal repair. "
+                f"The saved storyboard was not changed to work around it. {failure}"
+            )
+            result.update(retryable=False, code="PROMPT_GENERATION_FAILED")
         completed_actions = self.actions[before:]
         if result["ok"] and any(
             action == "ref_frame_all" or action.startswith("ref_frame:")
@@ -320,18 +361,48 @@ async def handle_harness_chat(*, project_id, message, svc, chat_fn=None, history
         if wants_vision(message) or layout_ids:
             pack = collect_vision_attachments(project_id=project_id, shots=shots, message=message, layout_ref_ids=layout_ids or None)
             turn.images = list(pack.get("images_b64") or [])
-    result = await HarnessClient(settings.harness_base_url, settings.harness_internal_token,
-                                 timeout=settings.harness_turn_timeout_sec).run(
-        {"message": message, "history": [],
-         "session_id": harness_session_id(project_id),
-         # Harness meters prompt pressure. Reserve the provider's configured
-         # completion allowance so long history is compacted before it can
-         # consume the space Qwen needs to finish reasoning and tool output.
-         "context_window": harness_input_budget(len(turn.images)),
-         "max_steps": settings.harness_max_steps},
-        turn.dispatch, on_progress,
-    )
+    try:
+        result = await HarnessClient(settings.harness_base_url, settings.harness_internal_token,
+                                     timeout=settings.harness_turn_timeout_sec).run(
+            {"message": message, "history": [],
+             "session_id": harness_session_id(project_id),
+             # Harness meters prompt pressure. Reserve the provider's configured
+             # completion allowance so long history is compacted before it can
+             # consume the space Qwen needs to finish reasoning and tool output.
+             "context_window": harness_input_budget(len(turn.images)),
+             "max_steps": settings.harness_max_steps},
+            turn.dispatch, on_progress,
+        )
+    except HarnessError as exc:
+        if exc.code != "MAX_STEPS":
+            raise
+        confirmed = " ".join(turn.notes[-3:]).strip()
+        detail = (
+            f" Last confirmed issue: {turn.terminal_failure}"
+            if turn.terminal_failure
+            else f" Confirmed before stopping: {confirmed}" if confirmed else ""
+        )
+        result = {
+            "reply": (
+                "I couldn't safely complete this request in one turn. Any listed tool "
+                "results were preserved; any additional action is not confirmed."
+                f"{detail} Please continue with the specific pending step you want next."
+            ),
+            "thinking": "",
+        }
     return turn.finish(result)
+
+
+def _needs_fresh_storyboard(project, shots) -> bool:
+    from .context_io import load_agent_context
+    from .service import _script_hash
+
+    script = (project.script_text or "").strip()
+    if not script:
+        return False
+    planned = load_agent_context(project.id)
+    planned_hash = (planned.script_hash if planned else "") or ""
+    return not shots or planned_hash != _script_hash(script)
 
 
 def harness_session_id(project_id: str) -> str:

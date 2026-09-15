@@ -16,7 +16,7 @@ def project_context_blob(
     focused: bool = False,
 ) -> str:
     from .context_io import load_agent_context
-    from .intent import shot_ref
+    from .intent import explicit_layout_generation_intent, shot_ref
     from .service import _inventory, _script_hash
 
     inv = _inventory(project.id)
@@ -38,10 +38,9 @@ def project_context_blob(
         next_step = "review_asset_coverage"
     elif not shots or shots_stale:
         next_step = "save_storyboard"
-    elif any(
+    elif explicit_layout_generation_intent(message) and any(
         (s.status.value if hasattr(s.status, "value") else str(s.status))
         in ("ref_frame_pending", "draft", "planning", "blocked", "failed")
-        or not s.layout_asset_id
         for s in shots
     ):
         next_step = "queue_ref_frame"

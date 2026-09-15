@@ -119,6 +119,42 @@ def test_wrapped_dialogue_does_not_require_identical_whitespace():
         '[Shot 1] (S1) says <d>[English] We should\n leave now.</d>')), ["We should leave now."])
 
 
+def test_screenplay_speaker_labels_are_not_spoken_words():
+    validate_h3_prompt(
+        compose_h3_prompt(
+            prompt(
+                detailed_description=(
+                    '[Shot 1] Mia says <d>[English] Final check complete.</d> '
+                    'Elsa answers <d>[English] Then let us go.</d>'
+                )
+            )
+        ),
+        ['MIA: "Final check complete."', 'ELSA: "Then let us go."'],
+    )
+
+
+def test_unquoted_screenplay_speaker_label_is_not_spoken_words():
+    validate_h3_prompt(
+        compose_h3_prompt(
+            prompt(detailed_description='[Shot 1] Mia says <d>[English] Go.</d>')
+        ),
+        ["Mia: Go."],
+    )
+
+
+def test_language_tag_accidentally_saved_in_storyboard_is_not_spoken_words():
+    validate_h3_prompt(
+        compose_h3_prompt(
+            prompt(
+                detailed_description=(
+                    '[Shot 1] Mia says <d>[English] Final check complete.</d>'
+                )
+            )
+        ),
+        ['[English] MIA: "Final check complete."'],
+    )
+
+
 @pytest.mark.parametrize("dialogue,detail", [
     (["Hello.", "Come in."], '<d>[English] Come in. Hello.</d>'),
     (["Hello."], '<d>[English] Hello. Extra words.</d>'),

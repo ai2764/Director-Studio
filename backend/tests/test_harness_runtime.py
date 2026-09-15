@@ -649,12 +649,142 @@ async def test_backend_tools_validate_refresh_and_deduplicate(tmp_projects_dir):
     valid = {"name": "set_script", "arguments": {"script": "A cat opens a box."}, "call_id": "good"}
     assert (await turn.dispatch("tool", valid))["ok"] is True
     assert load_project(project.id).script_text == "A cat opens a box."
-    assert (await turn.dispatch("tool", {**valid, "call_id": "again"}))["ok"] is False
-    assert turn.actions == ["set_script"]
+    assert (await turn.dispatch("tool", {**valid, "call_id": "again"}))["ok"] is True
+    unchanged_replay = await turn.dispatch("tool", {**valid, "call_id": "third"})
+    assert unchanged_replay["ok"] is False
+    assert turn.actions == ["set_script", "set_script"]
     save_project(load_project(project.id).model_copy(update={"script_locked": True}))
     blocked = await turn.dispatch("tool", {"name": "set_script", "arguments": {"script": "wrong"}, "call_id": "blocked"})
     assert blocked["ok"] is False
     assert load_project(project.id).script_text == "A cat opens a box."
+
+
+def test_stale_storyboard_does_not_offer_tools_the_pipeline_will_reject(
+    tmp_projects_dir,
+):
+    from app.agents.director.harness_runtime import BackendTurn
+
+    project = create_project("stale tool catalog", "A cat waits.")
+    shot = Shot(
+        id="sht_stale_catalog",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Old plan",
+        script_beat="An older beat.",
+        duration_s=5,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+
+    context = BackendTurn(project.id, "Write Shot 1's prompt", None, None).context()
+    names = {tool["function"]["name"] for tool in context["tools"]}
+
+    assert "save_storyboard" in names
+    assert "write_prompt" not in names
+    assert "queue_ref_frame" not in names
+
+
+@pytest.mark.asyncio
+async def test_failed_prompt_write_makes_remainder_of_turn_explain_only(
+    tmp_projects_dir,
+):
+    from app.agents.director.harness_runtime import BackendTurn
+
+    project = create_project("terminal prompt failure", "")
+    shot = Shot(
+        id="sht_prompt_failure",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Greeting",
+        script_beat="A greeting.",
+        duration_s=5,
+        dialogue=['MIA: "Hello."'],
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+
+    class Service:
+        async def write_prompts_after_layout(self, shot_id):
+            raise ValueError("dialogue validation failed")
+
+    turn = BackendTurn(project.id, "Write Shot 1's prompt", Service(), None)
+    await turn.dispatch("context", {})
+    result = await turn.dispatch(
+        "tool",
+        {
+            "name": "write_prompt",
+            "arguments": {"shot_id": shot.id},
+            "call_id": "write-1",
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["retryable"] is False
+    refreshed = turn.context()
+    assert refreshed["tools"] == []
+    assert "explain" in refreshed["system"].lower()
+
+
+def test_missing_optional_layout_recommends_prompt_not_layout(tmp_projects_dir):
+    from app.agents.director.chat_context import project_context_blob
+    from app.agents.director.context_io import save_agent_context
+    from app.agents.director.service import _script_hash
+    from app.core.projects.models import AgentContext
+
+    project = create_project("optional layout", "A cat waits.")
+    shot = Shot(
+        id="sht_without_layout",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Direct prompt",
+        script_beat="A cat waits.",
+        duration_s=5,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    save_agent_context(
+        project.id,
+        AgentContext(project_id=project.id, script_hash=_script_hash(project.script_text)),
+    )
+
+    state = json.loads(project_context_blob(load_project(project.id), [shot]))
+    assert state["recommended_next_step"] == "write_or_rewrite_prompt"
+    requested = json.loads(
+        project_context_blob(
+            load_project(project.id), [shot], message="Generate a Layout for Shot 1."
+        )
+    )
+    assert requested["recommended_next_step"] == "queue_ref_frame"
+
+
+@pytest.mark.asyncio
+async def test_max_steps_returns_a_normal_unconfirmed_outcome(
+    tmp_projects_dir,
+    monkeypatch,
+):
+    from app.agents.director import harness_runtime
+    from app.agents.director.harness_client import HarnessError
+
+    project = create_project("bounded fallback", "")
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run(self, body, dispatch, on_progress):
+            raise HarnessError("Harness step limit reached", code="MAX_STEPS")
+
+    monkeypatch.setattr(harness_runtime, "HarnessClient", Client)
+    result = await harness_runtime.handle_harness_chat(
+        project_id=project.id,
+        message="Keep going",
+        svc=None,
+        chat_fn=None,
+    )
+
+    assert "Something went wrong" not in result.reply
+    assert "MAX_STEPS" not in result.reply
+    assert "not confirmed" in result.reply.lower()
 
 
 @pytest.mark.asyncio
@@ -710,8 +840,11 @@ async def test_real_shot_revision_preserves_neighbor(tmp_projects_dir, duration)
     assert finished.shots[0].title == "The waiting cat"
     for index, equivalent in enumerate(["7", "7.0", 7, 7.0]):
         replay = await turn.dispatch("tool", {"call_id": f"replay-{index}", "name": "revise_shot", "arguments": {**arguments, "duration_s": equivalent}})
-        assert replay["ok"] is False and "Repeated" in replay["error"]
-    assert turn.actions == ["revise_shot"]
+        if index == 0:
+            assert replay["ok"] is True
+        else:
+            assert replay["ok"] is False and "Repeated" in replay["error"]
+    assert turn.actions == ["revise_shot", "revise_shot"]
 
 
 @pytest.mark.asyncio

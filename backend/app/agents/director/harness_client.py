@@ -14,7 +14,9 @@ import httpx
 
 
 class HarnessError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 class HarnessClient:
@@ -109,7 +111,11 @@ class HarnessClient:
                                 result["compaction"] = event["compaction"]
                             return result
                         elif kind == "error":
-                            raise HarnessError(f"Harness {event.get('code', 'error')}: {event.get('message', '')}")
+                            code = str(event.get("code") or "HARNESS_ERROR")
+                            raise HarnessError(
+                                f"Harness {code}: {event.get('message', '')}",
+                                code=code,
+                            )
                         elif kind in {"status", "runtime"} and on_progress:
                             await on_progress({"type": kind, "text": str(event.get("text") or "")[:2000]})
                     raise HarnessError("Harness turn interrupted; no final result received. Completed tools were not replayed.")

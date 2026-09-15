@@ -115,6 +115,22 @@ def _dialogue_text(text: str) -> str:
     return re.sub(r"(?<=[\u3400-\u9fff]) (?=[\u3400-\u9fff])", "", normalized)
 
 
+def _spoken_dialogue_text(text: str) -> str:
+    """Return only the authored words from a screenplay-style dialogue row."""
+    value = _dialogue_text(text)
+    value = re.sub(r"^\[[^\[\]\n]+\]\s*", "", value)
+    labelled = re.fullmatch(r"[^:：\n]{1,64}\s*[:：]\s*(.+)", value)
+    if labelled:
+        speaker = value[: labelled.start(1)].rstrip(" :：")
+        candidate = labelled.group(1).strip()
+        quote_pairs = {'"': '"', "'": "'", "“": "”", "‘": "’"}
+        quoted = len(candidate) >= 2 and quote_pairs.get(candidate[0]) == candidate[-1]
+        screenplay_label = bool(re.fullmatch(r"[\w.-]+(?:\s+[\w.-]+){0,3}", speaker))
+        if quoted or screenplay_label:
+            value = candidate[1:-1].strip() if quoted else candidate
+    return _dialogue_text(value)
+
+
 def _misplaced_spoken_line(body: str, line: str) -> bool:
     # Exempt only the quoted visible-text occurrence, never the whole section.
     body = re.sub(
@@ -141,7 +157,7 @@ def _validate_dialogue(bodies: dict[str, str], dialogue: list[str]) -> None:
     # Ref2VA guide sections 5.4/6: spoken words belong inside <d> in the
     # timeline, not in summaries of ambience/music. Count vocal content, not
     # matching text on signs or a short line embedded in a longer line.
-    expected = [_dialogue_text(line) for line in dialogue]
+    expected = [_spoken_dialogue_text(line) for line in dialogue]
     if any(not line for line in expected):
         raise ValueError("dialogue line is empty")
     misplaced = []
