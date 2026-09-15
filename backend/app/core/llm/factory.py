@@ -8,6 +8,7 @@ from typing import Any
 from ...config import settings
 from ..vram.director_model import model_status, set_director_model
 from .lifecycle import LMStudioLifecycle, RemoteLifecycle
+from .llama_swap import LlamaSwapLifecycle
 from .ollama import OllamaLLMProvider
 from .openai_compatible import OpenAICompatibleClient
 from .provider import LLMClient, LLMLifecycle
@@ -43,6 +44,8 @@ def get_llm_provider():
     base_url = settings.llm_base_url.strip()
     if provider_id == "lm-studio":
         base_url = base_url or "http://127.0.0.1:1234/v1"
+    elif provider_id == "llama-swap":
+        base_url = base_url or "http://127.0.0.1:11435/v1"
     else:
         base_url = base_url or "https://api.openai.com/v1"
     client = OpenAICompatibleClient(
@@ -50,7 +53,14 @@ def get_llm_provider():
         api_key=settings.llm_api_key,
         timeout=settings.llm_timeout_sec,
     )
-    if provider_id == "lm-studio":
+    if provider_id == "llama-swap":
+        lifecycle = LlamaSwapLifecycle(
+            base_url,
+            api_key=settings.llm_api_key,
+            timeout=settings.llm_timeout_sec,
+        )
+        catalog = lifecycle.list_models
+    elif provider_id == "lm-studio":
         lifecycle = LMStudioLifecycle(
             base_url,
             api_key=settings.llm_api_key,

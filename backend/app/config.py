@@ -70,7 +70,9 @@ class Settings(BaseSettings):
     gpt_bridge_job_cooldown_sec: float = 15.0
 
     # Director LLM. Exactly one provider is active for the process.
-    llm_provider: Literal["ollama", "lm-studio", "openai-compatible"] = "ollama"
+    llm_provider: Literal[
+        "ollama", "lm-studio", "llama-swap", "openai-compatible"
+    ] = "ollama"
     llm_base_url: str = ""
     llm_api_key: str | None = None
     llm_timeout_sec: float = 600.0
