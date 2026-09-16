@@ -103,3 +103,10 @@ class LlamaSwapLifecycle:
             ),
             "loaded_instances": [item.get("model") for item in running],
         }
+
+    async def context_capacity(self, model: str) -> int | None:
+        response = await self._client.get("/props", params={"model": model})
+        response.raise_for_status()
+        payload = response.json()
+        value = (payload.get("default_generation_settings") or {}).get("n_ctx")
+        return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None

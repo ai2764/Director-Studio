@@ -57,7 +57,6 @@ async def test_harness_reserves_model_output_tokens_from_pressure_window(
             return {"reply": "done", "thinking": ""}
 
     monkeypatch.setattr(harness_runtime, "HarnessClient", Client)
-    monkeypatch.setattr(harness_runtime.settings, "director_num_ctx", 32_000)
     monkeypatch.setattr(harness_runtime.settings, "director_num_predict", 4_000)
 
     await harness_runtime.handle_harness_chat(
@@ -65,9 +64,18 @@ async def test_harness_reserves_model_output_tokens_from_pressure_window(
         message="hello",
         svc=None,
         chat_fn=None,
+        context_capacity=32_000,
     )
 
     assert captured["context_window"] == 28_000
+
+
+def test_harness_input_budget_uses_provider_capacity_and_image_reserve(monkeypatch):
+    from app.agents.director import harness_runtime
+
+    monkeypatch.setattr(harness_runtime.settings, "director_num_predict", 4096)
+
+    assert harness_runtime.harness_input_budget(131072, image_count=2) == 122880
 
 
 def test_material_review_turn_only_offers_prompt_rewrite_for_exact_shot(

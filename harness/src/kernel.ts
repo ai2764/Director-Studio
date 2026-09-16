@@ -454,6 +454,11 @@ export async function runTurn(
       const result = await ctx.compaction.compactNow(handle.agent, signal);
       const after = ctx.tokenMeter.measure(handle.agent.session).totalTokens;
       await ctx.sessions.flush(handle.agent.session);
+      if (after >= input.context_window) {
+        const detail = result === null ? "No compactable history remains" : "The summary was saved";
+        throw new ProtocolError("CONTEXT_WINDOW_EXCEEDED",
+          `${detail}, but the fixed Director envelope still exceeds the service context capacity (${after} estimated tokens >= ${input.context_window}). Increase the model context window.`);
+      }
       return { reply: "", thinking: "", compaction: { compacted: result !== null,
         before_tokens: before, after_tokens: after, session_id: sessionId } };
     }

@@ -141,7 +141,8 @@ async def test_real_harness_preserves_usage_from_compaction_and_truncated_turn(r
     history = [{"role": "user" if i % 2 == 0 else "assistant", "content": "resolved discussion " * 50} for i in range(162)]
     with pytest.raises(HarnessError, match="INCOMPLETE_TURN"):
         await handle_harness_chat(project_id=project.id, message="hello", history=history, svc=None,
-                                  chat_fn=await _make_chat_fn(on_progress=progress), on_progress=progress)
+                                  chat_fn=await _make_chat_fn(on_progress=progress), on_progress=progress,
+                                  context_capacity=32768)
     calls = [event["data"] for event in events if event["type"] == "context_usage"]
     assert [(call["purpose"], call["status"]) for call in calls] == [
         ("compaction", "running"), ("compaction", "completed"),

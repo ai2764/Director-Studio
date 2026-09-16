@@ -76,7 +76,13 @@ async def test_chat_emits_full_envelope_estimate_then_actual_usage_or_failure(mo
     class Orchestrator:
         provider_id = "local-test-provider"
         client = Client()
-        lifecycle = type("Lifecycle", (), {"uses_local_gpu": True})()
+        class Lifecycle:
+            uses_local_gpu = True
+
+            async def context_capacity(self, model):
+                return 32768 if model == "test-qwen" else None
+
+        lifecycle = Lifecycle()
 
         def model_status(self):
             return {"model": "test-qwen"}
@@ -92,7 +98,6 @@ async def test_chat_emits_full_envelope_estimate_then_actual_usage_or_failure(mo
     orch.provider = orch
     monkeypatch.setattr(vram, "get_orchestrator", lambda: orch)
     monkeypatch.setattr(projects, "with_director_skill", lambda system, **kwargs: "live skill instructions\n" + system)
-    monkeypatch.setattr(projects.settings, "director_num_ctx", 32768)
     monkeypatch.setattr(projects.settings, "director_num_predict", 4096)
     chat = await projects._make_chat_fn(on_progress=progress)
     args = dict(messages=[{"role": "user", "content": "hello", "images": ["SECRET_IMAGE_BYTES" * 5000]}],
@@ -111,6 +116,7 @@ async def test_chat_emits_full_envelope_estimate_then_actual_usage_or_failure(mo
     assert start["call_id"] == end["call_id"]
     assert start["purpose"] == "compaction"
     assert start["context_window"] == 32768 and start["output_limit"] == 4096
+    assert start["capacity_source"] == "provider_reported"
     assert start["input_budget"] == 28672
     assert start["image_count"] == 1
     assert start["estimated_input_tokens"] < 1000  # base64 is not text token usage

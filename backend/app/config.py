@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     # Local Ollama / Director agent (VRAM exclusive with Comfy)
     ollama_base_url: str = "http://127.0.0.1:11434"
     director_plan_model: str = ""
+    # Fallback for generic OpenAI-compatible servers that cannot report capacity.
+    # Ollama, LM Studio and llama-swap are discovered from the loaded model.
     director_num_ctx: int = 32768
     director_num_predict: int = 4096
     vram_policy: str = "exclusive"  # exclusive: one of LLM/Comfy at a time, others queue

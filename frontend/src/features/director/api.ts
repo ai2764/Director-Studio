@@ -200,6 +200,7 @@ export interface ContextUsage {
   model: string;
   status: "running" | "completed" | "output_truncated" | "context_overflow" | "failed" | "cancelled";
   context_window: number | null;
+  capacity_source?: "provider_reported" | "configured_fallback" | null;
   input_budget: number | null;
   output_limit: number | null;
   estimated_input_tokens: number;

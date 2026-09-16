@@ -125,6 +125,74 @@ async def test_remote_lifecycle_checks_health_without_local_gpu_actions() -> Non
     assert lifecycle.uses_local_gpu is False
     assert lifecycle.release_failure_is_fatal is False
     assert (await lifecycle.status("remote-model"))["ready"] is True
+    assert await lifecycle.context_capacity("remote-model") is None
+
+
+@pytest.mark.asyncio
+async def test_lm_studio_reports_selected_loaded_instance_context_capacity() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/models"
+        return httpx.Response(200, json={"models": [{
+            "key": "qwen/vision-model",
+            "type": "llm",
+            "loaded_instances": [{
+                "instance_id": "qwen-loaded",
+                "config": {"context_length": 131072},
+            }],
+        }]})
+
+    lifecycle = LMStudioLifecycle(
+        "http://127.0.0.1:1234/v1",
+        api_key=None,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        assert await lifecycle.context_capacity("qwen/vision-model") == 131072
+    finally:
+        await lifecycle.close()
+
+
+@pytest.mark.asyncio
+async def test_lm_studio_prepare_jit_loads_model_before_capacity_discovery() -> None:
+    loaded = False
+    warm_requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal loaded
+        if request.url.path == "/api/v1/models":
+            return httpx.Response(200, json={"models": [{
+                "key": "qwen/local",
+                "type": "llm",
+                "loaded_instances": ([{
+                    "instance_id": "qwen-loaded",
+                    "config": {"context_length": 65536},
+                }] if loaded else []),
+            }]})
+        assert request.url.path == "/v1/chat/completions"
+        warm_requests.append(json.loads(request.content))
+        loaded = True
+        return httpx.Response(200, json={
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+        })
+
+    lifecycle = LMStudioLifecycle(
+        "http://127.0.0.1:1234/v1",
+        api_key=None,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        await lifecycle.prepare("qwen/local")
+        assert await lifecycle.context_capacity("qwen/local") == 65536
+    finally:
+        await lifecycle.close()
+
+    assert warm_requests == [{
+        "model": "qwen/local",
+        "messages": [{"role": "user", "content": "OK"}],
+        "max_tokens": 1,
+        "temperature": 0,
+        "stream": False,
+    }]
 
 
 @pytest.mark.asyncio
@@ -155,6 +223,9 @@ async def test_ollama_lifecycle_warms_and_releases_selected_model() -> None:
         async def loaded_models(self) -> list[dict]:
             return []
 
+        async def context_capacity(self, model: str) -> int | None:
+            return 65536 if model == "qwen-local" else None
+
     client = Client()
     lifecycle = OllamaLifecycle(client)
 
@@ -164,3 +235,4 @@ async def test_ollama_lifecycle_warms_and_releases_selected_model() -> None:
     assert client.generated == [("qwen-local", "ok")]
     assert client.unloaded == ["qwen-local"]
     assert lifecycle.uses_local_gpu is True
+    assert await lifecycle.context_capacity("qwen-local") == 65536

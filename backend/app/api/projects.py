@@ -578,17 +578,63 @@ async def _make_chat_fn(
     from ..core.llm.usage import ChatUsageReporter
 
     provider_id = getattr(active_provider, "provider_id", settings.llm_provider)
-    lifecycle = getattr(active_provider, "lifecycle", None)
-    uses_configured_local_capacity = bool(
+    lifecycle = (
+        getattr(active_provider, "lifecycle", None)
+        if provider is not None or orchestrator_provider is not None
+        else None
+    )
+    uses_local_capacity_discovery = bool(
         getattr(lifecycle, "uses_local_gpu", provider_id == "ollama")
     )
-    # Locally managed providers share Director's configured inference budget.
-    # Remote servers own their capacity, so don't invent a limit for them.
+    initial_capacity = None if uses_local_capacity_discovery else settings.director_num_ctx
     usage_reporter = ChatUsageReporter(
         on_progress, provider=provider_id,
-        context_window=settings.director_num_ctx if uses_configured_local_capacity else None,
-        output_limit=settings.director_num_predict if uses_configured_local_capacity else None,
+        context_window=initial_capacity,
+        output_limit=settings.director_num_predict,
+        capacity_source=None if initial_capacity is None else "configured_fallback",
     )
+
+    def _selected_model() -> str:
+        if provider is not None or orchestrator_provider is not None:
+            return str(active_provider.model_status().get("model") or "").strip()
+        return get_director_model()
+
+    def set_context_capacity(tokens: int, source: str) -> None:
+        usage_reporter.set_context_capacity(tokens, source)
+
+    async def _refresh_context_capacity(model: str) -> int | None:
+        discover = getattr(lifecycle, "context_capacity", None)
+        capacity = await discover(model) if discover is not None else None
+        if capacity is not None:
+            set_context_capacity(capacity, "provider_reported")
+        return capacity
+
+    async def resolve_context_capacity() -> int:
+        keep = bool(getattr(settings, "llm_keep_loaded", True))
+
+        async def _runtime(text: str) -> None:
+            if on_progress:
+                await on_progress({"type": "runtime", "text": text})
+
+        async with orch.llm_session(
+            release_on_exit=not keep,
+            on_status=_runtime,
+            fail_if_generation_pending=True,
+        ):
+            await orch.ensure_llm_ready(on_status=_runtime)
+            model = _selected_model()
+            capacity = await _refresh_context_capacity(model)
+        if capacity is None:
+            if uses_local_capacity_discovery:
+                raise RuntimeError(
+                    f"{provider_id} did not report the loaded model context capacity"
+                )
+            capacity = settings.director_num_ctx
+            source = "configured_fallback"
+        else:
+            source = "provider_reported"
+        set_context_capacity(capacity, source)
+        return capacity
 
     async def chat_fn(
         system: str,
@@ -620,12 +666,8 @@ async def _make_chat_fn(
         ):
             # Always (re)load / verify GPU residency after Comfy may have unloaded it
             await orch.ensure_llm_ready(on_status=_runtime)
-            if provider is not None or orchestrator_provider is not None:
-                plan_model = str(
-                    active_provider.model_status().get("model") or ""
-                ).strip()
-            else:
-                plan_model = get_director_model()
+            plan_model = _selected_model()
+            await _refresh_context_capacity(plan_model)
             if use_images:
                 label = f"Thinking with {plan_model} · {len(use_images)} image{'s' if len(use_images) != 1 else ''}…"
             else:
@@ -691,6 +733,7 @@ async def _make_chat_fn(
                         tools=None if forced_tool_schema is not None else tools or None,
                         format=forced_tool_schema or response_format,
                         require_vision=require_vision or bool(use_images),
+                        **({"think": False} if provider_id == "ollama" and _kwargs.get("inference_purpose") == "compaction" else {}),
                         **({"options": {"num_predict": max_output_tokens}} if max_output_tokens is not None else {}),
                     )
                 except Exception as exc:
@@ -779,6 +822,8 @@ async def _make_chat_fn(
                 )
             return await client.generate(plan_model, prompt)
 
+    chat_fn.resolve_context_capacity = resolve_context_capacity
+    chat_fn.set_context_capacity = set_context_capacity
     return chat_fn
 
 

@@ -17,12 +17,17 @@ def _text_tokens(value) -> int:
 
 
 class ChatUsageReporter:
-    def __init__(self, on_progress, *, provider: str, context_window=None, output_limit=None):
+    def __init__(self, on_progress, *, provider: str, context_window=None, output_limit=None, capacity_source=None):
         self.on_progress = on_progress
         self.provider = provider
         self.context_window = context_window if context_window and context_window > 0 else None
         self.output_limit = output_limit if output_limit and output_limit > 0 else None
+        self.capacity_source = capacity_source
         self.sequence = 0
+
+    def set_context_capacity(self, context_window, source) -> None:
+        self.context_window = context_window if context_window and context_window > 0 else None
+        self.capacity_source = source if self.context_window else None
 
     async def call(self, client, model, *, purpose="turn", **request):
         if self.on_progress is None:
@@ -51,7 +56,8 @@ class ChatUsageReporter:
             "call_id": uuid.uuid4().hex, "sequence": self.sequence,
             "purpose": "compaction" if purpose == "compaction" else "turn",
             "provider": self.provider, "model": model, "status": "running",
-            "context_window": self.context_window, "output_limit": output_limit,
+            "context_window": self.context_window, "capacity_source": self.capacity_source,
+            "output_limit": output_limit,
             "input_budget": max(0, self.context_window - output_limit)
                 if self.context_window and output_limit else None,
             "estimated_input_tokens": sum(parts.values()), "estimated_parts": parts,

@@ -83,6 +83,7 @@ export function ContextUsagePanel({
             <div className="context-usage-metrics" aria-live="polite">
               <span>Input {input(last)} · {last.input_tokens == null ? "estimated text" : "provider reported"}</span>
               <span>Output {number(last.output_tokens)} / {number(last.output_limit)}</span>
+              <span>Capacity {number(last.context_window)} · {last.capacity_source === "provider_reported" ? "provider reported" : last.capacity_source === "configured_fallback" ? "configured fallback" : "not reported"}</span>
             </div>
             {ratio != null ? (
               <div role="meter" aria-label="Input context usage" aria-valuemin={0} aria-valuemax={last.context_window!}

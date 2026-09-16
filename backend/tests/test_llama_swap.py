@@ -107,3 +107,25 @@ async def test_factory_uses_local_gpu_lifecycle(monkeypatch):
         await provider.lifecycle.close()
         await provider.client.close()
         reset_llm_provider()
+
+
+@pytest.mark.asyncio
+async def test_context_capacity_comes_from_llama_cpp_props_for_selected_model():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={
+            "default_generation_settings": {"n_ctx": 131072},
+        })
+
+    lifecycle = LlamaSwapLifecycle(
+        "http://localhost:11435/v1", transport=httpx.MockTransport(handler)
+    )
+    try:
+        assert await lifecycle.context_capacity("qwen3_8") == 131072
+    finally:
+        await lifecycle.close()
+
+    assert requests[0].url.path == "/props"
+    assert requests[0].url.params["model"] == "qwen3_8"

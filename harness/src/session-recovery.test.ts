@@ -107,6 +107,19 @@ it("manually compacts below automatic threshold without a user turn or tool exec
   }, new AbortController().signal, runtime);
 });
 
+it("does not report manual compaction as usable when the fixed envelope exceeds capacity", async () => {
+  const runtime = await config();
+  const oversizedEnvelope = "fixed director instruction ".repeat(500);
+  await expect(runTurn({ ...input, history, operation: "compact", context_window: 1024 }, async (method, params) => {
+    if (method === "context") return { system: oversizedEnvelope, state: {}, tools: [] };
+    expect(params.purpose).toBe("compaction");
+    return { content: "Confirmed BLUE." };
+  }, new AbortController().signal, runtime)).rejects.toMatchObject({
+    code: "CONTEXT_WINDOW_EXCEEDED",
+    message: expect.stringMatching(/summary was saved.*context capacity/i),
+  });
+});
+
 it("preserves original durable history after a failed manual summary", async () => {
   const runtime = await config();
   await expect(runTurn({ ...input, history, operation: "compact" }, async method => {

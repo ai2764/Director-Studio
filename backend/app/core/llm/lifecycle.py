@@ -49,6 +49,10 @@ class RemoteLifecycle:
             "loaded_instances": [],
         }
 
+    async def context_capacity(self, model: str) -> int | None:
+        del model
+        return None
+
 
 class OllamaLifecycle:
     uses_local_gpu = True
@@ -106,6 +110,9 @@ class OllamaLifecycle:
             "loaded_instances": loaded,
         }
 
+    async def context_capacity(self, model: str) -> int | None:
+        return await self.client.context_capacity(model)
+
 
 def _server_origin(base_url: str) -> str:
     parsed = urlsplit(base_url)
@@ -161,10 +168,36 @@ class LMStudioLifecycle:
         model: str,
         on_status: Callable[[str], Any] | None = None,
     ) -> None:
-        available = await self.list_models()
-        if model not in available:
+        catalog = await self._catalog()
+        selected = next(
+            (
+                item
+                for item in catalog
+                if item.get("type") == "llm" and item.get("key") == model
+            ),
+            None,
+        )
+        if selected is None:
             raise RuntimeError(f"LM Studio model is not available: {model}")
-        await _emit_status(on_status, f"{model} ready for LM Studio JIT loading")
+        if not selected.get("loaded_instances"):
+            await _emit_status(on_status, f"Loading {model} via LM Studio…")
+            try:
+                response = await self._client.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": "OK"}],
+                        "max_tokens": 1,
+                        "temperature": 0,
+                        "stream": False,
+                    },
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                suffix = f" (HTTP {status})" if status else ""
+                raise RuntimeError(f"LM Studio failed to load {model}{suffix}") from exc
+        await _emit_status(on_status, f"{model} ready via LM Studio")
 
     async def release(self, models: Sequence[str]) -> None:
         del models
@@ -209,3 +242,14 @@ class LMStudioLifecycle:
             "model": model,
             "loaded_instances": loaded_ids,
         }
+
+    async def context_capacity(self, model: str) -> int | None:
+        for item in await self._catalog():
+            if item.get("type") != "llm" or item.get("key") != model:
+                continue
+            for instance in list(item.get("loaded_instances") or []):
+                config = instance.get("config") or {}
+                value = config.get("context_length")
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                    return value
+        return None

@@ -1859,6 +1859,60 @@ async def test_make_chat_fn_falls_back_to_text_tool_protocol_on_ollama_xml_error
 
 
 @pytest.mark.asyncio
+async def test_make_chat_fn_disables_ollama_thinking_for_compaction(monkeypatch):
+    from app.api import projects as projects_api
+
+    captured: list[dict] = []
+
+    class FakeOllama:
+        async def chat_response(self, *args, **kwargs):
+            captured.append(kwargs)
+            return {"content": "short summary", "thinking": "", "tool_calls": []}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    class FakeProvider:
+        provider_id = "ollama"
+        client = FakeOllama()
+        lifecycle = None
+
+        def model_status(self):
+            return {"model": "qwen-test"}
+
+    class FakeOrchestrator:
+        provider = FakeProvider()
+
+        def llm_session(self, **kwargs):
+            return FakeSession()
+
+        async def ensure_llm_ready(self, **kwargs):
+            return None
+
+    monkeypatch.setattr(projects_api.settings, "llm_provider", "ollama")
+    monkeypatch.setattr("app.core.vram.get_orchestrator", lambda: FakeOrchestrator())
+    monkeypatch.setattr(
+        "app.core.vram.director_model.get_director_model", lambda: "qwen-test"
+    )
+
+    chat_fn = await projects_api._make_chat_fn()
+    await chat_fn(
+        "Summarize history.",
+        "",
+        messages=[{"role": "user", "content": "Keep BLUE."}],
+        inference_purpose="compaction",
+        prepared_system=True,
+        max_output_tokens=512,
+    )
+
+    assert captured[0]["think"] is False
+
+
+@pytest.mark.asyncio
 async def test_make_chat_fn_forces_single_gpt_tool_through_structured_output(
     monkeypatch,
 ):

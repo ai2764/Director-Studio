@@ -31,8 +31,8 @@ from .skill_loader import with_director_skill
 IMAGE_TOKEN_RESERVE = 2048
 
 
-def harness_input_budget(image_count: int = 0) -> int:
-    budget = settings.director_num_ctx - settings.director_num_predict - image_count * IMAGE_TOKEN_RESERVE
+def harness_input_budget(context_capacity: int, image_count: int = 0) -> int:
+    budget = context_capacity - settings.director_num_predict - image_count * IMAGE_TOKEN_RESERVE
     if budget < 256:
         raise ValueError("Current images and output allowance leave no usable context budget; send fewer images.")
     return budget
@@ -391,7 +391,9 @@ class BackendTurn:
 
 
 async def handle_harness_chat(*, project_id, message, svc, chat_fn=None, history=None,
-                              on_progress=None, user_images_b64=None, user_image_captions=None):
+                              on_progress=None, user_images_b64=None, user_image_captions=None,
+                              context_capacity=None):
+    context_capacity = context_capacity or settings.director_num_ctx
     turn = BackendTurn(project_id, message, svc, chat_fn, images=user_images_b64,
                        captions=user_image_captions, on_progress=on_progress, history=history)
     # Reuse Python's existing visual preparation; sidecar receives no file paths/bytes.
@@ -408,10 +410,10 @@ async def handle_harness_chat(*, project_id, message, svc, chat_fn=None, history
                                      timeout=settings.harness_turn_timeout_sec).run(
             {"message": message, "history": [],
              "session_id": harness_session_id(project_id),
-             # Harness meters prompt pressure. Reserve the provider's configured
+             # Harness meters prompt pressure. Reserve the provider-reported
              # completion allowance so long history is compacted before it can
              # consume the space Qwen needs to finish reasoning and tool output.
-             "context_window": harness_input_budget(len(turn.images)),
+             "context_window": harness_input_budget(context_capacity, len(turn.images)),
              "max_steps": settings.harness_max_steps},
             turn.dispatch, on_progress,
         )
@@ -452,12 +454,16 @@ def harness_session_id(project_id: str) -> str:
     return hashlib.sha256(f"{settings.projects_dir.resolve().as_posix()}\n{project_id}".encode()).hexdigest()
 
 
-async def compact_harness_chat(*, project_id, chat_fn, history=None, on_progress=None):
+async def compact_harness_chat(*, project_id, chat_fn, history=None, on_progress=None,
+                               context_capacity=None):
+    if context_capacity is None:
+        resolver = getattr(chat_fn, "resolve_context_capacity", None)
+        context_capacity = await resolver() if resolver is not None else settings.director_num_ctx
     turn = BackendTurn(project_id, "", None, chat_fn, on_progress=on_progress, compact_only=True, history=history)
     result = await HarnessClient(settings.harness_base_url, settings.harness_internal_token,
                                  timeout=settings.harness_turn_timeout_sec).run(
         {"message": "", "history": [], "session_id": harness_session_id(project_id),
-         "operation": "compact", "context_window": harness_input_budget(),
+         "operation": "compact", "context_window": harness_input_budget(context_capacity),
          "max_steps": settings.harness_max_steps}, turn.dispatch, on_progress,
     )
     if not isinstance(result.get("compaction"), dict):

@@ -74,6 +74,8 @@ class LLMLifecycle(Protocol):
 
     async def status(self, model: str) -> dict[str, Any]: ...
 
+    async def context_capacity(self, model: str) -> int | None: ...
+
 
 class LLMProvider(Protocol):
     """Complete Director-facing LLM boundary."""

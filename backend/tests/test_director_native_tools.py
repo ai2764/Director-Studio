@@ -3948,6 +3948,7 @@ async def test_ollama_chat_response_passes_native_tools_and_json_schema(monkeypa
         messages=[{"role": "user", "content": "status"}],
         tools=tools,
         format=schema,
+        think=False,
     )
 
     assert result == {
@@ -3957,8 +3958,8 @@ async def test_ollama_chat_response_passes_native_tools_and_json_schema(monkeypa
     }
     assert requests[1]["tools"] == tools
     assert requests[1]["format"] == schema
+    assert requests[1]["think"] is False
     assert requests[1]["options"] == {
         "num_gpu": 999,
-        "num_ctx": 32_768,
         "num_predict": 4_096,
     }

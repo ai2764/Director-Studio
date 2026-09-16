@@ -9,6 +9,7 @@ afterEach(cleanup);
 const usage: ContextUsage = {
   call_id: "call-1", sequence: 1, purpose: "turn", provider: "ollama", model: "qwen",
   status: "running", context_window: 32768, output_limit: 4096, input_budget: 28672,
+  capacity_source: "provider_reported",
   estimated_input_tokens: 22000, estimated_parts: { system: 8000, conversation: 10000, tools: 4000, format: 0 },
   image_count: 2, input_tokens: null, output_tokens: null, reasoning_tokens: null,
   thinking_chars: null, content_chars: null, tool_calls: null, finish_reason: null, elapsed_ms: 0,
@@ -23,6 +24,7 @@ it("labels estimates and missing image/usage counts while inference is running",
   expect(screen.getAllByText(/~22,000/).length).toBeGreaterThan(0);
   expect(screen.getByText(/excludes image tokens/i)).toBeTruthy();
   expect(screen.getByText(/actual counts arrive when/i)).toBeTruthy();
+  expect(screen.getByText(/32,768 · provider reported/i)).toBeTruthy();
   expect(screen.getByRole("button", { name: "Compact context" })).toBeTruthy();
   expect(screen.queryByText(/Output truncated/)).toBeNull();
 });
@@ -53,6 +55,12 @@ it("shows unknown provider capacity without a fabricated percentage", () => {
   fireEvent.click(screen.getByRole("button", { name: /Context · 100/ }));
   expect(screen.getByText(/capacity not reported/i)).toBeTruthy();
   expect(screen.queryByRole("meter")).toBeNull();
+});
+
+it("labels a configured fallback instead of presenting it as provider reported", () => {
+  render(<ContextUsagePanel calls={[{ ...usage, capacity_source: "configured_fallback" }]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Context · ~22,000/ }));
+  expect(screen.getByText(/32,768 · configured fallback/i)).toBeTruthy();
 });
 
 it("uses a compact percentage label while keeping full context details accessible", () => {
