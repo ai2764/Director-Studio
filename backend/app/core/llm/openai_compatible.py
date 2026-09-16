@@ -32,6 +32,27 @@ def _messages(items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     converted: list[dict[str, Any]] = []
     for source in items:
         message = dict(source)
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list):
+            normalized_calls: list[Any] = []
+            for source_call in tool_calls:
+                if not isinstance(source_call, dict):
+                    normalized_calls.append(source_call)
+                    continue
+                call = dict(source_call)
+                source_function = call.get("function")
+                if isinstance(source_function, dict):
+                    function = dict(source_function)
+                    arguments = function.get("arguments")
+                    if not isinstance(arguments, str):
+                        function["arguments"] = json.dumps(
+                            arguments if arguments is not None else {},
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                    call["function"] = function
+                normalized_calls.append(call)
+            message["tool_calls"] = normalized_calls
         images = list(message.pop("images", []) or [])
         if images:
             original = message.get("content")

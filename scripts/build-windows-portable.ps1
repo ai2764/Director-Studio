@@ -121,7 +121,7 @@ if ($LASTEXITCODE -ne 0) { throw "packaged Director guide test failed" }
 
 Copy-Item -LiteralPath $builtExe -Destination (Join-Path $packageRoot "DirectorStudio.exe")
 Copy-Item -LiteralPath (Join-Path $backendRoot ".env.example") -Destination (Join-Path $packageRoot ".env")
-Copy-Item -LiteralPath (Join-Path $repoRoot "README.md") -Destination (Join-Path $packageRoot "README.md")
+Copy-Item -LiteralPath (Join-Path $repoRoot "packaging/windows-portable-readme.md") -Destination (Join-Path $packageRoot "README.md")
 
 $stageArguments = @(
     (Join-Path $PSScriptRoot "stage_windows_harness.py"),

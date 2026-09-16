@@ -79,7 +79,9 @@ public static class SlowHealthServer
 try {
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $packageRoot ".env") -Value "# test"
-    Set-Content -LiteralPath (Join-Path $packageRoot "README.md") -Value "test package"
+    Copy-Item `
+        -LiteralPath (Join-Path $PSScriptRoot "../packaging/windows-portable-readme.md") `
+        -Destination (Join-Path $packageRoot "README.md")
     $nodeRoot = Join-Path $packageRoot "runtime/node"
     $harnessRoot = Join-Path $packageRoot "harness"
     $koffiRoot = Join-Path $harnessRoot "node_modules/@koromix/koffi-win32-x64/win32_x64"

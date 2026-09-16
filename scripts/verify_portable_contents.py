@@ -391,6 +391,30 @@ def _verify_env_has_no_active_secrets(env_path: Path) -> None:
     _verify_env_content_has_no_active_secrets(env_path.read_bytes())
 
 
+def _verify_windows_portable_readme(readme_path: Path) -> None:
+    try:
+        text = readme_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"Windows portable instructions are unreadable: {exc}") from exc
+    lowered = text.lower()
+    required = ("directorstudio.exe", ".env", "data")
+    forbidden = (
+        "build the windows portable package",
+        "source installation",
+        "macos portable installation",
+        "linux portable installation",
+        "architecture",
+    )
+    if (
+        len(text) > 12_000
+        or any(item not in lowered for item in required)
+        or any(item in lowered for item in forbidden)
+    ):
+        raise ValueError(
+            "Windows README must contain portable instructions only, not repository development documentation"
+        )
+
+
 def verify_package_tree(root: Path, flavor: PackageFlavor) -> None:
     if not root.is_dir():
         raise ValueError(f"package root does not exist: {root}")
@@ -413,6 +437,7 @@ def verify_package_tree(root: Path, flavor: PackageFlavor) -> None:
             _validate_package_content_path(parts, label="package", flavor=flavor)
     _verify_env_has_no_active_secrets(root / ".env")
     if flavor.bundled_harness:
+        _verify_windows_portable_readme(root / "README.md")
         verify_windows_harness_runtime(root)
 
 

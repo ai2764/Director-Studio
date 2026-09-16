@@ -159,6 +159,51 @@ async def test_chat_response_converts_images_tools_schema_and_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_response_serializes_replayed_tool_arguments_for_openai_api() -> None:
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return _chat_response(content="saved")
+
+    client = _client(handler)
+    try:
+        await client.chat_response(
+            "test-model",
+            messages=[
+                {"role": "user", "content": "Save it."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "set_script",
+                                "arguments": {"script": "Scene one."},
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "tool_name": "set_script",
+                    "content": '{"ok":true}',
+                },
+            ],
+        )
+    finally:
+        await client.close()
+
+    arguments = bodies[0]["messages"][1]["tool_calls"][0]["function"][
+        "arguments"
+    ]
+    assert arguments == '{"script":"Scene one."}'
+
+
+@pytest.mark.asyncio
 async def test_stream_normalizes_reasoning_and_text_deltas() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         events = [

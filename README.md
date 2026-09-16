@@ -11,6 +11,9 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and exten
 The [slim Harness runtime](docs/HARNESS.md) is the default Director agent loop,
 using the same Python-owned providers and tools. Windows portable includes its
 private Node runtime and sidecar; source checkouts retain an explicit Legacy switch.
+Harness can compact older conversation history, but the model server still sets
+the usable context capacity. Director Studio reads that capacity when the
+provider reports it and shows context usage in the Director UI.
 
 ## Stack
 
@@ -44,6 +47,11 @@ The macOS port adds packaging, launch/install scripts, and platform-specific ver
 An officially supported platform is exercised by its own CI build and packaged-runtime checks. “Best effort” means the source may run there, but releases are not built or verified for that platform.
 
 ## Windows portable installation
+
+For the short instructions included in the ZIP, see
+[Windows portable instructions](packaging/windows-portable-readme.md). This
+section provides the additional configuration and troubleshooting detail for
+source readers.
 
 The portable package is started through one `DirectorStudio.exe`. The UI,
 backend, private Node.js runtime, compiled Harness sidecar, private Python
@@ -665,7 +673,7 @@ npm run build
 
 | Flow | What happens |
 |------|----------------|
-| **Director** | Paste script → plan shots (Ollama) → optionally generate a **Layout reference** (Comfy) → write the H3 prompt |
+| **Director** | Paste script → plan shots (selected LLM provider) → optionally generate a **Layout reference** (Comfy) → write the H3 prompt |
 | **Production** | Approve full shot package (refs + six-section prompt) → Gate 2 → submit pure **H3 Ref2AV** |
 
 Rules locked for v1:
@@ -673,7 +681,7 @@ Rules locked for v1:
 - Video mode is **pure H3 Reference-to-AV** only (`MiniMaxH3ReferenceToVideo`). No I2V first/last frame sockets.
 - A Layout is an optional composition Picture reference, not an I2V `first_frame` and not a guaranteed opening frame.
 - Picture references use their actual saved order. A shot becomes ready for H3 when its production prompt is complete; a Layout is not required.
-- **VRAM exclusive:** Ollama unloads before Comfy Layout, asset, and local H3 jobs; Agent context reloads from disk when the LLM must think again.
+- **VRAM exclusive:** The local Ollama or LM Studio model unloads before Comfy Layout, asset, and local H3 jobs; Agent context reloads from disk when the LLM must think again.
 
 API: `/api/projects/*` · pipelines: `GET /api/pipelines` · health: `GET /api/health`
 

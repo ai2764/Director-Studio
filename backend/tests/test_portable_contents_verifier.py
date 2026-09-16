@@ -72,6 +72,13 @@ def _package_fixture(tmp_path: Path, flavor):
                 json.dumps({"name": "director-studio-harness-sidecar", "version": "0.1.0"}),
                 encoding="utf-8",
             )
+        elif name == "README.md":
+            path.write_text(
+                "# Windows portable instructions\n\n"
+                "Extract the complete ZIP, configure `.env`, preserve `data`, "
+                "and run `DirectorStudio.exe`.\n",
+                encoding="utf-8",
+            )
         else:
             path.write_bytes(b"fixture")
     return package
@@ -228,6 +235,18 @@ def test_windows_package_requires_bundled_harness_runtime():
     assert "runtime/python/python.exe" not in verifier.required_package_files(
         verifier.FLAVORS["linux"]
     )
+
+
+def test_windows_package_rejects_full_repository_readme(tmp_path: Path):
+    flavor = verifier.FLAVORS["windows"]
+    package = _package_fixture(tmp_path, flavor)
+    (package / "README.md").write_text(
+        (REPO_ROOT / "README.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="portable instructions"):
+        verifier.verify_package_tree(package, flavor)
 
 
 @pytest.mark.parametrize("package_name", ["setuptools", "wheel", "uv"])
