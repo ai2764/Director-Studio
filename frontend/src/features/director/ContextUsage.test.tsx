@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import { ContextUsagePanel } from "./ContextUsage";
 import type { ContextUsage } from "./api";
@@ -15,16 +15,31 @@ const usage: ContextUsage = {
 };
 
 it("labels estimates and missing image/usage counts while inference is running", () => {
-  render(<ContextUsagePanel calls={[usage]} />);
+  render(<ContextUsagePanel calls={[usage]}><button>Compact context</button></ContextUsagePanel>);
+  expect(screen.queryByText(/excludes image tokens/i)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Compact context" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /Context · ~22,000/ }));
+  expect(screen.getByRole("dialog", { name: "Context details" })).toBeTruthy();
   expect(screen.getAllByText(/~22,000/).length).toBeGreaterThan(0);
   expect(screen.getByText(/excludes image tokens/i)).toBeTruthy();
   expect(screen.getByText(/actual counts arrive when/i)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Compact context" })).toBeTruthy();
   expect(screen.queryByText(/Output truncated/)).toBeNull();
+});
+
+it("closes the context dialog with Escape and returns focus to its trigger", () => {
+  render(<ContextUsagePanel calls={[usage]} />);
+  const trigger = screen.getByRole("button", { name: /Context · ~22,000/ });
+  fireEvent.click(trigger);
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
 });
 
 it("distinguishes output truncation from context overflow using actual counts", () => {
   render(<ContextUsagePanel calls={[{ ...usage, status: "output_truncated", input_tokens: 28939,
     output_tokens: 4096, thinking_chars: 17000, content_chars: 0, tool_calls: 0, finish_reason: "length" }]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Context · 28,939/ }));
   expect(screen.getAllByText(/Output truncated/).length).toBeGreaterThan(0);
   expect(screen.getAllByText(/28,939/).length).toBeGreaterThan(0);
   expect(screen.getAllByText(/4,096 \/ 4,096/).length).toBeGreaterThan(0);
@@ -35,6 +50,7 @@ it("distinguishes output truncation from context overflow using actual counts", 
 it("shows unknown provider capacity without a fabricated percentage", () => {
   render(<ContextUsagePanel calls={[{ ...usage, context_window: null, input_budget: null, output_limit: null,
     status: "completed", input_tokens: 100, output_tokens: 20 }]} />);
+  fireEvent.click(screen.getByRole("button", { name: /Context · 100/ }));
   expect(screen.getByText(/capacity not reported/i)).toBeTruthy();
   expect(screen.queryByRole("meter")).toBeNull();
 });

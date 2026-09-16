@@ -441,6 +441,15 @@ def test_chat_guidance_routes_single_shot_authored_edits_safely():
     assert "revise_shot then write_prompt" in guidance
 
 
+def test_chat_guidance_keeps_model_authored_script_expansion_as_a_draft():
+    from app.agents.director.chat import DIRECTOR_CHAT_SYSTEM
+
+    guidance = DIRECTOR_CHAT_SYSTEM.lower()
+    assert "premise or one-line brief" in guidance
+    assert "model-authored draft" in guidance
+    assert "do not call set_script until the user explicitly" in guidance
+
+
 def test_look_at_reference_is_llm():
     intent, _ = detect_intent("帮我看一下参考帧", _shots())
     assert intent == "llm"

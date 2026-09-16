@@ -66,15 +66,28 @@ def test_allows_picture_references_inside_timed_action_descriptions():
     )
 
 
-def test_requires_every_selected_layout_picture_binding():
+def test_requires_every_ordinary_picture_binding_with_accurate_error():
     from app.core.h3.prompt import validate_required_picture_bindings
 
     prompt = "<Picture 5> establishes the empty doorway."
 
     with pytest.raises(
-        ValueError, match="missing selected Layout binding: <Picture 6>"
+        ValueError, match="missing required Picture binding: <Picture 6>"
     ):
         validate_required_picture_bindings(prompt, [5, 6])
+
+
+def test_requires_every_selected_layout_picture_binding():
+    from app.core.h3.prompt import validate_required_picture_bindings
+
+    with pytest.raises(
+        ValueError, match="missing selected Layout binding: <Picture 6>"
+    ):
+        validate_required_picture_bindings(
+            "<Picture 5> establishes the empty doorway.",
+            [5, 6],
+            binding_label="selected Layout",
+        )
 
 
 def test_required_picture_bindings_deduplicate_indices():

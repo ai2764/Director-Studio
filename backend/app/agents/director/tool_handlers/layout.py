@@ -677,16 +677,23 @@ async def handle_layout_tool(
         )
         try:
             s2 = await svc.write_prompts_after_layout(shot.id)
+            prompt_written_shot_ids.add(s2.id)
             actions.append(f"write_prompt:{shot.id}")
             review = (s2.meta or {}).get("material_review") or {}
             decision = review.get("decision") or {}
-            notes.append(f"Prompt prepared for **{s2.title}**"
-                         + (f"; all {len(review['references'])} references reviewed. {decision.get('reason', '')}" if review else ""))
+            notes.append(
+                f"Prompt saved for **{s2.title}**"
+                + (
+                    f" after reviewing all {len(review['references'])} references."
+                    if review else "."
+                )
+            )
             if result_payloads is not None:
                 result_payloads.append({"ok": True, "shot_id": s2.id,
                                         "brief_changed": s2.script_beat != shot.script_beat,
                                         "prompt_changed": s2.prompt_sections != shot.prompt_sections,
-                                        "reviewed_picture_indices": [r["picture_index"] for r in review.get("references", [])]})
+                                        "reviewed_picture_indices": [r["picture_index"] for r in review.get("references", [])],
+                                        "review_reason": decision.get("reason", "")})
             touched.add(s2.id)
         except Exception as e:
             logger.exception("write_prompt tool failed")

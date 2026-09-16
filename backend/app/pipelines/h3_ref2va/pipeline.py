@@ -198,6 +198,7 @@ class H3Ref2VaPipeline(Pipeline):
             prompt_text,
             (int(index) for index in layout_picture_indices),
             submitted_picture_indices=range(1, len(image_names) + 1),
+            binding_label="selected Layout",
         )
 
         dialogue = p.get("dialogue") or []
@@ -258,6 +259,7 @@ class H3Ref2VaPipeline(Pipeline):
             prompt_text,
             (int(index) for index in (p.get("layout_picture_indices") or [])),
             submitted_picture_indices=range(1, len(image_keys) + 1),
+            binding_label="selected Layout",
         )
 
         audio_keys = self._ordered_keys(p.get("audio_keys"), inputs)

@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 from ...core.library.images import resolve_asset_image
 from ...core.library.store import load_asset
 from ...core.projects.models import Project, Shot
-from .asset_catalog import LIBRARY_KINDS
+from .asset_catalog import LIBRARY_KINDS, _script_hash
 from .planner import _extract_json_payload, role_to_library_kind
 from .vision import image_bytes_to_b64_jpeg
 
@@ -120,6 +120,18 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
             raise ValueError(f"Material review incomplete at {label}; {len(reviewed)}/{len(records)} reviewed: {exc}") from exc
         reviewed.append(observation)
     check_current()
+    coverage = project.asset_coverage_review
+    confirmed_project_review = None
+    if coverage is not None and coverage.script_hash == _script_hash(project.script_text):
+        confirmed_project_review = {
+            "status": coverage.status,
+            "notes": coverage.notes[:4000],
+            "recommendations": [
+                recommendation.model_dump(mode="json")
+                for recommendation in coverage.recommendations
+                if recommendation.resolution != "pending"
+            ][:20],
+        }
     raw = await provider.complete(
         "Make a reference review decision for exactly one shot after ALL its current Pictures were "
         "visually inspected. Return only JSON with required fields brief (replacement Creative brief "
@@ -134,7 +146,10 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
         "are lookup labels, not requirements for literal appearance. A label differing from the "
         "image is not by itself a reason to block or change the story. Use the visual observations "
         "to judge appearance against the brief and explicit identity/wardrobe requirements; ask "
-        "only about a conflict that remains in those requirements, not an already resolved label mismatch.",
+        "only about a conflict that remains in those requirements, not an already resolved label mismatch. "
+        "confirmed_project_review contains durable choices recorded for the current script. Treat those "
+        "choices as authoritative and do not reopen them unless a newly changed Picture creates a new, "
+        "concrete conflict.",
         json.dumps({"script": project.script_text, "shot": {
             "title": shot.title, "brief": shot.script_beat, "duration_s": shot.duration_s,
             "dialogue": shot.dialogue, "shot_type": shot.shot_type,
@@ -142,7 +157,8 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
             "composition": shot.composition, "feedback": shot.feedback,
             "prompt_sections": shot.prompt_sections.model_dump(),
             "material_changes": (shot.meta or {}).get("material_changes", {}),
-        }, "references": reviewed}, ensure_ascii=False), guides=(),
+        }, "references": reviewed,
+            "confirmed_project_review": confirmed_project_review}, ensure_ascii=False), guides=(),
     )
     decision = MaterialDecision.model_validate(_extract_json_payload(raw))
     check_current()

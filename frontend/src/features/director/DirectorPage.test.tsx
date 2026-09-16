@@ -170,6 +170,7 @@ describe("Director shot actions", () => {
 
   it("preserves the draft and never sends chat after manual compaction", async () => {
     render(<DirectorPage />);
+    fireEvent.click(screen.getByRole("button", { name: /Context ·/ }));
     const button = await screen.findByRole("button", { name: "Compact context" });
     await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
     const draft = screen.getByPlaceholderText(/Talk to the Director/) as HTMLTextAreaElement;

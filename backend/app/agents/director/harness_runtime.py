@@ -59,6 +59,7 @@ class BackendTurn:
         self.budget = _StoryboardSubmissionBudget()
         self.call_ids: set[str] = set()
         self.calls: set[tuple[str, str]] = set()
+        self.successful_prompt_shot_ids: set[str] = set()
         self.storyboard_failed = False
         self.terminal_failure: str | None = None
         self.expected_state: str | None = None
@@ -259,6 +260,20 @@ class BackendTurn:
         if len(self.call_ids) >= settings.harness_max_tool_calls:
             return {"ok": False, "error": "Turn tool limit reached. No further tools can run in this turn; report completed and pending work without retrying."}
         self.call_ids.add(call_id)
+        prompt_shot_id = args.get("shot_id") if name == "write_prompt" else None
+        if (
+            isinstance(prompt_shot_id, str)
+            and prompt_shot_id in self.successful_prompt_shot_ids
+        ):
+            return {
+                "ok": True,
+                "already_saved": True,
+                "shot_id": prompt_shot_id,
+                "notes": [
+                    "Prompt already saved for this Shot in the current turn; "
+                    "the duplicate write_prompt call made no changes."
+                ],
+            }
         context = self.context()
         schema = next((s["function"] for s in context["tools"] if s["function"]["name"] == name), None)
         if schema is None:
@@ -329,6 +344,10 @@ class BackendTurn:
                 f"The saved storyboard was not changed to work around it. {failure}"
             )
             result.update(retryable=False, code="PROMPT_GENERATION_FAILED")
+        elif name == "write_prompt" and result["ok"]:
+            saved_shot_id = result.get("shot_id") or args.get("shot_id")
+            if isinstance(saved_shot_id, str) and saved_shot_id:
+                self.successful_prompt_shot_ids.add(saved_shot_id)
         completed_actions = self.actions[before:]
         if result["ok"] and any(
             action == "ref_frame_all" or action.startswith("ref_frame:")

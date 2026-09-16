@@ -698,6 +698,7 @@ async def test_failed_prompt_write_makes_remainder_of_turn_explain_only(
         title="Greeting",
         script_beat="A greeting.",
         duration_s=5,
+        meta={"material_review_pending": True},
         dialogue=['MIA: "Hello."'],
     )
     save_shot(shot)
@@ -735,6 +736,62 @@ async def test_failed_prompt_write_makes_remainder_of_turn_explain_only(
     )
     assert "<tool_call>" not in finished.reply
     assert "not executed" in finished.reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_successful_prompt_write_is_idempotent_for_remainder_of_turn(
+    tmp_projects_dir,
+):
+    from app.agents.director.harness_runtime import BackendTurn
+    from app.agents.director.context_io import save_agent_context
+    from app.agents.director.service import _script_hash
+    from app.core.projects.models import AgentContext
+
+    project = create_project("single prompt mutation", "A greeting.")
+    shot = Shot(
+        id="sht_prompt_once",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Greeting",
+        script_beat="A greeting.",
+        duration_s=5,
+        meta={"material_review_pending": True},
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    save_agent_context(
+        project.id,
+        AgentContext(project_id=project.id, script_hash=_script_hash(project.script_text)),
+    )
+
+    class Service:
+        calls = 0
+
+        async def write_prompts_after_layout(self, shot_id):
+            self.calls += 1
+            current = load_shot(project.id, shot_id)
+            assert current is not None
+            updated = current.model_copy(
+                update={"meta": {**current.meta, "prompt_write_count": self.calls}}
+            )
+            save_shot(updated)
+            return updated
+
+    service = Service()
+    turn = BackendTurn(project.id, "Write Shot 1's prompt", service, None)
+    await turn.dispatch("context", {})
+    first = await turn.dispatch("tool", {
+        "name": "write_prompt", "arguments": {"shot_id": shot.id}, "call_id": "write-1",
+    })
+    second = await turn.dispatch("tool", {
+        "name": "write_prompt", "arguments": {"shot_id": shot.id}, "call_id": "write-2",
+    })
+
+    assert first["ok"] is True, first
+    assert second["ok"] is True
+    assert second["already_saved"] is True
+    assert "already saved" in " ".join(second["notes"]).lower()
+    assert service.calls == 1
 
 
 def test_missing_optional_layout_recommends_prompt_not_layout(tmp_projects_dir):

@@ -37,7 +37,7 @@ export function ContextCompaction({ projectId, disabled, onBusyChange }: {
 
   if (!available) return null;
   return <div className="context-compaction">
-    <button type="button" className="button ghost small" disabled={disabled || busy} onClick={() => void compact()}
+    <button type="button" className="context-compaction-button" disabled={disabled || busy} onClick={() => void compact()}
       title="Use Harness to summarize older history. This does not retry your request or generate assets.">
       {busy ? "Compacting context…" : "Compact context"}
     </button>

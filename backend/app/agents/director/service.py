@@ -1966,6 +1966,11 @@ class DirectorService:
             required_layout_indices = [
                 int(item["picture_index"]) for item in selected_layouts
             ]
+            required_ordinary_picture_indices = [
+                ref.picture_index
+                for ref in shot.refs
+                if ref.role != RefRole.layout_ref_frame
+            ]
 
             def parse_and_validate(value: str) -> PromptSections:
                 parsed = PromptSections(**parse_prompt_sections_json(value))
@@ -1974,8 +1979,8 @@ class DirectorService:
                 validate_tail_frame_transition_prompt(parsed, selected_layouts)
                 validate_h3_prompt(ordered_text, shot.dialogue,
                                    audio_count=0 if shot.source_audio_path else len(shot.voice_refs),
-                                   required_picture_indices=([r.picture_index for r in shot.refs]
-                                                             if review else required_layout_indices),
+                                   required_picture_indices=(required_ordinary_picture_indices
+                                                             if review else []),
                                    submitted_picture_indices=[r.picture_index for r in shot.refs])
                 validate_required_picture_bindings(
                     ordered_text,
@@ -1983,6 +1988,7 @@ class DirectorService:
                     submitted_picture_indices=(
                         ref.picture_index for ref in shot.refs
                     ),
+                    binding_label="selected Layout",
                 )
                 return parsed
 

@@ -728,10 +728,11 @@ function DirectorAgentWorkspace({
               </select>
             </label>
           </div>
-          <ContextUsagePanel calls={contextUsage} />
-          {projectId ? <ContextCompaction key={projectId} projectId={projectId}
-            disabled={busy || generationLocked || chatActive || llmBusy || !llmModel}
-            onBusyChange={setCompactingContext} /> : null}
+          <ContextUsagePanel calls={contextUsage}>
+            {projectId ? <ContextCompaction key={projectId} projectId={projectId}
+              disabled={busy || generationLocked || chatActive || llmBusy || !llmModel}
+              onBusyChange={setCompactingContext} /> : null}
+          </ContextUsagePanel>
         </div>
 
         {mobile && !chatOnly ? (

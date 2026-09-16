@@ -80,6 +80,7 @@ def validate_required_picture_bindings(
     required_indices: Iterable[int],
     *,
     submitted_picture_indices: Iterable[int] | None = None,
+    binding_label: str = "required Picture",
 ) -> None:
     found_indices = [
         int(value)
@@ -96,7 +97,7 @@ def validate_required_picture_bindings(
     for index in dict.fromkeys(int(value) for value in required_indices):
         tag = f"<Picture {index}>"
         if index not in found_indices:
-            raise ValueError(f"missing selected Layout binding: {tag}")
+            raise ValueError(f"missing {binding_label} binding: {tag}")
 
 
 def compose_h3_prompt(sections: PromptSections) -> str:

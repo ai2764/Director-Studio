@@ -9,7 +9,14 @@ from PIL import Image
 
 from app.config import settings
 from app.agents.director.service import DirectorService
-from app.core.projects.models import PromptSections, RefRole, Shot, ShotRef
+from app.core.projects.models import (
+    AssetCoverageRecommendation,
+    AssetCoverageReview,
+    PromptSections,
+    RefRole,
+    Shot,
+    ShotRef,
+)
 from app.core.projects.store import create_project, load_shot, save_project, save_shot
 from app.core.schemas import LibraryAsset
 
@@ -124,6 +131,47 @@ async def test_all_nine_refs_reviewed_before_brief_and_prompt_save(material_shot
     assert load_shot(project.id, neighbor.id) == neighbor
     assert load_shot(project.id, shot.id) == updated
     assert not orch.active
+
+
+@pytest.mark.asyncio
+async def test_material_review_receives_current_confirmed_project_decisions(material_shot):
+    from app.agents.director.service import _script_hash
+
+    project, shot, _, _ = material_shot
+    review = AssetCoverageReview(
+        script_hash=_script_hash(project.script_text),
+        status="reviewed",
+        notes="The reference images are authoritative; use the bright coastal scene.",
+        recommendations=[
+            AssetCoverageRecommendation(
+                kind="scene",
+                needed_variant="bright coastal scene",
+                reason="User confirmed this look.",
+                resolution="accepted",
+            ),
+            AssetCoverageRecommendation(
+                kind="prop",
+                needed_variant="optional spare gear",
+                reason="Not decided yet.",
+                resolution="pending",
+            ),
+        ],
+    )
+    save_project(project.model_copy(update={"asset_coverage_review": review}))
+    orch = Orchestrator()
+    provider = Provider(orch)
+
+    await DirectorService(
+        plan_provider=provider, orchestrator=orch
+    ).write_prompts_after_layout(shot.id)
+
+    system, user = provider.text[0]
+    payload = json.loads(user)
+    assert payload["confirmed_project_review"]["notes"] == review.notes
+    assert payload["confirmed_project_review"]["recommendations"] == [
+        review.recommendations[0].model_dump(mode="json")
+    ]
+    assert "do not reopen" in system.lower()
 
 
 @pytest.mark.asyncio
