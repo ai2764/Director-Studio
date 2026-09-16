@@ -54,3 +54,12 @@ it("shows unknown provider capacity without a fabricated percentage", () => {
   expect(screen.getByText(/capacity not reported/i)).toBeTruthy();
   expect(screen.queryByRole("meter")).toBeNull();
 });
+
+it("uses a compact percentage label while keeping full context details accessible", () => {
+  render(<ContextUsagePanel calls={[usage]} compact />);
+  const trigger = screen.getByRole("button", { name: /Context · ~22,000 \/ 32,768/ });
+  expect(trigger.textContent).toContain("Context 67%");
+  expect(trigger.textContent).not.toContain("Waiting for model");
+  fireEvent.click(trigger);
+  expect(screen.getByRole("dialog", { name: "Context details" })).toBeTruthy();
+});

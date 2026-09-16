@@ -472,7 +472,8 @@ function DirectorAgentWorkspace({
     if (log) log.scrollTop = log.scrollHeight;
   }, [messages, busy, liveStatus, liveRuntime, liveThink, liveTokens]);
 
-  const send = async (text?: string) => {
+  const send = async (text?: string, options?: { preserveComposer?: boolean }) => {
+    const preserveComposer = options?.preserveComposer === true;
     const typedMessage = (text ?? draft).trim();
     const message = typedMessage || (pendingImages.length ? "Please analyze the attached image(s)." : "");
     if (!message || chatDisabled) return;
@@ -507,12 +508,12 @@ function DirectorAgentWorkspace({
     }
 
     const outgoingDraft = draft;
-    const outgoingImages = [...pendingImages];
+    const outgoingImages = preserveComposer ? [] : [...pendingImages];
     const optimisticMessageId = `director-local-${Date.now()}-${Math.random()}`;
-    setDraft("");
+    if (!preserveComposer) setDraft("");
     const requestMessage = message;
     setContextUsage([]);
-    setPendingImages([]);
+    if (!preserveComposer) setPendingImages([]);
     setMessages((m) => [
       ...m,
       {
@@ -602,8 +603,10 @@ function DirectorAgentWorkspace({
         return;
       }
       if (e instanceof DirectorChatError && e.code === "GPU_GENERATION_ACTIVE") {
-        setDraft(outgoingDraft);
-        setPendingImages(outgoingImages);
+        if (!preserveComposer) {
+          setDraft(outgoingDraft);
+          setPendingImages(outgoingImages);
+        }
         setMessages((current) => current.filter((message) => message.id !== optimisticMessageId));
         void refreshVramStatus();
         return;
@@ -681,6 +684,13 @@ function DirectorAgentWorkspace({
       text: "I want to discuss whether any shots would benefit from optional Layout studies. Ask what visual states I want before proposing sources. Do not queue generation yet.",
     },
   ];
+  const promptRetryMessage =
+    "Retry the previous failed H3 prompt once. Preserve the current storyboard, Picture references, dialogue, and shot structure. Correct only the reported prompt validation error. Do not generate a Layout or change the story.";
+  const isPromptGenerationFailure = (content: string) => {
+    const normalized = content.toLowerCase();
+    return normalized.includes("prompt generation did not complete after bounded internal repair")
+      || normalized.includes("prompt_generation_failed");
+  };
   const selectedShotIndex = Math.max(0, shots.findIndex((shot) => shot.id === selectedShotId));
   const selectedShot = shots[selectedShotIndex] ?? null;
 
@@ -703,36 +713,38 @@ function DirectorAgentWorkspace({
                 ) : null}
               </div>
             </div>
-            <label className="director-model-picker inline-model-picker">
-              <span className="muted tiny">LLM</span>
-              <select
-                value={llmOptions.length ? llmModel : ""}
-                disabled={chatDisabled || llmBusy || llmOptions.length === 0}
-                onChange={(e) => void onChangeLlm(e.target.value)}
-                title={`${llmProvider} model used for Director chat and shot planning`}
-              >
-                {llmOptions.length === 0 ? (
-                  <option value="">{llmReachable ? "No models available" : `${llmProvider} unavailable`}</option>
-                ) : (
-                  <>
-                    {llmModel && !llmOptions.includes(llmModel) ? (
-                      <option value={llmModel} disabled>{llmModel} (not available)</option>
-                    ) : null}
-                    {llmOptions.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </>
-                )}
-              </select>
-            </label>
+            <div className="director-runtime-controls">
+              <label className="director-model-picker inline-model-picker">
+                <span className="muted tiny">LLM</span>
+                <select
+                  value={llmOptions.length ? llmModel : ""}
+                  disabled={chatDisabled || llmBusy || llmOptions.length === 0}
+                  onChange={(e) => void onChangeLlm(e.target.value)}
+                  title={`${llmProvider} model used for Director chat and shot planning`}
+                >
+                  {llmOptions.length === 0 ? (
+                    <option value="">{llmReachable ? "No models available" : `${llmProvider} unavailable`}</option>
+                  ) : (
+                    <>
+                      {llmModel && !llmOptions.includes(llmModel) ? (
+                        <option value={llmModel} disabled>{llmModel} (not available)</option>
+                      ) : null}
+                      {llmOptions.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </>
+                  )}
+                </select>
+              </label>
+              <ContextUsagePanel calls={contextUsage} compact={mobile}>
+                {projectId ? <ContextCompaction key={projectId} projectId={projectId}
+                  disabled={busy || generationLocked || chatActive || llmBusy || !llmModel}
+                  onBusyChange={setCompactingContext} /> : null}
+              </ContextUsagePanel>
+            </div>
           </div>
-          <ContextUsagePanel calls={contextUsage}>
-            {projectId ? <ContextCompaction key={projectId} projectId={projectId}
-              disabled={busy || generationLocked || chatActive || llmBusy || !llmModel}
-              onBusyChange={setCompactingContext} /> : null}
-          </ContextUsagePanel>
         </div>
 
         {mobile && !chatOnly ? (
@@ -753,6 +765,9 @@ function DirectorAgentWorkspace({
         <div className="chat-log" ref={chatLogRef}>
           {messages.map((m, i) => {
             const images = visibleChatImages(m.images, shots);
+            const canRetryPrompt = m.role === "assistant"
+              && i === messages.length - 1
+              && isPromptGenerationFailure(m.content);
             return (
               <div
                 key={m.id || i}
@@ -776,6 +791,18 @@ function DirectorAgentWorkspace({
                 </details>
               ) : null}
               <div className="chat-content">{m.content}</div>
+              {canRetryPrompt ? (
+                <div className="chat-message-actions">
+                  <button
+                    type="button"
+                    className="prompt-retry-button"
+                    disabled={chatDisabled}
+                    onClick={() => void send(promptRetryMessage, { preserveComposer: true })}
+                  >
+                    Retry prompt
+                  </button>
+                </div>
+              ) : null}
               {images.length ? (
                 <div className="chat-images">
                   {images.map((img, j) => (

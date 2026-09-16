@@ -14,7 +14,15 @@ const status = (call: ContextUsage) => ({
   cancelled: "Cancelled",
 })[call.status];
 
-export function ContextUsagePanel({ calls, children }: { calls: ContextUsage[]; children?: ReactNode }) {
+export function ContextUsagePanel({
+  calls,
+  children,
+  compact = false,
+}: {
+  calls: ContextUsage[];
+  children?: ReactNode;
+  compact?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -27,6 +35,13 @@ export function ContextUsagePanel({ calls, children }: { calls: ContextUsage[]; 
   const summary = last
     ? `Context · ${input(last)}${last.context_window ? ` / ${number(last.context_window)}` : " tokens"} · ${status(last)}${high && !failed ? " · High pressure" : ""}`
     : "Context · Usage and compaction";
+  const visibleSummary = compact
+    ? last?.context_window
+      ? `Context ${Math.round((prompt / last.context_window) * 100)}%`
+      : last
+        ? `Context ${input(last)}`
+        : "Context"
+    : summary;
 
   const close = useCallback(() => {
     triggerRef.current?.focus();
@@ -43,10 +58,10 @@ export function ContextUsagePanel({ calls, children }: { calls: ContextUsage[]; 
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [close, open]);
 
-  return <div className={`context-usage ${tone}`}>
+  return <div className={`context-usage ${tone}${compact ? " compact" : ""}`}>
     <button ref={triggerRef} type="button" className="context-usage-trigger"
-      aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
-      <span className="context-usage-trigger-label">{summary}</span>
+      aria-label={summary} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
+      <span className="context-usage-trigger-label">{visibleSummary}</span>
       <span aria-hidden="true" className="context-usage-trigger-icon">↗</span>
     </button>
 

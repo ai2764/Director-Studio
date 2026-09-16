@@ -231,6 +231,17 @@ describe("Director shot actions", () => {
     expect(container.querySelector(".director-model-picker.inline-model-picker")).toBeTruthy();
   });
 
+  it("groups the model and compact context controls on one mobile header row", async () => {
+    const { container } = render(<DirectorPage mobile />);
+
+    await screen.findByRole("heading", { name: "Director" });
+    const controls = container.querySelector(
+      ".director-chat-header-row > .director-runtime-controls",
+    );
+    expect(controls?.querySelector(".director-model-picker.inline-model-picker")).toBeTruthy();
+    expect(controls?.querySelector(".context-usage.compact")).toBeTruthy();
+  });
+
   it("disables Director chat when Ollama has no installed models", async () => {
     vi.mocked(getDirectorModel).mockResolvedValueOnce({
       model: "",
@@ -273,6 +284,54 @@ describe("Director shot actions", () => {
       screen.getByText("I will preserve the warm lighting across the shots."),
     ).toBeTruthy();
     expect(screen.queryByText(/Working on \*\*Test project\*\*/)).toBeNull();
+  });
+
+  it("retries the latest prompt-generation failure without clearing an unsent draft", async () => {
+    getDirectorChatHistoryMock.mockResolvedValue([
+      {
+        id: "prompt-failure",
+        role: "assistant",
+        content:
+          "Prompt generation did not complete after bounded internal repair. The saved storyboard was not changed to work around it. detailed_description <d> block 1 must contain [Language] and spoken words only",
+        images: [],
+      },
+    ]);
+    vi.mocked(chatWithDirectorStream).mockResolvedValue({
+      reply: "Prompt saved.", actions: [], project: projectState.project!,
+      shots: [testShot], images: [], thinking: "", steps: [],
+    });
+
+    render(<DirectorPage />);
+    const retry = await screen.findByRole("button", { name: "Retry prompt" });
+    const draft = screen.getByPlaceholderText(/Talk to the Director/) as HTMLTextAreaElement;
+    fireEvent.change(draft, { target: { value: "Keep this unsent note" } });
+    fireEvent.click(retry);
+
+    await waitFor(() => expect(chatWithDirectorStream).toHaveBeenCalledWith(
+      "prj_test",
+      expect.stringMatching(/Retry the previous failed H3 prompt once.*Correct only the reported prompt validation error/is),
+      [],
+      expect.any(Object),
+      [],
+      expect.any(AbortSignal),
+    ));
+    expect(draft.value).toBe("Keep this unsent note");
+  });
+
+  it("does not offer prompt retry for an older or unrelated failure", async () => {
+    getDirectorChatHistoryMock.mockResolvedValue([
+      {
+        id: "prompt-failure",
+        role: "assistant",
+        content: "Prompt generation did not complete after bounded internal repair.",
+        images: [],
+      },
+      { id: "latest", role: "assistant", content: "The GPU is busy.", images: [] },
+    ]);
+
+    render(<DirectorPage />);
+    await screen.findByText("The GPU is busy.");
+    expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
   });
 
   it("replaces Send with Cancel and disables the composer during a local response", async () => {

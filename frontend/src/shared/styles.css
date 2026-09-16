@@ -306,6 +306,18 @@ code {
   flex-wrap: wrap;
 }
 
+.director-runtime-controls {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.director-runtime-controls .context-usage {
+  flex: 1 1 auto;
+}
+
 .director-model-picker {
   display: flex;
   flex-direction: column;
@@ -322,6 +334,32 @@ code {
   background: var(--bg-panel);
   color: inherit;
   max-width: 100%;
+}
+
+.chat-message-actions {
+  display: flex;
+  margin-top: 0.65rem;
+}
+
+.prompt-retry-button {
+  min-height: 2.1rem;
+  padding: 0.42rem 0.75rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent, #725344);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.prompt-retry-button:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.prompt-retry-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .shot-refs-block {
@@ -3613,6 +3651,24 @@ select {
 
 .mobile-director-layout .director-chat-header-row {
   align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.45rem;
+}
+
+.mobile-director-layout .director-runtime-controls {
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+}
+
+.mobile-director-layout .director-model-picker.inline-model-picker {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+}
+
+.mobile-director-layout .director-model-picker.inline-model-picker > span {
+  display: none;
 }
 
 .mobile-director-layout .director-agent-mascot {
@@ -3624,9 +3680,14 @@ select {
 }
 
 .mobile-director-layout .director-model-picker select {
-  max-width: 8.5rem;
+  width: 100%;
+  max-width: none;
   padding: 0.38rem 0.45rem;
   font-size: 0.68rem;
+}
+
+.mobile-director-layout .director-runtime-controls .context-usage {
+  flex: 0 0 auto;
 }
 
 .mobile-shot-drawer {

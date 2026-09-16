@@ -6,6 +6,8 @@
 .context-usage-trigger-icon { flex: 0 0 auto; opacity: 0.65; }
 .context-usage.warning .context-usage-trigger { color: #775510; }
 .context-usage.error .context-usage-trigger { color: var(--danger, #743a34); }
+.context-usage.compact { margin-top: 0; }
+.context-usage.compact .context-usage-trigger { width: auto; min-height: 2rem; padding: 0.34rem 0.5rem; }
 
 .context-dialog-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); background: rgb(24 18 14 / 42%); backdrop-filter: blur(3px); }
 .context-dialog { display: flex; flex-direction: column; width: min(680px, 100%); max-height: min(760px, calc(100dvh - 2rem)); overflow: hidden; border: 1px solid var(--border, #c9beb3); border-radius: 16px; background: var(--panel, #f7f1e9); color: var(--text, #2c2521); box-shadow: 0 24px 70px rgb(31 21 16 / 28%); }
