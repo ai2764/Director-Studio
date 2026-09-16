@@ -117,4 +117,3 @@
 - [ ] Run the complete frontend Vitest suite and `npm run build`.
 - [ ] Inspect the dialog at desktop and mobile width against the accepted screenshot requirements.
 - [ ] Run `git diff --check`, review `git status`, and confirm no project data, model configuration or secrets are staged.
-
