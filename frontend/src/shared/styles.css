@@ -1384,6 +1384,61 @@ code {
   font-size: 1.1rem;
 }
 
+.desktop-shot-design {
+  margin: 1rem 0 1.25rem;
+}
+
+.desktop-shot-design h3 {
+  margin: 0 0 0.55rem;
+  font-size: 0.84rem;
+}
+
+.desktop-shot-design .shot-beat {
+  margin: 0;
+}
+
+.shot-design-metadata {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem 1rem;
+  margin: 1rem 0 0;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.shot-design-metadata > div {
+  min-width: 0;
+}
+
+.shot-design-metadata > div:last-child {
+  grid-column: 1 / -1;
+}
+
+.shot-design-metadata dt,
+.shot-design-note > span {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.shot-design-metadata dd {
+  margin: 0.25rem 0 0;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.shot-design-note {
+  margin-top: 0.9rem;
+}
+
+.shot-design-note p {
+  margin: 0.3rem 0 0;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
 .shot-editor-body {
   min-height: 280px;
 }
@@ -6375,6 +6430,11 @@ select {
   font-family: Georgia, "Times New Roman", serif;
   font-size: 1rem;
   line-height: 1.65;
+}
+
+.shot-document .shot-design-metadata,
+.shot-document .shot-design-note {
+  max-width: 66ch;
 }
 
 .shot-document .shot-dialogue {

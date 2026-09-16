@@ -187,6 +187,18 @@ export function ShotWorkspace({
                     <h4>Creative brief</h4>
                   </header>
                   <p className="shot-beat">{selected.script_beat || "No creative brief written yet."}</p>
+                  <dl className="shot-design-metadata">
+                    <div><dt>Duration</dt><dd>{selected.duration_s}s</dd></div>
+                    <div><dt>Framing</dt><dd>{selected.shot_type || "—"}</dd></div>
+                    <div><dt>Angle</dt><dd>{selected.camera_angle || "—"}</dd></div>
+                    <div><dt>Motion</dt><dd>{selected.camera_motion || "—"}</dd></div>
+                  </dl>
+                  {selected.composition ? (
+                    <div className="shot-design-note">
+                      <span>Composition</span>
+                      <p>{selected.composition}</p>
+                    </div>
+                  ) : null}
                   {selected.dialogue.length ? (
                     <div className="shot-dialogue" aria-label="Dialogue">
                       {selected.dialogue.map((line, index) => {

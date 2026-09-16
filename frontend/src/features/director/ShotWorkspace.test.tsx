@@ -213,6 +213,29 @@ describe("ShotWorkspace", () => {
     expect(screen.getByText("Reveal beat")).toBeTruthy();
   });
 
+  it("shows the mobile Shot design fields in the desktop creative brief", () => {
+    const selected = shot("s1", "Launch");
+    selected.shot_type = "wide shot";
+    selected.camera_angle = "low angle";
+    selected.camera_motion = "slow push-in toward the hatch";
+    selected.composition = "Mia stays small beneath the rocket.";
+
+    const { container } = render(
+      <ShotWorkspace
+        shots={[selected]}
+        busy={false}
+        onSend={vi.fn()}
+        onOpenImage={vi.fn()}
+      />,
+    );
+
+    const brief = container.querySelector("#shot-brief");
+    expect(brief?.textContent).toContain("wide shot");
+    expect(brief?.textContent).toContain("low angle");
+    expect(brief?.textContent).toContain("slow push-in toward the hatch");
+    expect(brief?.textContent).toContain("Mia stays small beneath the rocket.");
+  });
+
   it("frames the Shot header, navigation, and document as one clapperboard", () => {
     const { container } = render(
       <ShotWorkspace

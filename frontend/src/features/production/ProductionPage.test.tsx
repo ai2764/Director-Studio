@@ -280,6 +280,29 @@ describe("ProductionPage prompt refresh", () => {
     expect(container.querySelector(".production-submit-actions")).toBeTruthy();
   });
 
+  it("shows the mobile Shot design details on desktop Production", async () => {
+    const planned = {
+      ...shot(emptyPrompt),
+      shot_type: "medium close-up",
+      camera_angle: "eye-level",
+      camera_motion: "tracking push toward Mia",
+      composition: "Mia holds the left third of the frame.",
+      dialogue: ["Open the hatch."],
+    };
+    vi.mocked(getProject).mockResolvedValue(detail(planned));
+
+    render(<ProductionPage active />);
+    fireEvent.click(await screen.findByText("Corridor walk-in"));
+
+    const design = await screen.findByRole("region", { name: "Shot design" });
+    expect(design.textContent).toContain("6s");
+    expect(design.textContent).toContain("medium close-up");
+    expect(design.textContent).toContain("eye-level");
+    expect(design.textContent).toContain("tracking push toward Mia");
+    expect(design.textContent).toContain("Mia holds the left third of the frame.");
+    expect(design.textContent).toContain("Open the hatch.");
+  });
+
   it("renders a read-only mobile Shot review with the final result first", async () => {
     const completed = {
       ...shot(generatedPrompt),

@@ -845,10 +845,32 @@ export function ProductionPage({
               <div className="shot-editor-header">
                 <div>
                   <h2 className="shot-editor-title">{selected.title || selected.id}</h2>
-                  <p className="shot-beat muted">{selected.script_beat}</p>
                 </div>
                 <ProductionStatusChip shot={selected} />
               </div>
+
+              <section className="desktop-shot-design" aria-label="Shot design">
+                <h3>Shot design</h3>
+                <p className="shot-beat muted">{selected.script_beat}</p>
+                <dl className="shot-design-metadata">
+                  <div><dt>Duration</dt><dd>{selected.duration_s}s</dd></div>
+                  <div><dt>Framing</dt><dd>{selected.shot_type || "—"}</dd></div>
+                  <div><dt>Angle</dt><dd>{selected.camera_angle || "—"}</dd></div>
+                  <div><dt>Motion</dt><dd>{selected.camera_motion || "—"}</dd></div>
+                </dl>
+                {selected.composition ? (
+                  <div className="shot-design-note">
+                    <span>Composition</span>
+                    <p>{selected.composition}</p>
+                  </div>
+                ) : null}
+                {selected.dialogue?.length ? (
+                  <div className="shot-design-note">
+                    <span>Dialogue</span>
+                    {selected.dialogue.map((line, index) => <p key={`${line}-${index}`}>{line}</p>)}
+                  </div>
+                ) : null}
+              </section>
 
               <div className="segment-tabs" role="tablist">
                 {tabs.map((t) => (
