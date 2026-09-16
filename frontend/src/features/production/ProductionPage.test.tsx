@@ -111,6 +111,24 @@ describe("ProductionPage prompt refresh", () => {
     });
   });
 
+  it("shows a loading state instead of zero shots before mobile project data arrives", async () => {
+    let resolveProject!: (value: ProjectDetail) => void;
+    vi.mocked(getProject).mockReturnValueOnce(new Promise((resolve) => {
+      resolveProject = resolve;
+    }));
+
+    render(<ProductionPage active mobile />);
+
+    expect(screen.getByText("Loading…")).toBeTruthy();
+    expect(screen.getByText("Loading shots…")).toBeTruthy();
+    expect(screen.queryByText("0 shots")).toBeNull();
+    expect(screen.queryByText("No shots yet. Plan them with Director first.")).toBeNull();
+
+    await act(async () => resolveProject(detail(shot(emptyPrompt))));
+    expect(await screen.findByText("1 shots")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Shot 01 · Corridor walk-in" })).toBeTruthy();
+  });
+
   it("shows the resolved custom workflow in Production", async () => {
     vi.mocked(getProject).mockResolvedValue(detail(shot(emptyPrompt)));
     render(<ProductionPage active />);

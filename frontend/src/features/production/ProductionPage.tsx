@@ -31,6 +31,10 @@ import { fetchH3Profiles } from "../../shared/api/client";
 import type { H3ActiveProfile } from "../../shared/api/types";
 
 const ACTIVE: JobStatus[] = ["queued", "uploading", "running"];
+type ProjectLoadState = {
+  projectId: string | null;
+  status: "idle" | "loading" | "loaded" | "error";
+};
 
 function ProductionWorkflowProfile({ profile, error, job }: {
   profile: H3ActiveProfile | null;
@@ -168,6 +172,10 @@ export function ProductionPage({
 } = {}) {
   const { projectId } = useProject();
   const [shots, setShots] = useState<Shot[]>([]);
+  const [projectLoad, setProjectLoad] = useState<ProjectLoadState>(() => ({
+    projectId,
+    status: projectId ? "loading" : "idle",
+  }));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draftPrompt, setDraftPrompt] = useState<PromptSections>(EMPTY_PROMPT_SECTIONS);
   const [promptDirty, setPromptDirty] = useState(false);
@@ -228,15 +236,18 @@ export function ProductionPage({
   const loadProject = useCallback(async (id: string) => {
     const detail = await getProject(id);
     setShots(detail.shots);
+    setProjectLoad({ projectId: id, status: "loaded" });
     return detail;
   }, []);
 
   useEffect(() => {
     setSelectedId(null);
     setH3Job(null);
-    if (!projectId) {
-      setShots([]);
-    }
+    setShots([]);
+    setProjectLoad({
+      projectId,
+      status: projectId ? "loading" : "idle",
+    });
   }, [projectId]);
 
   // Pages stay mounted across top-level tab switches. Refresh when Production
@@ -245,19 +256,38 @@ export function ProductionPage({
     if (!projectId) return;
     let cancelled = false;
     setError(null);
+    setProjectLoad((current) => current.projectId === projectId && current.status === "loaded"
+      ? current
+      : { projectId, status: "loading" });
     getProject(projectId)
       .then((detail) => {
         if (cancelled) return;
         setShots(detail.shots);
+        setProjectLoad({ projectId, status: "loaded" });
         setError(null);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) {
+          setProjectLoad((current) => current.projectId === projectId && current.status === "loaded"
+            ? current
+            : { projectId, status: "error" });
+          setError(e instanceof Error ? e.message : String(e));
+        }
       });
     return () => {
       cancelled = true;
     };
   }, [active, projectId]);
+
+  const projectLoading = Boolean(
+    projectId
+    && (projectLoad.projectId !== projectId || projectLoad.status === "loading"),
+  );
+  const projectFailed = Boolean(
+    projectId
+    && projectLoad.projectId === projectId
+    && projectLoad.status === "error",
+  );
 
   useEffect(() => {
     if (!active) return;
@@ -570,14 +600,18 @@ export function ProductionPage({
             <span className="mobile-eyebrow">Production</span>
             <h1>Shot review</h1>
           </div>
-          <span className="mobile-shot-count">{shots.length} shots</span>
+          <span className="mobile-shot-count">
+            {projectLoading ? "Loading…" : `${shots.length} shots`}
+          </span>
         </header>
 
         {error ? <div className="banner error mobile-production-error">{error}</div> : null}
 
         {!projectId ? (
           <p className="mobile-production-empty">Select a project to review its shots.</p>
-        ) : shots.length === 0 ? (
+        ) : projectLoading ? (
+          <p className="mobile-production-empty" role="status">Loading shots…</p>
+        ) : projectFailed ? null : shots.length === 0 ? (
           <p className="mobile-production-empty">No shots yet. Plan them with Director first.</p>
         ) : (
           <nav className="mobile-production-shot-strip" aria-label="Production shots">
@@ -761,11 +795,13 @@ export function ProductionPage({
           <div className="section-card compact-card">
             <div className="section-card-head">
               <h2 className="section-card-title">Shots</h2>
-              <span className="muted tiny">{shots.length}</span>
+              <span className="muted tiny">{projectLoading ? "Loading…" : shots.length}</span>
             </div>
             {!projectId ? (
               <p className="empty-copy">No project selected.</p>
-            ) : shots.length === 0 ? (
+            ) : projectLoading ? (
+              <p className="empty-copy" role="status">Loading shots…</p>
+            ) : projectFailed ? null : shots.length === 0 ? (
               <p className="empty-copy">No shots yet. Plan them in Director first.</p>
             ) : (
               <div className="shot-table-wrap">
