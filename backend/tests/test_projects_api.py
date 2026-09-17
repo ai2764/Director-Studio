@@ -94,7 +94,7 @@ def _fresh_layout_prompt_meta(shot: Shot) -> dict:
 def _seed_layout(library_root: Path, asset_id: str = "lay_testlayout01") -> LibraryAsset:
     adir = library_root / "layouts" / asset_id
     adir.mkdir(parents=True, exist_ok=True)
-    (adir / "layout.png").write_bytes(b"fake-layout-png" * 200)  # >2KB for resolve
+    Image.effect_noise((128, 128), 30).convert("RGB").save(adir / "layout.png")
     asset = LibraryAsset(
         id=asset_id,
         kind="layouts",
@@ -113,7 +113,7 @@ def _seed_layout(library_root: Path, asset_id: str = "lay_testlayout01") -> Libr
 def _seed_actor(library_root: Path, asset_id: str = "act_testactor01") -> LibraryAsset:
     adir = library_root / "actors" / asset_id
     adir.mkdir(parents=True, exist_ok=True)
-    (adir / "master.png").write_bytes(b"fake-actor-png" * 200)  # >2KB for resolve
+    Image.effect_noise((128, 128), 30).convert("RGB").save(adir / "master.png")
     asset = LibraryAsset(
         id=asset_id,
         kind="actors",
@@ -139,7 +139,7 @@ def _seed_image_reference(
     adir = library_root / kind / asset_id
     adir.mkdir(parents=True, exist_ok=True)
     filename = f"{file_key}.png"
-    (adir / filename).write_bytes(b"reference-image" * 200)
+    Image.effect_noise((128, 128), 30).convert("RGB").save(adir / filename)
     asset = LibraryAsset(
         id=asset_id,
         kind=kind,
@@ -803,7 +803,7 @@ def test_replace_shot_materials_rejects_more_than_nine_pictures(client, api_env)
     assert response.status_code == 422
 
 
-def test_delete_layout_removes_shot_binding_and_generated_asset(client, api_env):
+def test_delete_layout_removes_shot_binding_but_keeps_asset_in_library(client, api_env):
     project = create_project("Delete Layout", "A door opens.")
     asset = _seed_layout(api_env["library"], "lay_delete_me")
     shot = Shot(
@@ -848,7 +848,7 @@ def test_delete_layout_removes_shot_binding_and_generated_asset(client, api_env)
     assert body["refs"] == []
     assert body["layout_asset_id"] is None
     assert body["layout_review_status"] is None
-    assert not (api_env["library"] / "layouts" / asset.id).exists()
+    assert (api_env["library"] / "layouts" / asset.id).exists()
 
 
 def test_delete_current_layout_keeps_history_without_reactivating_it(client, api_env):
@@ -904,7 +904,7 @@ def test_delete_current_layout_keeps_history_without_reactivating_it(client, api
     assert body["layout_asset_id"] is None
     assert body["refs"] == []
     assert (api_env["library"] / "layouts" / previous.id).exists()
-    assert not (api_env["library"] / "layouts" / current.id).exists()
+    assert (api_env["library"] / "layouts" / current.id).exists()
 
 
 def test_delete_layout_preserves_asset_referenced_by_another_project(client, api_env):
@@ -954,6 +954,68 @@ def test_delete_layout_preserves_asset_referenced_by_another_project(client, api
 
     assert response.status_code == 200
     assert (api_env["library"] / "layouts" / shared.id).exists()
+
+
+def test_delete_layout_from_library_detaches_active_shot_references(client, api_env):
+    project = create_project("Delete Layout asset", "A door opens.")
+    actor = _seed_actor(api_env["library"], "act_keep_after_layout_delete")
+    layout = _seed_layout(api_env["library"], "lay_delete_from_library")
+    shot = Shot(
+        id="sht_library_layout_delete",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Keep the actor",
+        script_beat="The door opens.",
+        duration_s=6,
+        status=ShotStatus.needs_review,
+        layout_asset_id=layout.id,
+        layout_review_status="usable",
+        layout_refs=[
+            LayoutReference(
+                id="lref_library_delete",
+                asset_id=layout.id,
+                job_status="succeeded",
+                review_status=LayoutReviewStatus.usable,
+                selected_for_h3=True,
+            )
+        ],
+        refs=[
+            ShotRef(
+                role=RefRole.actor,
+                asset_id=actor.id,
+                picture_index=1,
+                file_key="master",
+            ),
+            ShotRef(
+                role=RefRole.layout_ref_frame,
+                asset_id=layout.id,
+                picture_index=2,
+                file_key="layout",
+            ),
+        ],
+        meta={
+            "prompt_picture_signature": "old-picture-signature",
+            "prompt_layout_signature": "old-layout-signature",
+        },
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+
+    response = client.delete(f"/api/library/layouts/{layout.id}")
+
+    assert response.status_code == 200
+    assert not (api_env["library"] / "layouts" / layout.id).exists()
+    persisted = load_shot(project.id, shot.id)
+    assert persisted is not None
+    assert [(ref.asset_id, ref.picture_index) for ref in persisted.refs] == [
+        (actor.id, 1)
+    ]
+    assert persisted.layout_refs == []
+    assert persisted.layout_asset_id is None
+    assert persisted.layout_review_status is None
+    assert persisted.meta["prompt_picture_signature"] == ""
+    assert persisted.meta["prompt_layout_signature"] == ""
+    assert persisted.meta["material_review_pending"] is True
 
 
 def test_director_chat_history_is_persisted_and_reloaded(client, monkeypatch):
@@ -1349,6 +1411,7 @@ async def test_inserted_approved_layout_survives_prompt_write_and_h3_submit(
     client,
     api_env,
     monkeypatch,
+    enable_reference_review,
 ):
     _seed_actor(api_env["library"])
     project = create_project("Inserted Layout H3", "Chen crosses the doorway.")
@@ -1373,10 +1436,12 @@ async def test_inserted_approved_layout_survives_prompt_write_and_h3_submit(
     project.shot_ids = [shot.id]
     save_project(project)
 
+    png = io.BytesIO()
+    Image.effect_noise((128, 128), 30).convert("RGB").save(png, format="PNG")
     inserted_response = client.post(
         f"/api/shots/{shot.id}/layout/insert",
         data={"name": "approved still", "approve": "true"},
-        files={"file": ("approved.png", b"approved-layout" * 400, "image/png")},
+        files={"file": ("approved.png", png.getvalue(), "image/png")},
     )
     assert inserted_response.status_code == 200, inserted_response.text
     inserted_asset_id = inserted_response.json()["layout_asset_id"]
@@ -1393,7 +1458,7 @@ async def test_inserted_approved_layout_survives_prompt_write_and_h3_submit(
         return __import__("json").dumps(
             {
                 "subject_definitions": (
-                    "<Picture 2> controls the inserted doorway composition."
+                    "<Picture 1> defines Chen. <Picture 2> controls the inserted doorway composition."
                 ),
                 "summary": "One continuous doorway scene.",
                 "retention_analysis": "Retain Chen and the inserted geography.",
@@ -1404,6 +1469,7 @@ async def test_inserted_approved_layout_survives_prompt_write_and_h3_submit(
         )
 
     monkeypatch.setattr(provider, "complete", return_inserted_layout_prompt)
+    enable_reference_review(provider)
     written = await client.app.state.director_service.write_prompts_after_layout(
         shot.id
     )
@@ -1793,6 +1859,60 @@ async def test_make_chat_fn_falls_back_to_text_tool_protocol_on_ollama_xml_error
 
 
 @pytest.mark.asyncio
+async def test_make_chat_fn_disables_ollama_thinking_for_compaction(monkeypatch):
+    from app.api import projects as projects_api
+
+    captured: list[dict] = []
+
+    class FakeOllama:
+        async def chat_response(self, *args, **kwargs):
+            captured.append(kwargs)
+            return {"content": "short summary", "thinking": "", "tool_calls": []}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    class FakeProvider:
+        provider_id = "ollama"
+        client = FakeOllama()
+        lifecycle = None
+
+        def model_status(self):
+            return {"model": "qwen-test"}
+
+    class FakeOrchestrator:
+        provider = FakeProvider()
+
+        def llm_session(self, **kwargs):
+            return FakeSession()
+
+        async def ensure_llm_ready(self, **kwargs):
+            return None
+
+    monkeypatch.setattr(projects_api.settings, "llm_provider", "ollama")
+    monkeypatch.setattr("app.core.vram.get_orchestrator", lambda: FakeOrchestrator())
+    monkeypatch.setattr(
+        "app.core.vram.director_model.get_director_model", lambda: "qwen-test"
+    )
+
+    chat_fn = await projects_api._make_chat_fn()
+    await chat_fn(
+        "Summarize history.",
+        "",
+        messages=[{"role": "user", "content": "Keep BLUE."}],
+        inference_purpose="compaction",
+        prepared_system=True,
+        max_output_tokens=512,
+    )
+
+    assert captured[0]["think"] is False
+
+
+@pytest.mark.asyncio
 async def test_make_chat_fn_forces_single_gpt_tool_through_structured_output(
     monkeypatch,
 ):
@@ -1957,7 +2077,7 @@ def test_approve_shot_and_submit_h3(client, api_env, monkeypatch):
             ),
             summary="summary",
             retention_analysis="retention",
-            detailed_description='Actor says "Hello" and walks in.',
+            detailed_description='Actor (S1) says <d>[English] Hello</d> and walks in.',
             overall_soundscape="sound",
             non_diegetic_music="music",
         ),
@@ -2138,7 +2258,7 @@ def test_submit_h3_rejects_locked_source_audio_for_official_providers(
 
 
 def test_submit_refreshes_prompt_when_layout_provenance_is_stale(
-    client, api_env, monkeypatch
+    client, api_env, monkeypatch, enable_reference_review
 ):
     _seed_layout(api_env["library"])
     project = create_project("P", "script")
@@ -2191,6 +2311,7 @@ def test_submit_refreshes_prompt_when_layout_provenance_is_stale(
         return json.dumps(fresh_sections)
 
     monkeypatch.setattr(provider, "complete", return_fresh_sections)
+    enable_reference_review(provider)
 
     started: list[dict] = []
 
@@ -2215,6 +2336,7 @@ def test_submit_refreshes_prompt_when_picture_materials_changed(
     client,
     api_env,
     monkeypatch,
+    enable_reference_review,
 ):
     actor = _seed_actor(api_env["library"], "act_changed_material")
     project = create_project("Changed materials", "The Agent waits.")
@@ -2259,6 +2381,7 @@ def test_submit_refreshes_prompt_when_picture_materials_changed(
         )
 
     monkeypatch.setattr(provider, "complete", return_material_prompt)
+    enable_reference_review(provider)
     started: list[dict] = []
 
     async def capture_start(job, *, images=None):
@@ -2277,7 +2400,7 @@ def test_submit_refreshes_prompt_when_picture_materials_changed(
 
 
 def test_submit_syncs_explicit_multi_layout_set_and_refreshes_stale_signature(
-    client, api_env, monkeypatch
+    client, api_env, monkeypatch, enable_reference_review
 ):
     _seed_actor(api_env["library"])
     _seed_layout(api_env["library"], "lay_before")
@@ -2339,7 +2462,7 @@ def test_submit_syncs_explicit_multi_layout_set_and_refreshes_stale_signature(
         return __import__("json").dumps(
             {
                 "subject_definitions": (
-                    "<Picture 2> controls empty-doorway geography; "
+                    "<Picture 1> defines Chen. <Picture 2> controls empty-doorway geography; "
                     "<Picture 3> controls the compatible two-person blocking."
                 ),
                 "summary": "Compatible states of one continuous doorway scene.",
@@ -2351,6 +2474,7 @@ def test_submit_syncs_explicit_multi_layout_set_and_refreshes_stale_signature(
         )
 
     monkeypatch.setattr(provider, "complete", return_layout_grounded_sections)
+    enable_reference_review(provider)
     started: list[dict] = []
 
     async def capture_start(job, *, images=None):
@@ -2382,7 +2506,7 @@ def test_submit_syncs_explicit_multi_layout_set_and_refreshes_stale_signature(
 
 
 def test_submit_uses_existing_layout_even_when_legacy_selection_is_false(
-    client, api_env, monkeypatch
+    client, api_env, monkeypatch, enable_reference_review
 ):
     _seed_actor(api_env["library"])
     _seed_layout(api_env["library"], "lay_old")
@@ -2436,7 +2560,7 @@ def test_submit_uses_existing_layout_even_when_legacy_selection_is_false(
         return __import__("json").dumps(
             {
                 "subject_definitions": (
-                    "Chen's identity remains stable. "
+                    "<Picture 1> defines Chen's identity. "
                     "<Picture 2> controls the composition."
                 ),
                 "summary": "Chen remains alone in one continuous shot.",
@@ -2448,6 +2572,7 @@ def test_submit_uses_existing_layout_even_when_legacy_selection_is_false(
         )
 
     monkeypatch.setattr(provider, "complete", return_layout_sections)
+    enable_reference_review(provider)
     started: list[dict] = []
 
     async def capture_start(job, *, images=None):
@@ -2479,6 +2604,7 @@ async def test_legacy_deselect_removes_the_current_layout_from_h3(
     client,
     api_env,
     monkeypatch,
+    enable_reference_review,
 ):
     from app.agents.director.context_io import (
         load_agent_context,
@@ -2559,7 +2685,7 @@ async def test_legacy_deselect_removes_the_current_layout_from_h3(
     ) -> str:
         provider.calls.append((system, user))
         has_layout = '\"role\": \"layout_ref_frame\"' in user
-        subject = "Chen, the room, and recorder remain coherent."
+        subject = "<Picture 1> defines Chen, <Picture 2> the room, <Picture 3> the recorder."
         if has_layout:
             subject += " <Picture 4> controls the room composition."
         return __import__("json").dumps(
@@ -2574,6 +2700,7 @@ async def test_legacy_deselect_removes_the_current_layout_from_h3(
         )
 
     monkeypatch.setattr(provider, "complete", return_sections)
+    enable_reference_review(provider)
     await client.app.state.director_service.write_prompts_after_layout(shot.id)
 
     saved = load_agent_context(project.id)

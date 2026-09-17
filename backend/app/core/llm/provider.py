@@ -9,6 +9,7 @@ class LLMResult(TypedDict, total=False):
     thinking: str
     tool_calls: list[dict[str, Any]]
     finish_reason: str
+    usage: dict[str, int]
 
 
 class UnsupportedLLMFeatureError(RuntimeError):
@@ -72,6 +73,8 @@ class LLMLifecycle(Protocol):
     async def release(self, models: Sequence[str]) -> None: ...
 
     async def status(self, model: str) -> dict[str, Any]: ...
+
+    async def context_capacity(self, model: str) -> int | None: ...
 
 
 class LLMProvider(Protocol):

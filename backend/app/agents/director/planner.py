@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any, Iterable, Protocol, runtime_checkable
 
@@ -41,7 +42,8 @@ class PlanProvider(Protocol):
 class AssetMatchDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role: str
+    role: str = Field(json_schema_extra={"enum": [r.value for r in RefRole] + ["layout"]},
+                      description="Asset kind binding, not its visual job. Use actor even for an actor's wardrobe_ref file.")
     asset_id: str
     file_key: str | None = None
     picture_index: int | None = Field(default=None, ge=1, le=9)
@@ -165,6 +167,30 @@ class ShotDraft(BaseModel):
         return self
 
 
+class NewShotDraft(ShotDraft):
+    """Only authored fields for a fresh, server-identified Shot."""
+
+    model_config = ConfigDict(extra="forbid")
+    shot_id: None = None
+
+    @field_validator("duration_s", mode="before")
+    @classmethod
+    def _finite_duration(cls, value):
+        if not isinstance(value, (int, float, str)) or isinstance(value, bool) or not math.isfinite(float(value)):
+            raise ValueError("duration_s must be a finite number, not a boolean")
+        return value
+
+
+class AppendShotSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_script_hash: str = Field(min_length=1)
+    expected_last_shot_id: str | None = Field(
+        description="Copy PROJECT_STATE.last_shot_id; null only for an empty storyboard."
+    )
+    shot: NewShotDraft
+
+
 class StoryboardSubmission(BaseModel):
     """Typed native-tool payload for lossless storyboard persistence."""
 
@@ -234,13 +260,17 @@ class ShotRevisionSubmission(BaseModel):
         return self
 
 
+class OrderedAssetMatchDraft(AssetMatchDraft):
+    picture_index: int = Field(ge=1, le=9)
+
+
 class ShotRefsPatch(BaseModel):
     """One exact image-reference replacement for an existing shot."""
 
     model_config = ConfigDict(extra="forbid")
 
     shot_id: str
-    refs: list[AssetMatchDraft] = Field(max_length=9)
+    refs: list[OrderedAssetMatchDraft] = Field(max_length=9)
 
     @field_validator("shot_id")
     @classmethod

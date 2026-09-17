@@ -306,6 +306,18 @@ code {
   flex-wrap: wrap;
 }
 
+.director-runtime-controls {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.director-runtime-controls .context-usage {
+  flex: 1 1 auto;
+}
+
 .director-model-picker {
   display: flex;
   flex-direction: column;
@@ -322,6 +334,32 @@ code {
   background: var(--bg-panel);
   color: inherit;
   max-width: 100%;
+}
+
+.chat-message-actions {
+  display: flex;
+  margin-top: 0.65rem;
+}
+
+.prompt-retry-button {
+  min-height: 2.1rem;
+  padding: 0.42rem 0.75rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent, #725344);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.prompt-retry-button:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.prompt-retry-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .shot-refs-block {
@@ -3613,6 +3651,24 @@ select {
 
 .mobile-director-layout .director-chat-header-row {
   align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.45rem;
+}
+
+.mobile-director-layout .director-runtime-controls {
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+}
+
+.mobile-director-layout .director-model-picker.inline-model-picker {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+}
+
+.mobile-director-layout .director-model-picker.inline-model-picker > span {
+  display: none;
 }
 
 .mobile-director-layout .director-agent-mascot {
@@ -3624,9 +3680,14 @@ select {
 }
 
 .mobile-director-layout .director-model-picker select {
-  max-width: 8.5rem;
+  width: 100%;
+  max-width: none;
   padding: 0.38rem 0.45rem;
   font-size: 0.68rem;
+}
+
+.mobile-director-layout .director-runtime-controls .context-usage {
+  flex: 0 0 auto;
 }
 
 .mobile-shot-drawer {
@@ -5884,6 +5945,98 @@ select {
   font-size: 0.7rem;
 }
 
+.shot-material-save-review {
+  grid-row: 2 / 5;
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  min-height: 0;
+  padding: clamp(1.25rem, 4vw, 2.75rem);
+  overflow-y: auto;
+  background:
+    linear-gradient(135deg, rgba(124, 71, 47, 0.08), transparent 45%),
+    color-mix(in srgb, var(--bg-panel) 72%, #f5eee4);
+}
+
+.shot-material-save-review > div:first-child {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.shot-material-save-review > div:first-child span {
+  color: var(--accent);
+  font: 0.62rem var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.shot-material-save-review > div:first-child strong {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.15rem, 2vw, 1.55rem);
+}
+
+.shot-material-save-review dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border: 1px solid var(--border);
+  background: #f6efe5;
+}
+
+.shot-material-save-review dl > div {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.75rem 0.9rem;
+}
+
+.shot-material-save-review dl > div + div {
+  border-left: 1px solid var(--border);
+}
+
+.shot-material-save-review dt {
+  color: var(--muted);
+  font: 0.62rem var(--mono);
+}
+
+.shot-material-save-review dd {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.25rem;
+}
+
+.shot-material-save-review label {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.shot-material-save-review label > span {
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.shot-material-save-review textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: #fffaf2;
+  color: var(--text);
+  line-height: 1.55;
+}
+
+.shot-material-save-review textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.shot-material-save-review > p {
+  max-width: 66ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.55;
+}
+
 .shot-material-editor-selected {
   display: flex;
   gap: 0.55rem;
@@ -6166,7 +6319,7 @@ select {
 
 .shot-material-editor-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 0.6rem;
   padding: 0.85rem 1.25rem;
@@ -6201,6 +6354,19 @@ select {
 
   .shot-material-editor-actions > span {
     grid-column: 1 / -1;
+  }
+
+  .shot-material-editor-actions > .shot-material-notify-button {
+    grid-column: 1 / -1;
+  }
+
+  .shot-material-save-review dl {
+    grid-template-columns: 1fr;
+  }
+
+  .shot-material-save-review dl > div + div {
+    border-top: 1px solid var(--border);
+    border-left: 0;
   }
 }
 

@@ -50,6 +50,16 @@ def test_data_dir_derives_all_persistent_subdirectories(tmp_path: Path) -> None:
     assert configured.workflow_profiles_dir == data_root / "workflow_profiles"
 
 
+def test_harness_management_can_be_disabled_explicitly(tmp_path: Path) -> None:
+    configured = Settings(
+        _env_file=None,
+        data_dir=tmp_path,
+        harness_managed=False,
+    )
+
+    assert configured.harness_managed is False
+
+
 def test_explicit_persistent_subdirectory_override_is_preserved(tmp_path: Path) -> None:
     data_root = tmp_path / "shared-data"
     custom_projects = tmp_path / "custom-projects"

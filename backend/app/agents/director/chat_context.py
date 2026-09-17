@@ -13,9 +13,10 @@ def project_context_blob(
     shots: list[Shot],
     *,
     message: str = "",
+    focused: bool = False,
 ) -> str:
     from .context_io import load_agent_context
-    from .intent import shot_ref
+    from .intent import explicit_layout_generation_intent, shot_ref
     from .service import _inventory, _script_hash
 
     inv = _inventory(project.id)
@@ -37,10 +38,9 @@ def project_context_blob(
         next_step = "review_asset_coverage"
     elif not shots or shots_stale:
         next_step = "save_storyboard"
-    elif any(
+    elif explicit_layout_generation_intent(message) and any(
         (s.status.value if hasattr(s.status, "value") else str(s.status))
         in ("ref_frame_pending", "draft", "planning", "blocked", "failed")
-        or not s.layout_asset_id
         for s in shots
     ):
         next_step = "queue_ref_frame"
@@ -180,6 +180,8 @@ def project_context_blob(
         }
         if target_shot is not None and shot.id != target_shot.id:
             return summary
+        if focused and target_shot is None:
+            return summary
         return {
             **summary,
             "material_review_pending": bool(
@@ -219,6 +221,7 @@ def project_context_blob(
         },
         "script_chars": len(script),
         "script_hash": script_hash,
+        "last_shot_id": shots[-1].id if shots else None,
         "script_hash_at_last_plan": planned_hash or None,
         "shots_stale_vs_script": shots_stale,
         "asset_coverage_review": (
@@ -255,13 +258,19 @@ def project_context_blob(
             "save_storyboard and plan_shots remain available, and the user may persist status=skipped."
             if next_step == "review_asset_coverage"
             else
-            "If shots_stale_vs_script=true or recommended_next_step=save_storyboard, "
+            "For a user-requested end addition, use append_shot only and preserve existing Shots, even if stale. Otherwise, if shots_stale_vs_script=true or recommended_next_step=save_storyboard, "
             "author and call save_storyboard against script_hash; do not call queue_ref_frame first. "
             "plan_shots remains available only for compatibility."
             if shots_stale or next_step == "save_storyboard"
             else None
         ),
     }
+    if focused:
+        ctx.pop("script_preview", None)
+        ctx["context_scope"] = {
+            "shot_id": target_shot.id if target_shot else None,
+            "instruction": "Only the named Shot is detailed. Use get_status(shot_id) to read another Shot before editing it. Other Shots are summaries, not missing data.",
+        }
     return json.dumps(ctx, ensure_ascii=False, separators=(",", ":"))
 
 

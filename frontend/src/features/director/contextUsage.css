@@ -1,0 +1,44 @@
+.context-usage { min-width: 0; margin-top: 0.55rem; color: var(--muted, #5c5149); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.context-usage-trigger { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; width: 100%; min-width: 0; padding: 0.42rem 0.58rem; border: 1px solid var(--border, #c9beb3); border-radius: 8px; background: color-mix(in srgb, var(--panel, #f7f1e9) 82%, transparent); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.context-usage-trigger:hover { border-color: currentColor; }
+.context-usage-trigger:focus-visible { outline: 2px solid #8c6958; outline-offset: 2px; }
+.context-usage-trigger-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-usage-trigger-icon { flex: 0 0 auto; opacity: 0.65; }
+.context-usage.warning .context-usage-trigger { color: #775510; }
+.context-usage.error .context-usage-trigger { color: var(--danger, #743a34); }
+.context-usage.compact { margin-top: 0; }
+.context-usage.compact .context-usage-trigger { width: auto; min-height: 2rem; padding: 0.34rem 0.5rem; }
+
+.context-dialog-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); background: rgb(24 18 14 / 42%); backdrop-filter: blur(3px); }
+.context-dialog { display: flex; flex-direction: column; width: min(680px, 100%); max-height: min(760px, calc(100dvh - 2rem)); overflow: hidden; border: 1px solid var(--border, #c9beb3); border-radius: 16px; background: var(--panel, #f7f1e9); color: var(--text, #2c2521); box-shadow: 0 24px 70px rgb(31 21 16 / 28%); }
+.context-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1rem 1.1rem 0.85rem; border-bottom: 1px solid var(--border, #c9beb3); }
+.context-dialog-header h3 { margin: 0.15rem 0 0; font-size: 1.05rem; }
+.context-dialog-eyebrow { opacity: 0.65; font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.context-dialog-close { width: 2rem; height: 2rem; padding: 0; border: 1px solid var(--border, #c9beb3); border-radius: 999px; background: transparent; color: inherit; font-size: 1.35rem; line-height: 1; cursor: pointer; }
+.context-dialog-scroll { min-height: 0; overflow: auto; padding: 1rem 1.1rem; }
+.context-usage-empty { margin: 0; color: var(--muted, #5c5149); }
+.context-usage-metrics { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.35rem 1rem; font-weight: 600; }
+.context-usage-meter { margin-top: 0.65rem; height: 6px; overflow: hidden; border-radius: 999px; background: var(--border, #c9beb3); }
+.context-usage-meter span { display: block; height: 100%; background: #65957e; }
+.context-usage.warning .context-usage-meter span { background: #b78822; }
+.context-usage.error .context-usage-meter span { background: #c95f55; }
+.context-usage-note { opacity: 0.76; line-height: 1.5; }
+.context-usage-calls { margin-top: 0.75rem; }
+.context-usage-call { display: grid; gap: 0.25rem; padding: 0.7rem 0; border-top: 1px solid var(--border, #c9beb3); overflow-wrap: anywhere; }
+.context-dialog-actions { flex: 0 0 auto; padding: 0.8rem 1.1rem max(0.8rem, env(safe-area-inset-bottom)); border-top: 1px solid var(--border, #c9beb3); background: color-mix(in srgb, var(--panel, #f7f1e9) 92%, #fff); }
+.context-dialog-actions:empty { display: none; }
+.context-compaction { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem 0.7rem; margin: 0; color: var(--muted, #5c5149); }
+.context-compaction-button { flex: 0 0 auto; min-height: 2.15rem; margin: 0; padding: 0.45rem 0.8rem; border: 1px solid #7c5c4c; border-radius: 9px; background: #7c5c4c; color: #fffaf5; font: inherit; font-weight: 700; cursor: pointer; }
+.context-compaction-button:hover:not(:disabled) { background: #684a3c; }
+.context-compaction-button:disabled { cursor: not-allowed; opacity: 0.48; }
+.context-compaction-button:focus-visible { outline: 2px solid #8c6958; outline-offset: 2px; }
+.context-compaction p { flex: 1 1 100%; margin: 0.1rem 0 0; line-height: 1.45; }
+.context-compaction [role="alert"] { color: var(--danger, #743a34); }
+
+@media (max-width: 640px) {
+  .context-dialog-backdrop { place-items: end stretch; padding: max(0.5rem, env(safe-area-inset-top)) 0 0; }
+  .context-dialog { width: 100%; max-height: calc(100dvh - max(0.5rem, env(safe-area-inset-top))); border-right: 0; border-bottom: 0; border-left: 0; border-radius: 18px 18px 0 0; }
+  .context-dialog-header { padding: 0.85rem 1rem 0.75rem; }
+  .context-dialog-scroll { padding: 0.85rem 1rem; }
+  .context-dialog-actions { padding: 0.75rem 1rem max(0.75rem, env(safe-area-inset-bottom)); }
+}

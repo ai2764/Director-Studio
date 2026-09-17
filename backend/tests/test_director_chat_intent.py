@@ -208,7 +208,7 @@ def test_actor_design_intent_offers_only_the_actor_generation_tool(
     ]
 
 
-def test_follow_existing_character_setting_keeps_gpt_layout_tools_available(
+def test_ambiguous_gpt_generation_from_character_setting_does_not_authorize_layout(
     tmp_projects_dir, monkeypatch
 ):
     project = create_project("Existing Mia", "Mia stands in the room.")
@@ -220,8 +220,9 @@ def test_follow_existing_character_setting_keeps_gpt_layout_tools_available(
     names = {item["function"]["name"] for item in tools}
 
     assert actor_design_intent(message) is False
-    assert "queue_gpt_ref_frame" in names
-    assert names != {"queue_actor_design"}
+    assert "queue_gpt_ref_frame" not in names
+    assert "queue_ref_frame" not in names
+    assert "revise_ref_frame" not in names
 
 
 @pytest.mark.asyncio
@@ -383,15 +384,36 @@ def test_shot_material_discussion_offers_only_relevant_tools(
 
     assert {
         "patch_shot_refs",
-        "queue_ref_frame",
         "accept_ref_frame",
-        "revise_ref_frame",
         "write_prompt",
         "get_status",
     } <= names
+    assert "queue_ref_frame" not in names
+    assert "revise_ref_frame" not in names
+    assert "queue_gpt_ref_frame" not in names
+    assert "extract_clip_tail_frame" not in names
     assert names.isdisjoint(
         {"set_script", "save_storyboard", "plan_shots", "queue_actor_design"}
     )
+
+
+def test_generic_discussion_does_not_offer_gpt_layout_generation(
+    tmp_projects_dir,
+    monkeypatch,
+):
+    project = create_project("No implicit image generation", "A door opens.")
+    monkeypatch.setattr(settings, "gpt_bridge_base_url", "http://127.0.0.1:8080")
+    monkeypatch.setattr(settings, "gpt_bridge_env_file", settings.project_root / "bridge.env")
+
+    tools = _director_tool_schemas(
+        project,
+        current_message="Review the current shots and tell me what needs attention.",
+    )
+    names = {item["function"]["name"] for item in tools}
+
+    assert "queue_ref_frame" not in names
+    assert "revise_ref_frame" not in names
+    assert "queue_gpt_ref_frame" not in names
 
 
 def test_shot_layout_review_still_offers_exact_scene_override_tool(tmp_projects_dir):
@@ -417,6 +439,15 @@ def test_chat_guidance_routes_single_shot_authored_edits_safely():
     assert "revise_shot" in guidance
     assert "multi-shot" in guidance
     assert "revise_shot then write_prompt" in guidance
+
+
+def test_chat_guidance_keeps_model_authored_script_expansion_as_a_draft():
+    from app.agents.director.chat import DIRECTOR_CHAT_SYSTEM
+
+    guidance = DIRECTOR_CHAT_SYSTEM.lower()
+    assert "premise or one-line brief" in guidance
+    assert "model-authored draft" in guidance
+    assert "do not call set_script until the user explicitly" in guidance
 
 
 def test_look_at_reference_is_llm():

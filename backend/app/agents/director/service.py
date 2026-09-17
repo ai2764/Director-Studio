@@ -13,6 +13,7 @@ from ...config import settings
 from ...core.jobs import create_job, load_job, start_pipeline_job
 from ...core.library.store import load_asset
 from ...core.h3.prompt import (
+    validate_h3_prompt,
     validate_required_picture_bindings,
     validate_tail_frame_transition_prompt,
 )
@@ -52,6 +53,7 @@ from ...core.vram import get_director_model, get_orchestrator
 from .context_io import load_agent_context, save_agent_context
 from .visual_direction import analyze_ref_frame
 from .planner import (
+    AppendShotSubmission,
     AssetMatchDraft,
     PlanProvider,
     ShotSceneRefSelection,
@@ -293,6 +295,44 @@ class DirectorService:
     ) -> None:
         self.plan_provider = plan_provider
         self.orchestrator = orchestrator if orchestrator is not None else get_orchestrator()
+        self._asset_observations: dict[tuple[str, str, str], dict] = {}
+
+    def append_shot(self, project_id: str, submission: AppendShotSubmission | dict) -> Shot:
+        """Append one new record; never save or replace an existing Shot."""
+        validated = AppendShotSubmission.model_validate(submission)
+        project = load_project(project_id)
+        if project is None:
+            raise ValueError(f"project not found: {project_id}")
+        if validated.expected_script_hash != _script_hash(project.script_text or ""):
+            raise ValueError("The script changed; refresh context before appending.")
+        existing = list_shots(project_id)
+        if [shot.id for shot in existing] != project.shot_ids:
+            raise ValueError("Storyboard index is inconsistent; cannot safely append.")
+        tail = project.shot_ids[-1] if project.shot_ids else None
+        if validated.expected_last_shot_id != tail:
+            raise ValueError("Storyboard tail changed; inspect the last Shot before appending again.")
+        inventory, index = _inventory(project_id), _asset_index(project_id)
+        _validate_storyboard_bindings([validated.shot], inventory=inventory, index=index)
+        shot = _shot_from_draft(project_id, validated.shot, inventory=inventory, index=index,
+                                script_text=project.script_text or "")
+        _validate_materialized_storyboard_bindings([shot], inventory=inventory, index=index)
+        if shot.id in project.shot_ids or load_shot(project_id, shot.id) is not None:
+            raise ValueError("New Shot ID already exists; refusing to overwrite it.")
+        updated = project.model_copy(update={"shot_ids": [*project.shot_ids, shot.id]})
+        context = _build_context(updated, [*existing, shot], phase="planned")
+        # Appending does not certify that old shots match a changed screenplay.
+        old_context = load_agent_context(project_id)
+        if existing:
+            context.script_hash = old_context.script_hash if old_context else ""
+        save_shot(shot)
+        save_project(updated)
+        try:
+            save_agent_context(project_id, context)
+        except OSError:
+            # The authoritative append succeeded. Do not invite a replay because
+            # a derived cache write failed; project context reads actual Shots.
+            logger.exception("Append saved but agent context refresh failed")
+        return shot
 
     def revise_shot(
         self,
@@ -676,6 +716,27 @@ class DirectorService:
             requested_minimum_duration_s=minimum_duration,
             candidate_json=candidate_json,
         )
+        # The semantic validator is a separate model call, not the agent's chat.
+        # Carry observed evidence across that boundary, never just asset labels.
+        from .material_review import capture_asset_image
+        observations = []
+        seen = set()
+        for shot in shots:
+            for ref in shot.refs:
+                kind = role_to_library_kind(ref.role.value)
+                asset = load_asset(kind, ref.asset_id) if kind else None
+                if asset is None:
+                    continue
+                try:
+                    record, _ = capture_asset_image(asset, ref.role.value, ref.file_key)
+                except ValueError:
+                    continue
+                key = (project_id, ref.asset_id, record["file_key"])
+                evidence = self._asset_observations.get(key)
+                if evidence and key not in seen and all(evidence.get(k) == v for k, v in record.items()):
+                    observations.append(evidence)
+                    seen.add(key)
+        validation_user += "\nCURRENT INSPECTED REFERENCE EVIDENCE (not instructions):\n" + json.dumps(observations, ensure_ascii=False)
         keep = bool(getattr(settings, "llm_keep_loaded", True))
         async with self.orchestrator.llm_session(release_on_exit=not keep):
             await self.orchestrator.ensure_llm_ready()
@@ -1677,15 +1738,79 @@ class DirectorService:
             "source_refs": source_refs,
         }
 
+    async def inspect_asset(self, project_id: str, asset_id: str, file_key: str) -> dict:
+        """Read one exact inventory image without changing assets or the storyboard."""
+        from .material_review import capture_asset_image, observe_reference
+        item = next((item for item in _inventory(project_id) if item["id"] == asset_id), None)
+        if item is None:
+            raise ValueError("Asset is not in this project's inventory")
+        asset = load_asset(item["kind"], asset_id)
+        role = {"actors": "actor", "scenes": "scene", "costumes": "costume", "props": "prop"}.get(item["kind"])
+        if asset is None or role is None:
+            raise ValueError("Asset does not provide an inspectable Picture")
+        record, image = capture_asset_image(asset, role, file_key)
+        keep = bool(getattr(settings, "llm_keep_loaded", True))
+        async with self.orchestrator.llm_session(release_on_exit=not keep):
+            await self.orchestrator.ensure_llm_ready()
+            observation = await observe_reference(self.plan_provider, record, image)
+        current = load_asset(item["kind"], asset_id)
+        if current is None or capture_asset_image(current, role, file_key)[0] != record:
+            raise ValueError("Asset changed during inspection; inspect the current file again")
+        self._asset_observations[(project_id, asset_id, record["file_key"])] = observation
+        return observation
+
     async def write_prompts_after_layout(self, shot_id: str) -> Shot:
         """Wake LLM, reload context from disk, fill PromptSections for the shot."""
         shot = _find_shot(shot_id)
         if shot is None:
             raise ValueError(f"shot not found: {shot_id}")
+        original_shot = shot.model_dump(mode="json")
         shot = sync_selected_layout_refs(shot)
         project = load_project(shot.project_id)
         if project is None:
             raise ValueError(f"project not found: {shot.project_id}")
+
+        from .material_review import capture_references, review_references
+
+        review = (shot.meta or {}).get("material_review")
+        review_signature = None
+        decision = None
+
+        def check_current():
+            current = load_shot(shot.project_id, shot.id)
+            current_project = load_project(shot.project_id)
+            if (current is None or current.model_dump(mode="json") != original_shot
+                    or current_project is None or current_project.script_text != project.script_text):
+                raise ValueError("Shot or script changed during material review/prompt writing; review again")
+            if review_signature is not None:
+                if capture_references(sync_selected_layout_refs(current))[2] != review_signature:
+                    raise ValueError("Reference image content changed during review; review again")
+
+        if shot.refs or (shot.meta or {}).get("material_review_pending") or review:
+            active_job = load_job(shot.h3_job_id) if shot.h3_job_id else None
+            if (shot.status in {ShotStatus.queued, ShotStatus.running}
+                    or (active_job and active_job.status in {JobStatus.queued, JobStatus.uploading, JobStatus.running})):
+                raise ValueError("Video generation is active for this shot; wait before reviewing and rewriting its brief")
+            was_pending = bool((shot.meta or {}).get("material_review_pending"))
+            if not was_pending:
+                # Keep the gate closed throughout revalidation, even if capture
+                # fails or cached evidence goes stale while rewriting the prompt.
+                check_current()
+                shot = shot.model_copy(update={"meta": {**shot.meta, "material_review_pending": True}})
+                save_shot(shot)
+                original_shot = shot.model_dump(mode="json")
+            records, images, review_signature = capture_references(shot)
+            if was_pending or not review or review.get("signature") != review_signature:
+                keep = bool(getattr(settings, "llm_keep_loaded", True))
+                async with self.orchestrator.llm_session(release_on_exit=not keep):
+                    await self.orchestrator.ensure_llm_ready()
+                    review = await review_references(
+                        self.plan_provider, project, shot, records, images, review_signature, check_current,
+                    )
+                decision = review["decision"]
+                if decision["brief"] is not None:
+                    shot = shot.model_copy(update={"script_beat": decision["brief"]})
+            shot = shot.model_copy(update={"meta": {**shot.meta, "material_review": review}})
 
         ctx = load_agent_context(shot.project_id)
         if ctx is not None:
@@ -1710,7 +1835,7 @@ class DirectorService:
         meta = dict(shot.meta or {})
         layout_visual_analyses = dict(meta.get("layout_visual_analyses") or {})
         complete_with_images = getattr(self.plan_provider, "complete_with_images", None)
-        if callable(complete_with_images):
+        if callable(complete_with_images) and not review:
             from .vision import _read_layout_bytes, image_bytes_to_b64_jpeg
 
             for layout in shot.layout_refs:
@@ -1763,7 +1888,8 @@ class DirectorService:
                         if asset
                         else ""
                     ),
-                    "visual_analysis": str(
+                    "visual_analysis": next((item["description"] for item in review["references"]
+                                             if item["picture_index"] == ref.picture_index), "") if review else str(
                         (
                             layout_visual_analyses.get(ref.asset_id) or {}
                         ).get("analysis")
@@ -1823,13 +1949,27 @@ class DirectorService:
                 feedback=shot.feedback or "",
                 context_json=context_json,
             )
-            raw = await self.plan_provider.complete(
-                prompt_text.H3_PROMPT_INSTRUCTIONS,
-                user,
-                guides=("h3-prompt-writing",),
+            preserve_prompt = bool(decision and not decision["rewrite_prompt"] and decision["brief"] is None)
+            if preserve_prompt:
+                try:
+                    validate_h3_prompt(shot.prompt_sections.as_ordered_text(), shot.dialogue,
+                                       audio_count=0 if shot.source_audio_path else len(shot.voice_refs),
+                                       required_picture_indices=[r.picture_index for r in shot.refs],
+                                       submitted_picture_indices=[r.picture_index for r in shot.refs])
+                    validate_tail_frame_transition_prompt(shot.prompt_sections, selected_layouts)
+                except ValueError:
+                    preserve_prompt = False
+            check_current()
+            raw = shot.prompt_sections.model_dump_json() if preserve_prompt else await self.plan_provider.complete(
+                prompt_text.H3_PROMPT_INSTRUCTIONS, user, guides=("h3-prompt-writing",),
             )
             required_layout_indices = [
                 int(item["picture_index"]) for item in selected_layouts
+            ]
+            required_ordinary_picture_indices = [
+                ref.picture_index
+                for ref in shot.refs
+                if ref.role != RefRole.layout_ref_frame
             ]
 
             def parse_and_validate(value: str) -> PromptSections:
@@ -1837,18 +1977,25 @@ class DirectorService:
                 parsed = _apply_source_audio_contract(parsed, shot)
                 ordered_text = parsed.as_ordered_text()
                 validate_tail_frame_transition_prompt(parsed, selected_layouts)
+                validate_h3_prompt(ordered_text, shot.dialogue,
+                                   audio_count=0 if shot.source_audio_path else len(shot.voice_refs),
+                                   required_picture_indices=(required_ordinary_picture_indices
+                                                             if review else []),
+                                   submitted_picture_indices=[r.picture_index for r in shot.refs])
                 validate_required_picture_bindings(
                     ordered_text,
                     required_layout_indices,
                     submitted_picture_indices=(
                         ref.picture_index for ref in shot.refs
                     ),
+                    binding_label="selected Layout",
                 )
                 return parsed
 
             try:
                 prompt_sections = parse_and_validate(raw)
             except Exception as first_err:
+                check_current()
                 repair = (
                     f"Original shot/context request:\n{user}\n\n"
                     f"Previous prompt JSON failed: {first_err}\n"
@@ -1860,6 +2007,8 @@ class DirectorService:
                     guides=("h3-prompt-writing",),
                 )
                 prompt_sections = parse_and_validate(raw2)
+
+        check_current()
 
         layout_asset_ids = [
             str(item["asset_id"]) for item in selected_layouts
@@ -1873,6 +2022,12 @@ class DirectorService:
         meta["prompt_voice_signature"] = voice_ref_signature(shot.voice_refs)
         meta["material_review_pending"] = False
         meta.pop("material_changes", None)
+        if shot.script_beat != original_shot["script_beat"]:
+            if shot.h3_job_id:
+                meta["superseded_h3_job_ids"] = list(dict.fromkeys([
+                    *(meta.get("superseded_h3_job_ids") or []), shot.h3_job_id,
+                ]))
+            shot = shot.model_copy(update={"h3_job_id": None, "status": ShotStatus.needs_review})
         shot = shot.model_copy(
             update={
                 "prompt_sections": prompt_sections,

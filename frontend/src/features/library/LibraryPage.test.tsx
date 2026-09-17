@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LibraryPage } from "./LibraryPage";
-import { importExternalAsset, listLibraryAssets } from "./api";
+import { deleteLibraryAsset, importExternalAsset, listLibraryAssets } from "./api";
 
 const updateLibraryAssetMock = vi.hoisted(() => vi.fn());
 
@@ -38,6 +38,34 @@ const voiceAsset = {
     reference: "/api/files/library/voices/voi_mia/reference.wav",
   },
   project_id: "prj_test",
+};
+
+const generatedLayout = {
+  id: "lay_generated",
+  kind: "layouts",
+  name: "Shot 2 composition",
+  notes: "Generated composition reference",
+  pipeline_id: "ref_frame",
+  job_id: "job_layout",
+  seed: 42,
+  created_at: "2026-09-14T10:00:00Z",
+  files: { layout: "layout.png" },
+  meta: { review_status: "pending_review" },
+  urls: { layout: "/api/files/library/layouts/lay_generated/layout.png" },
+  project_id: "prj_test",
+};
+
+const extractedTailFrame = {
+  ...generatedLayout,
+  id: "lay_tail",
+  name: "Shot 1 tail frame",
+  job_id: "job_h3",
+  seed: null,
+  urls: { layout: "/api/files/library/layouts/lay_tail/layout.png" },
+  meta: {
+    review_status: "pending_review",
+    origin: { kind: "clip_tail_frame", source_shot_id: "sht_1" },
+  },
 };
 
 describe("LibraryPage Voices", () => {
@@ -126,5 +154,25 @@ describe("LibraryPage Voices", () => {
     })));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import Actors" })).toBeNull());
     expect(listLibraryAssets).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows generated Layouts and extracted tail frames and allows manual deletion", async () => {
+    vi.mocked(listLibraryAssets).mockImplementation(async (kind) =>
+      kind === "layouts" ? [generatedLayout, extractedTailFrame] : [],
+    );
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<LibraryPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Layouts/ }));
+    await screen.findByText("Shot 2 composition");
+    expect(screen.getByText("Shot 1 tail frame")).toBeTruthy();
+
+    const tailPreview = screen.getByRole("img", { name: "Shot 1 tail frame" });
+    fireEvent.click(tailPreview.closest("button")!);
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Shot 1 tail frame assets" })).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(deleteLibraryAsset).toHaveBeenCalledWith("layouts", "lay_tail");
+    });
   });
 });

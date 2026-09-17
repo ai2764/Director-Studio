@@ -8,6 +8,15 @@ Core features include a typed asset library, actor and set workflows, conversati
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and extension points.
 
+The [slim Harness runtime](docs/HARNESS.md) is the default Director agent loop,
+using the same Python-owned providers and tools. Windows portable includes its
+private Node runtime and sidecar; source checkouts retain an explicit Legacy switch.
+Linux and macOS portable packages retain Legacy as their default until they
+bundle the Harness sidecar and a private Node runtime.
+Harness can compact older conversation history, but the model server still sets
+the usable context capacity. Director Studio reads that capacity when the
+provider reports it and shows context usage in the Director UI.
+
 ## Stack
 
 | Layer | Tech |
@@ -32,7 +41,7 @@ The macOS port adds packaging, launch/install scripts, and platform-specific ver
 
 | Platform | Install tools | Start Portable | Release artifact |
 |----------|---------------|----------------|------------------|
-| Windows | `Install-Tools.cmd` | `DirectorStudio.exe` | `Director-Studio-Legacy-Windows-x64.zip` |
+| Windows | Automatic on first launch | `DirectorStudio.exe` | `Director-Studio-Windows-x64.zip` |
 | Ubuntu | `./install-tools.sh` | `./launch.sh` | `Director-Studio-Linux-x86_64.tar.gz` |
 | macOS Apple Silicon | `Install-Tools.command` | `Launch.command` | `Director-Studio-macOS-arm64.tar.gz` |
 | macOS Intel | `Install-Tools.command` | `Launch.command` | `Director-Studio-macOS-x86_64.tar.gz` |
@@ -41,7 +50,18 @@ An officially supported platform is exercised by its own CI build and packaged-r
 
 ## Windows portable installation
 
-The portable package runs Director Studio locally as one `DirectorStudio.exe`. The UI and backend are included; the selected LLM server and ComfyUI remain external services. The included installer creates a private Python environment for `comfy-cli` and `comfy-mcp`.
+For the short instructions included in the ZIP, see
+[Windows portable instructions](packaging/windows-portable-readme.md). This
+section provides the additional configuration and troubleshooting detail for
+source readers.
+
+The portable package is started through one `DirectorStudio.exe`. The UI,
+backend, private Node.js runtime, compiled Harness sidecar, private Python
+runtime, and its locked Python installer are included. On the first launch,
+Director Studio automatically downloads the pinned `comfy-mcp` and `comfy-cli`
+packages into `data\tools\comfy`; later launches reuse that private copy. Do not
+install Node.js, Python, npm packages, or MCP tools yourself. The selected LLM
+server and ComfyUI remain external services.
 
 ### 1. Install local prerequisites
 
@@ -55,16 +75,14 @@ The portable package runs Director Studio locally as one `DirectorStudio.exe`. T
   LM Studio and other OpenAI-compatible servers are configured below instead. Director reads the active provider's model catalog; choose the model in the Director dropdown.
 
 - [ComfyUI Desktop for Windows](https://docs.comfy.org/installation/desktop/windows), running at `http://127.0.0.1:8188`.
-- Python 3.10 or newer for the external Comfy command-line tools. Director Studio itself does not require a separate Python installation.
 
 Extract the complete zip to a writable folder such as `C:\DirectorStudio`; do not copy only the executable. The release archive intentionally contains no user data. Director Studio creates `data` beside the executable on first launch; after that, keep it with the other extracted files and back it up before upgrades.
 
-```powershell
-Set-Location C:\DirectorStudio
-.\Install-Tools.cmd
-```
-
-The installer creates `tools\venv`, installs the pinned `comfy-cli` and `comfy-mcp` dependencies, verifies their command entry points, and updates the included `.env` with their absolute executable paths. Users who already have a compatible MCP installation may skip this installer and configure those paths manually. Internet access to PyPI is required during installation.
+The first launch requires internet access to Python Package Index (PyPI). It
+verifies every downloaded wheel against the package's lock file before making
+the private tool environment active. Director Studio does not scan for or reuse
+a system `comfy-mcp`, `comfy-cli`, or Python installation. `Install-Tools.cmd`
+is not included in the Windows package and is no longer required.
 
 ### 2. Configure Director Studio
 
@@ -73,7 +91,9 @@ Set-Location C:\DirectorStudio
 notepad .env
 ```
 
-At minimum, confirm the local service URLs. When run, the installer writes its absolute MCP command paths automatically and replaces any prior values for those two path settings.
+At minimum, confirm the local service URLs. Leave the MCP command settings
+commented to use the managed private runtime. An explicit process environment
+or uncommented `.env` MCP command skips automatic setup and uses that override.
 
 #### Director LLM providers
 
@@ -147,7 +167,14 @@ Start the configured LLM server and ComfyUI first, then run:
 - API documentation: http://127.0.0.1:8790/docs
 - Health check: http://127.0.0.1:8790/api/health
 
-If the MCP process cannot start, verify both configured executable paths. You can run `comfy --help` to check the Comfy CLI; do not use `comfy-mcp --help`, because that entry point starts the stdio server. If a workflow fails, load the same workflow in ComfyUI and confirm its custom nodes and models are installed.
+If first-launch tool setup fails, keep the extracted package in a writable
+folder, confirm PyPI is reachable, and inspect `data\logs\comfy-bootstrap.log`.
+An interrupted or failed update leaves the last valid private tool environment
+untouched; launch again after fixing the network problem. If you explicitly
+override the MCP commands, verify those configured paths. Do not run
+`comfy-mcp --help`, because that entry point starts the stdio server. If a
+workflow fails, load the same workflow in ComfyUI and confirm its custom nodes
+and models are installed.
 
 ## macOS portable installation
 
@@ -327,7 +354,7 @@ For a new or incompatible graph:
 2. Add or update the adapter under `backend/app/pipelines/<pipeline>/`: schemas/router, prompt and node injection, job submission, and output mapping.
 3. Register the pipeline from its package `__init__.py` using `register_pipeline(...)`, and ensure the package is imported by application startup.
 4. Add tests for graph validation, prompt injection, and output mapping.
-5. Rebuild with `pwsh -File scripts/build-legacy-portable.ps1`.
+5. Rebuild with `pwsh -File scripts/build-windows-portable.ps1`.
 
 Non-H3 custom-workflow overrides remain source-only in the current release. Portable supports H3 Ref2AV workflow import through Settings, while the packaged official workflow remains a read-only fallback. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the pipeline contract and extension points.
 
@@ -479,7 +506,7 @@ Run the entire backend suite after the focused checks:
 Set-Location backend
 py -m pytest -q
 Set-Location ..
-pwsh -File scripts/build-legacy-portable.ps1
+pwsh -File scripts/build-windows-portable.ps1
 ```
 
 Before distributing the result, extract the new zip, configure its `.env`, start ComfyUI and Ollama, and run one real job for every workflow you replaced. For an imported H3 profile, use the Settings Test step before activation, then submit a new Production job. Unit tests verify the graph contract and mapping; only a real ComfyUI run proves that all custom nodes, model files, tensor shapes, and output formats are compatible on the target installation.
@@ -648,7 +675,7 @@ npm run build
 
 | Flow | What happens |
 |------|----------------|
-| **Director** | Paste script → plan shots (Ollama) → optionally generate a **Layout reference** (Comfy) → write the H3 prompt |
+| **Director** | Paste script → plan shots (selected LLM provider) → optionally generate a **Layout reference** (Comfy) → write the H3 prompt |
 | **Production** | Approve full shot package (refs + six-section prompt) → Gate 2 → submit pure **H3 Ref2AV** |
 
 Rules locked for v1:
@@ -656,7 +683,7 @@ Rules locked for v1:
 - Video mode is **pure H3 Reference-to-AV** only (`MiniMaxH3ReferenceToVideo`). No I2V first/last frame sockets.
 - A Layout is an optional composition Picture reference, not an I2V `first_frame` and not a guaranteed opening frame.
 - Picture references use their actual saved order. A shot becomes ready for H3 when its production prompt is complete; a Layout is not required.
-- **VRAM exclusive:** Ollama unloads before Comfy Layout, asset, and local H3 jobs; Agent context reloads from disk when the LLM must think again.
+- **VRAM exclusive:** The local Ollama or LM Studio model unloads before Comfy Layout, asset, and local H3 jobs; Agent context reloads from disk when the LLM must think again.
 
 API: `/api/projects/*` · pipelines: `GET /api/pipelines` · health: `GET /api/health`
 
@@ -694,7 +721,7 @@ API: `/api/actors/*` · `GET /api/pipelines`
 |----------|---------|---------|
 | `DS_COMFY_BASE_URL` | `http://127.0.0.1:8188` | ComfyUI |
 | `DS_H3_PROVIDER` | `local` | Initial H3 provider shown in Production and JSON Production; each run can override it |
-| `DS_COMFY_MCP_COMMAND` | `comfy-mcp` | ComfyUI MCP executable; Portable installer writes its absolute path |
+| `DS_COMFY_MCP_COMMAND` | `comfy-mcp` | ComfyUI MCP executable; Windows portable defaults to its private Python module |
 | `DS_COMFY_MCP_ARGS` | empty | Optional extra command-line arguments passed to the MCP server process |
 | `DS_COMFY_MCP_COMFY_BIN` | `comfy` | comfy-cli executable used by the MCP server |
 | `DS_HOST` | `127.0.0.1` | API bind address; use `0.0.0.0` only for an explicitly trusted LAN |
@@ -719,12 +746,23 @@ From a source checkout with Node.js, npm, Python, and PowerShell available:
 ```powershell
 python -m pip install -r backend/requirements.txt
 python -m pip install -r backend/requirements-build.txt
-pwsh -File scripts/build-legacy-portable.ps1
+pwsh -File scripts/build-windows-portable.ps1
 ```
 
-The build runs the frontend and focused packaged-runtime tests, creates the one-file executable, launches it on an isolated port, checks the health endpoint and bundled UI, then writes the archive and reports its SHA-256 in the terminal. It also verifies that the executable and zip contain the official H3 workflow but no imported profiles, active pointer, user data, projects, jobs, outputs, or tests. The current script and archive retain their existing `legacy` filename for build compatibility; the packaged application itself is Director Studio:
+The build runs the frontend and focused packaged-runtime tests, compiles
+Harness, installs only its locked production dependencies, verifies and stages
+the pinned Windows x64 Node and Python runtimes plus a checksum-pinned `pip`
+bootstrap, and creates the executable. It runs an offline deterministic Harness
+turn without system Node on `PATH`, exercises a real first-launch installation
+of the locked Comfy MCP/CLI wheels into isolated package data, launches the
+packaged application on isolated ports, checks authenticated Harness readiness
+and the bundled UI, confirms child cleanup, then writes the archive and reports
+its SHA-256. It also verifies that the executable and zip contain the official
+H3 workflow but no Comfy MCP/CLI packages, obsolete Windows installer, imported
+profiles, active pointer, user data, projects, jobs, outputs, compiled tests, or
+Harness development dependencies:
 
-- `dist/Director-Studio-Legacy-Windows-x64.zip`
+- `dist/Director-Studio-Windows-x64.zip`
 
 ## Build the Linux portable package
 

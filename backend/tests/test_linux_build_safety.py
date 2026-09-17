@@ -126,6 +126,9 @@ def test_copied_linux_wrappers_are_required_and_executable(tmp_path: Path):
     )
 
     assert result.returncode == 0, result.stderr
+    assert "DS_DIRECTOR_AGENT_RUNTIME=legacy" in (package_root / ".env").read_text(
+        encoding="utf-8"
+    )
 
 
 @pytest.mark.skipif(sys.platform == "darwin", reason="Linux cleanup requires GNU realpath; macOS builder uses temporary staging")

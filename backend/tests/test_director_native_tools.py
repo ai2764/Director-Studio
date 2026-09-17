@@ -864,7 +864,7 @@ def test_patch_shot_refs_tool_only_accepts_exact_reference_updates():
     assert set(patch_schema["properties"]) == {"shot_id", "refs"}
     assert patch_schema["required"] == ["shot_id", "refs"]
     assert patch_schema["additionalProperties"] is False
-    assert set(parameters["$defs"]["AssetMatchDraft"]["properties"]) == {
+    assert set(parameters["$defs"]["OrderedAssetMatchDraft"]["properties"]) == {
         "role",
         "asset_id",
         "file_key",
@@ -899,9 +899,12 @@ def test_revise_shot_tool_only_accepts_partial_authored_fields():
 
 
 @pytest.mark.asyncio
-async def test_native_revise_shot_returns_refreshed_storyboard_snapshot(
-    tmp_projects_dir,
+@pytest.mark.parametrize("shot_count", [4, 24])
+async def test_native_revise_shot_returns_only_persisted_target(
+    tmp_projects_dir, shot_count,
 ):
+    from app.agents.director.service import DirectorService
+
     project = create_project("Revise one", "Mia turns toward camera.")
     shot = Shot(
         id="sht_revise_native",
@@ -912,16 +915,18 @@ async def test_native_revise_shot_returns_refreshed_storyboard_snapshot(
         duration_s=5.0,
     )
     save_shot(shot)
-    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
-
-    class Service:
-        def revise_shot(self, project_id, revision):
-            assert project_id == project.id
-            assert revision.shot_id == shot.id
-            assert revision.script_beat == "Mia faces camera."
-            revised = shot.model_copy(update={"script_beat": revision.script_beat})
-            save_shot(revised)
-            return list_shots(project.id)
+    neighbors = [
+        shot.model_copy(update={"id": f"sht_neighbor_{i}", "title": f"Neighbor {i}"})
+        for i in range(shot_count - 1)
+    ]
+    for neighbor in neighbors:
+        save_shot(neighbor)
+    ordered_ids = [neighbors[0].id, shot.id, *[s.id for s in neighbors[1:]]]
+    save_project(project.model_copy(update={"shot_ids": ordered_ids}))
+    before = {
+        s.id: s.model_dump(mode="json")
+        for s in list_shots(project.id) if s.id != shot.id
+    }
 
     actions: list[str] = []
     payloads: list[dict] = []
@@ -936,16 +941,41 @@ async def test_native_revise_shot_returns_refreshed_storyboard_snapshot(
                 },
             }
         ],
-        svc=Service(),
+        svc=DirectorService(plan_provider=None),
         actions=actions,
         result_payloads=payloads,
     )
 
     assert actions == ["revise_shot"]
-    assert payloads[0]["storyboard"]["shots"][0]["script_beat"] == (
-        "Mia faces camera."
-    )
+    assert "storyboard" not in payloads[0]
+    assert payloads[0]["ok"] is True
+    assert payloads[0]["shot"]["id"] == shot.id
+    assert payloads[0]["shot"]["script_beat"] == "Mia faces camera."
+    assert payloads[0]["shot"]["duration_s"] == 5.0
+    assert load_shot(project.id, shot.id).script_beat == "Mia faces camera."
+    persisted = list_shots(project.id)
+    assert {s.id: s.model_dump(mode="json") for s in persisted if s.id != shot.id} == before
+    assert [s.id for s in persisted] == ordered_ids
+    # Adding neighboring shots must not amplify a single-shot tool response.
+    assert len(json.dumps(payloads)) < 1000
     assert "one shot" in notes[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_native_revise_missing_shot_returns_failure_not_saved_result(tmp_projects_dir):
+    from app.agents.director.service import DirectorService
+
+    project = create_project("Missing target", "Mia waits.")
+    actions, payloads = [], []
+    await _run_tools(
+        project_id=project.id,
+        tools=[{"name": "revise_shot", "args": {"shot_id": "sht_missing", "title": "New"}}],
+        svc=DirectorService(plan_provider=None), actions=actions, result_payloads=payloads,
+    )
+    assert actions == []
+    assert payloads[0]["ok"] is False
+    assert "shot" not in payloads[0]
+    assert list_shots(project.id) == []
 
 
 def test_set_shot_scene_ref_tool_accepts_only_an_exact_scene_selection():
@@ -3807,7 +3837,8 @@ async def test_native_write_prompt_tool_is_executed_and_result_returns_to_model(
     assert calls[0]["tools"]
     assert any(t["function"]["name"] == "write_prompt" for t in calls[0]["tools"])
     offered_tools = {t["function"]["name"] for t in calls[0]["tools"]}
-    assert "queue_ref_frame" in offered_tools
+    assert "queue_ref_frame" not in offered_tools
+    assert "revise_ref_frame" not in offered_tools
     assert "approve_layout" not in offered_tools
     assert "reject_layout" not in offered_tools
     tool_messages = calls[1]["messages"]
@@ -3917,6 +3948,7 @@ async def test_ollama_chat_response_passes_native_tools_and_json_schema(monkeypa
         messages=[{"role": "user", "content": "status"}],
         tools=tools,
         format=schema,
+        think=False,
     )
 
     assert result == {
@@ -3926,8 +3958,8 @@ async def test_ollama_chat_response_passes_native_tools_and_json_schema(monkeypa
     }
     assert requests[1]["tools"] == tools
     assert requests[1]["format"] == schema
+    assert requests[1]["think"] is False
     assert requests[1]["options"] == {
         "num_gpu": 999,
-        "num_ctx": 32_768,
         "num_predict": 4_096,
     }

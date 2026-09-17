@@ -6,7 +6,9 @@ Bind every active Layout to its real `<Picture N>` and name the geography, block
 
 ## Write one feasible clip
 
-Preserve exact dialogue once, keep every timing interval within `duration_s`, and state required non-appearance positively. Use approved metadata and describe motion directly without assigning Pictures to time windows.
+Preserve scripted dialogue in order inside `detailed_description` using `<d>[Language] exact words</d>`. Keep speaker IDs, actions, and delivery outside `<d>`. Perform repetitions only when the script specifies them. Never quote the spoken lines in `summary`, `retention_analysis`, `subject_definitions`, `overall_soundscape`, or `non_diegetic_music`; those sections describe roles, ambience, and music without repeating dialogue. Visible scene text is not another vocal event.
+
+Keep every timing interval within `duration_s`, and state required non-appearance positively. Use approved metadata and describe motion directly without assigning Pictures to time windows.
 
 ## Escalate incompatible reveals
 

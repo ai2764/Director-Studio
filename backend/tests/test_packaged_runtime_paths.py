@@ -55,8 +55,8 @@ def _write_fake_archive_viewer(tmp_path: Path, listing: str) -> dict[str, str]:
 
 
 def _write_portable_zip(tmp_path: Path, executable: Path, *extra: str) -> Path:
-    zip_path = tmp_path / "Director-Studio-Legacy-Windows-x64.zip"
-    package = "Director-Studio-Legacy-Windows-x64"
+    zip_path = tmp_path / "Director-Studio-Windows-x64.zip"
+    package = "Director-Studio-Windows-x64"
     with zipfile.ZipFile(zip_path, "w") as archive:
         archive.write(executable, f"{package}/DirectorStudio.exe")
         archive.writestr(f"{package}/README.md", "portable fixture")
@@ -115,6 +115,54 @@ def test_h3_archive_check_accepts_official_only_executable_and_zip(tmp_path: Pat
 
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
     assert "official H3-only packaging test passed" in result.stdout
+
+
+def test_h3_archive_check_allows_tests_inside_locked_harness_dependency(
+    tmp_path: Path,
+):
+    executable = tmp_path / "DirectorStudio.exe"
+    executable.write_bytes(b"same packaged executable")
+    zip_path = _write_portable_zip(
+        tmp_path,
+        executable,
+        "harness/node_modules/zod/src/v4/mini/tests/fixture.js",
+    )
+    env = _write_fake_archive_viewer(tmp_path, WORKFLOW_ENTRIES)
+
+    result = _run_script(
+        H3_CHECK,
+        "-ExecutablePath",
+        str(executable),
+        "-ZipPath",
+        str(zip_path),
+        env=env,
+    )
+
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+def test_h3_archive_check_allows_data_inside_locked_python_dependency(
+    tmp_path: Path,
+):
+    executable = tmp_path / "DirectorStudio.exe"
+    executable.write_bytes(b"same packaged executable")
+    zip_path = _write_portable_zip(
+        tmp_path,
+        executable,
+        "runtime/python/Lib/site-packages/comfy_cli/cql/data/fixture.json",
+    )
+    env = _write_fake_archive_viewer(tmp_path, WORKFLOW_ENTRIES)
+
+    result = _run_script(
+        H3_CHECK,
+        "-ExecutablePath",
+        str(executable),
+        "-ZipPath",
+        str(zip_path),
+        env=env,
+    )
+
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
 
 
 def test_h3_archive_check_rejects_external_state_in_zip(tmp_path: Path):

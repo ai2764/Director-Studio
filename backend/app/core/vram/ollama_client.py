@@ -53,7 +53,6 @@ class OllamaClient:
     def _opts(self, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         o = {
             "num_gpu": 999,
-            "num_ctx": settings.director_num_ctx,
             "num_predict": settings.director_num_predict,
         }
         if extra:
@@ -99,6 +98,17 @@ class OllamaClient:
             if n == model or n.startswith(name):
                 return int(m.get("size_vram") or 0)
         return 0
+
+    async def context_capacity(self, model: str) -> int | None:
+        """Return the context window allocated by Ollama for a loaded model."""
+        name = (model or "").split(":")[0]
+        for item in await self.loaded_models():
+            loaded = str(item.get("name") or item.get("model") or "")
+            if loaded == model or loaded.startswith(name + ":"):
+                value = item.get("context_length")
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                    return value
+        return None
 
     async def unload_models(self, names: Sequence[str] | Iterable[str]) -> None:
         """Best-effort unload: POST /api/generate with keep_alive=0."""
@@ -184,6 +194,7 @@ class OllamaClient:
         keep_alive: str | int | None = None,
         options: dict[str, Any] | None = None,
         require_vision: bool = False,
+        think: bool | None = None,
     ) -> dict[str, Any]:
         """Return a provider-neutral chat result using Ollama's official SDK."""
         request: dict[str, Any] = {
@@ -196,6 +207,8 @@ class OllamaClient:
             request["tools"] = list(tools)
         if format is not None:
             request["format"] = format
+        if think is not None:
+            request["think"] = think
         if keep_alive is not None:
             request["keep_alive"] = keep_alive
         elif getattr(settings, "llm_keep_loaded", True):
@@ -256,6 +269,13 @@ class OllamaClient:
         done_reason = str(_value(response, "done_reason", "") or "")
         if done_reason:
             result["done_reason"] = done_reason
+        usage = {}
+        for source, target in (("prompt_eval_count", "input_tokens"), ("eval_count", "output_tokens")):
+            count = _value(response, source)
+            if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                usage[target] = count
+        if usage:
+            result["usage"] = usage
         return result
 
     async def _chat_http_legacy(

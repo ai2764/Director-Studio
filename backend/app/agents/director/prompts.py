@@ -116,6 +116,7 @@ Judge only observed problems in these four categories:
 - model-infeasible motion: the described motion, transformation, or continuity is not credible for one H3 clip.
 
 Report concise evidence-based problems. Never propose replacement shots, shot counts, timings, camera recipes, or rewritten beats. Do not reject for style preferences outside the four categories. A valid candidate must return an empty issues list.
+Asset IDs, names and file keys are lookup labels, not established visual or story facts. Use supplied inspected evidence for appearance; without it, do not infer appearance from a label or invent a label-based contradiction. A minimum duration of 0 means no separately specified minimum, not a demand for a zero-length film. Judge concrete conflicts with the actual screenplay and user request.
 """
 
 STORYBOARD_VALIDATION_USER_TEMPLATE = """IMMUTABLE FULL SCREENPLAY:
@@ -171,10 +172,17 @@ Output rules:
   again where it clarifies action or sound; the shot dialogue below is the new performance.
 - Treat each ref's approved_description and approved_notes as authoritative for
   identity, wardrobe, set and prop appearance; never replace them with guesses.
+- Use visual_analysis for what the selected Picture visibly establishes. Asset names
+  and file keys are lookup labels, not visual descriptions; do not turn a misleading
+  label into an appearance, location or story fact absent from the visual evidence.
 - Express all action timing as seconds (for example, "0–2 seconds"); never label
   second ranges as frames or write ambiguous ranges such as "Frame 0–2". Every
   interval must stay inside duration_s, and its stated length must match its endpoints.
-- Each dialogue line must appear exactly once in the full prompt package (usually in detailed_description).
+- Put spoken dialogue only in detailed_description as <d>[Language] exact words</d>.
+  Keep speaker IDs, actions, and delivery outside <d>. Preserve shot.dialogue in order,
+  including repetitions explicitly present in the script; never add an extra performance.
+  Do not quote or repeat dialogue in subject_definitions, summary, retention_analysis,
+  overall_soundscape, or non_diegetic_music. Describe those sections without the spoken words.
 """
 
 # Backward-compatible name used by existing Director integrations.

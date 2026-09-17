@@ -40,7 +40,6 @@ from ..core.jobs import create_job, load_job, start_pipeline_job
 from ..core.library.store import (
     asset_dir,
     create_external_asset,
-    delete_asset,
     load_asset,
     write_asset,
 )
@@ -576,6 +575,66 @@ async def _make_chat_fn(
         if provider is not None or orchestrator_provider is not None
         else getattr(orch, "ollama", active_provider.client)
     )
+    from ..core.llm.usage import ChatUsageReporter
+
+    provider_id = getattr(active_provider, "provider_id", settings.llm_provider)
+    lifecycle = (
+        getattr(active_provider, "lifecycle", None)
+        if provider is not None or orchestrator_provider is not None
+        else None
+    )
+    uses_local_capacity_discovery = bool(
+        getattr(lifecycle, "uses_local_gpu", provider_id == "ollama")
+    )
+    initial_capacity = None if uses_local_capacity_discovery else settings.director_num_ctx
+    usage_reporter = ChatUsageReporter(
+        on_progress, provider=provider_id,
+        context_window=initial_capacity,
+        output_limit=settings.director_num_predict,
+        capacity_source=None if initial_capacity is None else "configured_fallback",
+    )
+
+    def _selected_model() -> str:
+        if provider is not None or orchestrator_provider is not None:
+            return str(active_provider.model_status().get("model") or "").strip()
+        return get_director_model()
+
+    def set_context_capacity(tokens: int, source: str) -> None:
+        usage_reporter.set_context_capacity(tokens, source)
+
+    async def _refresh_context_capacity(model: str) -> int | None:
+        discover = getattr(lifecycle, "context_capacity", None)
+        capacity = await discover(model) if discover is not None else None
+        if capacity is not None:
+            set_context_capacity(capacity, "provider_reported")
+        return capacity
+
+    async def resolve_context_capacity() -> int:
+        keep = bool(getattr(settings, "llm_keep_loaded", True))
+
+        async def _runtime(text: str) -> None:
+            if on_progress:
+                await on_progress({"type": "runtime", "text": text})
+
+        async with orch.llm_session(
+            release_on_exit=not keep,
+            on_status=_runtime,
+            fail_if_generation_pending=True,
+        ):
+            await orch.ensure_llm_ready(on_status=_runtime)
+            model = _selected_model()
+            capacity = await _refresh_context_capacity(model)
+        if capacity is None:
+            if uses_local_capacity_discovery:
+                raise RuntimeError(
+                    f"{provider_id} did not report the loaded model context capacity"
+                )
+            capacity = settings.director_num_ctx
+            source = "configured_fallback"
+        else:
+            source = "provider_reported"
+        set_context_capacity(capacity, source)
+        return capacity
 
     async def chat_fn(
         system: str,
@@ -584,7 +643,11 @@ async def _make_chat_fn(
         **_kwargs,
     ) -> str | dict:
         guides = tuple(_kwargs.get("guides") or ())
-        system = with_director_skill(system, guides=guides)
+        if not _kwargs.get("prepared_system"):
+            system = with_director_skill(system, guides=guides)
+        max_output_tokens = _kwargs.get("max_output_tokens")
+        if max_output_tokens is not None and (type(max_output_tokens) is not int or not 1 <= max_output_tokens <= 131072):
+            raise ValueError("Invalid inference output budget")
         # When images are present, keep system separate for /api/chat.
         # Text-only keeps the combined prompt for /api/generate compatibility.
         use_images = list(images or [])
@@ -603,12 +666,8 @@ async def _make_chat_fn(
         ):
             # Always (re)load / verify GPU residency after Comfy may have unloaded it
             await orch.ensure_llm_ready(on_status=_runtime)
-            if provider is not None or orchestrator_provider is not None:
-                plan_model = str(
-                    active_provider.model_status().get("model") or ""
-                ).strip()
-            else:
-                plan_model = get_director_model()
+            plan_model = _selected_model()
+            await _refresh_context_capacity(plan_model)
             if use_images:
                 label = f"Thinking with {plan_model} · {len(use_images)} image{'s' if len(use_images) != 1 else ''}…"
             else:
@@ -667,12 +726,15 @@ async def _make_chat_fn(
                 ):
                     messages.insert(0, {"role": "system", "content": system})
                 try:
-                    result = await client.chat_response(
-                        plan_model,
+                    result = await usage_reporter.call(
+                        client, plan_model,
+                        purpose=_kwargs.get("inference_purpose", "turn"),
                         messages=messages,
                         tools=None if forced_tool_schema is not None else tools or None,
                         format=forced_tool_schema or response_format,
                         require_vision=require_vision or bool(use_images),
+                        **({"think": False} if provider_id == "ollama" and _kwargs.get("inference_purpose") == "compaction" else {}),
+                        **({"options": {"num_predict": max_output_tokens}} if max_output_tokens is not None else {}),
                     )
                 except Exception as exc:
                     unsupported_tools = (
@@ -760,6 +822,8 @@ async def _make_chat_fn(
                 )
             return await client.generate(plan_model, prompt)
 
+    chat_fn.resolve_context_capacity = resolve_context_capacity
+    chat_fn.set_context_capacity = set_context_capacity
     return chat_fn
 
 
@@ -783,22 +847,24 @@ async def project_chat_endpoint(
         await _assert_chat_available()
     except GenerationActiveError as exc:
         raise _generation_active_http(exc) from exc
-    if (await director_chat_sessions.snapshot(project_id)).active:
+    try:
+        session = await director_chat_sessions.reserve(project_id)
+    except DirectorChatSessionConflict as exc:
         raise HTTPException(
             409,
             "Director chat is already running for this project",
-        )
+        ) from exc
 
     from ..agents.director.chat import handle_chat
 
-    stored_history = load_chat_history(project_id)
-    history = agent_history(stored_history)
-    if not history:
-        history = [{"role": h.role, "content": h.content} for h in (body.history or [])]
-    chat_fn = await _make_chat_fn(on_progress=None)
-    append_chat_message(project_id, role="user", content=msg)
-
     try:
+        await director_chat_sessions.attach(project_id, session.session_id or "", asyncio.current_task())
+        stored_history = load_chat_history(project_id)
+        history = agent_history(stored_history)
+        if not history:
+            history = [{"role": h.role, "content": h.content} for h in (body.history or [])]
+        chat_fn = await _make_chat_fn(on_progress=None)
+        append_chat_message(project_id, role="user", content=msg)
         result = await handle_chat(
             project_id=project_id,
             message=msg,
@@ -806,6 +872,12 @@ async def project_chat_endpoint(
             chat_fn=chat_fn,
             history=history,
         )
+        response = _chat_result_to_response(result)
+        append_chat_message(
+            project_id, role="assistant", content=response.reply,
+            images=[DirectorChatImage.model_validate(image.model_dump()) for image in response.images],
+        )
+        return response
     except ValueError as e:
         raise _http_value_error(e) from e
     except GenerationActiveError as e:
@@ -813,15 +885,8 @@ async def project_chat_endpoint(
     except Exception as e:
         logger.exception("project chat failed for %s", project_id)
         raise HTTPException(503, f"Director chat failed: {e}") from e
-
-    response = _chat_result_to_response(result)
-    append_chat_message(
-        project_id,
-        role="assistant",
-        content=response.reply,
-        images=[DirectorChatImage.model_validate(image.model_dump()) for image in response.images],
-    )
-    return response
+    finally:
+        await director_chat_sessions.finish(project_id, session.session_id or "")
 
 
 @router.get(
@@ -832,6 +897,42 @@ async def project_chat_history_endpoint(project_id: str) -> list[DirectorChatMes
     if load_project(project_id) is None:
         raise HTTPException(404, "Project not found")
     return load_chat_history(project_id)
+
+
+class ChatCompactionResult(BaseModel):
+    compacted: bool
+    before_tokens: int = Field(ge=0)
+    after_tokens: int = Field(ge=0)
+    session_id: str
+
+
+@router.post("/projects/{project_id}/chat/compact", response_model=ChatCompactionResult)
+async def compact_project_chat_endpoint(project_id: str) -> ChatCompactionResult:
+    from ..agents.director.harness_runtime import compact_harness_chat
+
+    if load_project(project_id) is None:
+        raise HTTPException(404, "Project not found")
+    if settings.director_agent_runtime != "harness":
+        raise HTTPException(409, "Manual context compaction requires Harness runtime")
+    try:
+        await _assert_chat_available()
+        session = await director_chat_sessions.reserve(project_id)
+    except GenerationActiveError as exc:
+        raise _generation_active_http(exc) from exc
+    except DirectorChatSessionConflict as exc:
+        raise HTTPException(409, "Director chat is already running for this project") from exc
+    try:
+        await director_chat_sessions.attach(project_id, session.session_id or "", asyncio.current_task())
+        result = await compact_harness_chat(project_id=project_id, chat_fn=await _make_chat_fn(),
+                                            history=agent_history(load_chat_history(project_id)))
+        return ChatCompactionResult.model_validate(result)
+    except GenerationActiveError as exc:
+        raise _generation_active_http(exc) from exc
+    except Exception as exc:
+        logger.exception("Manual Harness compaction failed for %s", project_id)
+        raise HTTPException(503, f"Context compaction failed: {exc}") from exc
+    finally:
+        await director_chat_sessions.finish(project_id, session.session_id or "")
 
 
 @router.get(
@@ -1233,15 +1334,6 @@ async def delete_layout_reference_endpoint(
         )
     save_shot(updated)
 
-    if target.asset_id and load_asset("layouts", target.asset_id) is not None:
-        asset_is_still_used = any(
-            any(layout.asset_id == target.asset_id for layout in candidate.layout_refs)
-            or any(ref.asset_id == target.asset_id for ref in candidate.refs)
-            for project in list_projects()
-            for candidate in list_shots(project.id)
-        )
-        if not asset_is_still_used:
-            delete_asset("layouts", target.asset_id)
     return updated
 
 

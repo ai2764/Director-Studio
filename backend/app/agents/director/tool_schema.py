@@ -7,8 +7,15 @@ from typing import Any, Iterable
 
 from ...config import settings
 from ...core.projects.models import AssetCoverageReviewSubmission, Project
-from .intent import actor_design_intent, explicit_gpt_image_intent
+from .intent import (
+    actor_design_intent,
+    explicit_gpt_image_intent,
+    explicit_layout_generation_intent,
+    material_review_target_shot_id,
+    tail_frame_extraction_intent,
+)
 from .planner import (
+    AppendShotSubmission,
     ShotRefsPatchSubmission,
     ShotRevisionSubmission,
     ShotSceneRefSelection,
@@ -58,6 +65,34 @@ def function_tool(
             "parameters": parameters,
         },
     }
+
+
+def _material_review_tool(name: str, target_shot_id: str) -> dict[str, Any]:
+    source = next(
+        tool
+        for tool in DIRECTOR_TOOL_SCHEMAS
+        if tool["function"]["name"] == name
+    )
+    parameters = source["function"]["parameters"]
+    properties = dict(parameters.get("properties") or {})
+    required = list(parameters.get("required") or [])
+    target_key = "target_shot_id" if name == "extract_clip_tail_frame" else "shot_id"
+    if name in {"queue_ref_frame", "write_prompt"}:
+        for selector in ("shot_index", "title", "all"):
+            properties.pop(selector, None)
+    properties[target_key] = {
+        "type": "string",
+        "const": target_shot_id,
+        "description": "Exact Shot changed in the material editor",
+    }
+    if target_key not in required:
+        required.append(target_key)
+    return function_tool(
+        name,
+        source["function"]["description"],
+        properties,
+        required=required,
+    )
 
 
 SHOT_SELECTOR = {
@@ -246,9 +281,22 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "Persist the exact complete ordered storyboard you authored for the "
                 "current screenplay. Use PROJECT_STATE.script_hash. Preserve every "
                 "existing Shot's PROJECT_STATE id in shot_id, and omit shot_id only "
-                "for a genuinely new Shot."
+                "for a genuinely new Shot. For adding one Shot at the end, use append_shot instead."
             ),
             "parameters": StoryboardSubmission.model_json_schema(),
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "append_shot",
+            "description": (
+                "Append exactly one new Shot at the end. Submit only the new shot's "
+                "authored fields, not existing Shots or production state. Python assigns "
+                "its ID and preserves every existing Shot, ref, prompt, Layout and video link. "
+                "Copy PROJECT_STATE.script_hash and last_shot_id for stale/replay checks."
+            ),
+            "parameters": AppendShotSubmission.model_json_schema(),
         },
     },
     {
@@ -414,10 +462,24 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     function_tool(
         "write_prompt",
-        "Write or rewrite the six-section H3 production prompt for a shot with a reference frame.",
+        "Prepare the six-section H3 production prompt for one shot. The backend ensures visual evidence "
+        "for every current Picture, reviewing new or changed references first, decides whether the Creative brief "
+        "and prompt need changes, and preserves old drafts if review is incomplete or needs a user choice.",
         dict(SHOT_SELECTOR),
     ),
-    function_tool("get_status", "Read the current project and shot status."),
+    function_tool(
+        "inspect_asset",
+        "Read one exact Library image before casting or answering visual questions, even with no Shots. "
+        "Returns visual observations, metadata conflicts and content hash, not image bytes. "
+        "Use when appearance is unknown or names/descriptions may be misleading; does not change the asset or project.",
+        {"asset_id": {"type": "string", "minLength": 1}, "file_key": {"type": "string", "minLength": 1}},
+        required=["asset_id", "file_key"],
+    ),
+    function_tool(
+        "get_status",
+        "Read project status, or the full saved details of one Shot by exact shot_id before editing it.",
+        {"shot_id": {"type": "string", "description": "Optional exact Shot ID to read; omit for project status."}},
+    ),
 ]
 
 
@@ -432,11 +494,33 @@ def director_tool_schemas(
         return [CHAT_IMAGE_CLASSIFICATION_TOOL]
     if actor_design_intent(current_message):
         return [ACTOR_DESIGN_TOOL]
+    layout_generation_authorized = explicit_layout_generation_intent(
+        current_message
+    )
+    material_review_target = material_review_target_shot_id(current_message)
+    if material_review_target:
+        tools = [_material_review_tool("write_prompt", material_review_target)]
+        if layout_generation_authorized:
+            tools.append(
+                _material_review_tool("queue_ref_frame", material_review_target)
+            )
+        if tail_frame_extraction_intent(current_message):
+            tools.append(
+                _material_review_tool(
+                    "extract_clip_tail_frame",
+                    material_review_target,
+                )
+            )
+        return tools
     excluded = set()
     if project.script_locked:
         excluded.update(SCRIPT_TOOLS)
     if not allow_save_storyboard:
         excluded.update(STORYBOARD_TOOLS)
+    if not layout_generation_authorized:
+        excluded.update({"queue_ref_frame", "revise_ref_frame"})
+    if not tail_frame_extraction_intent(current_message):
+        excluded.add("extract_clip_tail_frame")
     tools = [
         tool
         for tool in DIRECTOR_TOOL_SCHEMAS
@@ -453,6 +537,7 @@ def director_tool_schemas(
     )
     if shot_layout_turn:
         relevant = {
+            "append_shot",
             "revise_shot",
             "patch_shot_refs",
             "set_shot_scene_ref",
@@ -462,15 +547,15 @@ def director_tool_schemas(
             "revise_ref_frame",
             "write_prompt",
             "get_status",
+            "inspect_asset",
         }
         tools = [
             tool
             for tool in tools
             if tool["function"]["name"] in relevant
         ]
-    if settings.gpt_bridge_configured:
-        if not shot_layout_turn or explicit_gpt_image_intent(current_message):
-            tools.append(GPT_REF_FRAME_TOOL)
+    if settings.gpt_bridge_configured and layout_generation_authorized:
+        tools.append(GPT_REF_FRAME_TOOL)
     return tools
 
 

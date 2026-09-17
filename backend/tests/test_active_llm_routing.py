@@ -45,6 +45,9 @@ class RecordingLifecycle:
             "loaded_instances": ["instance-1"],
         }
 
+    async def context_capacity(self, model: str) -> int | None:
+        return 65536 if model == "catalog-model" else None
+
 
 class FakeOrchestrator:
     @asynccontextmanager
@@ -96,6 +99,22 @@ async def test_make_chat_fn_routes_plain_chat_to_injected_provider(monkeypatch):
     assert len(active.client.generate_calls) == 1
     assert active.client.generate_calls[0][0] == "catalog-model"
     assert active.client.generate_calls[0][1].endswith("\n\nUSER")
+
+
+@pytest.mark.asyncio
+async def test_chat_preflight_reads_local_provider_context_capacity(monkeypatch):
+    from app.api import projects as projects_api
+
+    active = RecordingProvider()
+    active.provider_id = "lm-studio"
+    active.lifecycle = RecordingLifecycle()
+    monkeypatch.setattr(
+        "app.core.vram.get_orchestrator", lambda: FakeOrchestrator()
+    )
+
+    chat_fn = await projects_api._make_chat_fn(provider=active)
+
+    assert await chat_fn.resolve_context_capacity() == 65536
 
 
 @pytest.mark.asyncio

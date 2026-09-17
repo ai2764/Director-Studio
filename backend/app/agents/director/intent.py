@@ -12,6 +12,57 @@ def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
+def material_review_target_shot_id(message: str) -> str | None:
+    """Return the exact Shot targeted by the material-editor review handoff."""
+    text = normalize_text(message)
+    review_instruction = (
+        "review the current materials and rewrite its h3 prompt" in text
+        or "review every current picture reference and decide the next step" in text
+    )
+    if (
+        "references changed for" not in text
+        or not review_instruction
+    ):
+        return None
+    match = re.search(r"\((sht_[a-z0-9_-]+)\)", text, flags=re.I)
+    return match.group(1) if match else None
+
+
+def explicit_layout_generation_intent(message: str) -> bool:
+    """Require an affirmative current-turn request before offering Layout generation."""
+    text = normalize_text(message)
+    if re.search(
+        r"(?:do not|don't|dont|not yet)\s+(?:queue|generate|create|render)|"
+        r"(?:不要|先别|暂不|别)\s*(?:生成|创建|排队|出)",
+        text,
+        flags=re.I,
+    ):
+        return False
+    has_layout = bool(
+        re.search(
+            r"\b(?:layout|reference\s+frame|composition\s+reference)\b|"
+            r"(?:layout|参考帧|首帧|构图参考)",
+            text,
+            flags=re.I,
+        )
+    )
+    has_generation = bool(
+        re.search(
+            r"\b(?:generate|regenerate|create|render|queue|make)\b|"
+            r"(?:生成|重新生成|重做|创建|排队|出一张|出图)",
+            text,
+            flags=re.I,
+        )
+    )
+    return has_layout and has_generation
+
+
+def tail_frame_extraction_intent(message: str) -> bool:
+    """Tail-frame extraction is a separate explicit Layout creation path."""
+    text = normalize_text(message)
+    return bool(re.search(r"\b(?:tail|last)\s+frame\b|(?:尾帧|末帧)", text, re.I))
+
+
 def layout_activation_mode(message: str) -> str:
     """Map explicit additive language to Layout append; default to replacement."""
     text = normalize_text(message)

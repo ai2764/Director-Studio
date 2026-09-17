@@ -100,6 +100,13 @@ describe("ShotMaterialEditor", () => {
     expect(screen.getByText("Pictures 2 / 9")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
+    expect(screen.getByRole("heading", { name: "Review reference changes" })).toBeTruthy();
+    expect(replaceShotMaterialsMock).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Message to Agent (optional)"), {
+      target: { value: "Keep the room wide and preserve the actor identity." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save & send to Agent" }));
+
     await waitFor(() => {
       expect(replaceShotMaterialsMock).toHaveBeenCalledWith("sht_1", [
         { role: "scene", asset_id: "scn_1", file_key: "wide" },
@@ -203,6 +210,7 @@ describe("ShotMaterialEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add Mia angles · profile" }));
     expect(screen.getByText("Pictures 2 / 9")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save & send to Agent" }));
 
     await waitFor(() => {
       expect(replaceShotMaterialsMock).toHaveBeenCalledWith("sht_1", [
