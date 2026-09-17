@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -99,7 +100,10 @@ def test_backend_readiness_requires_its_own_authenticated_sidecar():
     assert json.loads(output) == {"rejected": True, "accepted": True}
 
 
-@pytest.mark.skipif(not POWERSHELL or not shutil.which("node"), reason="Windows launcher prerequisites unavailable")
+@pytest.mark.skipif(
+    sys.platform != "win32" or not POWERSHELL or not shutil.which("node"),
+    reason="Windows launcher prerequisites unavailable",
+)
 def test_hidden_child_has_sanitized_environment_in_real_process(tmp_path):
     probe = tmp_path / "probe.cjs"
     probe.write_text('console.log(JSON.stringify({secret:!!process.env.DS_LLM_API_KEY,port:process.env.DS_HARNESS_PORT}));')

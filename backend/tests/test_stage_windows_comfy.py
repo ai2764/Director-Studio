@@ -190,6 +190,7 @@ def test_extract_pip_bootstrap_and_write_runtime_manifest(tmp_path: Path) -> Non
     assert not (runtime / "python" / "Lib" / "site-packages" / "comfy_cli").exists()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows executable launcher only")
 def test_comfy_launcher_uses_adjacent_private_python(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime" / "python"
     runtime.mkdir(parents=True)
