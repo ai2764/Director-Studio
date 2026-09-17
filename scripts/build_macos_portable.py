@@ -40,6 +40,14 @@ def stage_package(repo: Path, executable: Path, package: Path) -> None:
             source = repo / "backend" / ".env.example"
         destination = package / name
         shutil.copyfile(source, destination)
+        if name == ".env":
+            portable_env = destination.read_bytes()
+            runtime_line = b"DS_DIRECTOR_AGENT_RUNTIME=harness"
+            if portable_env.count(runtime_line) != 1:
+                raise RuntimeError("Portable .env is missing the Harness runtime setting")
+            destination.write_bytes(
+                portable_env.replace(runtime_line, b"DS_DIRECTOR_AGENT_RUNTIME=legacy")
+            )
         executable_file = name == "DirectorStudio" or name in flavor.wrappers
         if name in flavor.wrappers:
             destination.write_bytes(destination.read_bytes().replace(b"\r\n", b"\n"))

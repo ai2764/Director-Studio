@@ -11,6 +11,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and exten
 The [slim Harness runtime](docs/HARNESS.md) is the default Director agent loop,
 using the same Python-owned providers and tools. Windows portable includes its
 private Node runtime and sidecar; source checkouts retain an explicit Legacy switch.
+Linux and macOS portable packages retain Legacy as their default until they
+bundle the Harness sidecar and a private Node runtime.
 Harness can compact older conversation history, but the model server still sets
 the usable context capacity. Director Studio reads that capacity when the
 provider reports it and shows context usage in the Director UI.

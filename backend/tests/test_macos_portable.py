@@ -49,7 +49,11 @@ def test_package_only_contains_shippable_files_and_preserves_permissions(builder
             if name != "DirectorStudio":
                 assert b"\r\n" not in contents.extractfile(member).read()
         assert not any("/data" in name or "/.env.example" in name for name in names)
-    assert (package / ".env").read_bytes() == (ROOT / "backend" / ".env.example").read_bytes()
+    expected_env = (ROOT / "backend" / ".env.example").read_bytes().replace(
+        b"DS_DIRECTOR_AGENT_RUNTIME=harness",
+        b"DS_DIRECTOR_AGENT_RUNTIME=legacy",
+    )
+    assert (package / ".env").read_bytes() == expected_env
 
 
 def test_staging_never_overwrites_existing_user_package(builder, tmp_path):

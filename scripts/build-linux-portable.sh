@@ -108,6 +108,8 @@ copy_package_files() {
     cp -- "$repo_root/Install-Tools.py" "$destination/Install-Tools.py"
     cp -- "$repo_root/portable-tools-requirements.txt" "$destination/portable-tools-requirements.txt"
     cp -- "$backend_root/.env.example" "$destination/.env"
+    grep -q '^DS_DIRECTOR_AGENT_RUNTIME=harness$' "$destination/.env" || die "portable .env is missing the Harness runtime setting"
+    sed -i 's/^DS_DIRECTOR_AGENT_RUNTIME=harness$/DS_DIRECTOR_AGENT_RUNTIME=legacy/' "$destination/.env"
     cp -- "$repo_root/README.md" "$destination/README.md"
     chmod 0755 "$destination/DirectorStudio" "$destination/launch.sh" "$destination/install-tools.sh"
     chmod 0644 "$destination/Install-Tools.py" "$destination/portable-tools-requirements.txt" "$destination/.env" "$destination/README.md"
