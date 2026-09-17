@@ -584,6 +584,26 @@ export function ProductionPage({
     </label>
   );
 
+  const resolutionPicker = (
+    <label className="field-label h3-resolution-picker">
+      Resolution
+      <select
+        className="field-input"
+        value={resolutionPreset}
+        disabled={busy || jobActive}
+        onChange={(event) =>
+          setResolutionPreset(event.target.value as ResolutionPreset)
+        }
+      >
+        <option value="auto">Auto from project</option>
+        <option value="landscape-480">Landscape · 864×480</option>
+        <option value="landscape-720">Landscape 720p tier · 1280×704</option>
+        <option value="portrait-480">Portrait · 480×864</option>
+        <option value="portrait-720">Portrait 720p tier · 704×1280</option>
+      </select>
+    </label>
+  );
+
   if (mobile) {
     const selectedNumber = selected
       ? Math.max(0, shots.findIndex((shot) => shot.id === selected.id)) + 1
@@ -664,6 +684,7 @@ export function ProductionPage({
                 </div>
               ) : null}
               {providerPicker}
+              {resolutionPicker}
               <button
                 type="button"
                 className="btn primary mobile-production-run"
@@ -1095,23 +1116,7 @@ export function ProductionPage({
 
                 {tab === "run" ? (
                   <div className="tab-panel">
-                    <label className="field-label">
-                      Resolution
-                      <select
-                        className="field-input"
-                        value={resolutionPreset}
-                        disabled={busy || jobActive}
-                        onChange={(event) =>
-                          setResolutionPreset(event.target.value as ResolutionPreset)
-                        }
-                      >
-                        <option value="auto">Auto from project</option>
-                        <option value="landscape-480">Landscape · 864×480</option>
-                        <option value="landscape-720">Landscape 720p tier · 1280×704</option>
-                        <option value="portrait-480">Portrait · 480×864</option>
-                        <option value="portrait-720">Portrait 720p tier · 704×1280</option>
-                      </select>
-                    </label>
+                    {resolutionPicker}
                     <ol className="run-steps">
                       <li className={(selected.refs?.length ?? 0) > 0 ? "done" : ""}>
                         Refs cast

@@ -428,7 +428,7 @@ describe("ProductionPage prompt refresh", () => {
     expect(onReviewMaterials).not.toHaveBeenCalled();
   });
 
-  it("runs a ready Shot from the mobile Production result surface", async () => {
+  it("runs a ready Shot at the resolution selected in mobile Production", async () => {
     const ready = {
       ...shot(generatedPrompt),
       refs: [
@@ -464,9 +464,16 @@ describe("ProductionPage prompt refresh", () => {
 
     const runButton = await screen.findByRole("button", { name: "Run H3" });
     expect(runButton.hasAttribute("disabled")).toBe(false);
+    fireEvent.change(screen.getByLabelText("Resolution"), {
+      target: { value: "portrait-720" },
+    });
     fireEvent.click(runButton);
 
     expect(await screen.findByRole("button", { name: "H3 running…" })).toBeTruthy();
+    expect(submitShot).toHaveBeenCalledWith("sht_1", "local", {
+      width: 704,
+      height: 1280,
+    });
   });
 
   it("does not show the legacy layout approval column or state", async () => {
