@@ -377,11 +377,15 @@ export function ProductionPage({
       setH3Job(null);
       return;
     }
+    if (!active) return;
     let cancelled = false;
     const tick = () => {
       getH3Job(jobId)
         .then((j) => {
-          if (!cancelled) setH3Job(j);
+          if (!cancelled) {
+            setH3Job(j);
+            if (!ACTIVE.includes(j.status)) window.clearInterval(t);
+          }
         })
         .catch(() => undefined);
     };
@@ -391,11 +395,11 @@ export function ProductionPage({
       cancelled = true;
       window.clearInterval(t);
     };
-  }, [selected?.h3_job_id]);
+  }, [active, selected?.h3_job_id]);
 
   useEffect(() => {
-    if (!projectId) return;
-    const running = shots.some((s) => ACTIVE.includes(s.status as JobStatus) || s.h3_job_id);
+    if (!active || !projectId) return;
+    const running = shots.some((s) => ACTIVE.includes(s.status as JobStatus));
     if (!running) return;
     const t = window.setInterval(() => {
       getProject(projectId)
@@ -403,7 +407,7 @@ export function ProductionPage({
         .catch(() => undefined);
     }, 3000);
     return () => window.clearInterval(t);
-  }, [projectId, shots]);
+  }, [active, projectId, shots]);
 
   const replaceShot = (updated: Shot) => {
     setShots((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));

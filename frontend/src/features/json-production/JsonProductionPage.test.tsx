@@ -354,6 +354,23 @@ describe("JsonProductionPage three-column workspace", () => {
     });
   });
 
+  it("loads generation records only for the selected shot", async () => {
+    render(<JsonProductionPage active />);
+
+    await waitFor(() => expect(listJsonShotJobs).toHaveBeenCalledWith("prj_test", "shot_001", 1));
+    expect(vi.mocked(listJsonShotJobs).mock.calls.every((call) => call[1] === "shot_001")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: /shot_002/ }));
+    await waitFor(() => expect(listJsonShotJobs).toHaveBeenCalledWith("prj_test", "shot_002", 1));
+  });
+
+  it("loads the storyboard only once when the page first becomes active", async () => {
+    render(<JsonProductionPage active />);
+
+    await screen.findByRole("button", { name: /shot_001/ });
+    expect(getStoryboard).toHaveBeenCalledTimes(1);
+  });
+
   it("offers the official MiniMax API and submits it for only the current run", async () => {
     render(<JsonProductionPage active />);
 

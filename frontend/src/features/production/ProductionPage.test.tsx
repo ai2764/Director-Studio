@@ -111,6 +111,34 @@ describe("ProductionPage prompt refresh", () => {
     });
   });
 
+  it("does not keep reloading every shot after an H3 job has completed", async () => {
+    const completed = { ...shot(generatedPrompt), status: "succeeded", h3_job_id: "job_done" } as Shot;
+    vi.mocked(getProject).mockResolvedValue(detail(completed));
+
+    render(<ProductionPage active />);
+    await screen.findByText("Corridor walk-in");
+    const initialCalls = vi.mocked(getProject).mock.calls.length;
+
+    await new Promise((resolve) => window.setTimeout(resolve, 3100));
+    expect(getProject).toHaveBeenCalledTimes(initialCalls);
+  });
+
+  it("does not keep polling the selected H3 job after it has completed", async () => {
+    const completed = { ...shot(generatedPrompt), status: "succeeded", h3_job_id: "job_done" } as Shot;
+    vi.mocked(getProject).mockResolvedValue(detail(completed));
+    vi.mocked(getH3Job).mockResolvedValue({
+      id: "job_done", status: "succeeded", name: "done", notes: "", prompt: "", dialogue: [],
+      frames: 90, error: null, comfy_prompt_id: null, external_task_id: null,
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:01:00Z",
+      outputs: {}, input_previews: {}, pipeline_id: "h3_ref2va",
+    });
+
+    render(<ProductionPage active mobile />);
+    await waitFor(() => expect(getH3Job).toHaveBeenCalledWith("job_done"));
+    await new Promise((resolve) => window.setTimeout(resolve, 1600));
+    expect(getH3Job).toHaveBeenCalledTimes(1);
+  });
+
   it("shows a loading state instead of zero shots before mobile project data arrives", async () => {
     let resolveProject!: (value: ProjectDetail) => void;
     vi.mocked(getProject).mockReturnValueOnce(new Promise((resolve) => {
