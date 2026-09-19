@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "../../shared/api/types";
+import { listLibraryAssets } from "../library/api";
 import { AssetWorkspace } from "./AssetWorkspace";
 
 const state = vi.hoisted(() => ({ project: null as Project | null }));
@@ -101,6 +102,32 @@ describe("AssetWorkspace", () => {
 
     expect(screen.getByRole("dialog", { name: "Import Scenes" })).toBeTruthy();
     expect(screen.queryByTestId("asset-library")).toBeNull();
+  });
+
+  it("reloads the project library after saving from a preparation workflow", async () => {
+    const mara = {
+      id: "actor_1", kind: "actors", name: "Mara", notes: "Lead", pipeline_id: "actor",
+      job_id: "job_1", seed: null, created_at: "2026-01-01", files: {}, meta: {},
+      urls: { master: "/mara.png" }, project_id: "prj_1",
+    };
+    let actors: typeof mara[] = [];
+    vi.mocked(listLibraryAssets).mockImplementation(async (kind: string) =>
+      kind === "actors" ? actors : [],
+    );
+    state.project = {
+      id: "prj_1", name: "Film", script_text: "", mode: "director",
+      created_at: "2026-01-01", updated_at: "2026-01-01", shot_ids: [],
+    };
+    render(<AssetWorkspace />);
+
+    await waitFor(() => expect(listLibraryAssets).toHaveBeenCalled());
+    expect(screen.queryByText("Mara")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Actors" }));
+    actors = [mara];
+    fireEvent.click(screen.getByRole("button", { name: "Library" }));
+
+    expect(await screen.findByText("Mara")).toBeTruthy();
   });
 
   it("preserves an asset draft while switching preparation categories", () => {

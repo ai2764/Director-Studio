@@ -68,6 +68,31 @@ describe("CastingPage", () => {
     expect(screen.getByText("Idle")).toBeTruthy();
   });
 
+  it("reconnects to an in-progress actor job after reload", async () => {
+    vi.mocked(listActorJobs).mockResolvedValue([
+      {
+        ...finishedJob,
+        id: "actjob_running",
+        status: "running",
+        name: "Mara",
+        outputs: {
+          master: {
+            key: "master",
+            label: "Master",
+            filename: "master.png",
+            url: "/api/files/jobs/actjob_running/outputs/master.png",
+          },
+        },
+      },
+    ]);
+
+    render(<CastingPage onOpenLibrary={() => undefined} />);
+
+    expect(await screen.findByText("Running workbench…")).toBeTruthy();
+    expect((screen.getByLabelText(/Name/) as HTMLInputElement).value).toBe("Mara");
+    expect(screen.getByRole("img", { name: "Master" })).toBeTruthy();
+  });
+
   it("offers wardrobe accessory options and submits them", async () => {
     vi.mocked(generateActor).mockResolvedValue({
       ...finishedJob,

@@ -53,9 +53,9 @@ export function MobileAssetWorkspace() {
         ))}
       </nav>
 
-      <div hidden={category !== "library"}>
+      {category === "library" ? (
         <MobileLibraryOverview onSelectKind={setCategory} />
-      </div>
+      ) : null}
       {CATEGORIES.filter((item) => item.id !== "library").map((item) => {
         const workflowCategory = item.id as Exclude<MobileAssetCategory, "library">;
         return (

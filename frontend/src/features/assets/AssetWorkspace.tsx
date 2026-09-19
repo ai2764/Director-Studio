@@ -62,9 +62,11 @@ export function AssetWorkspace() {
         </nav>
 
         <section className="asset-category-content" aria-live="polite">
-          <div className="asset-library-overview-panel" hidden={category !== "library"}>
-            <LibraryOverview onSelectKind={setCategory} />
-          </div>
+          {category === "library" ? (
+            <div className="asset-library-overview-panel">
+              <LibraryOverview onSelectKind={setCategory} />
+            </div>
+          ) : null}
           {CATEGORIES.filter((item) => item.id !== "library").map((item) => {
             const workflowCategory = item.id as PreparedAssetCategory;
             return (

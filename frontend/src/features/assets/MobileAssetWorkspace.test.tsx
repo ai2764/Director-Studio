@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "../../shared/api/types";
+import { listLibraryAssets } from "../library/api";
 import { MobileAssetWorkspace } from "./MobileAssetWorkspace";
 
 const state = vi.hoisted(() => ({
@@ -55,6 +56,28 @@ describe("MobileAssetWorkspace", () => {
     expect(screen.getByRole("heading", { name: "Project library" })).toBeTruthy();
     await waitFor(() => expect(screen.getByText("Mara")).toBeTruthy());
     expect(screen.queryByTestId("mobile-library")).toBeNull();
+  });
+
+  it("reloads the project library after saving from a mobile preparation workflow", async () => {
+    const mara = {
+      id: "actor_1", kind: "actors", name: "Mara", notes: "Lead", pipeline_id: "actor",
+      job_id: "job_1", seed: null, created_at: "2026-01-01", files: {}, meta: {},
+      urls: { master: "/mara.png" }, project_id: "prj_1",
+    };
+    let actors: typeof mara[] = [];
+    vi.mocked(listLibraryAssets).mockImplementation(async (kind: string) =>
+      kind === "actors" ? actors : [],
+    );
+    render(<MobileAssetWorkspace />);
+
+    await waitFor(() => expect(listLibraryAssets).toHaveBeenCalled());
+    expect(screen.queryByText("Mara")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Actors" }));
+    actors = [mara];
+    fireEvent.click(screen.getByRole("button", { name: "Library" }));
+
+    expect(await screen.findByText("Mara")).toBeTruthy();
   });
 
   it("shows the preparation input directly without a category library", () => {
