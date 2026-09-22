@@ -348,6 +348,38 @@ async def test_harness_receives_review_failure_not_success(material_shot):
 
 
 @pytest.mark.asyncio
+async def test_failed_prompt_preserves_both_raw_drafts_and_validation_errors(material_shot):
+    project, shot, _, _ = material_shot
+    orch = Orchestrator()
+    provider = Provider(orch)
+    original_complete = provider.complete
+    drafts = ['{"subject_definitions":"initial draft"}', '{"subject_definitions":"repair draft"}']
+
+    async def fail_prompt(system, user, *, guides=()):
+        if "reference review decision" in system.lower():
+            return await original_complete(system, user, guides=guides)
+        return drafts.pop(0)
+
+    provider.complete = fail_prompt
+    with pytest.raises(ValueError, match="prompt section 'summary' missing or empty"):
+        await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
+
+    debug_dir = settings.projects_dir / project.id / "agent" / "prompt_failures"
+    records = list(debug_dir.glob("*.json"))
+    assert len(records) == 1
+    record = json.loads(records[0].read_text(encoding="utf-8"))
+    assert record["project_id"] == project.id
+    assert record["shot_id"] == shot.id
+    assert record["attempts"] == [
+        {"stage": "initial", "raw": '{"subject_definitions":"initial draft"}',
+         "error": "prompt section 'summary' missing or empty"},
+        {"stage": "repair", "raw": '{"subject_definitions":"repair draft"}',
+         "error": "prompt section 'summary' missing or empty"},
+    ]
+    assert load_shot(project.id, shot.id) == shot
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["unreadable", "missing", "cached_midflight"])
 async def test_replacement_failure_reinstates_pending_flag(material_shot, failure):
     project, shot, _, files = material_shot

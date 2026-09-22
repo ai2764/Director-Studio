@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ....core.media.clip_generations import ClipGenerationAmbiguous
+from ....core.media.clip_generations import (
+    ClipGenerationAmbiguous,
+    list_shot_h3_generations,
+)
 from ....core.media import tail_frame
 from ....core.projects.models import Project, Shot
 from ....core.projects.store import load_shot
@@ -32,7 +35,20 @@ async def handle_media_tool(
             selected = next((shot for shot in shots if shot.id == shot_id), None)
             if result_payloads is not None:
                 result_payloads.append(
-                    {"ok": True, "shot": selected.model_dump(mode="json")}
+                    {
+                        "ok": True,
+                        "shot": selected.model_dump(mode="json"),
+                        "h3_generations": [
+                            {
+                                "version": f"v{index}",
+                                "job_id": job.id,
+                                "status": job.status.value,
+                            }
+                            for index, job in enumerate(
+                                list_shot_h3_generations(project_id, shot_id), start=1
+                            )
+                        ],
+                    }
                     if selected else {"ok": False, "error": "Shot not found in this project"}
                 )
             notes.append(f"Read Shot {shot_id}." if selected else "Shot not found in this project.")

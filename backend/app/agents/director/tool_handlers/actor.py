@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import uuid
 from typing import Any
 
 from ....config import settings
 from ....core.library.store import load_asset
+from ....core.projects.store import project_dir
 from ....core.schemas import JobStatus
 from ..intent import (
     actor_acceptance_intent,
@@ -14,6 +18,32 @@ from ..intent import (
     explicit_gpt_image_intent,
     normalize_text,
 )
+
+
+def _proposal_path(project_id: str):
+    return project_dir(project_id) / "agent" / "pending_actor_design.json"
+
+
+def _load_proposal(project_id: str) -> dict[str, Any] | None:
+    path = _proposal_path(project_id)
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
+def _save_proposal(project_id: str, proposal: dict[str, Any]) -> None:
+    path = _proposal_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(proposal, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _confirms_actor_proposal(message: str) -> bool:
+    # Approval must be an unqualified reply, not a sentence changing the design.
+    return bool(re.fullmatch(
+        r"(?:确认|确认生成|可以|同意|开始生成|生成吧|就这样|yes|confirm|go ahead)[。.!！\s]*",
+        normalize_text(message),
+        flags=re.I,
+    ))
 
 
 async def handle_actor_tool(
@@ -60,6 +90,57 @@ async def handle_actor_tool(
             )
         if requested_provider not in {"gpt", "local"}:
             raise ValueError("queue_actor_design provider must be gpt or local")
+        proposed_args = {
+            "name": actor_name,
+            "description": description,
+            "body_description": str(args.get("body_description") or "").strip(),
+            "hair_description": str(args.get("hair_description") or "").strip(),
+            "wardrobe_description": str(args.get("wardrobe_description") or "").strip(),
+            "generation_prompt": generation_prompt,
+            "provider": provider,
+        }
+        pending = _load_proposal(project_id)
+        if pending is None or pending.get("args") != proposed_args:
+            pending = {
+                "id": f"ades_{uuid.uuid4().hex[:12]}",
+                "args": proposed_args,
+                "request_message": normalize_text(user_feedback),
+                "state": "pending",
+            }
+            _save_proposal(project_id, pending)
+        notes.append(
+            f"Actor design proposal {pending['id']} for {actor_name} ({provider}) is pending. "
+            "No generation job was started. Show the proposed identity, wardrobe, and "
+            "prompt to the user and ask for a later text confirmation."
+        )
+        if result_payloads is not None:
+            result_payloads.append({
+                "ok": True,
+                "confirmation_required": True,
+                "proposal_id": pending["id"],
+                "proposal": proposed_args,
+            })
+        actions.append(f"propose_actor_design:{pending['id']}")
+        return True
+
+    if name == "confirm_actor_design":
+        pending = _load_proposal(project_id)
+        proposal_id = str(args.get("proposal_id") or "").strip()
+        if pending is None or pending.get("id") != proposal_id:
+            raise ValueError("Actor design proposal not found in this project")
+        if pending.get("state") != "pending":
+            raise ValueError("Actor design proposal was already confirmed")
+        if not _confirms_actor_proposal(user_feedback) or (
+            normalize_text(user_feedback) == pending.get("request_message")
+        ):
+            raise ValueError(
+                "confirm_actor_design requires an unqualified confirmation in a later user reply"
+            )
+        proposed_args = pending["args"]
+        actor_name = proposed_args["name"]
+        description = proposed_args["description"]
+        generation_prompt = proposed_args["generation_prompt"]
+        provider = proposed_args["provider"]
         if provider == "gpt" and not settings.gpt_bridge_configured:
             raise runtime.gpt_tool_error(
                 "configuration",
@@ -73,11 +154,9 @@ async def handle_actor_tool(
             notes=description,
             params={
                 "description": description,
-                "body_description": str(args.get("body_description") or "").strip(),
-                "hair_description": str(args.get("hair_description") or "").strip(),
-                "wardrobe_description": str(
-                    args.get("wardrobe_description") or ""
-                ).strip(),
+                "body_description": proposed_args["body_description"],
+                "hair_description": proposed_args["hair_description"],
+                "wardrobe_description": proposed_args["wardrobe_description"],
                 "generation_prompt": generation_prompt,
                 "has_actor_ref": False,
                 "has_wardrobe_ref": False,
@@ -86,6 +165,9 @@ async def handle_actor_tool(
             },
             project_id=project_id,
         )
+        pending["state"] = "confirmed"
+        pending["job_id"] = job.id
+        _save_proposal(project_id, pending)
         await runtime.start_pipeline_job(job, images={})
         terminal = await runtime.await_pipeline_job(job.id)
         if terminal is None:

@@ -18,6 +18,7 @@ def project_context_blob(
     from .context_io import load_agent_context
     from .intent import explicit_layout_generation_intent, shot_ref
     from .service import _inventory, _script_hash
+    from .tool_handlers.actor import _load_proposal
 
     inv = _inventory(project.id)
     script = project.script_text or ""
@@ -28,6 +29,7 @@ def project_context_blob(
         not planned_hash or planned_hash != script_hash
     )
     coverage_review = project.asset_coverage_review
+    pending_actor = _load_proposal(project.id)
     coverage_current = bool(
         coverage_review and coverage_review.script_hash == script_hash
     )
@@ -252,6 +254,20 @@ def project_context_blob(
         "script_text": script[:4000],
         "script_preview": script[:1200],
         "library_inventory": inv,
+        "pending_actor_design": (
+            {
+                "proposal_id": pending_actor["id"],
+                "name": pending_actor["args"]["name"],
+                "description": pending_actor["args"]["description"],
+                "body_description": pending_actor["args"]["body_description"],
+                "hair_description": pending_actor["args"]["hair_description"],
+                "wardrobe_description": pending_actor["args"]["wardrobe_description"],
+                "provider": pending_actor["args"]["provider"],
+                "status": "awaiting_text_confirmation",
+            }
+            if pending_actor and pending_actor.get("state") == "pending"
+            else None
+        ),
         "shots": [shot_context(i + 1, shot) for i, shot in enumerate(shots)],
         "note": (
             "Review asset coverage before storyboarding when useful. This is advisory: "

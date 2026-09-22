@@ -6,8 +6,6 @@ import re
 from typing import Any, Iterable
 
 from ...config import settings
-from ...core.managed_runs.store import list_runs
-from ...core.managed_runs.context import managed_turn_scope
 from ...core.projects.models import AssetCoverageReviewSubmission, Project
 from .intent import (
     actor_design_intent,
@@ -189,7 +187,9 @@ GPT_REF_FRAME_TOOL = function_tool(
 ACTOR_DESIGN_TOOL = function_tool(
     "queue_actor_design",
     (
-        "Generate one reviewable character design. Local is the default provider; "
+        "Propose one reviewable character design; this does not start generation. "
+        "After the user confirms the exact proposal in a later chat reply, "
+        "call confirm_actor_design with its proposal ID. Local is the default provider; "
         "use GPT only when the user explicitly asks for GPT or ChatGPT generation. "
         "Do not save it to the Actor library until the user accepts it."
     ),
@@ -207,6 +207,13 @@ ACTOR_DESIGN_TOOL = function_tool(
         "generation_prompt": {"type": "string", "minLength": 1},
     },
     required=["name", "description", "generation_prompt"],
+)
+
+ACTOR_CONFIRM_TOOL = function_tool(
+    "confirm_actor_design",
+    "Start the exact pending Actor design proposal only after the user confirms it in a later text reply. Never substitute new parameters.",
+    {"proposal_id": {"type": "string", "minLength": 1}},
+    required=["proposal_id"],
 )
 
 ACTOR_ACCEPT_TOOL = function_tool(
@@ -272,6 +279,7 @@ CHAT_IMAGE_CLASSIFICATION_TOOL = function_tool(
 
 DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     ACTOR_DESIGN_TOOL,
+    ACTOR_CONFIRM_TOOL,
     ACTOR_ACCEPT_TOOL,
     function_tool(
         "set_script",
@@ -495,12 +503,12 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     function_tool(
         "get_status",
-        "Read project status, or the full saved details of one Shot by exact shot_id before editing it.",
+        "Read project status, or one Shot's saved details and H3 generation versions, job IDs, and statuses by exact shot_id before editing it.",
         {"shot_id": {"type": "string", "description": "Optional exact Shot ID to read; omit for project status."}},
     ),
     function_tool(
         "start_h3_video",
-        "Start a local ComfyUI H3 Job for the next managed Shot or an explicitly requested one-off Shot. Returns the actual Job ID immediately; never waits for completion. A managed run binds its selected resolution server-side.",
+        "Start a local ComfyUI H3 Job only for the next managed Shot or an explicitly requested one-off Shot. Visibility does not authorize execution. Returns the actual Job ID immediately; never waits for completion. A managed run binds its selected resolution server-side.",
         {"shot_id": {"type": "string", "description": "Exact next planned Shot ID."}},
         required=["shot_id"],
     ),
@@ -516,81 +524,28 @@ def director_tool_schemas(
 ) -> list[dict[str, Any]]:
     if include_chat_image_import:
         return [CHAT_IMAGE_CLASSIFICATION_TOOL]
-    if actor_design_intent(current_message):
-        return [ACTOR_DESIGN_TOOL]
-    layout_generation_authorized = explicit_layout_generation_intent(
-        current_message
-    )
+    # The material-editor handoff is a write-scoped workflow, not a normal chat
+    # intent filter. Keep its exact-Shot schema while exposing the full catalog
+    # in ordinary turns.
     material_review_target = material_review_target_shot_id(current_message)
     if material_review_target:
         tools = [_material_review_tool("write_prompt", material_review_target)]
-        if layout_generation_authorized:
-            tools.append(
-                _material_review_tool("queue_ref_frame", material_review_target)
-            )
+        if explicit_layout_generation_intent(current_message):
+            tools.append(_material_review_tool("queue_ref_frame", material_review_target))
         if tail_frame_extraction_intent(current_message):
-            tools.append(
-                _material_review_tool(
-                    "extract_clip_tail_frame",
-                    material_review_target,
-                )
-            )
+            tools.append(_material_review_tool("extract_clip_tail_frame", material_review_target))
         return tools
     excluded = set()
     if project.script_locked:
         excluded.update(SCRIPT_TOOLS)
     if not allow_save_storyboard:
         excluded.update(STORYBOARD_TOOLS)
-    if not layout_generation_authorized:
-        excluded.update({"queue_ref_frame", "revise_ref_frame"})
-    if not tail_frame_extraction_intent(current_message):
-        excluded.add("extract_clip_tail_frame")
-    scope = managed_turn_scope.get()
-    managed_turn = scope is not None and scope.project_id == project.id and any(
-        run.state == "active" and run.run_id == scope.run_id and (
-            run.pending_event_id == scope.event_id
-            or (run.current_job_id is not None and run.current_index < len(run.steps)
-                and run.steps[run.current_index].shot_id == scope.shot_id)
-        )
-        for run in list_runs(project.id)
-    )
-    if not managed_turn and not explicit_one_off_h3_intent(current_message, project.id):
-        excluded.add("start_h3_video")
     tools = [
         tool
         for tool in DIRECTOR_TOOL_SCHEMAS
         if tool["function"]["name"] not in excluded
     ]
-    normalized = current_message.lower()
-    shot_layout_turn = bool(
-        re.search(r"(?:shot\s*\d+|第\s*\d+\s*镜)", normalized)
-        and re.search(
-            r"(?:layout|reference(?:\s+frame)?|refs?\b|materials?\b|assets?\b|"
-            r"composition|构图|参考帧|首帧|素材|绑定|h3\b|prompt\b)",
-            normalized,
-        )
-    )
-    if shot_layout_turn:
-        relevant = {
-            "append_shot",
-            "revise_shot",
-            "patch_shot_refs",
-            "set_shot_scene_ref",
-            "queue_ref_frame",
-            "extract_clip_tail_frame",
-            "accept_ref_frame",
-            "revise_ref_frame",
-            "write_prompt",
-            "get_status",
-            "inspect_asset",
-            "start_h3_video",
-        }
-        tools = [
-            tool
-            for tool in tools
-            if tool["function"]["name"] in relevant
-        ]
-    if settings.gpt_bridge_configured and layout_generation_authorized:
+    if settings.gpt_bridge_configured:
         tools.append(GPT_REF_FRAME_TOOL)
     return tools
 

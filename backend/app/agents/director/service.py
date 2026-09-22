@@ -15,7 +15,6 @@ from ...core.library.store import load_asset
 from ...core.h3.prompt import (
     validate_h3_prompt,
     validate_required_picture_bindings,
-    validate_tail_frame_transition_prompt,
 )
 from ...core.projects.models import (
     AgentContext,
@@ -101,6 +100,25 @@ from .reference_service import (
 )
 
 logger = logging.getLogger("director_studio.director")
+
+
+def _save_prompt_failure_diagnostics(shot: Shot, attempts: list[dict[str, str | None]]) -> None:
+    """Keep rejected model text in ignored, project-local data."""
+    root = settings.projects_dir / shot.project_id / "agent" / "prompt_failures"
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        filename = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}-{uuid.uuid4().hex}.json"
+        payload = {
+            "project_id": shot.project_id,
+            "shot_id": shot.id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "attempts": attempts,
+        }
+        (root / filename).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    except OSError:
+        logger.exception("Could not preserve failed prompt drafts for %s", shot.id)
 
 
 def _record_layout_generation_issue(shot: Shot, reasons: list[str]) -> Shot:
@@ -1956,7 +1974,6 @@ class DirectorService:
                                        audio_count=0 if shot.source_audio_path else len(shot.voice_refs),
                                        required_picture_indices=[r.picture_index for r in shot.refs],
                                        submitted_picture_indices=[r.picture_index for r in shot.refs])
-                    validate_tail_frame_transition_prompt(shot.prompt_sections, selected_layouts)
                 except ValueError:
                     preserve_prompt = False
             check_current()
@@ -1976,7 +1993,6 @@ class DirectorService:
                 parsed = PromptSections(**parse_prompt_sections_json(value))
                 parsed = _apply_source_audio_contract(parsed, shot)
                 ordered_text = parsed.as_ordered_text()
-                validate_tail_frame_transition_prompt(parsed, selected_layouts)
                 validate_h3_prompt(ordered_text, shot.dialogue,
                                    audio_count=0 if shot.source_audio_path else len(shot.voice_refs),
                                    required_picture_indices=(required_ordinary_picture_indices
@@ -2001,12 +2017,20 @@ class DirectorService:
                     f"Previous prompt JSON failed: {first_err}\n"
                     f"Raw:\n{raw}\nReturn valid six-section JSON only."
                 )
-                raw2 = await self.plan_provider.complete(
-                    prompt_text.H3_PROMPT_INSTRUCTIONS,
-                    repair,
-                    guides=("h3-prompt-writing",),
-                )
-                prompt_sections = parse_and_validate(raw2)
+                raw2 = None
+                try:
+                    raw2 = await self.plan_provider.complete(
+                        prompt_text.H3_PROMPT_INSTRUCTIONS,
+                        repair,
+                        guides=("h3-prompt-writing",),
+                    )
+                    prompt_sections = parse_and_validate(raw2)
+                except Exception as second_err:
+                    _save_prompt_failure_diagnostics(shot, [
+                        {"stage": "initial", "raw": raw, "error": str(first_err)},
+                        {"stage": "repair", "raw": raw2, "error": str(second_err)},
+                    ])
+                    raise
 
         check_current()
 

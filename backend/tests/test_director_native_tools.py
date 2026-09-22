@@ -104,6 +104,38 @@ def test_actor_design_tool_defaults_to_local_and_requires_identity_description()
     assert parameters["properties"]["provider"]["enum"] == ["gpt", "local"]
 
 
+@pytest.mark.asyncio
+async def test_visible_layout_tool_cannot_generate_from_a_discussion_only(
+    tmp_projects_dir,
+):
+    project = create_project("Layout discussion", "A door opens.")
+    shot = Shot(
+        id="sht_layout_discussion",
+        project_id=project.id,
+        scene_id="scene_1",
+        title="Door",
+        script_beat="A door opens.",
+        duration_s=5,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+
+    class Service:
+        async def queue_reference_frame(self, *args, **kwargs):
+            raise AssertionError("Layout generation was not authorized")
+
+    notes, touched = await _run_tools(
+        project_id=project.id,
+        tools=[{"name": "queue_ref_frame", "args": {"shot_id": shot.id}}],
+        svc=Service(),
+        actions=[],
+        user_feedback="Explain whether another Layout would help; do not generate yet.",
+    )
+
+    assert touched == set()
+    assert "requires an explicit request" in notes[0]
+
+
 def test_actor_design_does_not_inject_storyboarding_for_an_unplanned_script(
     tmp_projects_dir,
 ):
@@ -120,7 +152,7 @@ def test_actor_design_does_not_inject_storyboarding_for_an_unplanned_script(
 
 
 @pytest.mark.asyncio
-async def test_actor_design_tool_ignores_unrequested_gpt_and_queues_local_job(
+async def test_actor_design_requires_later_text_confirmation_and_uses_saved_proposal(
     tmp_projects_dir, monkeypatch
 ):
     import app.agents.director.chat as chat_module
@@ -186,11 +218,55 @@ async def test_actor_design_tool_ignores_unrequested_gpt_and_queues_local_job(
     )
 
     assert touched == set()
+    assert created == []
+    assert attached == []
+    assert actions[0].startswith("propose_actor_design:")
+    proposal_id = actions[0].split(":", 1)[1]
+    assert "No generation job was started" in notes[0]
+    context = json.loads(_project_context_blob(load_project(project.id), [], focused=True))
+    assert context["pending_actor_design"]["proposal_id"] == proposal_id
+    assert context["pending_actor_design"]["provider"] == "local"
+
+    rejected_actions = []
+    rejected_notes, _ = await _run_tools(
+        project_id=project.id,
+        tools=[{"name": "confirm_actor_design", "args": {"proposal_id": proposal_id}}],
+        svc=object(),
+        actions=rejected_actions,
+        user_feedback="确认，但改成红衣服",
+    )
+    assert rejected_actions == []
+    assert "requires an unqualified confirmation" in rejected_notes[0]
+    assert created == []
+
+    confirmed_actions = []
+    confirmed_notes, _ = await _run_tools(
+        project_id=project.id,
+        tools=[{"name": "confirm_actor_design", "args": {"proposal_id": proposal_id}}],
+        svc=object(),
+        actions=confirmed_actions,
+        user_feedback="确认",
+        images=attached,
+    )
     assert created[0]["pipeline_id"] == "actor"
     assert created[0]["params"]["provider"] == "local"
-    assert actions == ["actor_design:job_local_actor"]
+    assert confirmed_actions == ["actor_design:job_local_actor"]
     assert attached[0].url.endswith("/jobs/job_local_actor/outputs/master.png")
-    assert "job_local_actor" in notes[0]
+    assert "job_local_actor" in confirmed_notes[0]
+
+    replay_actions = []
+    replay_notes, _ = await _run_tools(
+        project_id=project.id,
+        tools=[{"name": "confirm_actor_design", "args": {"proposal_id": proposal_id}}],
+        svc=object(),
+        actions=replay_actions,
+        user_feedback="确认",
+    )
+    assert replay_actions == []
+    assert "already confirmed" in replay_notes[0]
+    assert len(created) == 1
+    context_after = json.loads(_project_context_blob(load_project(project.id), [], focused=True))
+    assert context_after["pending_actor_design"] is None
 
 
 @pytest.mark.asyncio
@@ -490,7 +566,7 @@ async def test_native_dict_executes_offered_tool_printed_as_fenced_json(
 
 
 @pytest.mark.asyncio
-async def test_gpt_tool_execution_does_not_reparse_user_language(
+async def test_gpt_tool_execution_requires_explicit_generation_request(
     tmp_projects_dir, monkeypatch
 ):
     from app.config import settings
@@ -547,7 +623,7 @@ async def test_gpt_tool_execution_does_not_reparse_user_language(
         svc=Service(),
         actions=[],
         result_payloads=payloads,
-        user_feedback="GPTでこの参考フレームを生成して",
+        user_feedback="Use GPT to generate a Layout reference frame for this shot.",
     )
 
     assert touched == set()
@@ -3292,6 +3368,7 @@ async def test_queue_ref_frame_tool_queues_explicit_layout_brief_and_reports_ide
         ],
         svc=svc,
         actions=[],
+        user_feedback="Generate a Layout for this shot.",
     )
 
     assert svc.brief is not None
@@ -3390,7 +3467,7 @@ async def test_agent_can_append_a_two_person_layout_to_the_same_shot(
         svc=svc,
         actions=[],
         user_feedback=(
-            "Keep this in the same shot and add another Layout for the later "
+            "Keep this in the same shot and generate another Layout for the later "
             "two-person composition."
         ),
     )
@@ -3466,7 +3543,7 @@ async def test_revise_ref_frame_records_chat_feedback_and_links_new_layout(
         ],
         svc=_Service(),
         actions=[],
-        user_feedback="人物太靠前，7号门看不清，重新生成。",
+        user_feedback="人物太靠前，7号门看不清，重新生成这个 Layout。",
     )
 
     saved = load_shot(project.id, shot.id)
@@ -3475,7 +3552,7 @@ async def test_revise_ref_frame_records_chat_feedback_and_links_new_layout(
     assert old.review_status == LayoutReviewStatus.reject
     assert old.review_feedback == "人物站位过近，7号门识别不足"
     assert old.feedback_source == "director_chat"
-    assert old.feedback_quote == "人物太靠前，7号门看不清，重新生成。"
+    assert old.feedback_quote == "人物太靠前，7号门看不清，重新生成这个 Layout。"
     assert old.superseded_by == "lref_revised"
     assert new.revision_of == "lref_original"
     assert touched == {shot.id}
@@ -3681,6 +3758,7 @@ async def test_queue_ref_frame_tool_requires_purpose_for_an_additional_layout(
         ],
         svc=_Service(),
         actions=[],
+        user_feedback="Generate another Layout for this shot.",
     )
 
     assert touched == set()
@@ -3744,6 +3822,7 @@ async def test_queue_ref_frame_tool_applies_explicit_brief_to_all_selected_shots
         ],
         svc=svc,
         actions=[],
+        user_feedback="Generate Layouts for all shots.",
     )
 
     assert [call[0] for call in svc.calls] == [shot.id for shot in shots]
@@ -3837,8 +3916,8 @@ async def test_native_write_prompt_tool_is_executed_and_result_returns_to_model(
     assert calls[0]["tools"]
     assert any(t["function"]["name"] == "write_prompt" for t in calls[0]["tools"])
     offered_tools = {t["function"]["name"] for t in calls[0]["tools"]}
-    assert "queue_ref_frame" not in offered_tools
-    assert "revise_ref_frame" not in offered_tools
+    assert "queue_ref_frame" in offered_tools
+    assert "revise_ref_frame" in offered_tools
     assert "approve_layout" not in offered_tools
     assert "reject_layout" not in offered_tools
     tool_messages = calls[1]["messages"]

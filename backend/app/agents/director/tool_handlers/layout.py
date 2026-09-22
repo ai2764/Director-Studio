@@ -163,21 +163,10 @@ async def handle_layout_tool(
         notes.append(
             f"Selected Layout {target.id} for H3 on **{shot.title}** and recorded the Director dialogue decision."
         )
-        writer = getattr(svc, "write_prompts_after_layout", None)
-        if writer is not None:
-            try:
-                await writer(shot.id)
-                prompt_written_shot_ids.add(shot.id)
-                actions.append(f"write_prompt:{shot.id}")
-                notes.append(
-                    "Rewrote the H3 prompt with the accepted Layout's real Picture index."
-                )
-            except Exception as exc:
-                logger.exception(
-                    "write_prompt after accept_ref_frame failed for %s",
-                    shot.id,
-                )
-                notes.append(f"write_prompt after accept failed: {exc}")
+        notes.append(
+            "The H3 prompt was not rewritten. If the current user requested a prompt, "
+            f"call write_prompt for Shot {shot.id} once."
+        )
         persisted = load_shot(project_id, shot.id) or accepted
         notes.append(
             _accepted_picture_order_note(
@@ -668,7 +657,7 @@ async def handle_layout_tool(
             return True
         if shot.id in prompt_written_shot_ids:
             notes.append(
-                f"Prompt already rewritten for **{shot.title}** after Layout acceptance; "
+                f"Prompt already written in this tool batch for **{shot.title}**; "
                 "skipped duplicate write_prompt."
             )
             return True

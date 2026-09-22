@@ -348,7 +348,7 @@ Recommended pipeline; use judgment to decide when to advance:
    parse natural language into exact source_shot_id and target_shot_id; omitted version/job means latest, with backend ambiguity checks
    do not independently approve the image; if the user pre-authorized direct approval, use only the successful extraction's returned layout_ref_id for accept_ref_frame
 6) accept_ref_frame — when the user accepts an existing Layout, record the dialogue decision and select that exact Layout for H3
-   acceptance rewrites the target shot H3 prompt with its real Picture index; do not also call write_prompt in the same tool batch
+   acceptance only binds the Picture; if the user also asked for a prompt, call write_prompt once after successful acceptance. Do not repeat an unchanged failed prompt request
 7) revise_ref_frame — when the user critiques an existing Layout and asks for another version, record the feedback on that exact Layout and generate a linked replacement
    for a tail-frame origin, the extracted frame is Image1; add other references only when they have a specific job
 8) write_prompt — generate or rewrite the six H3 sections from the selected Pictures; Layout is optional. The backend ensures current Pictures have visual evidence before writing. No approval step is required.
@@ -370,14 +370,15 @@ Tools (name + args):
 - plan_shots  {}  // compatibility shortcut; prefer save_storyboard for natural authoring/revision
 - queue_ref_frame  {"shot_index":1,"activation_mode":"replace|append"} | {"all":true} | {"shot_id":"..."} | {"force":true}
 - queue_gpt_ref_frame  {"shot_id":"...","purpose":"...","state_description":"...","time_hint":"...","activation_mode":"replace|append","source_refs":[],"generation_prompt":"..."}  // use only when the user chooses GPT/ChatGPT
-- queue_actor_design  {"name":"...","description":"...","body_description":"...","hair_description":"...","wardrobe_description":"...","provider":"gpt|local","generation_prompt":"..."}  // generate a review image; local is default, GPT requires an explicit user request
+- queue_actor_design  {"name":"...","description":"...","body_description":"...","hair_description":"...","wardrobe_description":"...","provider":"gpt|local","generation_prompt":"..."}  // record a proposal; no image generation yet
+- confirm_actor_design  {"proposal_id":"..."}  // run the saved proposal only after a later unqualified text confirmation
 - accept_actor_design  {"job_id":"...","name":"...","notes":"..."}  // only after the user explicitly accepts the shown design
 - classify_chat_image  {"image_index":1,"kind":"actors|costumes|scenes|props|layouts|chat_only","name":"...","notes":"...","confidence":0.0}  // required once for every current user upload
 - extract_clip_tail_frame  {"source_shot_id":"...","target_shot_id":"..."}  // optional source_version/source_job_id/output_kind; omitted selector means latest
 - accept_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"optional concise acceptance note"}
 - revise_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"concise actionable summary","additional_source_refs":[]}
 - write_prompt / get_status
-- start_h3_video  {"shot_id":"..."}  // only when offered for managed local run or explicit one-Shot request
+- start_h3_video  {"shot_id":"..."}  // visible in normal chat; executes only for a managed local run or explicit one-Shot request
 
 Vision: the system may attach Image 1…N when the user asks you to inspect references or composition. Describe only what is actually visible.
 
@@ -501,7 +502,7 @@ def sanitize_tools_for_pipeline(
     if (scope is not None and scope.project_id == project.id and names
             and set(names) <= {"start_h3_video", "write_prompt", "get_status", "inspect_asset"}):
         return tools, notes
-    if names and set(names) <= {"queue_actor_design", "accept_actor_design"}:
+    if names and set(names) <= {"queue_actor_design", "confirm_actor_design", "accept_actor_design"}:
         return tools, notes
     has_set = any(n in _SCRIPT_TOOLS for n in names)
     has_plan = any(n in _PLAN_TOOLS or n in _STORYBOARD_TOOLS or n == "append_shot" for n in names)

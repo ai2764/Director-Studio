@@ -1,4 +1,4 @@
-"""Accept extracted tail-frame Layouts into H3 Pictures and prompts."""
+"""Accept extracted tail-frame Layouts into H3 Pictures without hidden prompt work."""
 
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ def _continuity_sections(picture_index: int) -> PromptSections:
 
 
 @pytest.mark.asyncio
-async def test_accepting_tail_frame_assigns_picture_index_and_rewrites_prompt(
+async def test_accepting_tail_frame_assigns_picture_index_without_writing_prompt(
     tmp_projects_dir,
 ):
     project = create_project("Tail accept", "INT. ARCHIVE")
@@ -125,18 +125,11 @@ async def test_accepting_tail_frame_assigns_picture_index_and_rewrites_prompt(
     packed = sync_selected_layout_refs(saved)
     layout_ref = next(ref for ref in packed.refs if ref.asset_id == "lay_tail")
     assert layout_ref.picture_index == 3
-    assert prompt_calls == [shot.id]
+    assert prompt_calls == []
     assert touched == {shot.id}
-    text = compose_h3_prompt(saved.prompt_sections)
-    assert "<Picture 3>" in text
-    assert "shot2" in text
-    validate_h3_prompt(
-        text,
-        [],
-        required_picture_indices=[3],
-        submitted_picture_indices=[1, 2, 3],
-    )
+    assert not saved.prompt_sections.subject_definitions
     assert any("Selected Layout lref_tail" in note for note in notes)
+    assert any("write_prompt" in note for note in notes)
     reply = "\n".join(notes)
     assert "Current H3 Picture order:" in reply
     assert "Picture 1 — Actor: act_kai" in reply
@@ -156,7 +149,13 @@ async def test_accept_then_explicit_write_prompt_only_rewrites_once(tmp_projects
             prompt_calls.append(shot_id)
             current = load_shot(project.id, shot_id)
             assert current is not None
-            return current
+            context = selected_layout_prompt_context(current)
+            assert context[0]["picture_index"] == 3
+            updated = current.model_copy(
+                update={"prompt_sections": _continuity_sections(3)}
+            )
+            save_shot(updated)
+            return updated
 
     notes, _ = await _run_tools(
         project_id=project.id,
@@ -166,14 +165,27 @@ async def test_accept_then_explicit_write_prompt_only_rewrites_once(tmp_projects
                 "args": {"shot_id": shot.id, "layout_ref_id": "lref_tail"},
             },
             {"name": "write_prompt", "args": {"shot_id": shot.id}},
+            {"name": "write_prompt", "args": {"shot_id": shot.id}},
         ],
         svc=_Service(),
         actions=[],
-        user_feedback="这张直接用",
+        user_feedback="这张直接用，写 Shot 3 的提示词",
     )
 
     assert prompt_calls == [shot.id]
-    assert any("already" in note.lower() for note in notes)
+    assert any("Prompt saved" in note for note in notes)
+    assert any("already written in this tool batch" in note for note in notes)
+    saved = load_shot(project.id, shot.id)
+    assert saved is not None
+    text = compose_h3_prompt(saved.prompt_sections)
+    assert "<Picture 3>" in text
+    assert "shot2" in text
+    validate_h3_prompt(
+        text,
+        [],
+        required_picture_indices=[3],
+        submitted_picture_indices=[1, 2, 3],
+    )
 
 
 @pytest.mark.asyncio

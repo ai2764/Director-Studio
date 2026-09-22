@@ -41,6 +41,8 @@ from ...core.projects.transitions import (
 from ...core.schemas import JobStatus
 from .intent import (
     actor_acceptance_intent,
+    explicit_gpt_image_intent,
+    explicit_layout_generation_intent,
     normalize_text,
     resolve_shot,
     validate_gpt_generation_prompt,
@@ -141,6 +143,15 @@ async def execute_tools(
         await runtime.emit(on_progress, "status", f"Executing: {name}…")
 
         try:
+            if name in {"queue_ref_frame", "ref_frame", "revise_ref_frame", "queue_gpt_ref_frame"}:
+                if not explicit_layout_generation_intent(user_feedback):
+                    raise ValueError(
+                        "Layout generation requires an explicit request in the current user turn"
+                    )
+                if name == "queue_gpt_ref_frame" and not explicit_gpt_image_intent(user_feedback):
+                    raise ValueError(
+                        "GPT Layout generation requires an explicit GPT image request"
+                    )
             if name == "inspect_asset":
                 observation = await svc.inspect_asset(project_id, args["asset_id"], args["file_key"])
                 if result_payloads is not None:

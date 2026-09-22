@@ -150,13 +150,11 @@ Output rules:
   - Selected Layout context lists every active Layout's actual Picture number, purpose,
     state, and time hint. Mention every active Layout using its exact <Picture N> at least once.
   - State the geography, composition, blocking, or object state each Layout contributes.
-  - A selected Layout with origin_kind="clip_tail_frame" and
-    visible_transition_required=true is a visible handoff from the previous Shot. In the
-    first action interval beginning at 0 seconds, visibly carry the inherited source state
-    forward and make it transform, dissolve, open, clear, or resolve to reveal the target
-    Shot. Do not replace it with a hard cut, direct destination opening, palette-only cue,
-    style-only cue, or wording that suppresses the visible inherited state. This is action
-    continuity, not a promise that the Picture is the exact first frame.
+  - A selected Layout with origin_kind="clip_tail_frame" came from the prior clip.
+    Treat its visible pose, blocking, wardrobe and geography as continuity evidence.
+    When the Shot calls for continuous action, describe how it can proceed naturally;
+    choose the action and edit instead of forcing a dissolve, transformation, or other
+    fixed transition. The Picture conditions the whole clip, not an exact first frame.
   - Put action timing in detailed_description; never claim a Picture activates, is used,
     is shown, or switches at/from/during a time. Every Picture conditions the whole clip.
     Do not say a Picture or Layout confirms, ensures, or keeps a subject/state present or

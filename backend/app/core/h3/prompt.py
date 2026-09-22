@@ -19,62 +19,6 @@ SECTION_KEYS: list[str] = [
 # UTF-8 replacement character — optional corruption signal
 _REPLACEMENT_CHAR = "\ufffd"
 
-_TIMED_ACTION_INTERVAL_PATTERN = re.compile(
-    r"(?<![\d.])(?P<start>\d+(?:\.\d+)?)\s*[–—-]\s*"
-    r"(?P<end>\d+(?:\.\d+)?)\s*(?:s|seconds?)\b",
-    re.IGNORECASE,
-)
-_TAIL_TRANSITION_VERB_PATTERN = re.compile(
-    r"\b(?:continue(?:s|d|ing)?|carry(?:ing|ies|ied)?|unwind(?:s|ing)?|"
-    r"dissolv(?:e|es|ed|ing)|transform(?:s|ed|ing)?|morph(?:s|ed|ing)?|"
-    r"open(?:s|ed|ing)?|clear(?:s|ed|ing)?|reveal(?:s|ed|ing)?|"
-    r"resolv(?:e|es|ed|ing))\b",
-    re.IGNORECASE,
-)
-_TAIL_TRANSITION_NEGATION_PATTERNS = (
-    re.compile(r"\bhard[\s-]+cut\b", re.IGNORECASE),
-    re.compile(r"\b(?:palette|style)\s+only\b", re.IGNORECASE),
-    re.compile(r"\bmust\s+not\s+(?:manifest|be\s+visible)\b", re.IGNORECASE),
-    re.compile(r"\b(?:do\s+not|don't|never)\s+(?:show|render|manifest)\b", re.IGNORECASE),
-    re.compile(r"\b(?:open|start|begin)(?:s|ing)?\s+(?:directly\s+)?(?:on|with)\b", re.IGNORECASE),
-)
-
-
-def validate_tail_frame_transition_prompt(
-    sections: PromptSections,
-    selected_layouts: Iterable[dict[str, object]],
-) -> None:
-    """Require an explicit visible handoff for a selected clip-tail Layout.
-
-    The Picture still conditions the full clip. This validates action prose only;
-    it does not claim that the reference is an exact or time-addressable frame.
-    """
-    if not any(
-        bool(layout.get("visible_transition_required"))
-        for layout in selected_layouts
-    ):
-        return
-
-    description = sections.detailed_description
-    intervals = list(_TIMED_ACTION_INTERVAL_PATTERN.finditer(description))
-    if not intervals or float(intervals[0].group("start")) != 0.0:
-        raise ValueError(
-            "tail-frame transition must begin in the first action interval at 0 seconds"
-        )
-
-    first_start = intervals[0].start()
-    first_end = intervals[1].start() if len(intervals) > 1 else len(description)
-    first_interval = description[first_start:first_end]
-    if any(pattern.search(first_interval) for pattern in _TAIL_TRANSITION_NEGATION_PATTERNS):
-        raise ValueError(
-            "tail-frame transition cannot be a hard cut, style-only cue, or hidden source state"
-        )
-    if not _TAIL_TRANSITION_VERB_PATTERN.search(first_interval):
-        raise ValueError(
-            "tail-frame transition needs a visible carryover and transition action in the first interval"
-        )
-
-
 def validate_required_picture_bindings(
     text: str,
     required_indices: Iterable[int],

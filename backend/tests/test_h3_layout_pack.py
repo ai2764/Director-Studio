@@ -473,7 +473,6 @@ def test_selected_layout_prompt_context_uses_actual_picture_numbers():
             "state_description": "doorway empty",
             "time_hint": "before Chen enters",
             "origin_kind": "",
-            "visible_transition_required": False,
         },
         {
             "asset_id": "lay_after",
@@ -482,12 +481,11 @@ def test_selected_layout_prompt_context_uses_actual_picture_numbers():
             "state_description": "Chen outside glass",
             "time_hint": "after Chen enters",
             "origin_kind": "",
-            "visible_transition_required": False,
         },
     ]
 
 
-def test_selected_clip_tail_layout_requires_visible_transition():
+def test_selected_clip_tail_layout_marks_origin_without_forcing_transition():
     from app.core.projects.layouts import selected_layout_prompt_context
 
     tail = _multi_layout_shot().layout_refs[0].model_copy(
@@ -509,7 +507,25 @@ def test_selected_clip_tail_layout_requires_visible_transition():
     context = selected_layout_prompt_context(shot)
 
     assert context[0]["origin_kind"] == "clip_tail_frame"
-    assert context[0]["visible_transition_required"] is True
+    assert "visible_transition_required" not in context[0]
+
+
+def test_layout_prompt_signature_keeps_persisted_shape_without_transition_hint():
+    from app.core.projects.layouts import layout_prompt_signature
+
+    shot = _multi_layout_shot()
+    assert layout_prompt_signature(shot) == "85663930fab0666c"
+    tail = shot.layout_refs[0].model_copy(
+        update={
+            "origin": ClipTailFrameOrigin(
+                source_shot_id="sht_previous", source_job_id="job_previous",
+                source_generation=1, output_kind="enhanced", output_key="video",
+                source_filename="previous.mp4",
+            )
+        }
+    )
+    with_tail = shot.model_copy(update={"layout_refs": [tail, shot.layout_refs[1]]})
+    assert layout_prompt_signature(with_tail) == "5061c7eb166a7869"
 
 
 def test_layout_prompt_signature_changes_with_grounding_state():

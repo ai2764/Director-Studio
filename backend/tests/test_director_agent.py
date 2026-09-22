@@ -2336,6 +2336,62 @@ async def test_write_prompts_after_layout(director_dirs, enable_reference_review
 
 
 @pytest.mark.asyncio
+async def test_tail_frame_prompt_with_visible_carryover_is_saved_without_wording_gate(
+    director_dirs, enable_reference_review,
+):
+    from app.agents.director.service import DirectorService
+    from app.core.projects.layouts import ClipTailFrameOrigin, LayoutReference, LayoutReviewStatus
+    from app.core.projects.models import ShotRef
+
+    project = create_project("Tail continuity", "A dancer releases a held pose into a wave.")
+    _seed_layout_source_asset(
+        director_dirs["library"], kind="layouts", asset_id="lay_tail_continuity",
+        name="Previous shot tail", file_key="layout",
+    )
+    layout = LayoutReference(
+        id="lref_tail_continuity", asset_id="lay_tail_continuity",
+        purpose="carry the previous pose into this shot",
+        review_status=LayoutReviewStatus.usable, selected_for_h3=True,
+        origin=ClipTailFrameOrigin(
+            source_shot_id="sht_previous", source_job_id="job_previous",
+            source_generation=1, output_kind="enhanced", output_key="video",
+            source_filename="video.mp4",
+        ),
+    )
+    shot = Shot(
+        id="sht_tail_continuity", project_id=project.id, scene_id="sc01",
+        title="Continue the wave", script_beat="Release the held pose into a wave.",
+        duration_s=6, status=ShotStatus.needs_review, layout_refs=[layout],
+        refs=[ShotRef(role=RefRole.layout_ref_frame, asset_id=layout.asset_id,
+                      file_key="layout", picture_index=1)],
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    prompt = json.dumps({
+        "subject_definitions": "<Picture 1> supplies the dancer's inherited pose.",
+        "summary": "The dance continues in one coherent shot.",
+        "retention_analysis": "Keep the dancer and studio consistent.",
+        "detailed_description": (
+            "0-2 seconds: The clip begins with the visible inherited freeze pose from "
+            "<Picture 1>; her shoulders drop and the pose dissolves into motion. "
+            "2-6 seconds: A body roll flows into an upper-body wave."
+        ),
+        "overall_soundscape": "Soft room tone and movement.",
+        "non_diegetic_music": "No music.",
+    })
+    provider = FakePlanProvider(responses=[prompt, prompt])
+    enable_reference_review(provider)
+
+    updated = await DirectorService(
+        plan_provider=provider, orchestrator=RecordingOrchestrator(),
+    ).write_prompts_after_layout(shot.id)
+
+    assert updated.prompt_sections.detailed_description.startswith("0-2 seconds: The clip begins with")
+    assert load_shot(project.id, shot.id) == updated
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_write_prompts_visually_analyzes_a_new_layout_once(director_dirs):
     from PIL import Image
 

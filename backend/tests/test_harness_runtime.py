@@ -186,7 +186,7 @@ def test_material_review_note_can_offer_tail_frame_for_only_changed_shot(
     assert extract_schema["properties"]["target_shot_id"]["const"] == "sht_review_target"
 
 
-def test_layout_generation_tool_requires_an_explicit_current_turn_request(
+def test_layout_generation_tool_is_visible_even_without_explicit_request(
     tmp_projects_dir,
 ):
     from app.agents.director.tool_schema import director_tool_schemas
@@ -208,13 +208,13 @@ def test_layout_generation_tool_requires_an_explicit_current_turn_request(
         for tool in director_tool_schemas(project, current_message=explicit)
     }
 
-    assert "queue_ref_frame" not in discussion_names
-    assert "revise_ref_frame" not in discussion_names
+    assert "queue_ref_frame" in discussion_names
+    assert "revise_ref_frame" in discussion_names
     assert "queue_ref_frame" in explicit_names
     assert "revise_ref_frame" in explicit_names
 
 
-def test_tail_frame_request_offers_extraction_without_layout_generation(
+def test_tail_frame_request_keeps_full_layout_tool_catalog(
     tmp_projects_dir,
 ):
     from app.agents.director.tool_schema import director_tool_schemas
@@ -229,7 +229,7 @@ def test_tail_frame_request_offers_extraction_without_layout_generation(
     }
 
     assert "extract_clip_tail_frame" in names
-    assert "queue_ref_frame" not in names
+    assert "queue_ref_frame" in names
 
 
 @pytest.mark.asyncio
@@ -513,8 +513,16 @@ async def test_invalid_calls_consume_tool_budget_even_after_fresh_inference(tmp_
 
 
 @pytest.mark.asyncio
-async def test_repeated_shot_status_read_does_not_repeat_full_json(tmp_projects_dir):
+async def test_shot_status_exposes_clip_generations_and_can_be_read_again(
+    tmp_projects_dir, monkeypatch
+):
     from app.agents.director.harness_runtime import BackendTurn
+    from app.core.jobs.store import create_job, save_job
+    from app.core.schemas import JobStatus
+
+    jobs = tmp_projects_dir.parent / "jobs"
+    jobs.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "jobs_dir", jobs)
 
     project = create_project("tail continuity", "A cat waits.")
     shot = Shot(
@@ -523,6 +531,20 @@ async def test_repeated_shot_status_read_does_not_repeat_full_json(tmp_projects_
     )
     save_shot(shot)
     save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    first_job = create_job(
+        pipeline_id="h3_ref2va", asset_kind="productions", name="first",
+        project_id=project.id, params={"shot_id": shot.id},
+    )
+    first_job.created_at = "2026-09-21T10:00:00Z"
+    first_job.status = JobStatus.succeeded
+    save_job(first_job)
+    second_job = create_job(
+        pipeline_id="h3_ref2va", asset_kind="productions", name="second",
+        project_id=project.id, params={"shot_id": shot.id},
+    )
+    second_job.created_at = "2026-09-21T11:00:00Z"
+    second_job.status = JobStatus.failed
+    save_job(second_job)
     turn = BackendTurn(project.id, "Read Shot 1", None, None)
     await turn.dispatch("context", {})
 
@@ -534,17 +556,22 @@ async def test_repeated_shot_status_read_does_not_repeat_full_json(tmp_projects_
     })
 
     assert first["shot"]["id"] == shot.id
+    expected = [
+        {"version": "v1", "job_id": first_job.id, "status": "succeeded"},
+        {"version": "v2", "job_id": second_job.id, "status": "failed"},
+    ]
+    assert first["h3_generations"] == expected
     assert repeated["ok"] is True
-    assert repeated["already_read"] is True
-    assert "shot" not in repeated
+    assert repeated["shot"]["id"] == shot.id
+    assert repeated["h3_generations"] == expected
     status_schema = next(
         tool["function"]["parameters"] for tool in turn.context()["tools"]
         if tool["function"]["name"] == "get_status"
     )
-    assert list(Draft202012Validator(status_schema).iter_errors({"shot_id": shot.id}))
+    assert not list(Draft202012Validator(status_schema).iter_errors({"shot_id": shot.id}))
 
 
-def test_harness_only_offers_existing_layout_ids_for_acceptance(tmp_projects_dir):
+def test_harness_does_not_preemptively_whitelist_layout_ids(tmp_projects_dir):
     from app.agents.director.harness_runtime import BackendTurn
 
     project = create_project("tail acceptance", "")
@@ -557,7 +584,7 @@ def test_harness_only_offers_existing_layout_ids_for_acceptance(tmp_projects_dir
     turn = BackendTurn(project.id, "抽尾帧后直接 approve", None, None)
 
     before = {tool["function"]["name"] for tool in turn.context()["tools"]}
-    assert "accept_ref_frame" not in before
+    assert "accept_ref_frame" in before
 
     save_shot(shot.model_copy(update={
         "layout_refs": [LayoutReference(id="lref_real", asset_id="lay_real")],
@@ -568,7 +595,7 @@ def test_harness_only_offers_existing_layout_ids_for_acceptance(tmp_projects_dir
     )
     validator = Draft202012Validator(after["parameters"])
     assert not list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_real"}))
-    assert list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_invented"}))
+    assert not list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_invented"}))
 
 
 @pytest.mark.asyncio

@@ -27,7 +27,7 @@ def authorize_managed_turn():
     managed_turn_scope.set(None)
 
 
-def test_h3_start_tool_is_offered_only_while_management_is_active(authorize_managed_turn) -> None:
+def test_h3_start_tool_stays_visible_before_and_during_management(authorize_managed_turn) -> None:
     project = create_project("Managed H3", "A short scene")
     shot = Shot(id="sht_managed", project_id=project.id, scene_id="scene_1",
                 title="Open", script_beat="A door opens.", duration_s=5)
@@ -44,9 +44,9 @@ def test_h3_start_tool_is_offered_only_while_management_is_active(authorize_mana
     managed_turn_scope.set(None)
     unrelated = offered_tool_names(director_tool_schemas(project, current_message="How is it going?"))
 
-    assert "start_h3_video" not in before
+    assert "start_h3_video" in before
     assert "start_h3_video" in during
-    assert "start_h3_video" not in unrelated
+    assert "start_h3_video" in unrelated
 
 
 def test_explicit_one_off_video_request_offers_tool_without_management() -> None:
@@ -62,7 +62,7 @@ def test_explicit_one_off_video_request_offers_tool_without_management() -> None
         project, current_message="Generate Open video with local H3 now"))
     assert "start_h3_video" in names
     assert "start_h3_video" in by_title
-    assert "start_h3_video" not in offered_tool_names(director_tool_schemas(
+    assert "start_h3_video" in offered_tool_names(director_tool_schemas(
         project, current_message="How will Shot 1 look?"))
 
 
