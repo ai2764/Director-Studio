@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 
 from fastapi.testclient import TestClient
 
@@ -12,6 +13,18 @@ from app.core.projects.store import create_project, load_project, save_project, 
 from app.core.managed_runs.models import RunStep
 from app.core.managed_runs.store import create_draft
 from app.main import create_app
+
+
+@pytest.fixture(autouse=True)
+def isolate_managed_agent_worker(monkeypatch):
+    """API contract tests must not launch an unmocked local LLM background turn."""
+    from app.core.managed_runs import continuation
+    monkeypatch.setattr(continuation, "schedule_pending_runs", lambda: None)
+    monkeypatch.setattr(continuation, "schedule_continuation", lambda _project_id: None)
+    from app import main as app_main
+    async def no_recovery():
+        return []
+    monkeypatch.setattr(app_main, "recover_interrupted_jobs", no_recovery)
 
 
 def _two_shot_project():
@@ -118,3 +131,63 @@ def test_stop_marks_run_inactive_before_any_next_shot() -> None:
 
     assert response.status_code == 200
     assert response.json()["state"] == "stopped"
+
+
+def test_stop_marks_stopping_before_cancelling_bound_job(monkeypatch) -> None:
+    from app.api import managed_runs as managed_api
+    from app.core.managed_runs.store import activate_run, bind_job, load_run
+    from app.core.jobs.store import create_job
+
+    project, first, second = _two_shot_project()
+    draft = create_draft(project.id, [RunStep(shot_id=first.id), RunStep(shot_id=second.id)])
+    activate_run(project.id, draft.run_id, "landscape-480")
+    job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="test",
+                     project_id=project.id, params={"shot_id": first.id})
+    bind_job(project.id, draft.run_id, first.id, job.id)
+    observed = []
+
+    async def fake_cancel(job_id):
+        observed.append((job_id, load_run(project.id, draft.run_id).state))
+
+    monkeypatch.setattr(managed_api, "cancel_job", fake_cancel)
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/{draft.run_id}/stop")
+
+    assert response.status_code == 200
+    assert observed == [(job.id, "stopping")]
+    assert response.json()["state"] == "stopped"
+
+
+def test_failed_cancel_remains_retryable_stopping(monkeypatch) -> None:
+    from app.api import managed_runs as managed_api
+    from app.core.managed_runs.store import activate_run, bind_job, load_run
+    from app.core.jobs.store import create_job
+
+    project, first, second = _two_shot_project()
+    draft = create_draft(project.id, [RunStep(shot_id=first.id), RunStep(shot_id=second.id)])
+    activate_run(project.id, draft.run_id, "landscape-480")
+    job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="test",
+                     project_id=project.id, params={"shot_id": first.id})
+    bind_job(project.id, draft.run_id, first.id, job.id)
+
+    async def fake_cancel(_job_id):
+        raise RuntimeError("Comfy unavailable")
+
+    monkeypatch.setattr(managed_api, "cancel_job", fake_cancel)
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/{draft.run_id}/stop")
+
+    assert response.status_code == 503
+    assert load_run(project.id, draft.run_id).state == "stopping"
+
+
+def test_manual_h3_submit_is_blocked_while_management_active() -> None:
+    from app.core.managed_runs.store import activate_run
+
+    project, first, second = _two_shot_project()
+    draft = create_draft(project.id, [RunStep(shot_id=first.id), RunStep(shot_id=second.id)])
+    activate_run(project.id, draft.run_id, "landscape-480")
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/shots/{first.id}/submit", json={"h3_provider": "local"})
+    assert response.status_code == 409
+    assert "Stop the managed run" in response.json()["detail"]

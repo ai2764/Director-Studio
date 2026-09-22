@@ -1,0 +1,302 @@
+"""Durable terminal-event behavior for managed runs."""
+
+from __future__ import annotations
+
+import asyncio
+
+from app.core.managed_runs.models import RunStep
+from app.core.managed_runs.store import (
+    activate_run, bind_job, create_draft, load_run, record_terminal, request_stop,
+)
+from app.core.projects.models import Shot
+from app.core.projects.store import create_project, save_project, save_shot
+from app.core.schemas import JobStatus
+from app.core.jobs.store import create_job, save_job
+import pytest
+
+
+def _run():
+    project = create_project("Two Shots", "A passage")
+    shots = [Shot(id=f"sht_{i}", project_id=project.id, scene_id="scene_1",
+                  title=f"Shot {i}", script_beat="A passage", duration_s=5)
+             for i in (1, 2)]
+    for shot in shots:
+        save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id for shot in shots]}))
+    draft = create_draft(project.id, [RunStep(shot_id=shot.id) for shot in shots])
+    return activate_run(project.id, draft.run_id, "landscape-480")
+
+
+def test_terminal_event_advances_once_and_rejects_old_job() -> None:
+    run = _run()
+    assert run.pending_event_id == "start"
+    bind_job(run.project_id, run.run_id, "sht_1", "job_1")
+    first = record_terminal(run.project_id, "job_1", JobStatus.succeeded)
+    replay = record_terminal(run.project_id, "job_1", JobStatus.succeeded)
+    assert first.current_index == replay.current_index == 1
+    assert first.completed_job_ids == {"sht_1": "job_1"}
+    assert first.pending_event_id == "job_1:succeeded"
+    assert load_run(run.project_id, run.run_id).current_job_id is None
+
+
+def test_failure_pauses_without_retry() -> None:
+    run = _run()
+    bind_job(run.project_id, run.run_id, "sht_1", "job_failed")
+    paused = record_terminal(run.project_id, "job_failed", JobStatus.failed, "Provider error")
+    assert paused.state == "paused"
+    assert paused.current_index == 0
+    assert paused.current_job_id is None
+    assert "Provider error" in paused.paused_reason
+    assert paused.pending_event_id is None
+
+
+@pytest.mark.asyncio
+async def test_planned_tail_uses_exact_completed_job_and_selects_for_h3(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+    from app.core.projects.store import load_shot
+    from app.core.projects.layouts import LayoutReference, LayoutReviewStatus
+
+    run = _run()
+    from app.core.managed_runs.store import load_run as read_run
+    from app.core.managed_runs.store import _save_run
+    run = _save_run(run.model_copy(update={"steps": [
+        RunStep(shot_id="sht_1"),
+        RunStep(shot_id="sht_2", tail_from_shot_id="sht_1", tail_reason="Match the door"),
+    ]}))
+    bind_job(run.project_id, run.run_id, "sht_1", "job_first")
+    run = record_terminal(run.project_id, "job_first", JobStatus.succeeded)
+    captured = []
+
+    def fake_extract(**kwargs):
+        captured.append(kwargs)
+        shot = load_shot(run.project_id, "sht_2")
+        layout = LayoutReference(id="lref_tail", asset_id="lay_tail", purpose="continuity",
+                                 review_status=LayoutReviewStatus.pending_review)
+        save_shot(shot.model_copy(update={"layout_refs": [layout]}))
+        return {"layout_ref_id": layout.id, "layout_asset_id": layout.asset_id}
+
+    monkeypatch.setattr(continuation, "extract_clip_tail_frame", fake_extract)
+    class FakeService:
+        async def write_prompts_after_layout(self, shot_id):
+            captured.append({"rewrite": shot_id})
+
+    await continuation.prepare_planned_tail(run, FakeService())
+    updated = load_shot(run.project_id, "sht_2")
+    assert captured[0]["source_job_id"] == "job_first"
+    assert captured[0]["source_shot_id"] == "sht_1"
+    assert updated.layout_refs[0].selected_for_h3 is True
+    assert updated.layout_refs[0].feedback_source == "managed_run"
+    assert read_run(run.project_id, run.run_id).prepared_tail_layout_ids["sht_2"] == "lref_tail"
+
+
+@pytest.mark.asyncio
+async def test_empty_agent_turn_pauses_instead_of_repeating(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+    run = _run()
+    calls = []
+
+    async def fake_agent(run, svc):
+        calls.append(run.current_index)
+
+    monkeypatch.setattr(continuation, "_agent_turn", fake_agent)
+    await continuation.continue_run(run.project_id, run.run_id)
+    assert calls == [0]
+    assert load_run(run.project_id, run.run_id).state == "paused"
+
+
+@pytest.mark.asyncio
+async def test_stop_prevents_pending_agent_turn(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+    run = _run()
+    request_stop(run.project_id, run.run_id)
+    called = []
+
+    async def fake_agent(run, svc):
+        called.append(True)
+
+    monkeypatch.setattr(continuation, "_agent_turn", fake_agent)
+    await continuation.continue_run(run.project_id, run.run_id)
+    assert called == []
+
+
+@pytest.mark.asyncio
+async def test_restart_reconciles_terminal_bound_job_once(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+    run = _run()
+    job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="test",
+                     project_id=run.project_id, params={"shot_id": "sht_1", "project_id": run.project_id})
+    bind_job(run.project_id, run.run_id, "sht_1", job.id)
+    job.status = JobStatus.succeeded
+    save_job(job)
+    scheduled = []
+    monkeypatch.setattr(continuation, "schedule_continuation", lambda project_id: scheduled.append(project_id))
+
+    continuation.schedule_pending_runs()
+
+    updated = load_run(run.project_id, run.run_id)
+    assert updated.current_index == 1
+    assert updated.completed_job_ids["sht_1"] == job.id
+    assert scheduled == [run.project_id]
+
+
+@pytest.mark.asyncio
+async def test_normal_h3_runner_schedules_after_comfy_release(monkeypatch) -> None:
+    from app.core.jobs import runner
+    from app.core.jobs.store import load_job
+    from app.core.jobs.shot_sync import on_pipeline_job_terminal
+    from app.core.managed_runs import continuation
+
+    run = _run()
+    job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="test",
+                     project_id=run.project_id,
+                     params={"shot_id": "sht_1", "project_id": run.project_id})
+    bind_job(run.project_id, run.run_id, "sht_1", job.id)
+    calls = []
+
+    class FakeAdapter:
+        id = "comfy"
+
+        async def run(self, job, pipeline, images, cancel, runtime):
+            job.status = JobStatus.succeeded
+            save_job(job)
+            on_pipeline_job_terminal(job)
+
+    class FakeOrchestrator:
+        async def release_generation(self, job_id):
+            calls.append("released")
+
+    monkeypatch.setattr(runner._execution_adapters, "resolve", lambda pipeline, job: FakeAdapter())
+    monkeypatch.setattr(runner, "_runtime_for", lambda adapter: object())
+    monkeypatch.setattr(runner, "get_orchestrator", lambda: FakeOrchestrator())
+    monkeypatch.setattr(continuation, "schedule_continuation", lambda project_id: calls.append("scheduled"))
+
+    await runner._run_job(job.id, {}, asyncio.Event())
+
+    assert load_job(job.id).status == JobStatus.succeeded
+    assert calls == ["released", "scheduled"]
+
+
+def test_restart_adopts_tagged_job_created_before_run_bind(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+    run = _run()
+    job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="test",
+                     project_id=run.project_id, params={
+                         "shot_id": "sht_1", "project_id": run.project_id,
+                         "managed_run_id": run.run_id,
+                         "managed_step_shot_id": "sht_1",
+                         "managed_event_id": "start",
+                     })
+    scheduled = []
+    monkeypatch.setattr(continuation, "schedule_continuation", lambda project_id: scheduled.append(project_id))
+
+    continuation.schedule_pending_runs()
+
+    assert load_run(run.project_id, run.run_id).current_job_id == job.id
+    assert scheduled == [run.project_id]
+
+
+@pytest.mark.asyncio
+async def test_restart_retries_stopping_run_cancellation(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+    run = _run()
+    job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="test",
+                     project_id=run.project_id, params={"shot_id": "sht_1"})
+    bind_job(run.project_id, run.run_id, "sht_1", job.id)
+    request_stop(run.project_id, run.run_id)
+    cancelled = []
+
+    async def fake_cancel(job_id):
+        cancelled.append(job_id)
+
+    monkeypatch.setattr(continuation, "cancel_job", fake_cancel)
+    await continuation.reconcile_stopping_runs()
+    assert cancelled == [job.id]
+    assert load_run(run.project_id, run.run_id).state == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_agent_continuation_gets_compact_job_feedback_in_isolated_session(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+    from app.api import projects as projects_api
+    from app.agents.director import chat as director_chat
+    from app.agents.director.chat_orchestrator import ChatResult
+    from app.agents.director.harness_runtime import harness_session_id
+
+    run = _run()
+    job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="first",
+                     project_id=run.project_id, params={"shot_id": "sht_1"})
+    bind_job(run.project_id, run.run_id, "sht_1", job.id)
+    job.status = JobStatus.succeeded
+    save_job(job)
+    run = record_terminal(run.project_id, job.id, JobStatus.succeeded)
+    captured = {}
+
+    async def fake_chat(**kwargs):
+        captured.update(kwargs)
+        return ChatResult(reply="Ready")
+
+    async def fake_make_chat_fn(*, on_progress=None):
+        return object()
+
+    monkeypatch.setattr(director_chat, "handle_chat", fake_chat)
+    monkeypatch.setattr(projects_api, "_make_chat_fn", fake_make_chat_fn)
+    await continuation._agent_turn(run, object())
+
+    assert captured["history"] == []
+    assert captured["managed_session_id"] != harness_session_id(run.project_id)
+    assert job.id in captured["message"]
+    assert "succeeded" in captured["message"]
+    assert "sht_2" in captured["message"]
+
+
+@pytest.mark.asyncio
+async def test_agent_continuation_waits_for_user_chat_session(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+    from app.api import projects as projects_api
+    from app.agents.director import chat as director_chat
+    from app.agents.director.chat_orchestrator import ChatResult
+    from app.core.projects.chat_sessions import director_chat_sessions
+
+    run = _run()
+    user_session = await director_chat_sessions.reserve(run.project_id)
+    entered = asyncio.Event()
+
+    async def fake_chat(**kwargs):
+        entered.set()
+        return ChatResult(reply="Ready")
+
+    async def fake_make_chat_fn(*, on_progress=None):
+        return object()
+
+    monkeypatch.setattr(director_chat, "handle_chat", fake_chat)
+    monkeypatch.setattr(projects_api, "_make_chat_fn", fake_make_chat_fn)
+    task = asyncio.create_task(continuation._agent_turn(run, object()))
+    await asyncio.sleep(0)
+    assert not entered.is_set()
+    await director_chat_sessions.finish(run.project_id, user_session.session_id or "")
+    await task
+    assert entered.is_set()
+
+
+@pytest.mark.asyncio
+async def test_two_shots_advance_on_terminal_events_without_polling(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+    run = _run()
+    started = []
+
+    async def fake_agent(current, svc):
+        shot_id = current.steps[current.current_index].shot_id
+        job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name=shot_id,
+                         project_id=current.project_id, params={"shot_id": shot_id})
+        bind_job(current.project_id, current.run_id, shot_id, job.id)
+        started.append((shot_id, job.id))
+
+    monkeypatch.setattr(continuation, "_agent_turn", fake_agent)
+    await continuation.continue_run(run.project_id, run.run_id)
+    assert [shot for shot, _ in started] == ["sht_1"]
+    first_job = started[0][1]
+    record_terminal(run.project_id, first_job, JobStatus.succeeded)
+    await continuation.continue_run(run.project_id, run.run_id)
+    assert [shot for shot, _ in started] == ["sht_1", "sht_2"]
+    record_terminal(run.project_id, started[1][1], JobStatus.succeeded)
+    assert load_run(run.project_id, run.run_id).state == "completed"

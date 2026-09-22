@@ -91,7 +91,13 @@ class BackendTurn:
             allow_save_storyboard=not self.budget.exhausted,
             include_chat_image_import=pending,
         )
-        if not pending and _needs_fresh_storyboard(project, shots):
+        from ...core.managed_runs.context import managed_turn_scope
+        managed_scope = managed_turn_scope.get()
+        if managed_scope is not None and managed_scope.project_id == self.project_id:
+            tools = [tool for tool in tools if tool["function"]["name"] in {
+                "get_status", "inspect_asset", "write_prompt", "start_h3_video",
+            }]
+        if not pending and managed_scope is None and _needs_fresh_storyboard(project, shots):
             tools = [
                 tool for tool in tools
                 if tool["function"]["name"] not in IMAGE_TOOLS
@@ -350,6 +356,16 @@ class BackendTurn:
         if errors:
             return {"ok": False, "error": errors[0].message}
         project, shots, version = self.snapshot()
+        if name == "start_h3_video":
+            from ...core.managed_runs.store import active_run_for_project
+
+            run = active_run_for_project(self.project_id)
+            if (run is not None and run.current_index < len(run.steps)
+                    and run.steps[run.current_index].shot_id == args.get("shot_id")
+                    and run.current_job_id):
+                return {"ok": True, "already_started": True,
+                        "shot_id": args["shot_id"], "job_id": run.current_job_id,
+                        "notes": [f"H3 Job {run.current_job_id} is already running for this Shot."]}
         if name not in {"get_status", "inspect_asset"} and (
             (version, raw_fingerprint) in self.calls
             or (version, fingerprint) in self.calls
@@ -360,7 +376,12 @@ class BackendTurn:
         if self.storyboard_failed and name in IMAGE_TOOLS:
             return {"ok": False, "error": "Storyboard save failed; save a valid storyboard before image or prompt work"}
         requested = {"name": name, "args": args}
-        safe, _ = sanitize_tools_for_pipeline([requested], project=project, shots=shots)
+        from ...core.managed_runs.context import managed_turn_scope
+        scope = managed_turn_scope.get()
+        safe, _ = (
+            ([requested], []) if scope is not None and scope.project_id == self.project_id
+            else sanitize_tools_for_pipeline([requested], project=project, shots=shots)
+        )
         # The compatibility sanitizer can insert planning calls. Harness selects every
         # tool itself; only validate the requested call, never execute injected work.
         if requested not in safe:
@@ -442,7 +463,7 @@ class BackendTurn:
 
 async def handle_harness_chat(*, project_id, message, svc, chat_fn=None, history=None,
                               on_progress=None, user_images_b64=None, user_image_captions=None,
-                              context_capacity=None):
+                              context_capacity=None, managed_session_id=None):
     context_capacity = context_capacity or settings.director_num_ctx
     turn = BackendTurn(project_id, message, svc, chat_fn, images=user_images_b64,
                        captions=user_image_captions, on_progress=on_progress, history=history)
@@ -459,7 +480,7 @@ async def handle_harness_chat(*, project_id, message, svc, chat_fn=None, history
         result = await HarnessClient(settings.harness_base_url, settings.harness_internal_token,
                                      timeout=settings.harness_turn_timeout_sec).run(
             {"message": message, "history": [],
-             "session_id": harness_session_id(project_id),
+             "session_id": managed_session_id or harness_session_id(project_id),
              # Harness meters prompt pressure. Reserve the provider-reported
              # completion allowance so long history is compacted before it can
              # consume the space Qwen needs to finish reasoning and tool output.

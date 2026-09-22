@@ -2833,6 +2833,40 @@ h2 {
   max-height: calc(100vh - 260px);
 }
 
+.managed-run-card {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.9rem 1rem;
+  margin-bottom: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+  background: var(--bg-panel);
+}
+
+.managed-run-heading,
+.managed-run-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.managed-run-heading h2 { margin: 0.1rem 0 0; font-size: 1rem; }
+.managed-run-card > p { margin: 0; }
+.managed-run-resolution { display: grid; gap: 0.35rem; max-width: 21rem; }
+.managed-run-plan { display: grid; gap: 0.35rem; padding: 0; margin: 0.25rem 0; list-style: none; }
+.managed-run-plan li { display: flex; gap: 0.65rem; align-items: baseline; color: var(--muted); }
+.managed-run-plan li.current { color: var(--text); }
+.managed-run-plan li.done { opacity: 0.65; }
+.managed-run-plan li small { display: block; font-size: 0.72rem; line-height: 1.4; }
+.managed-run-number { font: 0.7rem var(--mono); color: var(--accent); }
+
+@media (max-width: 760px) {
+  .mobile-production-review > .managed-run-card { margin: 0.7rem 1rem; }
+  .managed-run-actions .btn { flex: 1 1 auto; }
+}
+
 .h3-preview {
   width: 100%;
   max-height: 280px;

@@ -34,14 +34,19 @@ async def plan_managed_run(project_id: str) -> ManagedRun:
 
     chat_fn = await _make_chat_fn(on_progress=None)
     brief = "\n".join(
-        f"{index}. {shot.id} — {shot.title}: {shot.script_beat}"
+        f"{index}. {shot.id} — {shot.title}: {shot.script_beat}; "
+        f"duration={shot.duration_s}s; framing={shot.shot_type}; "
+        f"angle={shot.camera_angle}; camera_motion={shot.camera_motion}; "
+        f"composition={shot.composition}; dialogue={shot.dialogue}; "
+        f"Pictures={[ref.asset_id for ref in shot.refs]}"
         for index, shot in enumerate(shots, start=1)
     )
     system = (
         "Plan local H3 video execution for the existing Shots. Return only JSON "
         "matching the schema. Preserve every Shot ID and its order. "
         "Only propose a tail-frame handoff when the Shot brief needs visual "
-        "continuity; give its concrete reason. Do not change Shot content."
+        "continuity; give its concrete reason based on action, camera, and composition. "
+        "Do not change Shot content."
     )
     response = await chat_fn(
         system, f"Current Shot briefs:\n{brief}",
@@ -66,7 +71,10 @@ async def get_managed_run(project_id: str) -> ManagedRun | None:
 @router.post("/projects/{project_id}/managed-run/{run_id}/start", response_model=ManagedRun)
 async def start_managed_run(project_id: str, run_id: str, body: StartManagedRunBody) -> ManagedRun:
     try:
-        return activate_run(project_id, run_id, body.resolution_preset)
+        run = activate_run(project_id, run_id, body.resolution_preset)
+        from ..core.managed_runs.continuation import schedule_continuation
+        schedule_continuation(project_id)
+        return run
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
@@ -78,5 +86,10 @@ async def stop_managed_run(project_id: str, run_id: str) -> ManagedRun:
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     if run.current_job_id:
-        await cancel_job(run.current_job_id)
+        try:
+            await cancel_job(run.current_job_id)
+        except Exception as exc:
+            # Keep stopping so no late Agent turn can submit. The user may
+            # retry Stop, and startup reconciliation retries cancellation.
+            raise HTTPException(503, f"Could not confirm H3 cancellation: {exc}") from exc
     return finish_stop(project_id, run_id)

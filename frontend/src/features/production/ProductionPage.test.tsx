@@ -10,6 +10,7 @@ import { listLibraryAssets } from "../library/api";
 const replaceShotMaterialsMock = vi.hoisted(() => vi.fn());
 const getH3ProviderStatusMock = vi.hoisted(() => vi.fn());
 const getLocalH3ResolutionsMock = vi.hoisted(() => vi.fn());
+const getManagedRunMock = vi.hoisted(() => vi.fn());
 const fetchH3ProfilesMock = vi.hoisted(() => vi.fn());
 vi.mock("../../shared/api/client", () => ({ fetchH3Profiles: fetchH3ProfilesMock }));
 
@@ -26,6 +27,10 @@ vi.mock("./api", () => ({
   getH3Job: vi.fn(),
   getH3ProviderStatus: getH3ProviderStatusMock,
   getLocalH3Resolutions: getLocalH3ResolutionsMock,
+  getManagedRun: getManagedRunMock,
+  planManagedRun: vi.fn(),
+  startManagedRun: vi.fn(),
+  stopManagedRun: vi.fn(),
   insertLayoutRefFrame: vi.fn(),
   patchShot: vi.fn(),
   skipLayout: vi.fn(),
@@ -121,6 +126,7 @@ describe("ProductionPage prompt refresh", () => {
       { id: "portrait-768", label: "Portrait 768 tier · 768×1376", width: 768, height: 1376 },
       { id: "portrait-1080", label: "Portrait 1080 tier · 1088×1920", width: 1088, height: 1920 },
     ] });
+    getManagedRunMock.mockResolvedValue(null);
   });
 
   it("does not keep reloading every shot after an H3 job has completed", async () => {

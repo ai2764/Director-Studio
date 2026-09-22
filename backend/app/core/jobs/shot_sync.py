@@ -42,6 +42,9 @@ def on_pipeline_job_terminal(job: JobRecord) -> None:
         _sync_ref_frame(job)
     elif job.pipeline_id == "h3_ref2va":
         _sync_h3_ref2va(job)
+        if job.project_id:
+            from ..managed_runs.store import record_terminal
+            record_terminal(job.project_id, job.id, job.status, job.error or "")
 
 
 def _sync_ref_frame(job: JobRecord) -> None:

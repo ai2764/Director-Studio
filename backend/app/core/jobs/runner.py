@@ -388,6 +388,9 @@ async def _resume_job(job_id: str, cancel: asyncio.Event) -> None:
         if adapter.id in LOCAL_COMFY_ADAPTER_IDS:
             await get_orchestrator().release_generation(job_id)
         _cancel_events.pop(job_id, None)
+        if job.pipeline_id == "h3_ref2va" and job.project_id:
+            from ..managed_runs.continuation import schedule_continuation
+            schedule_continuation(job.project_id)
 
 
 async def cancel_job(job_id: str) -> JobRecord | None:
@@ -459,6 +462,9 @@ async def _run_job(
         if adapter.id in LOCAL_COMFY_ADAPTER_IDS:
             await get_orchestrator().release_generation(job_id)
         _cancel_events.pop(job_id, None)
+        if job.pipeline_id == "h3_ref2va" and job.project_id:
+            from ..managed_runs.continuation import schedule_continuation
+            schedule_continuation(job.project_id)
 
 
 async def _run_external_job(

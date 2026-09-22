@@ -29,6 +29,7 @@ import {
 } from "./api";
 import { listLibraryAssets, type LibraryAsset } from "../library/api";
 import { ShotMaterialEditor } from "../director/ShotMaterialEditor";
+import { ManagedRunControls } from "./ManagedRunControls";
 import { fetchH3Profiles } from "../../shared/api/client";
 import type { H3ActiveProfile } from "../../shared/api/types";
 
@@ -207,6 +208,7 @@ export function ProductionPage({
   const [localResolutions, setLocalResolutions] = useState<LocalH3Resolution[]>([]);
   const [resolutionPreset, setResolutionPreset] =
     useState<string>("auto");
+  const [managedActive, setManagedActive] = useState(false);
 
   const selected = useMemo(
     () => shots.find((s) => s.id === selectedId) || null,
@@ -229,6 +231,7 @@ export function ProductionPage({
   useEffect(() => {
     setSelectedId(null);
     setH3Job(null);
+    setManagedActive(false);
     setShots([]);
     setProjectLoad({
       projectId,
@@ -626,6 +629,11 @@ export function ProductionPage({
 
         {error ? <div className="banner error mobile-production-error">{error}</div> : null}
 
+        {projectId ? <ManagedRunControls projectId={projectId} shots={shots}
+          provider={h3Provider} presets={localResolutions}
+          onStateChange={setManagedActive}
+          onProjectChanged={() => { void loadProject(projectId); }} /> : null}
+
         {!projectId ? (
           <p className="mobile-production-empty">Select a project to review its shots.</p>
         ) : projectLoading ? (
@@ -687,7 +695,7 @@ export function ProductionPage({
               <button
                 type="button"
                 className="btn primary mobile-production-run"
-                disabled={busy || !canSubmit || jobActive}
+                disabled={busy || !canSubmit || jobActive || managedActive}
                 onClick={() => void onSubmit()}
               >
                 {jobActive ? "H3 running…" : "Run H3"}
@@ -809,6 +817,10 @@ export function ProductionPage({
     >
       <ProductionWorkflowProfile profile={workflowProfile} error={workflowProfileError} job={h3Job} />
       {error ? <div className="banner error">{error}</div> : null}
+      {projectId ? <ManagedRunControls projectId={projectId} shots={shots}
+        provider={h3Provider} presets={localResolutions}
+        onStateChange={setManagedActive}
+        onProjectChanged={() => { void loadProject(projectId); }} /> : null}
 
       <div className="split-layout production-split">
         <aside className="split-side">
@@ -1176,7 +1188,7 @@ export function ProductionPage({
                       <button
                         type="button"
                         className="btn primary"
-                        disabled={busy || !canSubmit || jobActive}
+                        disabled={busy || !canSubmit || jobActive || managedActive}
                         onClick={onSubmit}
                       >
                         {jobActive ? "H3 running…" : "Submit H3"}

@@ -10,6 +10,13 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-21-managed-local-h3-video-runs-design.md`
 
+**Implementation note (2026-09-21):** Task 3 reuses the existing canonical
+`submit_shot_endpoint` function directly with explicit service and local H3
+options. Extracting its large preflight into a new `video_submission.py` would
+have duplicated or moved high-risk production logic without changing behavior.
+Tasks 4–5 share `core/managed_runs/continuation.py` for tail preparation and
+event-driven turns. The tests exercise the same intended contracts.
+
 ## Global Constraints
 
 - Local ComfyUI only; MiniMax API remains manual.

@@ -6,6 +6,8 @@ import re
 from typing import Any, Iterable
 
 from ...config import settings
+from ...core.managed_runs.store import list_runs
+from ...core.managed_runs.context import managed_turn_scope
 from ...core.projects.models import AssetCoverageReviewSubmission, Project
 from .intent import (
     actor_design_intent,
@@ -21,6 +23,22 @@ from .planner import (
     ShotSceneRefSelection,
     StoryboardSubmission,
 )
+
+
+def explicit_one_off_h3_intent(message: str, project_id: str | None = None) -> bool:
+    text = message.lower()
+    shot_named = bool(re.search(r"(?:shot\s*\d+|第\s*\d+\s*镜|sht_[a-z0-9_]+)", text))
+    if not shot_named and project_id:
+        from ...core.projects.store import list_shots
+        shot_named = any(
+            len(shot.title.strip()) >= 3 and shot.title.strip().lower() in text
+            for shot in list_shots(project_id)
+        )
+    start_named = bool(re.search(
+        r"(?:generate|run|start|kick\s*off).{0,35}(?:video|h3)|"
+        r"(?:生成|跑|启动|开始).{0,20}(?:视频|h3)", text,
+    ))
+    return shot_named and start_named
 
 
 IMAGE_TOOLS = frozenset(
@@ -480,6 +498,12 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "Read project status, or the full saved details of one Shot by exact shot_id before editing it.",
         {"shot_id": {"type": "string", "description": "Optional exact Shot ID to read; omit for project status."}},
     ),
+    function_tool(
+        "start_h3_video",
+        "Start a local ComfyUI H3 Job for the next managed Shot or an explicitly requested one-off Shot. Returns the actual Job ID immediately; never waits for completion. A managed run binds its selected resolution server-side.",
+        {"shot_id": {"type": "string", "description": "Exact next planned Shot ID."}},
+        required=["shot_id"],
+    ),
 ]
 
 
@@ -521,6 +545,17 @@ def director_tool_schemas(
         excluded.update({"queue_ref_frame", "revise_ref_frame"})
     if not tail_frame_extraction_intent(current_message):
         excluded.add("extract_clip_tail_frame")
+    scope = managed_turn_scope.get()
+    managed_turn = scope is not None and scope.project_id == project.id and any(
+        run.state == "active" and run.run_id == scope.run_id and (
+            run.pending_event_id == scope.event_id
+            or (run.current_job_id is not None and run.current_index < len(run.steps)
+                and run.steps[run.current_index].shot_id == scope.shot_id)
+        )
+        for run in list_runs(project.id)
+    )
+    if not managed_turn and not explicit_one_off_h3_intent(current_message, project.id):
+        excluded.add("start_h3_video")
     tools = [
         tool
         for tool in DIRECTOR_TOOL_SCHEMAS
@@ -548,6 +583,7 @@ def director_tool_schemas(
             "write_prompt",
             "get_status",
             "inspect_asset",
+            "start_h3_video",
         }
         tools = [
             tool

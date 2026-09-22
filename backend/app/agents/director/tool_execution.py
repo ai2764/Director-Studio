@@ -52,6 +52,7 @@ from .tool_handlers.actor import handle_actor_tool
 from .tool_handlers.layout import handle_layout_tool
 from .tool_handlers.library import handle_library_tool
 from .tool_handlers.media import handle_media_tool
+from .tool_handlers.video import handle_video_tool
 from .tool_handlers.casting import handle_casting_tool
 from .tool_handlers.project import handle_project_tool
 
@@ -218,6 +219,12 @@ async def execute_tools(
                 touched=touched,
                 result_payloads=result_payloads,
                 images=images,
+                user_feedback=user_feedback,
+            ):
+                continue
+            if await handle_video_tool(
+                name=name, args=args, project_id=project_id, svc=svc,
+                actions=actions, notes=notes, result_payloads=result_payloads,
                 user_feedback=user_feedback,
             ):
                 continue

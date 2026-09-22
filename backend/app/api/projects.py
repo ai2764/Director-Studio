@@ -1812,6 +1812,18 @@ async def submit_shot_endpoint(
     the Director Agent before preflight. Matching prompts do not wake the LLM.
     """
     shot = _find_shot(shot_id)
+    from ..core.managed_runs.context import managed_turn_scope
+    from ..core.managed_runs.store import active_run_for_project
+
+    managed_scope = managed_turn_scope.get()
+    active_run = active_run_for_project(shot.project_id)
+    if active_run is not None and (
+        managed_scope is None
+        or managed_scope.run_id != active_run.run_id
+        or managed_scope.project_id != shot.project_id
+        or managed_scope.shot_id != shot.id
+    ):
+        raise HTTPException(409, "Stop the managed run before submitting H3 manually")
     h3_provider = str(
         (
             options.h3_provider
@@ -1993,6 +2005,16 @@ async def submit_shot_endpoint(
             "The official H3 Ref2AV workflow cannot preserve locked source audio "
             "exactly; remove the source track or submit it as reference audio.",
         )
+    managed_tags = (
+        {"managed_run_id": managed_scope.run_id,
+         "managed_step_shot_id": shot.id,
+         "managed_event_id": managed_scope.event_id}
+        if managed_scope is not None
+        and managed_scope.project_id == shot.project_id
+        and managed_scope.shot_id == shot.id
+        and h3_provider == "local"
+        else {}
+    )
     job = create_job(
         pipeline_id="h3_ref2va",
         asset_kind="productions",
@@ -2011,6 +2033,7 @@ async def submit_shot_endpoint(
             "height": height,
             "shot_id": shot.id,
             "project_id": shot.project_id,
+            **managed_tags,
             "layout_asset_id": shot.layout_asset_id,
             "layout_asset_ids": [
                 str(item["asset_id"]) for item in selected_layouts

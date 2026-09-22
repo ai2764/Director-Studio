@@ -21,6 +21,7 @@ class _ActiveDirectorChatSession:
     session_id: str
     started_at: str
     task: asyncio.Task[None] | None = None
+    finished: asyncio.Event | None = None
 
 
 class DirectorChatSessionConflict(RuntimeError):
@@ -43,6 +44,7 @@ class DirectorChatSessionRegistry:
             session = _ActiveDirectorChatSession(
                 session_id=f"chat_{uuid.uuid4().hex}",
                 started_at=datetime.now(timezone.utc).isoformat(),
+                finished=asyncio.Event(),
             )
             self._sessions[project_id] = session
             return DirectorChatSessionSnapshot(
@@ -80,6 +82,19 @@ class DirectorChatSessionRegistry:
             session = self._sessions.get(project_id)
             if session is not None and session.session_id == session_id:
                 del self._sessions[project_id]
+                if session.finished is not None:
+                    session.finished.set()
+
+    async def wait_available(self, project_id: str) -> None:
+        """Wait on the current session's completion without polling or a new LLM call."""
+        while True:
+            async with self._lock:
+                session = self._sessions.get(project_id)
+                if session is None:
+                    return
+                finished = session.finished
+            if finished is not None:
+                await finished.wait()
 
     async def cancel(self, project_id: str) -> bool:
         async with self._lock:
@@ -90,6 +105,8 @@ class DirectorChatSessionRegistry:
             session.task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await session.task
+        if session.finished is not None:
+            session.finished.set()
         return True
 
 

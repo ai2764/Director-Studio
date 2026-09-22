@@ -126,6 +126,7 @@ async def handle_chat(
     on_progress: ProgressFn | None = None,
     user_images_b64: list[str] | None = None,
     user_image_captions: list[str] | None = None,
+    managed_session_id: str | None = None,
 ) -> ChatResult:
     """Preserve the public chat entry point while delegating orchestration."""
     from ...config import settings
@@ -142,6 +143,7 @@ async def handle_chat(
             user_images_b64=user_images_b64,
             user_image_captions=user_image_captions,
             context_capacity=context_capacity,
+            managed_session_id=managed_session_id,
         )
     return await orchestrate_chat(
         project_id=project_id,

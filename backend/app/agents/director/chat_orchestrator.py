@@ -352,7 +352,12 @@ Recommended pipeline; use judgment to decide when to advance:
 7) revise_ref_frame — when the user critiques an existing Layout and asks for another version, record the feedback on that exact Layout and generate a linked replacement
    for a tail-frame origin, the extracted frame is Image1; add other references only when they have a specific job
 8) write_prompt — generate or rewrite the six H3 sections from the selected Pictures; Layout is optional. The backend ensures current Pictures have visual evidence before writing. No approval step is required.
-9) H3 video generation happens later in Production
+9) H3 video generation is normally submitted in Production. During an explicitly
+   active managed local H3 run, write the planned Shot prompt as needed and call
+   start_h3_video for the exact next Shot. A backend job event wakes a new turn
+   after completion; do not poll, retry failed jobs, or generate unplanned Layouts.
+   Outside management, start_h3_video may be offered for an explicit one-Shot
+   video request; that single job never authorizes automatic continuation
 
 Tools (name + args):
 - set_script  {"script":"..."}  // only when the user supplies or changes story content; a question is not set_script
@@ -372,6 +377,7 @@ Tools (name + args):
 - accept_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"optional concise acceptance note"}
 - revise_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"concise actionable summary","additional_source_refs":[]}
 - write_prompt / get_status
+- start_h3_video  {"shot_id":"..."}  // only when offered for managed local run or explicit one-Shot request
 
 Vision: the system may attach Image 1…N when the user asks you to inspect references or composition. Describe only what is actually visible.
 
@@ -487,6 +493,13 @@ def sanitize_tools_for_pipeline(
     # Read-only tools must never implicitly replace a board (including before
     # or after an append on a stale board).
     if names and set(names) <= {"get_status", "status", "inspect_asset"}:
+        return tools, notes
+    if names and set(names) <= {"start_h3_video", "get_status", "inspect_asset"}:
+        return tools, notes
+    from ...core.managed_runs.context import managed_turn_scope
+    scope = managed_turn_scope.get()
+    if (scope is not None and scope.project_id == project.id and names
+            and set(names) <= {"start_h3_video", "write_prompt", "get_status", "inspect_asset"}):
         return tools, notes
     if names and set(names) <= {"queue_actor_design", "accept_actor_design"}:
         return tools, notes

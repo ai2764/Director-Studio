@@ -23,9 +23,12 @@ logger = logging.getLogger("director_studio")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     try:
+        from .core.managed_runs.continuation import reconcile_stopping_runs, schedule_pending_runs
+        await reconcile_stopping_runs()
         recovered = await recover_interrupted_jobs()
         if recovered:
             logger.info("recovered %d interrupted jobs on startup", len(recovered))
+        schedule_pending_runs()
         yield
     finally:
         await close_execution_runtimes()

@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 from ..projects.store import list_shots, load_project, project_dir
+from ..schemas import JobStatus
 from ...pipelines.h3_ref2va.resolutions import resolve_local_resolution
 from .models import ManagedRun, RunStep
 
@@ -99,12 +100,92 @@ def list_runs(project_id: str) -> list[ManagedRun]:
     return sorted(runs, key=lambda run: (run.created_at, run.run_id), reverse=True)
 
 
+def active_run_for_project(project_id: str) -> ManagedRun | None:
+    return next((run for run in list_runs(project_id) if run.state == "active"), None)
+
+
+def bind_job(project_id: str, run_id: str, shot_id: str, job_id: str,
+             *, expected_fingerprint: str | None = None) -> ManagedRun:
+    with _project_lock(project_id):
+        run = load_run(project_id, run_id)
+        if run is None or run.state != "active":
+            raise ValueError("Managed run was stopped before the H3 job could be bound")
+        if run.current_index >= len(run.steps) or run.steps[run.current_index].shot_id != shot_id:
+            raise ValueError("H3 job is not for the next planned Shot")
+        if run.current_job_id is not None:
+            raise ValueError("The next planned Shot already has an H3 job")
+        current_fingerprint = _fingerprint(project_id)
+        if expected_fingerprint and (
+            run.current_fingerprint != expected_fingerprint
+            or current_fingerprint != expected_fingerprint
+        ):
+            raise ValueError("Shot brief or references changed during H3 preflight")
+        return _save_run(run.model_copy(update={
+            "current_job_id": job_id, "pending_event_id": None,
+            "current_fingerprint": current_fingerprint,
+        }))
+
+
+def record_terminal(project_id: str, job_id: str, status: JobStatus, error: str = "") -> ManagedRun | None:
+    """Advance only the active run that bound this exact job, once."""
+    if status not in {JobStatus.succeeded, JobStatus.failed, JobStatus.cancelled}:
+        return None
+    with _project_lock(project_id):
+        run = active_run_for_project(project_id)
+        if run is None:
+            return None
+        if run.current_job_id != job_id:
+            return run if job_id in run.completed_job_ids.values() else None
+        if status != JobStatus.succeeded:
+            return _save_run(run.model_copy(update={
+                "state": "paused", "current_job_id": None, "pending_event_id": None,
+                "paused_reason": error or f"H3 job {job_id} {status.value}",
+            }))
+        step = run.steps[run.current_index]
+        completed = dict(run.completed_job_ids)
+        completed[step.shot_id] = job_id
+        next_index = run.current_index + 1
+        return _save_run(run.model_copy(update={
+            "current_index": next_index,
+            "current_job_id": None,
+            "completed_job_ids": completed,
+            "pending_event_id": f"{job_id}:{status.value}" if next_index < len(run.steps) else None,
+            "state": "active" if next_index < len(run.steps) else "completed",
+        }))
+
+
+def mark_tail_ready(project_id: str, run_id: str, shot_id: str, layout_id: str) -> ManagedRun:
+    with _project_lock(project_id):
+        run = load_run(project_id, run_id)
+        if run is None or run.state != "active" or run.steps[run.current_index].shot_id != shot_id:
+            raise ValueError("Managed run changed while preparing tail frame")
+        prepared = dict(run.prepared_tail_layout_ids)
+        prepared[shot_id] = layout_id
+        return _save_run(run.model_copy(update={
+            "prepared_tail_layout_ids": prepared,
+            "current_fingerprint": _fingerprint(project_id),
+        }))
+
+
+def pause_run(project_id: str, run_id: str, reason: str) -> ManagedRun:
+    with _project_lock(project_id):
+        run = load_run(project_id, run_id)
+        if run is None:
+            raise ValueError("Managed run not found")
+        if run.state != "active":
+            return run
+        return _save_run(run.model_copy(update={
+            "state": "paused", "pending_event_id": None, "paused_reason": reason,
+        }))
+
+
 def create_draft(project_id: str, steps: list[RunStep]) -> ManagedRun:
     with _project_lock(project_id):
         _validate_steps(project_id, steps)
         run = ManagedRun(
             run_id=f"mrun_{uuid.uuid4().hex}", project_id=project_id,
             steps=steps, plan_fingerprint=_fingerprint(project_id),
+            current_fingerprint=_fingerprint(project_id),
         )
         return _save_run(run)
 
@@ -121,7 +202,7 @@ def activate_run(project_id: str, run_id: str, preset: str) -> ManagedRun:
             raise ValueError("Shot brief or project order changed since this plan")
         if any(item.state in {"active", "stopping"} for item in list_runs(project_id)):
             raise ValueError("Another managed run is active for this project")
-        return _save_run(run.model_copy(update={"state": "active", "resolution_preset": preset}))
+        return _save_run(run.model_copy(update={"state": "active", "resolution_preset": preset, "pending_event_id": "start"}))
 
 
 def request_stop(project_id: str, run_id: str) -> ManagedRun:
