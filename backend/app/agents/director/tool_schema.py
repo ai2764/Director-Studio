@@ -377,7 +377,7 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         (
             "Extract the last decoded frame of a succeeded H3 clip into a "
             "pending, unselected Layout on a later shot. Use exact shot IDs. "
-            "Clarify rather than guess when the source clip is ambiguous. "
+            "Omitting the clip selector uses latest; clarify if latest is ambiguous. "
             "Do not visually approve the image."
         ),
         {
@@ -393,7 +393,7 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
             "source_version": {
                 "type": "string",
-                "description": "latest, or a generation number such as v2 or 2.",
+                "description": "Defaults to latest when omitted; or specify a generation such as v2 or 2.",
             },
             "source_job_id": {
                 "type": "string",

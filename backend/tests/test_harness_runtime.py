@@ -513,6 +513,65 @@ async def test_invalid_calls_consume_tool_budget_even_after_fresh_inference(tmp_
 
 
 @pytest.mark.asyncio
+async def test_repeated_shot_status_read_does_not_repeat_full_json(tmp_projects_dir):
+    from app.agents.director.harness_runtime import BackendTurn
+
+    project = create_project("tail continuity", "A cat waits.")
+    shot = Shot(
+        id="sht_read_once", project_id=project.id, scene_id="sc01",
+        title="Source", script_beat="A cat waits.", duration_s=5,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    turn = BackendTurn(project.id, "Read Shot 1", None, None)
+    await turn.dispatch("context", {})
+
+    first = await turn.dispatch("tool", {
+        "name": "get_status", "arguments": {"shot_id": shot.id}, "call_id": "read-1",
+    })
+    repeated = await turn.dispatch("tool", {
+        "name": "get_status", "arguments": {"shot_id": shot.id}, "call_id": "read-2",
+    })
+
+    assert first["shot"]["id"] == shot.id
+    assert repeated["ok"] is True
+    assert repeated["already_read"] is True
+    assert "shot" not in repeated
+    status_schema = next(
+        tool["function"]["parameters"] for tool in turn.context()["tools"]
+        if tool["function"]["name"] == "get_status"
+    )
+    assert list(Draft202012Validator(status_schema).iter_errors({"shot_id": shot.id}))
+
+
+def test_harness_only_offers_existing_layout_ids_for_acceptance(tmp_projects_dir):
+    from app.agents.director.harness_runtime import BackendTurn
+
+    project = create_project("tail acceptance", "")
+    shot = Shot(
+        id="sht_target", project_id=project.id, scene_id="sc01",
+        title="Target", script_beat="A cat waits.", duration_s=5,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    turn = BackendTurn(project.id, "抽尾帧后直接 approve", None, None)
+
+    before = {tool["function"]["name"] for tool in turn.context()["tools"]}
+    assert "accept_ref_frame" not in before
+
+    save_shot(shot.model_copy(update={
+        "layout_refs": [LayoutReference(id="lref_real", asset_id="lay_real")],
+    }))
+    after = next(
+        tool["function"] for tool in turn.context()["tools"]
+        if tool["function"]["name"] == "accept_ref_frame"
+    )
+    validator = Draft202012Validator(after["parameters"])
+    assert not list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_real"}))
+    assert list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_invented"}))
+
+
+@pytest.mark.asyncio
 async def test_explicit_runtime_dispatch(monkeypatch):
     from app.agents.director import chat, harness_runtime
 

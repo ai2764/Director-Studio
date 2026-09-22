@@ -59,6 +59,7 @@ class BackendTurn:
         self.budget = _StoryboardSubmissionBudget()
         self.call_ids: set[str] = set()
         self.calls: set[tuple[str, str]] = set()
+        self.status_reads: set[tuple[str, str]] = set()
         self.successful_prompt_shot_ids: set[str] = set()
         self.storyboard_failed = False
         self.terminal_failure: str | None = None
@@ -111,6 +112,45 @@ class BackendTurn:
             tools = []
         elif self.storyboard_failed and self.budget.exhausted:
             tools = [tool for tool in tools if tool["function"]["name"] in {"get_status", "inspect_asset"}]
+        layout_ids = sorted({
+            layout.id for shot in shots for layout in shot.layout_refs if layout.asset_id
+        })
+        offered_tools = []
+        for tool in tools:
+            function = tool["function"]
+            if function["name"] == "get_status":
+                unread = [shot.id for shot in shots if (version, shot.id) not in self.status_reads]
+                parameters = function["parameters"]
+                offered_tools.append({**tool, "function": {
+                    **function,
+                    "parameters": {
+                        **parameters,
+                        "properties": {
+                            "shot_id": {
+                                **parameters["properties"]["shot_id"],
+                                "enum": unread,
+                            },
+                        } if unread else {},
+                    },
+                }})
+            elif function["name"] != "accept_ref_frame":
+                offered_tools.append(tool)
+            elif layout_ids:
+                parameters = function["parameters"]
+                offered_tools.append({**tool, "function": {
+                    **function,
+                    "parameters": {
+                        **parameters,
+                        "properties": {
+                            **parameters["properties"],
+                            "layout_ref_id": {
+                                **parameters["properties"]["layout_ref_id"],
+                                "enum": layout_ids,
+                            },
+                        },
+                    },
+                }})
+        tools = offered_tools
         state = (gpt_generation_context_blob(project, shots, self.message)
                  if explicit_gpt_image_intent(self.message) and not actor_design_intent(self.message)
                  else project_context_blob(project, shots, message=self.message, focused=True))
@@ -260,6 +300,14 @@ class BackendTurn:
         if len(self.call_ids) >= settings.harness_max_tool_calls:
             return {"ok": False, "error": "Turn tool limit reached. No further tools can run in this turn; report completed and pending work without retrying."}
         self.call_ids.add(call_id)
+        status_shot_id = args.get("shot_id") if name == "get_status" else None
+        if isinstance(status_shot_id, str) and (self.snapshot()[2], status_shot_id) in self.status_reads:
+            return {
+                "ok": True,
+                "already_read": True,
+                "shot_id": status_shot_id,
+                "notes": ["This Shot was already read in the unchanged project state. Use that result; do not read it again."],
+            }
         prompt_shot_id = args.get("shot_id") if name == "write_prompt" else None
         if (
             isinstance(prompt_shot_id, str)
@@ -333,6 +381,8 @@ class BackendTurn:
         result = {"ok": True, "notes": notes}
         for payload in payloads:
             result.update(payload)
+        if result["ok"] and isinstance(status_shot_id, str):
+            self.status_reads.add((version, status_shot_id))
         if result["ok"] and len(self.actions) == before and not payloads:
             result.update(ok=False, error="No successful operation confirmed. " + " ".join(notes))
         if name == "save_storyboard":

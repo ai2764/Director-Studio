@@ -78,9 +78,7 @@ def resolve_source_clip(
     version = (source_version or "").strip() or None
     job_id = (source_job_id or "").strip() or None
     if version is None and job_id is None:
-        raise ClipGenerationError(
-            "clip selector required: supply source_version or source_job_id"
-        )
+        version = "latest"
 
     generations = list_shot_h3_generations(project_id, source_shot_id)
     if not generations:

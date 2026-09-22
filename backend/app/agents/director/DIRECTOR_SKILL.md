@@ -46,11 +46,11 @@ Load the relevant stage guide when the task calls for script planning, reference
 
 ## Cross-shot tail-frame Layouts
 
-When the user asks to pull the last frame of an existing clip for a later shot (for example “抽最新的 shot2 的尾帧，用于生成 shot3”), convert the request into `extract_clip_tail_frame` with exact `source_shot_id` and `target_shot_id`. Map “最新” to `source_version: "latest"`, a stated `vN` or job id to that selector, and “raw” / “enhanced” to `output_kind`. There is no `all` selector and no implicit current shot.
+When the user asks to pull the last frame of an existing clip for a later shot (for example “抽 shot2 的尾帧，用于 shot3”), convert the request into `extract_clip_tail_frame` with exact `source_shot_id` and `target_shot_id`. With no version or job specified, omit the selector; the backend resolves `latest`. Map a stated `vN` or job id to that selector, and “raw” / “enhanced” to `output_kind`. There is no `all` selector and no implicit current shot.
 
-Clarify instead of guessing when the source or target name matches more than one shot, no clip selector is implied, a stated `vN` and job id disagree, “latest” could mean a newer active or failed job, or neither enhanced nor raw video is available.
+Clarify instead of guessing when the source or target name matches more than one shot, a stated `vN` and job id disagree, the backend reports `latest` ambiguous because of a newer active or failed job, or neither enhanced nor raw video is available. Do not repeatedly call `get_status` to discover a job id when the user did not specify one.
 
-Do not visually inspect or approve the extracted image. After extraction, wait for the user to say they will use it directly or to request a redraw. Pronouns such as “这张” resolve only from the most recent unambiguous Layout in this conversation; otherwise ask which image they mean.
+Do not visually inspect or independently approve the extracted image. Normally wait for the user to say they will use it directly or to request a redraw. If the same request explicitly says to extract and directly approve, first require a successful extraction, then call `accept_ref_frame` using the exact `layout_ref_id` returned by that extraction; if extraction fails, do not call accept. Pronouns such as “这张” resolve only from the most recent unambiguous Layout in this conversation; otherwise ask which image they mean.
 
 If the user explicitly accepts the candidate, call `accept_ref_frame` for that exact LayoutReference to record QC and eagerly rewrite the target shot prompt with the real contiguous `<Picture N>`; acceptance is not a separate H3-selection gate. Do not also call `write_prompt` in the same tool batch. If they request edits, call `revise_ref_frame` for that exact LayoutReference: the extracted frame is Qwen Image1, and additional sources are added only when they have a specific identity, wardrobe, prop, or scene job.
 

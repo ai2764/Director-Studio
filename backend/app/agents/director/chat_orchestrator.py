@@ -345,8 +345,8 @@ Recommended pipeline; use judgment to decide when to advance:
    never fall back from failed GPT generation to local Comfy, or from failed local generation to GPT, unless the user chooses the other provider
    for GPT, source_refs may be empty when no useful real asset exists; then write a prompt-only generation_prompt without ImageN labels. When sources are attached, name every Image1…ImageN and state the visual job of each. An Actor image is an authoritative character reference, never a loose style hint: require the same exact identity, facial structure, hair, body proportions, and approved wardrobe. Do not write "identity only" or invent replacement clothing. A wardrobe change requires an attached Costume source or an explicit user request. Use an exact actor file_key; prefer bust_threeview for face fidelity and a full-body/master source for wardrobe when both are important and capacity allows. Always request one final frame rather than a collage
 5) extract_clip_tail_frame — extract the last decoded frame of a succeeded H3 clip as a pending Layout on a later shot
-   parse natural language into exact source_shot_id and target_shot_id plus version/job/output selectors; clarify rather than guess
-   do not visually approve the extracted image; wait for the user to accept it or request a redraw
+   parse natural language into exact source_shot_id and target_shot_id; omitted version/job means latest, with backend ambiguity checks
+   do not independently approve the image; if the user pre-authorized direct approval, use only the successful extraction's returned layout_ref_id for accept_ref_frame
 6) accept_ref_frame — when the user accepts an existing Layout, record the dialogue decision and select that exact Layout for H3
    acceptance rewrites the target shot H3 prompt with its real Picture index; do not also call write_prompt in the same tool batch
 7) revise_ref_frame — when the user critiques an existing Layout and asks for another version, record the feedback on that exact Layout and generate a linked replacement
@@ -368,7 +368,7 @@ Tools (name + args):
 - queue_actor_design  {"name":"...","description":"...","body_description":"...","hair_description":"...","wardrobe_description":"...","provider":"gpt|local","generation_prompt":"..."}  // generate a review image; local is default, GPT requires an explicit user request
 - accept_actor_design  {"job_id":"...","name":"...","notes":"..."}  // only after the user explicitly accepts the shown design
 - classify_chat_image  {"image_index":1,"kind":"actors|costumes|scenes|props|layouts|chat_only","name":"...","notes":"...","confidence":0.0}  // required once for every current user upload
-- extract_clip_tail_frame  {"source_shot_id":"...","target_shot_id":"...","source_version":"latest|vN","source_job_id":null,"output_kind":"enhanced|raw"}
+- extract_clip_tail_frame  {"source_shot_id":"...","target_shot_id":"..."}  // optional source_version/source_job_id/output_kind; omitted selector means latest
 - accept_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"optional concise acceptance note"}
 - revise_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"concise actionable summary","additional_source_refs":[]}
 - write_prompt / get_status
