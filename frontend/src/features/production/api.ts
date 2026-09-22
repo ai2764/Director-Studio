@@ -72,6 +72,19 @@ export async function getH3ProviderStatus(): Promise<H3ProviderStatus> {
   return res.json();
 }
 
+export interface LocalH3Resolution {
+  id: string;
+  label: string;
+  width: number;
+  height: number;
+}
+
+export async function getLocalH3Resolutions(): Promise<{ presets: LocalH3Resolution[] }> {
+  const res = await fetch("/api/h3-ref2va/resolutions");
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
 export async function submitShot(
   shotId: string,
   h3Provider: H3Provider,

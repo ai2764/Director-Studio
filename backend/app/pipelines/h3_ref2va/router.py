@@ -15,9 +15,15 @@ from ...core.jobs import (
 )
 from ...core.schemas import JobStatus
 from ...pipelines.registry import get_pipeline
+from .resolutions import list_local_resolutions
 from .schemas import H3Ref2VaJobResponse
 
 router = APIRouter(tags=["h3_ref2va"])
+
+
+@router.get("/h3-ref2va/resolutions")
+async def get_local_h3_resolutions() -> dict[str, list[dict[str, str | int]]]:
+    return {"presets": list_local_resolutions()}
 
 
 def _to_response(job) -> H3Ref2VaJobResponse:

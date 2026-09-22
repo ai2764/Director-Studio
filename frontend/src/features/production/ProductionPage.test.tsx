@@ -9,6 +9,7 @@ import { listLibraryAssets } from "../library/api";
 
 const replaceShotMaterialsMock = vi.hoisted(() => vi.fn());
 const getH3ProviderStatusMock = vi.hoisted(() => vi.fn());
+const getLocalH3ResolutionsMock = vi.hoisted(() => vi.fn());
 const fetchH3ProfilesMock = vi.hoisted(() => vi.fn());
 vi.mock("../../shared/api/client", () => ({ fetchH3Profiles: fetchH3ProfilesMock }));
 
@@ -24,6 +25,7 @@ vi.mock("./api", () => ({
   deleteLayout: vi.fn(),
   getH3Job: vi.fn(),
   getH3ProviderStatus: getH3ProviderStatusMock,
+  getLocalH3Resolutions: getLocalH3ResolutionsMock,
   insertLayoutRefFrame: vi.fn(),
   patchShot: vi.fn(),
   skipLayout: vi.fn(),
@@ -109,6 +111,16 @@ describe("ProductionPage prompt refresh", () => {
       minimax_configured: true,
       minimax_resolution: "768P",
     });
+    getLocalH3ResolutionsMock.mockResolvedValue({ presets: [
+      { id: "landscape-480", label: "Landscape 480 tier · 864×480", width: 864, height: 480 },
+      { id: "landscape-720", label: "Landscape 720 tier · 1280×704", width: 1280, height: 704 },
+      { id: "landscape-768", label: "Landscape 768 tier · 1376×768", width: 1376, height: 768 },
+      { id: "landscape-1080", label: "Landscape 1080 tier · 1920×1088", width: 1920, height: 1088 },
+      { id: "portrait-480", label: "Portrait 480 tier · 480×864", width: 480, height: 864 },
+      { id: "portrait-720", label: "Portrait 720 tier · 704×1280", width: 704, height: 1280 },
+      { id: "portrait-768", label: "Portrait 768 tier · 768×1376", width: 768, height: 1376 },
+      { id: "portrait-1080", label: "Portrait 1080 tier · 1088×1920", width: 1088, height: 1920 },
+    ] });
   });
 
   it("does not keep reloading every shot after an H3 job has completed", async () => {
@@ -493,14 +505,14 @@ describe("ProductionPage prompt refresh", () => {
     const runButton = await screen.findByRole("button", { name: "Run H3" });
     expect(runButton.hasAttribute("disabled")).toBe(false);
     fireEvent.change(screen.getByLabelText("Resolution"), {
-      target: { value: "portrait-720" },
+      target: { value: "portrait-1080" },
     });
     fireEvent.click(runButton);
 
     expect(await screen.findByRole("button", { name: "H3 running…" })).toBeTruthy();
     expect(submitShot).toHaveBeenCalledWith("sht_1", "local", {
-      width: 704,
-      height: 1280,
+      width: 1088,
+      height: 1920,
     });
   });
 
@@ -822,15 +834,29 @@ describe("ProductionPage prompt refresh", () => {
     fireEvent.click(await screen.findByText("Corridor walk-in"));
     fireEvent.click(screen.getByRole("tab", { name: "Run H3" }));
     fireEvent.change(screen.getByLabelText("Resolution"), {
-      target: { value: "landscape-720" },
+      target: { value: "landscape-768" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Submit H3" }));
 
     await waitFor(() =>
       expect(submitShot).toHaveBeenCalledWith("sht_1", "local", {
-        width: 1280,
-        height: 704,
+        width: 1376,
+        height: 768,
       }),
     );
+  });
+
+  it("does not present local dimensions as MiniMax API resolution", async () => {
+    vi.mocked(getProject).mockResolvedValue(detail(shot(generatedPrompt)));
+
+    render(<ProductionPage active />);
+    fireEvent.click(await screen.findByText("Corridor walk-in"));
+    fireEvent.click(screen.getByRole("tab", { name: "Run H3" }));
+    fireEvent.change(screen.getByLabelText("H3 provider"), {
+      target: { value: "minimax" },
+    });
+
+    expect(screen.queryByLabelText("Resolution")).toBeNull();
+    expect(screen.getByText("Official API · 768P")).toBeTruthy();
   });
 });

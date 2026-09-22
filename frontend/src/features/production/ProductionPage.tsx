@@ -18,12 +18,14 @@ import {
   deleteLayout,
   getH3Job,
   getH3ProviderStatus,
+  getLocalH3Resolutions,
   getProject,
   patchShot,
   submitShot,
   type H3JobRecord,
   type H3Provider,
   type H3ProviderStatus,
+  type LocalH3Resolution,
 } from "./api";
 import { listLibraryAssets, type LibraryAsset } from "../library/api";
 import { ShotMaterialEditor } from "../director/ShotMaterialEditor";
@@ -73,23 +75,6 @@ function ProductionWorkflowProfile({ profile, error, job }: {
 }
 
 type DrawerTab = "layout" | "refs" | "prompt" | "run";
-type ResolutionPreset =
-  | "auto"
-  | "landscape-480"
-  | "landscape-720"
-  | "portrait-480"
-  | "portrait-720";
-
-const RESOLUTION_PRESETS: Record<
-  Exclude<ResolutionPreset, "auto">,
-  { width: number; height: number }
-> = {
-  "landscape-480": { width: 864, height: 480 },
-  "landscape-720": { width: 1280, height: 704 },
-  "portrait-480": { width: 480, height: 864 },
-  "portrait-720": { width: 704, height: 1280 },
-};
-
 function pictureLabel(ref: { role: string; picture_index: number }): string {
   if (ref.role === "layout_ref_frame") {
     return `P${ref.picture_index} · Layout`;
@@ -219,8 +204,9 @@ export function ProductionPage({
   const [materialEditorOpen, setMaterialEditorOpen] = useState(false);
   const [h3ProviderStatus, setH3ProviderStatus] = useState<H3ProviderStatus | null>(null);
   const [h3Provider, setH3Provider] = useState<H3Provider>("local");
+  const [localResolutions, setLocalResolutions] = useState<LocalH3Resolution[]>([]);
   const [resolutionPreset, setResolutionPreset] =
-    useState<ResolutionPreset>("auto");
+    useState<string>("auto");
 
   const selected = useMemo(
     () => shots.find((s) => s.id === selectedId) || null,
@@ -292,6 +278,13 @@ export function ProductionPage({
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
+    getLocalH3Resolutions()
+      .then(({ presets }) => {
+        if (!cancelled) setLocalResolutions(presets);
+      })
+      .catch(() => {
+        if (!cancelled) setLocalResolutions([]);
+      });
     getH3ProviderStatus()
       .then((status) => {
         if (cancelled) return;
@@ -457,11 +450,14 @@ export function ProductionPage({
     setBusy(true);
     try {
       const resolution =
-        resolutionPreset === "auto"
+        h3Provider !== "local" || resolutionPreset === "auto"
           ? undefined
-          : RESOLUTION_PRESETS[resolutionPreset];
+          : localResolutions.find((preset) => preset.id === resolutionPreset);
       if (h3Provider === "local") await refreshWorkflowProfile();
-      replaceShot(await submitShot(selected.id, h3Provider, resolution));
+      replaceShot(await submitShot(selected.id, h3Provider, resolution && {
+        width: resolution.width,
+        height: resolution.height,
+      }));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -596,14 +592,13 @@ export function ProductionPage({
         value={resolutionPreset}
         disabled={busy || jobActive}
         onChange={(event) =>
-          setResolutionPreset(event.target.value as ResolutionPreset)
+          setResolutionPreset(event.target.value)
         }
       >
         <option value="auto">Auto from project</option>
-        <option value="landscape-480">Landscape · 864×480</option>
-        <option value="landscape-720">Landscape 720p tier · 1280×704</option>
-        <option value="portrait-480">Portrait · 480×864</option>
-        <option value="portrait-720">Portrait 720p tier · 704×1280</option>
+        {localResolutions.map((preset) => (
+          <option key={preset.id} value={preset.id}>{preset.label}</option>
+        ))}
       </select>
     </label>
   );
@@ -688,7 +683,7 @@ export function ProductionPage({
                 </div>
               ) : null}
               {providerPicker}
-              {resolutionPicker}
+              {h3Provider === "local" ? resolutionPicker : null}
               <button
                 type="button"
                 className="btn primary mobile-production-run"
@@ -1120,7 +1115,7 @@ export function ProductionPage({
 
                 {tab === "run" ? (
                   <div className="tab-panel">
-                    {resolutionPicker}
+                    {h3Provider === "local" ? resolutionPicker : null}
                     <ol className="run-steps">
                       <li className={(selected.refs?.length ?? 0) > 0 ? "done" : ""}>
                         Refs cast
