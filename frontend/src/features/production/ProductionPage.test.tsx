@@ -202,7 +202,7 @@ describe("ProductionPage prompt refresh", () => {
     render(<ProductionPage active />);
     await screen.findByText("Local · ComfyUI — My H3 Quality Profile");
     fetchH3ProfilesMock.mockResolvedValue({ active: {
-      profile_id: "builtin-official-h3", display_name: "Built-in Official H3", source: "builtin",
+      profile_id: "builtin-official-h3", display_name: "Built-in H3 Turbo 8 (temporary test)", source: "builtin",
       warning: { code: "profile_changed", message: "Custom workflow hash changed" },
     }, profiles: [] });
     fireEvent.click(await screen.findByText("Corridor walk-in"));
@@ -223,10 +223,10 @@ describe("ProductionPage prompt refresh", () => {
   });
 
   it("discloses fallback without blocking the Production workspace", async () => {
-    fetchH3ProfilesMock.mockResolvedValue({ active: { display_name: "Built-in Official H3", source: "builtin", warning: { code: "custom_profile_unavailable", message: "Custom workflow hash changed" } }, profiles: [] });
+    fetchH3ProfilesMock.mockResolvedValue({ active: { display_name: "Built-in H3 Turbo 8 (temporary test)", source: "builtin", warning: { code: "custom_profile_unavailable", message: "Custom workflow hash changed" } }, profiles: [] });
     vi.mocked(getProject).mockResolvedValue(detail(shot(emptyPrompt)));
     render(<ProductionPage active />);
-    expect(await screen.findByText("Using Built-in Official H3")).toBeTruthy();
+    expect(await screen.findByText("Using Built-in H3 Turbo 8 (temporary test)")).toBeTruthy();
     expect(screen.getByText("Custom workflow hash changed")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Production" })).toBeTruthy();
   });
@@ -243,7 +243,7 @@ describe("ProductionPage prompt refresh", () => {
     await screen.findByText("Local · ComfyUI — My H3 Quality Profile");
     fireEvent.click(await screen.findByText("Corridor walk-in"));
     await waitFor(() => expect(getH3Job).toHaveBeenCalledWith("job-existing"));
-    fetchH3ProfilesMock.mockResolvedValue({ active: { display_name: "Built-in Official H3", source: "builtin",
+    fetchH3ProfilesMock.mockResolvedValue({ active: { display_name: "Built-in H3 Turbo 8 (temporary test)", source: "builtin",
       warning: { code: "profile_changed", message: "Profile damaged during run" } }, profiles: [] });
     vi.mocked(getH3Job).mockResolvedValue({ ...job, status: "failed", error: "Output failed" });
     await screen.findByText("Profile damaged during run", {}, { timeout: 3500 });

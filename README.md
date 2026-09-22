@@ -289,7 +289,7 @@ Troubleshooting:
 
 ## Connect a custom H3 workflow
 
-Every clean Portable starts with **Built-in Official H3**. First make sure your custom H3 Ref2AV workflow already runs successfully in the same local ComfyUI. Then connect it at runtime:
+Every clean Portable normally starts with **Built-in Official H3**. This temporary test commit instead starts with **Built-in H3 Turbo 8 (temporary test)**. First make sure your custom H3 Ref2AV workflow already runs successfully in the same local ComfyUI. Then connect it at runtime:
 
 ```text
 Settings -> Workflows -> H3 -> Import Workflow
@@ -300,9 +300,9 @@ Director Studio treats everything inside the selected path as an opaque ComfyUI 
 
 The 56-frame test retains videos only from the final output node you selected. If that node emits several videos, preview them and choose one; this selection does not rerun ComfyUI. Reference-video inputs are not supported. Ollama is not used for importing, mapping, validating, or testing a custom workflow—the setup is deterministic and uses ComfyUI metadata plus your confirmations.
 
-Imported workflow JSON and its setup metadata stay under the external `data/workflow_profiles` directory and are never embedded in a release executable or zip. Any custom nodes, models, LoRAs, and other dependencies referenced by an imported graph remain the user's ComfyUI responsibility. If a custom workflow becomes unavailable or invalid, Director Studio falls back to **Built-in Official H3**.
+Imported workflow JSON and its setup metadata stay under the external `data/workflow_profiles` directory and are never embedded in a release executable or zip. Any custom nodes, models, LoRAs, and other dependencies referenced by an imported graph remain the user's ComfyUI responsibility. If a custom workflow becomes unavailable or invalid, Director Studio falls back to the built-in H3 graph (Turbo 8 in this temporary test commit).
 
-Workflow changes apply only to jobs submitted after the switch. Queued and running jobs keep the immutable workflow snapshot captured when they were submitted. You can switch back to **Built-in Official H3** without restarting, and doing so does not alter work already in flight.
+Workflow changes apply only to jobs submitted after the switch. Queued and running jobs keep the immutable workflow snapshot captured when they were submitted. You can switch back to the built-in H3 graph without restarting, and doing so does not alter work already in flight.
 
 ## How the local components fit together
 
@@ -330,7 +330,7 @@ Director Studio currently uses five ComfyUI workflow graphs:
 | Scene assets | `QwenEdit2511_MultiAngle_SceneRef.api.json` | Multi-angle scene generation |
 | Prop assets | `qwen_prop_master.api.json` | Prop master generation |
 | Layout reference | `ref_frame_layout.api.json` | Optional shot-composition Picture reference |
-| Local H3 video | `h3_ref2va.api.json` | API branch of the official Comfy-Org H3 Ref2AV template |
+| Local H3 video | `h3_ref2va.api.json` | Temporary Turbo 8 overlay on the Comfy-Org H3 Ref2AV API branch |
 
 The workflow JSON files are bundled with the application, but their model files and custom-node dependencies must also be available in the user's ComfyUI installation.
 
@@ -356,7 +356,7 @@ For a new or incompatible graph:
 4. Add tests for graph validation, prompt injection, and output mapping.
 5. Rebuild with `pwsh -File scripts/build-windows-portable.ps1`.
 
-Non-H3 custom-workflow overrides remain source-only in the current release. Portable supports H3 Ref2AV workflow import through Settings, while the packaged official workflow remains a read-only fallback. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the pipeline contract and extension points.
+Non-H3 custom-workflow overrides remain source-only in the current release. Portable supports H3 Ref2AV workflow import through Settings, while the packaged built-in workflow remains a read-only fallback. In this temporary test commit, that fallback is Turbo 8. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the pipeline contract and extension points.
 
 ## Replacing bundled generation workflows
 
@@ -470,7 +470,7 @@ py -m pytest tests/test_ref_frame_pipeline.py -q
 - Builder: `build_ref2va_prompt()` / `fill_ref2va_graph()`
 - Output mapper: `map_history_outputs()`
 
-The public build contains only the API-format execution branch of Comfy-Org's official `video_minimax_h3_r2v.json` template. The primary H3 node is discovered by `class_type = MiniMaxH3ReferenceToVideo`; its node ID may change without changing a constant.
+This temporary test commit overlays the built-in API graph derived from Comfy-Org's `video_minimax_h3_r2v.json` template with Turbo 8 sampling. Revert this commit to restore the full-quality official graph. The primary H3 node is discovered by `class_type = MiniMaxH3ReferenceToVideo`; its node ID may change without changing a constant.
 
 Minimal application boundary:
 
@@ -483,9 +483,9 @@ Minimal application boundary:
 | Uploaded reference audio | Dynamic `LoadAudio` nodes → `ref_audios.ref_audio_0..2` |
 | Seed | Unique `RandomNoise` → `inputs.noise_seed` |
 | Output directory | Unique `SaveVideo` → `inputs.filename_prefix` |
-| UI result | Official saver node `92` → `video` |
+| UI result | Built-in saver node `92` → `video` |
 
-Everything else comes from the workflow JSON. The adapter does not overwrite the model, LoRA, sampler, scheduler, steps, denoise, guider, decode, mux, FPS, format, or codec. In the checked-in official graph, node `127` loads the official Ref2AV model, node `123` selects `res_multistep`, node `124` contains the 20-step `simple` schedule, and node `92` saves the single final video.
+Everything else comes from the workflow JSON. The adapter does not overwrite the model, LoRA, sampler, scheduler, steps, denoise, guider, decode, mux, FPS, format, or codec. In this temporary graph, node `127` loads the official Ref2AV base model, nodes `131`–`134` apply Turbo LoRA and optimization, node `123` selects `euler`, node `124` contains the 8-step `simple` schedule, and node `92` saves the single final video.
 
 The adapter requires exactly one `MiniMaxH3ReferenceToVideo`, one `RandomNoise`, and one `SaveVideo`. It rejects `MiniMaxH3ImageToVideo`, `ref_frame`, and `last_frame`. The official local workflow generates synchronized audio as part of H3 Ref2AV, but it does not preserve a supplied source track exactly and produces only the `video` output.
 

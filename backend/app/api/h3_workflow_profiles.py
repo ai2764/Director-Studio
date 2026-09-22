@@ -161,7 +161,7 @@ def list_h3_profiles() -> dict[str, Any]:
     profiles: list[dict[str, Any]] = [
         {
             "profile_id": "builtin-official-h3",
-            "display_name": "Built-in Official H3",
+            "display_name": "Built-in H3 Turbo 8 (temporary test)",
             "source": "builtin",
             "status": (
                 "active"

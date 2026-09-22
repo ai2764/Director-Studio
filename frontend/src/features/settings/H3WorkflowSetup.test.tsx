@@ -35,7 +35,7 @@ const mapping = {
 
 const active = {
   profile_id: "builtin-official-h3",
-  display_name: "Built-in Official H3",
+  display_name: "Built-in H3 Turbo 8 (temporary test)",
   source: "builtin",
   workflow_sha256: "official-hash",
   contract_version: 2,
