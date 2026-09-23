@@ -139,6 +139,8 @@ The existing plan fingerprint remains the authority and covers:
 - project Shot IDs and order;
 - title, script beat, shot type, camera angle, camera motion, composition,
   duration, and dialogue for every Shot;
+- the project music-master content identity plus each Shot's optional music
+  segment timing and source-audio binding;
 - ordered Picture and Voice reference bindings.
 
 Any difference makes the plan stale. Reads expose `is_stale` and a concise
