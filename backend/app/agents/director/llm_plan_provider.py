@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from typing import Iterable
+import asyncio
+from collections.abc import Iterable
 
+from ...config import settings
 from ...core.llm import LLMProvider, get_llm_provider
 from .skill_loader import with_director_skill
+
+PROMPT_CALL_TIMEOUT_SEC = 180.0
 
 
 class DirectorLLMPlanProvider:
@@ -49,3 +53,21 @@ class DirectorLLMPlanProvider:
             images=images,
             require_vision=True,
         )
+
+    async def complete_bounded(self, system: str, user: str, *, max_tokens: int,
+                               guides: Iterable[str] = (), schema: dict | None = None) -> str:
+        """Short prompt audits and candidate drafts have explicit output budgets."""
+        prompt = with_director_skill(f"{system}\n\n{user}", guides=guides)
+        deadline = min(PROMPT_CALL_TIMEOUT_SEC, settings.llm_timeout_sec)
+        try:
+            async with asyncio.timeout(deadline):
+                response = await self.client.chat_response(self.model,
+                    messages=[{"role": "user", "content": prompt}], format=schema,
+                    options={"num_predict": max_tokens, "temperature": 0.1})
+        except TimeoutError as exc:
+            # Transport failure is not a rejected creative draft: do not repair/retry it.
+            raise TimeoutError(f"Prompt generation/review timed out after {deadline:g}s; "
+                               "no completed result was saved and no automatic retry was started") from exc
+        if response.get("finish_reason") in {"length", "max_tokens"}:
+            raise ValueError("Prompt review output was truncated at its output budget")
+        return str(response.get("content") or "")

@@ -43,6 +43,8 @@ async def handle_media_tool(
                                 "version": f"v{index}",
                                 "job_id": job.id,
                                 "status": job.status.value,
+                                "width": (job.params or {}).get("width"),
+                                "height": (job.params or {}).get("height"),
                             }
                             for index, job in enumerate(
                                 list_shot_h3_generations(project_id, shot_id), start=1

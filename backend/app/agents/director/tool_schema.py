@@ -7,6 +7,7 @@ from typing import Any, Iterable
 
 from ...config import settings
 from ...core.projects.models import AssetCoverageReviewSubmission, Project
+from ...pipelines.h3_ref2va.resolutions import LOCAL_H3_PRESETS
 from .intent import (
     actor_design_intent,
     explicit_gpt_image_intent,
@@ -23,20 +24,50 @@ from .planner import (
 )
 
 
-def explicit_one_off_h3_intent(message: str, project_id: str | None = None) -> bool:
+def explicit_one_off_h3_intent(
+    message: str,
+    project_id: str | None = None,
+    *,
+    shot_id: str | None = None,
+    previous_assistant: str = "",
+) -> bool:
     text = message.lower()
-    shot_named = bool(re.search(r"(?:shot\s*\d+|第\s*\d+\s*镜|sht_[a-z0-9_]+)", text))
-    if not shot_named and project_id:
-        from ...core.projects.store import list_shots
-        shot_named = any(
-            len(shot.title.strip()) >= 3 and shot.title.strip().lower() in text
-            for shot in list_shots(project_id)
-        )
     start_named = bool(re.search(
         r"(?:generate|run|start|kick\s*off).{0,35}(?:video|h3)|"
         r"(?:生成|跑|启动|开始).{0,20}(?:视频|h3)", text,
     ))
-    return shot_named and start_named
+    if not start_named or not project_id or not shot_id:
+        return False
+    if re.search(r"(?:不要|先别|暂不|别|do\s+not|don't|not\s+yet).{0,20}(?:生成|跑|启动|开始|generate|run|start)", text):
+        return False
+
+    from ...core.projects.store import list_shots
+    from .intent import shot_ref
+
+    shots = list_shots(project_id)
+    named = shot_ref(message, shots)
+    if named is not None:
+        return named.id == shot_id
+    if re.search(r"(?:shot\s*\d+|第\s*\d+\s*镜|sht_[a-z0-9_]+)", text):
+        return False
+
+    # A short command such as "跑h3" may answer the immediately preceding
+    # Director question. Only one exact Shot in an H3 launch question can grant
+    # that authority; discussion or an ambiguous choice cannot.
+    offered_shot_ids: set[str] = set()
+    for question in re.findall(r"[^。！？?!\n]*[?？]", previous_assistant, flags=re.I):
+        if not re.search(
+            r"(?:generate|run|start|启动|跑|生成).{0,40}(?:video|h3|视频)",
+            question.lower(),
+        ):
+            continue
+        shot_numbers = set(re.findall(r"(?:shot\s*|第\s*)(\d+)", question.lower()))
+        if len(shot_numbers) > 1:
+            return False
+        offered = shot_ref(question, shots)
+        if offered is not None:
+            offered_shot_ids.add(offered.id)
+    return offered_shot_ids == {shot_id}
 
 
 IMAGE_TOOLS = frozenset(
@@ -490,7 +521,9 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "write_prompt",
         "Prepare the six-section H3 production prompt for one shot. The backend ensures visual evidence "
         "for every current Picture, reviewing new or changed references first, decides whether the Creative brief "
-        "and prompt need changes, and preserves old drafts if review is incomplete or needs a user choice.",
+        "and prompt need changes, and preserves old drafts if review is incomplete or needs a user choice. "
+        "For selected clip tails, the current user request reaches a bounded drafting and semantic review pass; "
+        "it may reconcile this shot's camera plan with the requested continuity. Read returned shot_changes.",
         dict(SHOT_SELECTOR),
     ),
     function_tool(
@@ -503,13 +536,20 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     function_tool(
         "get_status",
-        "Read project status, or one Shot's saved details and H3 generation versions, job IDs, and statuses by exact shot_id before editing it.",
+        "Read project status, or one Shot's saved details and H3 generation versions, job IDs, statuses, and actual dimensions by exact shot_id before editing it.",
         {"shot_id": {"type": "string", "description": "Optional exact Shot ID to read; omit for project status."}},
     ),
     function_tool(
         "start_h3_video",
-        "Start a local ComfyUI H3 Job only for the next managed Shot or an explicitly requested one-off Shot. Visibility does not authorize execution. Returns the actual Job ID immediately; never waits for completion. A managed run binds its selected resolution server-side.",
-        {"shot_id": {"type": "string", "description": "Exact next planned Shot ID."}},
+        "Start a local ComfyUI H3 Job only for the next managed Shot or an explicitly requested one-off Shot. Visibility does not authorize execution. For one-off runs, inspect previous successful H3 resolutions and supply a supported resolution_preset; ask the user when uncertain. Managed runs use the user's already selected preset. Returns the actual Job ID immediately; never waits for completion.",
+        {
+            "shot_id": {"type": "string", "description": "Exact Shot ID."},
+            "resolution_preset": {
+                "type": "string",
+                "description": "Required for one-off H3. Match actual prior width/height to a local preset or use the user's explicit choice. Omit during managed runs.",
+                "enum": list(LOCAL_H3_PRESETS),
+            },
+        },
         required=["shot_id"],
     ),
 ]

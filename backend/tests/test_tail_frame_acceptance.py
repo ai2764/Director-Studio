@@ -87,7 +87,7 @@ async def test_accepting_tail_frame_assigns_picture_index_without_writing_prompt
     prompt_calls: list[str] = []
 
     class _Service:
-        async def write_prompts_after_layout(self, shot_id: str) -> Shot:
+        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="") -> Shot:
             prompt_calls.append(shot_id)
             current = load_shot(project.id, shot_id)
             assert current is not None
@@ -145,7 +145,7 @@ async def test_accept_then_explicit_write_prompt_only_rewrites_once(tmp_projects
     prompt_calls: list[str] = []
 
     class _Service:
-        async def write_prompts_after_layout(self, shot_id: str) -> Shot:
+        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="") -> Shot:
             prompt_calls.append(shot_id)
             current = load_shot(project.id, shot_id)
             assert current is not None
@@ -206,7 +206,7 @@ async def test_nine_picture_overflow_keeps_tail_frame_reviewed_unselected(
     prompt_calls: list[str] = []
 
     class _Service:
-        async def write_prompts_after_layout(self, shot_id: str) -> Shot:
+        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="") -> Shot:
             prompt_calls.append(shot_id)
             current = load_shot(project.id, shot_id)
             assert current is not None

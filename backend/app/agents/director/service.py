@@ -1777,7 +1777,69 @@ class DirectorService:
         self._asset_observations[(project_id, asset_id, record["file_key"])] = observation
         return observation
 
-    async def write_prompts_after_layout(self, shot_id: str) -> Shot:
+    async def _write_tail_prompt(self, shot, project, original_shot, revision_request):
+        from .material_review import capture_references
+        from .tail_prompt_review import draft_and_review
+
+        active_job = load_job(shot.h3_job_id) if shot.h3_job_id else None
+        if (shot.status in {ShotStatus.queued, ShotStatus.running}
+                or (active_job and active_job.status in {JobStatus.queued, JobStatus.uploading, JobStatus.running})):
+            raise ValueError("Video generation is active for this shot; wait before rewriting its prompt")
+        signature = None
+        model = str(getattr(self.plan_provider, "model", ""))
+
+        def check_current():
+            current = load_shot(project.id, shot.id)
+            current_project = load_project(project.id)
+            if (current is None or current.model_dump(mode="json") != original_shot
+                    or current_project is None or current_project.script_text != project.script_text
+                    or current_project.asset_coverage_review != project.asset_coverage_review
+                    or str(getattr(self.plan_provider, "model", "")) != model):
+                raise ValueError("Shot, script, confirmed choices or model changed during prompt review; review again")
+            if signature is not None and capture_references(sync_selected_layout_refs(current))[2] != signature:
+                raise ValueError("Reference image content changed during prompt review; review again")
+
+        check_current()
+        meta = {**shot.meta, "material_review_pending": True}
+        if revision_request.strip():
+            history = list(meta.get("prompt_revision_requests", []))
+            if not history or history[-1] != revision_request:
+                history.append(revision_request)
+            meta["prompt_revision_requests"] = history[-6:]
+            meta["prompt_revision_request"] = revision_request
+        shot = shot.model_copy(update={"meta": meta})
+        save_shot(shot)
+        original_shot = shot.model_dump(mode="json")
+        records, images, signature = capture_references(shot)
+        keep = bool(getattr(settings, "llm_keep_loaded", True))
+        async with self.orchestrator.llm_session(release_on_exit=not keep):
+            await self.orchestrator.ensure_llm_ready()
+            candidate = await draft_and_review(self.plan_provider, project, shot, records, images,
+                signature, check_current, _save_prompt_failure_diagnostics)
+        check_current()
+        meta = dict(candidate.meta)
+        layouts = selected_layout_prompt_context(candidate)
+        meta.update({
+            "prompt_layout_asset_ids": [str(item["asset_id"]) for item in layouts],
+            "prompt_layout_asset_id": str(layouts[0]["asset_id"]) if layouts else "",
+            "prompt_layout_signature": layout_prompt_signature(candidate),
+            "prompt_picture_signature": picture_ref_signature(candidate.refs),
+            "prompt_voice_signature": voice_ref_signature(candidate.voice_refs),
+            "material_review_pending": False,
+        })
+        meta.pop("material_changes", None)
+        authored = ("script_beat", "shot_type", "camera_angle", "camera_motion", "composition", "prompt_sections")
+        if any(getattr(candidate, key) != getattr(shot, key) for key in authored):
+            if shot.h3_job_id:
+                meta["superseded_h3_job_ids"] = list(dict.fromkeys([
+                    *(meta.get("superseded_h3_job_ids") or []), shot.h3_job_id]))
+            candidate = candidate.model_copy(update={"h3_job_id": None, "status": ShotStatus.needs_review})
+        candidate = candidate.model_copy(update={"meta": meta, "blocked_reasons": []})
+        save_shot(candidate)
+        save_agent_context(project.id, _build_context(project, list_shots(project.id), phase="awaiting_h3"))
+        return candidate
+
+    async def write_prompts_after_layout(self, shot_id: str, *, revision_request: str = "") -> Shot:
         """Wake LLM, reload context from disk, fill PromptSections for the shot."""
         shot = _find_shot(shot_id)
         if shot is None:
@@ -1788,11 +1850,15 @@ class DirectorService:
         if project is None:
             raise ValueError(f"project not found: {shot.project_id}")
 
-        from .material_review import capture_references, review_references
+        if any(item["origin_kind"] == "clip_tail_frame" for item in selected_layout_prompt_context(shot)):
+            return await self._write_tail_prompt(shot, project, original_shot, revision_request)
+
+        from .material_review import capture_references, review_references, tail_frame_review_signature
 
         review = (shot.meta or {}).get("material_review")
         review_signature = None
         decision = None
+        needs_handoff_review = False
 
         def check_current():
             current = load_shot(shot.project_id, shot.id)
@@ -1818,7 +1884,12 @@ class DirectorService:
                 save_shot(shot)
                 original_shot = shot.model_dump(mode="json")
             records, images, review_signature = capture_references(shot)
-            if was_pending or not review or review.get("signature") != review_signature:
+            handoff_signature = tail_frame_review_signature(project, shot, review_signature)
+            needs_handoff_review = bool(handoff_signature and (
+                not review or review.get("handoff_signature") != handoff_signature
+                or not (review.get("decision") or {}).get("tail_frame_handoff")
+            ))
+            if was_pending or not review or review.get("signature") != review_signature or needs_handoff_review:
                 keep = bool(getattr(settings, "llm_keep_loaded", True))
                 async with self.orchestrator.llm_session(release_on_exit=not keep):
                     await self.orchestrator.ensure_llm_ready()
@@ -1828,6 +1899,8 @@ class DirectorService:
                 decision = review["decision"]
                 if decision["brief"] is not None:
                     shot = shot.model_copy(update={"script_beat": decision["brief"]})
+                    if handoff_signature:
+                        review["handoff_signature"] = tail_frame_review_signature(project, shot, review_signature)
             shot = shot.model_copy(update={"meta": {**shot.meta, "material_review": review}})
 
         ctx = load_agent_context(shot.project_id)
@@ -1962,12 +2035,17 @@ class DirectorService:
                 dialogue_json=json.dumps(shot.dialogue),
                 refs_json=refs_json,
                 selected_layouts_json=selected_layouts_json,
+                tail_frame_handoff_json=json.dumps(
+                    (review or {}).get("decision", {}).get("tail_frame_handoff"),
+                    ensure_ascii=False,
+                ),
                 voice_refs_json=voice_refs_json,
                 layout_asset_id=selected_layout_asset_id,
-                feedback=shot.feedback or "",
+                feedback=(shot.feedback or "") + (f"\nCurrent user revision request: {revision_request}" if revision_request else ""),
                 context_json=context_json,
             )
-            preserve_prompt = bool(decision and not decision["rewrite_prompt"] and decision["brief"] is None)
+            preserve_prompt = bool(decision and not decision["rewrite_prompt"]
+                                   and decision["brief"] is None and not needs_handoff_review)
             if preserve_prompt:
                 try:
                     validate_h3_prompt(shot.prompt_sections.as_ordered_text(), shot.dialogue,

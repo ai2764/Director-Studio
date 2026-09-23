@@ -260,7 +260,7 @@ async def test_material_review_execution_rejects_a_different_shot(
     class Service:
         calls: list[str] = []
 
-        async def write_prompts_after_layout(self, shot_id):
+        async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
             self.calls.append(shot_id)
             return load_shot(project.id, shot_id)
 
@@ -533,14 +533,14 @@ async def test_shot_status_exposes_clip_generations_and_can_be_read_again(
     save_project(project.model_copy(update={"shot_ids": [shot.id]}))
     first_job = create_job(
         pipeline_id="h3_ref2va", asset_kind="productions", name="first",
-        project_id=project.id, params={"shot_id": shot.id},
+        project_id=project.id, params={"shot_id": shot.id, "width": 768, "height": 1376},
     )
     first_job.created_at = "2026-09-21T10:00:00Z"
     first_job.status = JobStatus.succeeded
     save_job(first_job)
     second_job = create_job(
         pipeline_id="h3_ref2va", asset_kind="productions", name="second",
-        project_id=project.id, params={"shot_id": shot.id},
+        project_id=project.id, params={"shot_id": shot.id, "width": 864, "height": 480},
     )
     second_job.created_at = "2026-09-21T11:00:00Z"
     second_job.status = JobStatus.failed
@@ -557,8 +557,8 @@ async def test_shot_status_exposes_clip_generations_and_can_be_read_again(
 
     assert first["shot"]["id"] == shot.id
     expected = [
-        {"version": "v1", "job_id": first_job.id, "status": "succeeded"},
-        {"version": "v2", "job_id": second_job.id, "status": "failed"},
+        {"version": "v1", "job_id": first_job.id, "status": "succeeded", "width": 768, "height": 1376},
+        {"version": "v2", "job_id": second_job.id, "status": "failed", "width": 864, "height": 480},
     ]
     assert first["h3_generations"] == expected
     assert repeated["ok"] is True
@@ -799,7 +799,7 @@ async def test_failed_prompt_write_makes_remainder_of_turn_explain_only(
     save_project(project.model_copy(update={"shot_ids": [shot.id]}))
 
     class Service:
-        async def write_prompts_after_layout(self, shot_id):
+        async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
             raise ValueError("dialogue validation failed")
 
     turn = BackendTurn(project.id, "Write Shot 1's prompt", Service(), None)
@@ -861,7 +861,7 @@ async def test_successful_prompt_write_is_idempotent_for_remainder_of_turn(
     class Service:
         calls = 0
 
-        async def write_prompts_after_layout(self, shot_id):
+        async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
             self.calls += 1
             current = load_shot(project.id, shot_id)
             assert current is not None

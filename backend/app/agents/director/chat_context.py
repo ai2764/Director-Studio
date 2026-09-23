@@ -19,6 +19,9 @@ def project_context_blob(
     from .intent import explicit_layout_generation_intent, shot_ref
     from .service import _inventory, _script_hash
     from .tool_handlers.actor import _load_proposal
+    from ...core.jobs.store import list_jobs
+    from ...core.schemas import JobStatus
+    from ...pipelines.h3_ref2va.resolutions import list_local_resolutions
 
     inv = _inventory(project.id)
     script = project.script_text or ""
@@ -30,6 +33,21 @@ def project_context_blob(
     )
     coverage_review = project.asset_coverage_review
     pending_actor = _load_proposal(project.id)
+    latest_successful_h3: dict[str, Any] = {}
+    for job in list_jobs(limit=None, pipeline_id="h3_ref2va", project_id=project.id):
+        params = job.params or {}
+        shot_id = params.get("shot_id")
+        width, height = params.get("width"), params.get("height")
+        if (job.status != JobStatus.succeeded or not isinstance(shot_id, str)
+                or type(width) is not int or type(height) is not int
+                or width <= 0 or height <= 0):
+            continue
+        previous = latest_successful_h3.get(shot_id)
+        if previous is None or (job.created_at, job.id) > previous["sort_key"]:
+            latest_successful_h3[shot_id] = {
+                "sort_key": (job.created_at, job.id),
+                "job_id": job.id, "width": width, "height": height,
+            }
     coverage_current = bool(
         coverage_review and coverage_review.script_hash == script_hash
     )
@@ -167,6 +185,7 @@ def project_context_blob(
     compact_project_overview = bool(message) and target_shot is None
 
     def shot_context(index: int, shot: Shot) -> dict[str, Any]:
+        prior_h3 = latest_successful_h3.get(shot.id)
         summary = {
             "index": index,
             "id": shot.id,
@@ -179,6 +198,10 @@ def project_context_blob(
             "layout_review": shot.layout_review_status,
             "layout_asset_id": shot.layout_asset_id,
             "duration_s": shot.duration_s,
+            "latest_successful_h3": (
+                {key: prior_h3[key] for key in ("job_id", "width", "height")}
+                if prior_h3 else None
+            ),
         }
         if target_shot is not None and shot.id != target_shot.id:
             return summary
@@ -254,6 +277,7 @@ def project_context_blob(
         "script_text": script[:4000],
         "script_preview": script[:1200],
         "library_inventory": inv,
+        "local_h3_resolution_presets": list_local_resolutions(),
         "pending_actor_design": (
             {
                 "proposal_id": pending_actor["id"],

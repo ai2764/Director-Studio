@@ -94,6 +94,7 @@ async def execute_tools(
     on_progress: ProgressFn | None = None,
     result_payloads: list[dict[str, Any]] | None = None,
     user_feedback: str = "",
+    previous_assistant: str = "",
     requested_minimum_duration_s: float = 0.0,
     storyboard_budget: Any | None = None,
     images: list[Any] | None = None,
@@ -237,6 +238,7 @@ async def execute_tools(
                 name=name, args=args, project_id=project_id, svc=svc,
                 actions=actions, notes=notes, result_payloads=result_payloads,
                 user_feedback=user_feedback,
+                previous_assistant=previous_assistant,
             ):
                 continue
             if await handle_casting_tool(

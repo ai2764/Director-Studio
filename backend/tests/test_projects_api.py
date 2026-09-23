@@ -546,7 +546,7 @@ def test_replace_shot_materials_rewrites_prompt_from_the_persisted_new_refs(
         def __init__(self) -> None:
             self.refs: list[tuple[str, str, str]] = []
 
-        async def write_prompts_after_layout(self, shot_id: str) -> Shot:
+        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="") -> Shot:
             current = load_shot(project.id, shot_id)
             assert current is not None
             self.refs = [
@@ -606,7 +606,7 @@ def test_replace_shot_materials_reports_prompt_failure_after_preserving_new_refs
     save_project(project.model_copy(update={"shot_ids": [shot.id]}))
 
     class FailingPromptRewrite:
-        async def write_prompts_after_layout(self, shot_id: str) -> Shot:
+        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="") -> Shot:
             raise RuntimeError("LLM unavailable")
 
     client.app.state.director_service = FailingPromptRewrite()

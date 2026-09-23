@@ -347,6 +347,11 @@ class BackendTurn:
             project_id=self.project_id, tools=[requested], svc=self.svc,
             actions=self.actions, on_progress=self.on_progress, result_payloads=payloads,
             user_feedback=self.message, requested_minimum_duration_s=_requested_minimum_duration_s(self.message),
+            previous_assistant=(
+                str(self.seed_history[-1].get("content") or "")
+                if self.seed_history and self.seed_history[-1].get("role") == "assistant"
+                else ""
+            ),
             storyboard_budget=self.budget, images=self.result_images, user_uploads=self.uploads,
         )
         self.notes.extend(notes)

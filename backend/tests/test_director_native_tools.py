@@ -3669,7 +3669,7 @@ async def test_accept_ref_frame_returns_authoritative_picture_order_without_llm_
     )
 
     class _Service:
-        async def write_prompts_after_layout(self, shot_id: str) -> Shot:
+        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="") -> Shot:
             current = load_shot(project.id, shot_id)
             assert current is not None
             save_shot(current)
@@ -3862,7 +3862,7 @@ async def test_native_write_prompt_tool_is_executed_and_result_returns_to_model(
     )
 
     class _Service:
-        async def write_prompts_after_layout(self, shot_id: str) -> Shot:
+        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="") -> Shot:
             current = load_shot(project.id, shot_id)
             assert current is not None
             updated = current.model_copy(

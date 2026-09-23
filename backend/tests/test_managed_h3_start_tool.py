@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import pytest
 import asyncio
+import json
 
 from app.agents.director.tool_schema import director_tool_schemas, offered_tool_names
 from app.core.managed_runs.models import RunStep
 from app.core.managed_runs.store import activate_run, bind_job, create_draft, list_runs, load_run, record_terminal, request_stop
 from app.core.projects.models import Shot
 from app.core.projects.store import create_project, save_project, save_shot, load_shot
-from app.core.jobs.store import create_job
+from app.core.jobs.store import create_job, save_job
 from app.core.schemas import JobStatus
 from app.core.managed_runs.context import ManagedTurnScope, managed_turn_scope
 
@@ -91,7 +92,7 @@ async def test_explicit_one_off_starts_only_named_shot(monkeypatch) -> None:
     submitted = []
 
     async def fake_submit(shot_id, svc, options):
-        submitted.append((shot_id, options.h3_provider))
+        submitted.append((shot_id, options.h3_provider, options.width, options.height))
         job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="one-off",
                          project_id=project.id, params={"shot_id": shot_id})
         saved = load_shot(project.id, shot_id).model_copy(update={"h3_job_id": job.id})
@@ -100,10 +101,180 @@ async def test_explicit_one_off_starts_only_named_shot(monkeypatch) -> None:
 
     monkeypatch.setattr(projects_api, "submit_shot_endpoint", fake_submit)
     turn = BackendTurn(project.id, "Generate Shot 1's video with local H3 now", object(), None)
-    result = await turn.dispatch("tool", {"name": "start_h3_video", "arguments": {"shot_id": shot.id}, "call_id": "one-off"})
+    result = await turn.dispatch("tool", {"name": "start_h3_video", "arguments": {
+        "shot_id": shot.id, "resolution_preset": "landscape-768",
+    }, "call_id": "one-off"})
     assert result["ok"] and result["job_id"] == load_shot(project.id, shot.id).h3_job_id
-    assert submitted == [(shot.id, "local")]
+    assert submitted == [(shot.id, "local", 1376, 768)]
     assert list_runs(project.id) == []
+
+
+@pytest.mark.asyncio
+async def test_one_off_uses_immediate_shot_two_offer_for_run_h3(monkeypatch) -> None:
+    from app.agents.director.harness_runtime import BackendTurn
+    from app.api import projects as projects_api
+
+    project = create_project("Contextual H3", "Two dance shots")
+    shots = [Shot(id=f"sht_offer_{index}", project_id=project.id, scene_id="scene_1",
+                  title=f"Dance {index}", script_beat="Dance.", duration_s=8)
+             for index in (1, 2)]
+    for shot in shots:
+        save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id for shot in shots]}))
+    submitted = []
+
+    async def fake_submit(shot_id, svc, options):
+        submitted.append((shot_id, options.width, options.height))
+        job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="one-off",
+                         project_id=project.id, params={"shot_id": shot_id})
+        saved = load_shot(project.id, shot_id).model_copy(update={"h3_job_id": job.id})
+        save_shot(saved)
+        return saved
+
+    monkeypatch.setattr(projects_api, "submit_shot_endpoint", fake_submit)
+    turn = BackendTurn(
+        project.id, "跑h3", object(), None,
+        history=[{"role": "assistant", "content": "要现在启动 Shot 2 的 H3 生成吗？还是先继续拆 Shot 3/4？"}],
+    )
+    result = await turn.dispatch("tool", {"name": "start_h3_video", "arguments": {
+        "shot_id": shots[1].id, "resolution_preset": "landscape-480",
+    }, "call_id": "contextual-offer"})
+
+    assert result["ok"] is True
+    assert submitted == [(shots[1].id, 864, 480)]
+
+
+@pytest.mark.asyncio
+async def test_previous_shot_two_offer_cannot_authorize_shot_one(monkeypatch) -> None:
+    from app.agents.director.harness_runtime import BackendTurn
+    from app.api import projects as projects_api
+
+    project = create_project("Exact offer", "Two shots")
+    shots = [Shot(id=f"sht_exact_{index}", project_id=project.id, scene_id="scene_1",
+                  title=f"Dance {index}", script_beat="Dance.", duration_s=8)
+             for index in (1, 2)]
+    for shot in shots:
+        save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id for shot in shots]}))
+    submitted = []
+
+    async def fake_submit(shot_id, svc, options):
+        submitted.append(shot_id)
+        return shots[0]
+
+    monkeypatch.setattr(projects_api, "submit_shot_endpoint", fake_submit)
+    turn = BackendTurn(project.id, "跑h3", object(), None, history=[
+        {"role": "assistant", "content": "要现在启动 Shot 2 的 H3 生成吗？"},
+    ])
+    result = await turn.dispatch("tool", {"name": "start_h3_video", "arguments": {
+        "shot_id": shots[0].id, "resolution_preset": "landscape-480",
+    }, "call_id": "wrong-shot"})
+
+    assert result["ok"] is False
+    assert submitted == []
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_previous_h3_offers_do_not_authorize_either_shot(monkeypatch) -> None:
+    from app.agents.director.harness_runtime import BackendTurn
+    from app.api import projects as projects_api
+
+    project = create_project("Ambiguous offer", "Two shots")
+    shots = [Shot(id=f"sht_ambiguous_{index}", project_id=project.id, scene_id="scene_1",
+                  title=f"Dance {index}", script_beat="Dance.", duration_s=8)
+             for index in (1, 2)]
+    for shot in shots:
+        save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id for shot in shots]}))
+    submitted = []
+
+    async def fake_submit(shot_id, svc, options):
+        submitted.append(shot_id)
+        job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="one-off",
+                         project_id=project.id, params={"shot_id": shot_id})
+        saved = load_shot(project.id, shot_id).model_copy(update={"h3_job_id": job.id})
+        save_shot(saved)
+        return saved
+
+    monkeypatch.setattr(projects_api, "submit_shot_endpoint", fake_submit)
+    turn = BackendTurn(project.id, "跑h3", object(), None, history=[
+        {"role": "assistant", "content": "要启动 Shot 1 的 H3 吗？还是要启动 Shot 2 的 H3 吗？"},
+    ])
+    result = await turn.dispatch("tool", {"name": "start_h3_video", "arguments": {
+        "shot_id": shots[0].id, "resolution_preset": "landscape-480",
+    }, "call_id": "ambiguous-offer"})
+
+    assert result["ok"] is False
+    assert submitted == []
+
+
+@pytest.mark.asyncio
+async def test_one_off_requires_resolution_instead_of_silent_project_default(monkeypatch) -> None:
+    from app.agents.director.tool_handlers.video import start_h3_video
+    from app.api import projects as projects_api
+
+    project = create_project("Uncertain resolution", "A short scene")
+    shot = Shot(id="sht_uncertain", project_id=project.id, scene_id="scene_1",
+                title="Open", script_beat="A door opens.", duration_s=5)
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    submitted = []
+
+    async def fake_submit(shot_id, svc, options):
+        submitted.append(shot_id)
+        return shot
+
+    monkeypatch.setattr(projects_api, "submit_shot_endpoint", fake_submit)
+    with pytest.raises(ValueError, match="resolution"):
+        await start_h3_video(project.id, shot.id, svc=object(), one_off_authorized=True)
+    assert submitted == []
+
+
+@pytest.mark.asyncio
+async def test_one_off_rejects_unknown_resolution_preset(monkeypatch) -> None:
+    from app.agents.director.tool_handlers.video import start_h3_video
+    from app.api import projects as projects_api
+
+    project = create_project("Unknown resolution", "A short scene")
+    shot = Shot(id="sht_unknown", project_id=project.id, scene_id="scene_1",
+                title="Open", script_beat="A door opens.", duration_s=5)
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    submitted = []
+
+    async def fake_submit(shot_id, svc, options):
+        submitted.append(shot_id)
+        return shot
+
+    monkeypatch.setattr(projects_api, "submit_shot_endpoint", fake_submit)
+    with pytest.raises(ValueError, match="Unknown local H3 resolution preset"):
+        await start_h3_video(project.id, shot.id, svc=object(),
+                             one_off_authorized=True, resolution_preset="portrait-9000")
+    assert submitted == []
+
+
+def test_compact_context_shows_prior_successful_h3_dimensions() -> None:
+    from app.agents.director.chat_context import project_context_blob
+
+    project = create_project("Historical resolution", "Two shots")
+    shots = [Shot(id=f"sht_history_{index}", project_id=project.id, scene_id="scene_1",
+                  title=f"Dance {index}", script_beat="Dance.", duration_s=8)
+             for index in (1, 2)]
+    for shot in shots:
+        save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id for shot in shots]}))
+    job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="first",
+                     project_id=project.id, params={"shot_id": shots[0].id, "width": 768, "height": 1376})
+    job.status = JobStatus.succeeded
+    save_job(job)
+
+    state = json.loads(project_context_blob(project, shots, message="跑shot2", focused=True))
+    assert state["shots"][0]["latest_successful_h3"] == {
+        "job_id": job.id, "width": 768, "height": 1376,
+    }
+    assert state["shots"][1]["latest_successful_h3"] is None
+    assert any(preset["id"] == "portrait-768" and preset["width"] == 768
+               and preset["height"] == 1376 for preset in state["local_h3_resolution_presets"])
 
 
 @pytest.mark.asyncio
@@ -136,6 +307,31 @@ async def test_start_h3_video_submits_exact_next_shot_with_run_resolution(monkey
     assert repeat["job_id"] == result["job_id"]
     assert repeat["already_started"] is True
     assert load_run(project.id, draft.run_id).current_job_id == result["job_id"]
+
+
+@pytest.mark.asyncio
+async def test_managed_run_does_not_accept_agent_resolution_override(monkeypatch, authorize_managed_turn) -> None:
+    from app.agents.director.tool_handlers.video import start_h3_video
+    from app.api import projects as projects_api
+
+    project = create_project("Managed resolution", "A short scene")
+    shot = Shot(id="sht_managed_resolution", project_id=project.id, scene_id="scene_1",
+                title="Open", script_beat="A door opens.", duration_s=5)
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    draft = create_draft(project.id, [RunStep(shot_id=shot.id)])
+    authorize_managed_turn(activate_run(project.id, draft.run_id, "portrait-768"))
+    submitted = []
+
+    async def fake_submit(shot_id, svc, options):
+        submitted.append(shot_id)
+        return shot
+
+    monkeypatch.setattr(projects_api, "submit_shot_endpoint", fake_submit)
+    with pytest.raises(ValueError, match="user-selected run preset"):
+        await start_h3_video(project.id, shot.id, svc=object(),
+                             resolution_preset="landscape-480")
+    assert submitted == []
 
 
 @pytest.mark.asyncio

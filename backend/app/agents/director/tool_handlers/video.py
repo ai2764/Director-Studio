@@ -16,14 +16,20 @@ _submission_locks: dict[str, asyncio.Lock] = {}
 
 
 async def start_h3_video(project_id: str, shot_id: str, *, svc: Any,
-                         one_off_authorized: bool = False) -> dict[str, Any]:
+                         one_off_authorized: bool = False,
+                         resolution_preset: str | None = None) -> dict[str, Any]:
     async with _submission_locks.setdefault(project_id, asyncio.Lock()):
         run = active_run_for_project(project_id)
         if run is None:
             if not one_off_authorized:
                 raise ValueError("No active managed H3 run or explicit one-off video request")
+            if not resolution_preset:
+                raise ValueError("One-off H3 resolution is required; inspect prior runs or ask the user")
+            width, height = resolve_local_resolution(resolution_preset)
             from ....api.projects import H3SubmitOptions, submit_shot_endpoint
-            shot = await submit_shot_endpoint(shot_id, svc, H3SubmitOptions(h3_provider="local"))
+            shot = await submit_shot_endpoint(
+                shot_id, svc, H3SubmitOptions(h3_provider="local", width=width, height=height)
+            )
             if not shot.h3_job_id:
                 raise ValueError("H3 submit returned no Job ID")
             finished = load_job(shot.h3_job_id)
@@ -51,6 +57,8 @@ async def start_h3_video(project_id: str, shot_id: str, *, svc: Any,
             raise ValueError("Shot brief or references changed after managed plan review")
         if not run.resolution_preset:
             raise ValueError("Managed H3 resolution was not selected")
+        if resolution_preset and resolution_preset != run.resolution_preset:
+            raise ValueError("Managed H3 resolution must match the user-selected run preset")
         width, height = resolve_local_resolution(run.resolution_preset)
 
         # Call the same API implementation used by manual Production. This keeps
@@ -98,12 +106,18 @@ async def start_h3_video(project_id: str, shot_id: str, *, svc: Any,
 async def handle_video_tool(
     *, name: str, args: dict[str, Any], project_id: str, svc: Any,
     actions: list[str], notes: list[str], result_payloads: list[dict[str, Any]] | None,
-    user_feedback: str,
+    user_feedback: str, previous_assistant: str = "",
 ) -> bool:
     if name != "start_h3_video":
         return False
-    result = await start_h3_video(project_id, str(args["shot_id"]), svc=svc,
-                                  one_off_authorized=explicit_one_off_h3_intent(user_feedback, project_id))
+    shot_id = str(args["shot_id"])
+    result = await start_h3_video(
+        project_id, shot_id, svc=svc,
+        one_off_authorized=explicit_one_off_h3_intent(
+            user_feedback, project_id, shot_id=shot_id, previous_assistant=previous_assistant,
+        ),
+        resolution_preset=args.get("resolution_preset"),
+    )
     actions.append(f"start_h3_video:{result['shot_id']}:{result['job_id']}")
     notes.append(f"Started local H3 video for Shot {result['shot_id']}; Job {result['job_id']}.")
     if result_payloads is not None:

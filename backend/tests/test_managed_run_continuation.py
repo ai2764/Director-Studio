@@ -77,7 +77,7 @@ async def test_planned_tail_uses_exact_completed_job_and_selects_for_h3(monkeypa
 
     monkeypatch.setattr(continuation, "extract_clip_tail_frame", fake_extract)
     class FakeService:
-        async def write_prompts_after_layout(self, shot_id):
+        async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
             captured.append({"rewrite": shot_id})
 
     await continuation.prepare_planned_tail(run, FakeService())

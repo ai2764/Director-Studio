@@ -17,6 +17,7 @@ from app.core.projects.models import (
     Shot,
     ShotRef,
 )
+from app.core.projects.layouts import ClipTailFrameOrigin, LayoutReference, LayoutReviewStatus
 from app.core.projects.store import create_project, load_shot, save_project, save_shot
 from app.core.schemas import LibraryAsset
 
@@ -77,6 +78,159 @@ class Provider:
         if self.mutate:
             self.mutate("prompt", len(self.text))
         return json.dumps(sections(self.count))
+
+
+class TailHandoffProvider(Provider):
+    def __init__(self, orch, *, handoff="Begin from the visible waist-up standing pose; lower the camera as she bends into the floor move.", rewrite=True):
+        super().__init__(orch, count=1, rewrite=rewrite)
+        self.handoff = handoff
+
+    async def complete_with_images(self, system, user, *, images, guides=()):
+        assert self.orch.active
+        self.visual.append((user, images[0]))
+        return json.dumps({
+            "readable": True,
+            "description": "The dancer stands upright in a waist-up front view, arms lowered, facing the camera.",
+            "concerns": [],
+        })
+
+    async def complete(self, system, user, *, guides=()):
+        assert self.orch.active
+        self.text.append((system, user))
+        if "Review a Director Studio tail-frame prompt candidate" in system:
+            return json.dumps({"valid": self.handoff is not None,
+                               "tail_opening": "Waist-up front view.",
+                               "candidate_opening": "Waist-up front view.",
+                               "camera_path": self.handoff or "Absent.",
+                               "issues": [] if self.handoff else ["Missing credible tail-frame handoff"],
+                               "blocking_question": None})
+        if "reference review decision" in system.lower():
+            decision = {
+                "brief": None, "rewrite_prompt": self.rewrite,
+                "reason": "The visible pose can lead into the low action with a camera move.",
+                "blocking_question": None,
+            }
+            if self.handoff is not None:
+                decision["tail_frame_handoff"] = self.handoff
+            return json.dumps(decision)
+        return json.dumps({"shot_patch": {}, "blocking_question": None,
+                           "reason": "The camera move carries the visible source stance forward.", "prompt_sections": {
+            "subject_definitions": "The dancer and studio are grounded by <Picture 1>.",
+            "summary": "One continuous dance move in the same studio.",
+            "retention_analysis": "The dancer and studio remain consistent.",
+            "detailed_description": "0-2 seconds: She bends from standing as the camera lowers. 2-6 seconds: She completes the floor move.",
+            "overall_soundscape": "Studio room tone.",
+            "non_diegetic_music": "No music.",
+        }})
+
+
+@pytest.fixture
+def tail_handoff_shot(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr(settings, "library_root", tmp_path / "library")
+    monkeypatch.setattr(settings, "jobs_dir", tmp_path / "jobs")
+    project = create_project("Dance continuity", "The dancer carries her move into the next shot.")
+    asset_dir = settings.library_root / "layouts" / "lay_previous_tail"
+    asset_dir.mkdir(parents=True)
+    Image.effect_noise((480, 640), 30).convert("RGB").save(asset_dir / "layout.png")
+    asset = LibraryAsset(
+        id="lay_previous_tail", kind="layouts", name="Previous shot tail",
+        pipeline_id="external", job_id="fixture", created_at="2026-09-12T00:00:00Z",
+        files={"layout": "layout.png"},
+    )
+    (asset_dir / "asset.json").write_text(asset.model_dump_json(), encoding="utf-8")
+    layout = LayoutReference(
+        id="lref_previous_tail", asset_id=asset.id,
+        purpose="continue the visible action from the previous shot",
+        review_status=LayoutReviewStatus.usable, selected_for_h3=True,
+        origin=ClipTailFrameOrigin(
+            source_shot_id="sht_previous", source_job_id="job_previous",
+            source_generation=1, output_kind="enhanced", output_key="video",
+            source_filename="video.mp4",
+        ),
+    )
+    shot = Shot(
+        id="sht_continuation", project_id=project.id, scene_id="sc01",
+        title="Low-angle continuation", script_beat="Continue the visible stance into a low floor move.",
+        camera_angle="low-angle 24mm", camera_motion="camera lowers into the move",
+        duration_s=6, layout_refs=[layout],
+        refs=[ShotRef(role=RefRole.layout_ref_frame, asset_id=asset.id,
+                      file_key="layout", picture_index=1)],
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    return project, shot
+
+
+@pytest.mark.asyncio
+async def test_tail_handoff_from_review_is_saved_and_grounded_into_prompt_request(tail_handoff_shot):
+    project, shot = tail_handoff_shot
+    orch = Orchestrator()
+    provider = TailHandoffProvider(orch)
+
+    updated = await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
+
+    review_request = json.loads(provider.text[0][1])
+    assert review_request["selected_layouts"][0]["picture_index"] == 1
+    assert review_request["references"][0]["description"].startswith(
+        "The dancer stands upright in a waist-up front view"
+    )
+    assert updated.meta["material_review"]["prompt_review"]["valid"] is True
+    assert "camera lowers" in provider.text[1][1]
+    assert load_shot(project.id, shot.id) == updated
+    assert len(provider.text) == 2  # draft and independent review
+
+
+@pytest.mark.asyncio
+async def test_tail_handoff_review_refreshes_when_shot_camera_changes(tail_handoff_shot):
+    project, shot = tail_handoff_shot
+    orch = Orchestrator()
+    provider = TailHandoffProvider(orch)
+    svc = DirectorService(plan_provider=provider, orchestrator=orch)
+    first = await svc.write_prompts_after_layout(shot.id)
+    save_shot(first.model_copy(update={"camera_angle": "overhead crane angle"}))
+
+    await svc.write_prompts_after_layout(shot.id)
+
+    review_requests = [json.loads(user) for system, user in provider.text
+                       if "For this tail-frame continuation return a candidate envelope" in system]
+    assert len(review_requests) == 2
+    assert review_requests[-1]["original_shot"]["camera_angle"] == "overhead crane angle"
+    assert len(provider.visual) == 1  # a camera change does not invalidate image facts
+
+
+@pytest.mark.asyncio
+async def test_tail_handoff_missing_from_review_does_not_save_prompt(tail_handoff_shot):
+    project, shot = tail_handoff_shot
+    provider = TailHandoffProvider(Orchestrator(), handoff=None)
+
+    with pytest.raises(ValueError, match="tail-frame handoff"):
+        await DirectorService(plan_provider=provider, orchestrator=provider.orch).write_prompts_after_layout(shot.id)
+
+    stored = load_shot(project.id, shot.id)
+    assert stored.prompt_sections == shot.prompt_sections
+    assert stored.refs == shot.refs
+    assert stored.meta["material_review_pending"] is True
+
+
+@pytest.mark.asyncio
+async def test_new_tail_handoff_rewrites_old_prompt_even_when_review_says_keep(tail_handoff_shot):
+    _, shot = tail_handoff_shot
+    shot = shot.model_copy(update={"prompt_sections": PromptSections(
+        subject_definitions="<Picture 1> supplies wardrobe and hair.",
+        summary="A dance move in the same studio.",
+        retention_analysis="The wardrobe stays the same.",
+        detailed_description="0-6 seconds: The dancer starts already crouching and rises.",
+        overall_soundscape="Studio room tone.", non_diegetic_music="No music.",
+    )})
+    save_shot(shot)
+    orch = Orchestrator()
+    provider = TailHandoffProvider(orch, rewrite=False)
+
+    await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
+
+    assert len(provider.text) == 2
+    assert "waist-up front view" in provider.text[1][1]
 
 
 @pytest.fixture

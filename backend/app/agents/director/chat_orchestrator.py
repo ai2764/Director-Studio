@@ -357,7 +357,14 @@ Recommended pipeline; use judgment to decide when to advance:
    start_h3_video for the exact next Shot. A backend job event wakes a new turn
    after completion; do not poll, retry failed jobs, or generate unplanned Layouts.
    Outside management, start_h3_video may be offered for an explicit one-Shot
-   video request; that single job never authorizes automatic continuation
+   video request; that single job never authorizes automatic continuation.
+   For a one-Shot local run, check PROJECT_STATE's actual successful H3 widths
+   and heights and its local resolution presets. Honor an explicit user choice;
+   otherwise carry forward an unambiguous prior resolution when suitable for
+   the intended aspect ratio. If prior results are absent, conflict, or leave
+   the desired orientation/tier unclear, ask the user before starting. Supply
+   resolution_preset to start_h3_video; never silently use project Auto/default.
+   Managed runs instead keep the resolution the user selected at activation.
 
 Tools (name + args):
 - set_script  {"script":"..."}  // only when the user supplies or changes story content; a question is not set_script
@@ -378,7 +385,7 @@ Tools (name + args):
 - accept_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"optional concise acceptance note"}
 - revise_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"concise actionable summary","additional_source_refs":[]}
 - write_prompt / get_status
-- start_h3_video  {"shot_id":"..."}  // visible in normal chat; executes only for a managed local run or explicit one-Shot request
+- start_h3_video  {"shot_id":"...","resolution_preset":"..."}  // one-Shot requires a chosen local preset; managed runs use the user's existing preset
 
 Vision: the system may attach Image 1…N when the user asks you to inspect references or composition. Describe only what is actually visible.
 
@@ -974,7 +981,7 @@ async def _execute_intent(
             return f"Shot not found: {sid}", actions, touched
         await _emit(on_progress, "status", f"Writing the six-section H3 prompt for {s.title}…")
         try:
-            s2 = await svc.write_prompts_after_layout(s.id)
+            s2 = await svc.write_prompts_after_layout(s.id, revision_request=message)
             touched.add(s2.id)
             return f"The six-section H3 prompt for **{s2.title}** is ready. You can generate the video in Production.", actions, touched
         except Exception as e:

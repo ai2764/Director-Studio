@@ -152,9 +152,13 @@ Output rules:
   - State the geography, composition, blocking, or object state each Layout contributes.
   - A selected Layout with origin_kind="clip_tail_frame" came from the prior clip.
     Treat its visible pose, blocking, wardrobe and geography as continuity evidence.
-    When the Shot calls for continuous action, describe how it can proceed naturally;
-    choose the action and edit instead of forcing a dissolve, transformation, or other
-    fixed transition. The Picture conditions the whole clip, not an exact first frame.
+    Use a reviewed tail-frame handoff when supplied, otherwise the visible observations,
+    to ground the opening in what is
+    actually visible, then describe the action and camera/edit that reaches the
+    Shot's intended framing. Do not reduce the tail image to wardrobe or identity,
+    or substitute a generic "continuing" claim for visible action. Choose a
+    natural handoff instead of forcing a dissolve or transformation. The Picture
+    conditions the whole clip, not an exact first frame.
   - Put action timing in detailed_description; never claim a Picture activates, is used,
     is shown, or switches at/from/during a time. Every Picture conditions the whole clip.
     Do not say a Picture or Layout confirms, ensures, or keeps a subject/state present or
@@ -198,6 +202,7 @@ PROMPT_SECTIONS_USER_TEMPLATE = """Shot:
 - dialogue: {dialogue_json}
 - refs (picture order): {refs_json}
 - selected Layout context (actual Picture bindings): {selected_layouts_json}
+- reviewed tail-frame handoff (null when no extracted tail is selected): {tail_frame_handoff_json}
 - voice refs (audio order): {voice_refs_json}
 - layout_asset_id: {layout_asset_id}
 - human feedback: {feedback}

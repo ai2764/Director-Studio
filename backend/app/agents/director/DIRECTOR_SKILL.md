@@ -82,6 +82,10 @@ By default, every successful Layout result replaces the Shot's active Layout set
 
 Multiple active Layouts are composition and continuity evidence, not timed keyframes. H3 conditions on every Picture for the whole clip. Never claim that a later Layout activates at a timestamp. Put a transition such as one person first and two people later into `detailed_description` as action timing. Keep both states in one Shot only when they form one continuous beat; if the second subject may leak into the opening or the transition is discontinuous, warn the user and recommend splitting the Shot.
 
+## H3 video runs
+
+For a user-requested one-Shot local H3 video, inspect actual prior successful H3 job dimensions in PROJECT_STATE or get_status and compare with the available local presets. Reuse an unambiguous compatible resolution or honor the user's explicit choice; if no reliable precedent or the aspect ratio/tier is unclear, ask before starting. Supply the chosen `resolution_preset` to `start_h3_video`. Do not quietly rely on the project's Auto/default size. In a managed run, keep the resolution chosen by the user at activation.
+
 ## Human review
 
 - Generation and prompt writing do not require an invented approval step. A successful Layout generation is saved and becomes current automatically; explicit review records QC rather than enabling H3 selection.
