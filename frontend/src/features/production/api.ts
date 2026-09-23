@@ -101,6 +101,13 @@ export interface ManagedRun {
   current_job_id: string | null;
   pending_event_id: string | null;
   paused_reason: string;
+  selected_shot_ids: string[];
+  pending_shot_ids: string[];
+  skipped_shots: Record<string, string>;
+  tail_source_job_ids: Record<string, string>;
+  completed_job_ids: Record<string, string>;
+  is_stale: boolean;
+  stale_reason: string;
 }
 
 export async function getManagedRun(projectId: string): Promise<ManagedRun | null> {
@@ -119,6 +126,24 @@ export async function startManagedRun(projectId: string, runId: string, resoluti
   const res = await fetch(`/api/projects/${projectId}/managed-run/${runId}/start`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ resolution_preset: resolutionPreset }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function runManagedSelection(
+  projectId: string,
+  runId: string,
+  shotIds: string[],
+  resolutionPreset?: string,
+): Promise<ManagedRun> {
+  const res = await fetch(`/api/projects/${projectId}/managed-run/${runId}/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      shot_ids: shotIds,
+      resolution_preset: resolutionPreset,
+    }),
   });
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();

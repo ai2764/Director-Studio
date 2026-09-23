@@ -2863,11 +2863,17 @@ h2 {
 .managed-run-details > p { margin: 0.65rem 0 0; }
 .managed-run-resolution { display: grid; gap: 0.35rem; max-width: 21rem; }
 .managed-run-plan { display: grid; gap: 0.35rem; padding: 0; margin: 0.25rem 0; list-style: none; }
-.managed-run-plan li { display: flex; gap: 0.65rem; align-items: baseline; color: var(--muted); }
+.managed-run-plan li { color: var(--muted); }
 .managed-run-plan li.current { color: var(--text); }
 .managed-run-plan li.done { opacity: 0.65; }
 .managed-run-plan li small { display: block; font-size: 0.72rem; line-height: 1.4; }
 .managed-run-number { font: 0.7rem var(--mono); color: var(--accent); }
+.managed-run-shot-choice { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 0.65rem; align-items: baseline; width: 100%; cursor: pointer; }
+.managed-run-shot-choice input { margin: 0; accent-color: var(--accent); }
+.managed-run-shot-choice input:disabled { cursor: not-allowed; }
+.managed-run-shot-copy { min-width: 0; }
+.managed-run-generated { display: inline-flex; margin-left: 0.45rem; padding: 0.08rem 0.35rem; border: 1px solid color-mix(in srgb, var(--success) 45%, transparent); border-radius: 999px; color: var(--success); font: 0.62rem var(--mono); text-transform: uppercase; letter-spacing: 0.04em; }
+.managed-run-plan li .managed-run-warning { margin-top: 0.18rem; color: var(--warning); }
 
 @media (max-width: 760px) {
   .mobile-production-review > .managed-run-card { margin: 0.7rem 1rem; }

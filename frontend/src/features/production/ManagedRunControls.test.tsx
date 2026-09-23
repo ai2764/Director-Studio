@@ -3,50 +3,135 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { ManagedRunControls } from "./ManagedRunControls";
-import { getManagedRun, planManagedRun, startManagedRun, stopManagedRun } from "./api";
+import { getManagedRun, planManagedRun, runManagedSelection, stopManagedRun } from "./api";
 
 vi.mock("./api", () => ({
   getManagedRun: vi.fn(), planManagedRun: vi.fn(),
-  startManagedRun: vi.fn(), stopManagedRun: vi.fn(),
+  runManagedSelection: vi.fn(), stopManagedRun: vi.fn(),
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
-it("requires a reviewed plan and explicit local resolution before autonomous start", async () => {
-  const draft = {
-    run_id: "mrun_1", project_id: "prj_1", state: "draft", resolution_preset: null,
-    current_index: 0, current_job_id: null, pending_event_id: null, paused_reason: "",
-    steps: [
-      { shot_id: "sht_1", tail_from_shot_id: null, tail_reason: "" },
-      { shot_id: "sht_2", tail_from_shot_id: "sht_1", tail_reason: "Match the door" },
-    ],
-  } as const;
-  vi.mocked(getManagedRun).mockResolvedValue(null);
-  vi.mocked(planManagedRun).mockResolvedValue(draft as never);
-  vi.mocked(startManagedRun).mockResolvedValue({ ...draft, state: "active" } as never);
-  render(<ManagedRunControls projectId="prj_1" shots={[
+const draftWithSelection = {
+  run_id: "mrun_1", project_id: "prj_1", state: "draft",
+  resolution_preset: null, current_index: 0, current_job_id: null,
+  pending_event_id: null, paused_reason: "", is_stale: false,
+  stale_reason: "", selected_shot_ids: ["sht_1", "sht_2"],
+  pending_shot_ids: [], skipped_shots: {}, tail_source_job_ids: {},
+  completed_job_ids: {}, steps: [
+    { shot_id: "sht_1", tail_from_shot_id: null, tail_reason: "" },
+    { shot_id: "sht_2", tail_from_shot_id: "sht_1", tail_reason: "Match the door" },
+  ],
+} as const;
+
+const stoppedRun = {
+  ...draftWithSelection,
+  run_id: "mrun_2",
+  state: "stopped",
+  resolution_preset: "portrait-768",
+  selected_shot_ids: ["sht_2"],
+  pending_shot_ids: ["sht_2"],
+  completed_job_ids: { sht_1: "job_done" },
+} as const;
+
+function renderControls() {
+  return render(<ManagedRunControls projectId="prj_1" shots={[
     { id: "sht_1", title: "Open" }, { id: "sht_2", title: "Enter" },
   ]} provider="local" presets={[
     { id: "portrait-768", label: "Portrait 768", width: 768, height: 1376 },
   ]} onProjectChanged={() => {}} />);
+}
+
+it("defaults a fresh plan to all shots and submits only checked shots", async () => {
+  vi.mocked(getManagedRun).mockResolvedValue(null);
+  vi.mocked(planManagedRun).mockResolvedValue(draftWithSelection as never);
+  vi.mocked(runManagedSelection).mockResolvedValue({
+    ...draftWithSelection, state: "active", pending_shot_ids: ["sht_1"],
+  } as never);
+  renderControls();
 
   fireEvent.click(await screen.findByRole("button", { name: "Plan managed run" }));
-  const summary = await screen.findByText("Plan details");
-  const details = summary.closest("details");
-  expect(details?.open).toBe(false);
-  fireEvent.click(summary);
-  expect(await screen.findByText(/Match the door/)).toBeTruthy();
-  expect(details?.open).toBe(true);
-  expect((screen.getByRole("button", { name: "Start managed run" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((await screen.findByRole("checkbox", { name: /Open/ }) as HTMLInputElement).checked).toBe(true);
+  expect((screen.getByRole("checkbox", { name: /Enter/ }) as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(screen.getByRole("checkbox", { name: /Enter/ }));
   fireEvent.change(screen.getByLabelText("Managed run resolution"), { target: { value: "portrait-768" } });
-  fireEvent.click(screen.getByRole("button", { name: "Start managed run" }));
-  await waitFor(() => expect(startManagedRun).toHaveBeenCalledWith("prj_1", "mrun_1", "portrait-768"));
+  fireEvent.click(screen.getByRole("button", { name: "Run selected" }));
+  await waitFor(() => expect(runManagedSelection).toHaveBeenCalledWith(
+    "prj_1", "mrun_1", ["sht_1"], "portrait-768",
+  ));
+});
+
+it("allows a successful shot to be selected again after stop", async () => {
+  vi.mocked(getManagedRun).mockResolvedValue(stoppedRun as never);
+  vi.mocked(runManagedSelection).mockResolvedValue(stoppedRun as never);
+  renderControls();
+
+  expect(await screen.findByText("Generated")).toBeTruthy();
+  fireEvent.click(screen.getByRole("checkbox", { name: /Open/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Resume selected" }));
+  await waitFor(() => expect(runManagedSelection).toHaveBeenCalledWith(
+    "prj_1", "mrun_2", ["sht_1", "sht_2"], undefined,
+  ));
+});
+
+it("shows persisted dependency warnings", async () => {
+  vi.mocked(getManagedRun).mockResolvedValue({
+    ...stoppedRun,
+    state: "paused",
+    pending_shot_ids: [],
+    skipped_shots: { sht_2: "Source Shot has no successful video" },
+  } as never);
+  renderControls();
+
+  expect(await screen.findByText("Source Shot has no successful video")).toBeTruthy();
+});
+
+it("defaults a completed batch to no selected shots", async () => {
+  vi.mocked(getManagedRun).mockResolvedValue({
+    ...stoppedRun,
+    state: "completed",
+    pending_shot_ids: [],
+  } as never);
+  renderControls();
+
+  const action = await screen.findByRole("button", { name: "Run selected" });
+  expect((screen.getByRole("checkbox", { name: /Open/ }) as HTMLInputElement).checked).toBe(false);
+  expect((screen.getByRole("checkbox", { name: /Enter/ }) as HTMLInputElement).checked).toBe(false);
+  expect((action as HTMLButtonElement).disabled).toBe(true);
+});
+
+it("leaves only Plan again when the saved plan is stale", async () => {
+  vi.mocked(getManagedRun).mockResolvedValue({
+    ...stoppedRun,
+    is_stale: true,
+    stale_reason: "Shot brief or audio changed",
+  } as never);
+  renderControls();
+
+  expect(await screen.findByText("Shot brief or audio changed")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Plan again" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Resume selected" })).toBeNull();
+});
+
+it("disables Run selected when no shots are checked", async () => {
+  vi.mocked(getManagedRun).mockResolvedValue(draftWithSelection as never);
+  renderControls();
+
+  fireEvent.click(await screen.findByRole("checkbox", { name: /Open/ }));
+  fireEvent.click(screen.getByRole("checkbox", { name: /Enter/ }));
+  expect((screen.getByRole("button", { name: "Run selected" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 it("offers stop for an active local run", async () => {
   const active = {
     run_id: "mrun_2", project_id: "prj_1", state: "active", resolution_preset: "portrait-768",
     current_index: 0, current_job_id: "job_1", pending_event_id: null, paused_reason: "",
+    is_stale: false, stale_reason: "", selected_shot_ids: ["sht_1"],
+    pending_shot_ids: ["sht_1"], skipped_shots: {}, tail_source_job_ids: {},
+    completed_job_ids: {},
     steps: [{ shot_id: "sht_1", tail_from_shot_id: null, tail_reason: "" }],
   } as const;
   vi.mocked(getManagedRun).mockResolvedValue(active as never);
