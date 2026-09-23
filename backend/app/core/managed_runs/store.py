@@ -13,6 +13,7 @@ from ..projects.store import list_shots, load_project, project_dir
 from ..schemas import JobStatus
 from ...pipelines.h3_ref2va.resolutions import resolve_local_resolution
 from .models import ManagedRun, RunStep
+from .selection import build_execution_batch
 
 _locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
@@ -47,10 +48,24 @@ def _fingerprint(project_id: str) -> str:
             "dialogue": shot.dialogue,
             "refs": [ref.model_dump(mode="json") for ref in shot.refs],
             "voice_refs": [ref.model_dump(mode="json") for ref in shot.voice_refs],
+            "music_segment": (
+                shot.music_segment.model_dump(mode="json")
+                if shot.music_segment else None
+            ),
+            "source_audio_path": shot.source_audio_path,
         }
         for shot in shots
     ]
-    payload = json.dumps([project.script_text, project.shot_ids, authored], sort_keys=True, ensure_ascii=False)
+    payload = json.dumps(
+        [
+            project.script_text,
+            project.music_master.content_sha256 if project.music_master else None,
+            project.shot_ids,
+            authored,
+        ],
+        sort_keys=True,
+        ensure_ascii=False,
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -104,13 +119,29 @@ def active_run_for_project(project_id: str) -> ManagedRun | None:
     return next((run for run in list_runs(project_id) if run.state == "active"), None)
 
 
+def current_step(run: ManagedRun) -> RunStep | None:
+    if not run.pending_shot_ids:
+        return None
+    shot_id = run.pending_shot_ids[0]
+    return next((step for step in run.steps if step.shot_id == shot_id), None)
+
+
+def _plan_index(run: ManagedRun, shot_id: str | None) -> int:
+    if shot_id is None:
+        return len(run.steps)
+    return next(
+        index for index, step in enumerate(run.steps) if step.shot_id == shot_id
+    )
+
+
 def bind_job(project_id: str, run_id: str, shot_id: str, job_id: str,
              *, expected_fingerprint: str | None = None) -> ManagedRun:
     with _project_lock(project_id):
         run = load_run(project_id, run_id)
         if run is None or run.state != "active":
             raise ValueError("Managed run was stopped before the H3 job could be bound")
-        if run.current_index >= len(run.steps) or run.steps[run.current_index].shot_id != shot_id:
+        step = current_step(run)
+        if step is None or step.shot_id != shot_id:
             raise ValueError("H3 job is not for the next planned Shot")
         if run.current_job_id is not None:
             raise ValueError("The next planned Shot already has an H3 job")
@@ -141,25 +172,31 @@ def record_terminal(project_id: str, job_id: str, status: JobStatus, error: str 
                 "state": "paused", "current_job_id": None, "pending_event_id": None,
                 "paused_reason": error or f"H3 job {job_id} {status.value}",
             }))
-        step = run.steps[run.current_index]
+        step = current_step(run)
+        if step is None:
+            return None
         completed = dict(run.completed_job_ids)
         completed[step.shot_id] = job_id
-        next_index = run.current_index + 1
+        remaining = run.pending_shot_ids[1:]
+        next_index = _plan_index(run, remaining[0] if remaining else None)
         return _save_run(run.model_copy(update={
             "current_index": next_index,
             "current_job_id": None,
             "completed_job_ids": completed,
+            "pending_shot_ids": remaining,
             "prompt_retry_count": 0,
             "prompt_retry_error": "",
-            "pending_event_id": f"{job_id}:{status.value}" if next_index < len(run.steps) else None,
-            "state": "active" if next_index < len(run.steps) else "completed",
+            "paused_reason": "",
+            "pending_event_id": f"{job_id}:{status.value}" if remaining else None,
+            "state": "active" if remaining else "completed",
         }))
 
 
 def mark_tail_ready(project_id: str, run_id: str, shot_id: str, layout_id: str) -> ManagedRun:
     with _project_lock(project_id):
         run = load_run(project_id, run_id)
-        if run is None or run.state != "active" or run.steps[run.current_index].shot_id != shot_id:
+        step = current_step(run) if run is not None else None
+        if run is None or run.state != "active" or step is None or step.shot_id != shot_id:
             raise ValueError("Managed run changed while preparing tail frame")
         prepared = dict(run.prepared_tail_layout_ids)
         prepared[shot_id] = layout_id
@@ -201,23 +238,71 @@ def create_draft(project_id: str, steps: list[RunStep]) -> ManagedRun:
             run_id=f"mrun_{uuid.uuid4().hex}", project_id=project_id,
             steps=steps, plan_fingerprint=_fingerprint(project_id),
             current_fingerprint=_fingerprint(project_id),
+            selected_shot_ids=[step.shot_id for step in steps],
         )
         return _save_run(run)
 
 
 def activate_run(project_id: str, run_id: str, preset: str) -> ManagedRun:
-    resolve_local_resolution(preset)
+    run = load_run(project_id, run_id)
+    if run is None:
+        raise ValueError("Managed run not found")
+    return run_selected(
+        project_id,
+        run_id,
+        [step.shot_id for step in run.steps],
+        preset,
+    )
+
+
+def run_selected(
+    project_id: str,
+    run_id: str,
+    shot_ids: list[str],
+    resolution_preset: str | None,
+) -> ManagedRun:
     with _project_lock(project_id):
         run = load_run(project_id, run_id)
         if run is None:
             raise ValueError("Managed run not found")
-        if run.state != "draft":
-            raise ValueError("Only a draft plan can start")
+        if run.state not in {"draft", "paused", "stopped", "completed"}:
+            raise ValueError("Managed run must be inactive before starting a selection")
         if run.plan_fingerprint != _fingerprint(project_id):
             raise ValueError("Shot brief or project order changed since this plan")
-        if any(item.state in {"active", "stopping"} for item in list_runs(project_id)):
+        if not shot_ids:
+            raise ValueError("Select at least one Shot to run")
+        preset = resolution_preset or run.resolution_preset
+        if preset is None:
+            raise ValueError("A resolution preset is required")
+        resolve_local_resolution(preset)
+        if run.resolution_preset and preset != run.resolution_preset:
+            raise ValueError("Managed run resolution cannot change after its first run")
+        if any(
+            item.run_id != run_id and item.state in {"active", "stopping"}
+            for item in list_runs(project_id)
+        ):
             raise ValueError("Another managed run is active for this project")
-        return _save_run(run.model_copy(update={"state": "active", "resolution_preset": preset, "pending_event_id": "start"}))
+        batch = build_execution_batch(project_id, run, shot_ids)
+        has_pending = bool(batch.pending_shot_ids)
+        next_shot_id = batch.pending_shot_ids[0] if has_pending else None
+        return _save_run(run.model_copy(update={
+            "state": "active" if has_pending else "paused",
+            "resolution_preset": preset,
+            "current_index": _plan_index(run, next_shot_id),
+            "current_job_id": None,
+            "selected_shot_ids": batch.selected_shot_ids,
+            "pending_shot_ids": batch.pending_shot_ids,
+            "skipped_shots": batch.skipped_shots,
+            "tail_source_job_ids": batch.tail_source_job_ids,
+            "pending_event_id": f"selection:{uuid.uuid4().hex}" if has_pending else None,
+            "paused_reason": (
+                "" if has_pending
+                else "No selected Shots have satisfiable dependencies"
+            ),
+            "prompt_retry_count": 0,
+            "prompt_retry_error": "",
+            "current_fingerprint": _fingerprint(project_id),
+        }))
 
 
 def request_stop(project_id: str, run_id: str) -> ManagedRun:
@@ -237,4 +322,8 @@ def finish_stop(project_id: str, run_id: str) -> ManagedRun:
             raise ValueError("Managed run not found")
         if run.state == "completed":
             return run
-        return _save_run(run.model_copy(update={"state": "stopped"}))
+        return _save_run(run.model_copy(update={
+            "state": "stopped",
+            "current_job_id": None,
+            "pending_event_id": None,
+        }))

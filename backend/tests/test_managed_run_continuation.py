@@ -6,7 +6,15 @@ import asyncio
 
 from app.core.managed_runs.models import RunStep
 from app.core.managed_runs.store import (
-    activate_run, bind_job, create_draft, load_run, record_prompt_retry, record_terminal, request_stop,
+    activate_run,
+    bind_job,
+    create_draft,
+    finish_stop,
+    load_run,
+    record_prompt_retry,
+    record_terminal,
+    request_stop,
+    run_selected,
 )
 from app.core.projects.models import Shot
 from app.core.projects.store import create_project, save_project, save_shot
@@ -29,12 +37,14 @@ def _run():
 
 def test_terminal_event_advances_once_and_rejects_old_job() -> None:
     run = _run()
-    assert run.pending_event_id == "start"
+    assert run.pending_event_id.startswith("selection:")
+    assert run.pending_shot_ids == ["sht_1", "sht_2"]
     bind_job(run.project_id, run.run_id, "sht_1", "job_1")
     first = record_terminal(run.project_id, "job_1", JobStatus.succeeded)
     replay = record_terminal(run.project_id, "job_1", JobStatus.succeeded)
     assert first.current_index == replay.current_index == 1
     assert first.completed_job_ids == {"sht_1": "job_1"}
+    assert first.pending_shot_ids == ["sht_2"]
     assert first.pending_event_id == "job_1:succeeded"
     assert load_run(run.project_id, run.run_id).current_job_id is None
 
@@ -46,8 +56,26 @@ def test_failure_pauses_without_retry() -> None:
     assert paused.state == "paused"
     assert paused.current_index == 0
     assert paused.current_job_id is None
+    assert paused.pending_shot_ids == ["sht_1", "sht_2"]
     assert "Provider error" in paused.paused_reason
     assert paused.pending_event_id is None
+
+
+def test_sparse_selection_completes_without_replaying_earlier_shot() -> None:
+    run = _run()
+    request_stop(run.project_id, run.run_id)
+    finish_stop(run.project_id, run.run_id)
+    resumed = run_selected(run.project_id, run.run_id, ["sht_2"], None)
+
+    bind_job(run.project_id, run.run_id, "sht_2", "job_second")
+    completed = record_terminal(
+        run.project_id, "job_second", JobStatus.succeeded
+    )
+
+    assert completed.state == "completed"
+    assert completed.pending_shot_ids == []
+    assert completed.current_index == len(completed.steps)
+    assert completed.completed_job_ids == {"sht_2": "job_second"}
 
 
 @pytest.mark.asyncio
@@ -327,7 +355,7 @@ def test_restart_adopts_tagged_job_created_before_run_bind(monkeypatch) -> None:
                          "shot_id": "sht_1", "project_id": run.project_id,
                          "managed_run_id": run.run_id,
                          "managed_step_shot_id": "sht_1",
-                         "managed_event_id": "start",
+                         "managed_event_id": run.pending_event_id,
                      })
     scheduled = []
     monkeypatch.setattr(continuation, "schedule_continuation", lambda project_id: scheduled.append(project_id))
