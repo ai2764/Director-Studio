@@ -11,7 +11,7 @@ from app.api import projects as projects_api
 from app.core.projects.models import Shot
 from app.core.projects.store import create_project, load_project, save_project, save_shot
 from app.core.managed_runs.models import RunStep
-from app.core.managed_runs.store import create_draft
+from app.core.managed_runs.store import _save_run, create_draft
 from app.main import create_app
 
 
@@ -162,6 +162,189 @@ def test_start_reads_resolution_from_json_body() -> None:
     assert response.status_code == 200
     assert response.json()["state"] == "active"
     assert response.json()["resolution_preset"] == "landscape-768"
+    assert response.json()["selected_shot_ids"] == [first.id, second.id]
+    assert response.json()["pending_shot_ids"] == [first.id, second.id]
+
+
+def test_run_route_accepts_exact_selection_and_returns_warnings() -> None:
+    project, first, second = _two_shot_project()
+    draft = create_draft(
+        project.id,
+        [RunStep(shot_id=first.id), RunStep(shot_id=second.id)],
+    )
+
+    with TestClient(create_app()) as client:
+        response = client.post(
+            f"/api/projects/{project.id}/managed-run/{draft.run_id}/run",
+            json={
+                "shot_ids": [second.id],
+                "resolution_preset": "landscape-768",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["selected_shot_ids"] == [second.id]
+    assert response.json()["pending_shot_ids"] == [second.id]
+    assert response.json()["skipped_shots"] == {}
+
+
+def test_get_marks_changed_brief_stale_and_run_refuses_it() -> None:
+    project, first, second = _two_shot_project()
+    draft = create_draft(
+        project.id,
+        [RunStep(shot_id=first.id), RunStep(shot_id=second.id)],
+    )
+    save_shot(second.model_copy(update={"script_beat": "Changed"}))
+
+    with TestClient(create_app()) as client:
+        view = client.get(f"/api/projects/{project.id}/managed-run")
+        response = client.post(
+            f"/api/projects/{project.id}/managed-run/{draft.run_id}/run",
+            json={"shot_ids": [second.id]},
+        )
+
+    assert view.status_code == 200
+    assert view.json()["is_stale"] is True
+    assert view.json()["stale_reason"]
+    assert response.status_code == 409
+
+
+def test_run_route_rejects_empty_and_unknown_selections() -> None:
+    project, first, second = _two_shot_project()
+    draft = create_draft(
+        project.id,
+        [RunStep(shot_id=first.id), RunStep(shot_id=second.id)],
+    )
+
+    with TestClient(create_app()) as client:
+        empty = client.post(
+            f"/api/projects/{project.id}/managed-run/{draft.run_id}/run",
+            json={"shot_ids": [], "resolution_preset": "landscape-480"},
+        )
+        unknown = client.post(
+            f"/api/projects/{project.id}/managed-run/{draft.run_id}/run",
+            json={
+                "shot_ids": ["sht_unknown"],
+                "resolution_preset": "landscape-480",
+            },
+        )
+
+    assert empty.status_code == 409
+    assert "Select at least one" in empty.json()["detail"]
+    assert unknown.status_code == 409
+    assert "outside this plan" in unknown.json()["detail"]
+
+
+def test_run_route_preserves_resolution_across_batches() -> None:
+    project, first, second = _two_shot_project()
+    draft = create_draft(
+        project.id,
+        [RunStep(shot_id=first.id), RunStep(shot_id=second.id)],
+    )
+
+    with TestClient(create_app()) as client:
+        started = client.post(
+            f"/api/projects/{project.id}/managed-run/{draft.run_id}/run",
+            json={
+                "shot_ids": [first.id],
+                "resolution_preset": "landscape-480",
+            },
+        )
+        stopped = client.post(
+            f"/api/projects/{project.id}/managed-run/{draft.run_id}/stop"
+        )
+        changed = client.post(
+            f"/api/projects/{project.id}/managed-run/{draft.run_id}/run",
+            json={
+                "shot_ids": [second.id],
+                "resolution_preset": "portrait-480",
+            },
+        )
+
+    assert started.status_code == 200
+    assert stopped.status_code == 200
+    assert changed.status_code == 409
+    assert "cannot change" in changed.json()["detail"]
+
+
+@pytest.mark.parametrize("state", ["paused", "stopped", "completed"])
+def test_run_route_resumes_inactive_saved_plan(state: str) -> None:
+    project, first, second = _two_shot_project()
+    draft = create_draft(
+        project.id,
+        [RunStep(shot_id=first.id), RunStep(shot_id=second.id)],
+    )
+    _save_run(draft.model_copy(update={
+        "state": state,
+        "resolution_preset": "landscape-480",
+    }))
+
+    with TestClient(create_app()) as client:
+        response = client.post(
+            f"/api/projects/{project.id}/managed-run/{draft.run_id}/run",
+            json={"shot_ids": [second.id]},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "active"
+    assert response.json()["pending_shot_ids"] == [second.id]
+
+
+def test_run_route_returns_dependency_warning_without_starting() -> None:
+    project, first, second = _two_shot_project()
+    draft = create_draft(project.id, [
+        RunStep(shot_id=first.id),
+        RunStep(
+            shot_id=second.id,
+            tail_from_shot_id=first.id,
+            tail_reason="Continue the door",
+        ),
+    ])
+
+    with TestClient(create_app()) as client:
+        response = client.post(
+            f"/api/projects/{project.id}/managed-run/{draft.run_id}/run",
+            json={
+                "shot_ids": [second.id],
+                "resolution_preset": "landscape-480",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "paused"
+    assert response.json()["pending_shot_ids"] == []
+    assert second.id in response.json()["skipped_shots"]
+
+
+def test_run_route_does_not_delete_existing_job_outputs() -> None:
+    from app.core.jobs.store import create_job, job_dir
+
+    project, first, second = _two_shot_project()
+    draft = create_draft(
+        project.id,
+        [RunStep(shot_id=first.id), RunStep(shot_id=second.id)],
+    )
+    job = create_job(
+        pipeline_id="h3_ref2va",
+        asset_kind="productions",
+        name="existing video",
+        project_id=project.id,
+        params={"shot_id": first.id},
+    )
+    output = job_dir(job.id, project_id=project.id) / "outputs" / "video.mp4"
+    output.write_bytes(b"existing-video")
+
+    with TestClient(create_app()) as client:
+        response = client.post(
+            f"/api/projects/{project.id}/managed-run/{draft.run_id}/run",
+            json={
+                "shot_ids": [first.id],
+                "resolution_preset": "landscape-480",
+            },
+        )
+
+    assert response.status_code == 200
+    assert output.read_bytes() == b"existing-video"
 
 
 def test_current_run_prefers_active_over_a_newer_draft() -> None:

@@ -7,9 +7,15 @@ import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ValidationError
 
-from ..core.managed_runs.models import ManagedRun, RunPlan, RunStep
+from ..core.managed_runs.models import ManagedRun, ManagedRunView, RunPlan, RunStep
 from ..core.managed_runs.store import (
-    activate_run, create_draft, finish_stop, list_runs, request_stop,
+    _fingerprint,
+    create_draft,
+    finish_stop,
+    list_runs,
+    load_run,
+    request_stop,
+    run_selected,
 )
 from ..core.jobs import cancel_job, list_jobs
 from ..core.schemas import JobStatus
@@ -20,6 +26,27 @@ router = APIRouter(tags=["managed_runs"])
 
 class StartManagedRunBody(BaseModel):
     resolution_preset: str
+
+
+class RunManagedRunBody(BaseModel):
+    shot_ids: list[str]
+    resolution_preset: str | None = None
+
+
+def _run_view(run: ManagedRun) -> ManagedRunView:
+    try:
+        stale = run.plan_fingerprint != _fingerprint(run.project_id)
+        reason = (
+            "Shot brief, order, dialogue, references, or audio changed"
+            if stale else ""
+        )
+    except ValueError as exc:
+        stale, reason = True, str(exc)
+    return ManagedRunView(
+        **run.model_dump(),
+        is_stale=stale,
+        stale_reason=reason,
+    )
 
 
 def _build_run_steps(shots, plan: RunPlan) -> list[RunStep]:
@@ -43,8 +70,8 @@ def _build_run_steps(shots, plan: RunPlan) -> list[RunStep]:
     ]
 
 
-@router.post("/projects/{project_id}/managed-run/plan", response_model=ManagedRun)
-async def plan_managed_run(project_id: str) -> ManagedRun:
+@router.post("/projects/{project_id}/managed-run/plan", response_model=ManagedRunView)
+async def plan_managed_run(project_id: str) -> ManagedRunView:
     project = load_project(project_id)
     if project is None:
         raise HTTPException(404, "Project not found")
@@ -79,32 +106,70 @@ async def plan_managed_run(project_id: str) -> ManagedRun:
     try:
         content = response.get("content") if isinstance(response, dict) else response
         plan = RunPlan.model_validate(json.loads(content) if isinstance(content, str) else content)
-        return create_draft(project_id, _build_run_steps(shots, plan))
+        return _run_view(create_draft(project_id, _build_run_steps(shots, plan)))
     except (ValueError, TypeError, ValidationError) as exc:
         raise HTTPException(422, f"Managed run plan was invalid: {exc}") from exc
 
 
-@router.get("/projects/{project_id}/managed-run", response_model=ManagedRun | None)
-async def get_managed_run(project_id: str) -> ManagedRun | None:
+@router.get("/projects/{project_id}/managed-run", response_model=ManagedRunView | None)
+async def get_managed_run(project_id: str) -> ManagedRunView | None:
     if load_project(project_id) is None:
         raise HTTPException(404, "Project not found")
     runs = list_runs(project_id)
-    return next((run for run in runs if run.state in {"active", "stopping"}), runs[0] if runs else None)
+    run = next(
+        (run for run in runs if run.state in {"active", "stopping"}),
+        runs[0] if runs else None,
+    )
+    return _run_view(run) if run is not None else None
 
 
-@router.post("/projects/{project_id}/managed-run/{run_id}/start", response_model=ManagedRun)
-async def start_managed_run(project_id: str, run_id: str, body: StartManagedRunBody) -> ManagedRun:
+@router.post("/projects/{project_id}/managed-run/{run_id}/run", response_model=ManagedRunView)
+async def run_managed_selection(
+    project_id: str,
+    run_id: str,
+    body: RunManagedRunBody,
+) -> ManagedRunView:
     try:
-        run = activate_run(project_id, run_id, body.resolution_preset)
-        from ..core.managed_runs.continuation import schedule_continuation
-        schedule_continuation(project_id)
-        return run
+        run = run_selected(
+            project_id,
+            run_id,
+            body.shot_ids,
+            body.resolution_preset,
+        )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+    if run.state == "active":
+        from ..core.managed_runs.continuation import schedule_continuation
+        schedule_continuation(project_id)
+    return _run_view(run)
 
 
-@router.post("/projects/{project_id}/managed-run/{run_id}/stop", response_model=ManagedRun)
-async def stop_managed_run(project_id: str, run_id: str) -> ManagedRun:
+@router.post("/projects/{project_id}/managed-run/{run_id}/start", response_model=ManagedRunView)
+async def start_managed_run(
+    project_id: str,
+    run_id: str,
+    body: StartManagedRunBody,
+) -> ManagedRunView:
+    try:
+        saved = load_run(project_id, run_id)
+        if saved is None:
+            raise ValueError("Managed run not found")
+        run = run_selected(
+            project_id,
+            run_id,
+            [step.shot_id for step in saved.steps],
+            body.resolution_preset,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if run.state == "active":
+        from ..core.managed_runs.continuation import schedule_continuation
+        schedule_continuation(project_id)
+    return _run_view(run)
+
+
+@router.post("/projects/{project_id}/managed-run/{run_id}/stop", response_model=ManagedRunView)
+async def stop_managed_run(project_id: str, run_id: str) -> ManagedRunView:
     try:
         run = request_stop(project_id, run_id)
     except ValueError as exc:
@@ -122,4 +187,4 @@ async def stop_managed_run(project_id: str, run_id: str) -> ManagedRun:
             # Keep stopping so no late Agent turn can submit. The user may
             # retry Stop, and startup reconciliation retries cancellation.
             raise HTTPException(503, f"Could not confirm H3 cancellation: {exc}") from exc
-    return finish_stop(project_id, run_id)
+    return _run_view(finish_stop(project_id, run_id))
