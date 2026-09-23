@@ -3947,25 +3947,33 @@ async def test_legacy_failed_write_prompt_reports_recoverable_failure(tmp_projec
     ))
 
     class FailingService:
+        attempts = 0
+
         async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
+            self.attempts += 1
             raise ValueError("dialogue validation failed")
 
     calls = 0
+    offered_tools = set()
 
     async def chat_fn(system, user, **kwargs):
-        nonlocal calls
+        nonlocal calls, offered_tools
         calls += 1
         if calls == 1:
+            offered_tools = {tool["function"]["name"] for tool in kwargs["tools"]}
             return {"content": "", "thinking": "", "tool_calls": [
-                {"name": "write_prompt", "arguments": {"shot_id": shot.id}}]}
+                {"name": "write_prompt", "arguments": {"shot_id": shot.id}},
+                {"name": "write_prompt", "arguments": {"shot_id": shot.id}},
+            ]}
         return {"content": "Prompt could not be saved.", "thinking": "", "tool_calls": []}
 
+    service = FailingService()
     scope_token = managed_turn_scope.set(ManagedTurnScope(
         project_id=project.id, run_id="mrun_test", event_id="start", shot_id=shot.id,
     ))
     try:
         result = await handle_chat(project_id=project.id, message="Write the Shot prompt",
-                                   svc=FailingService(), chat_fn=chat_fn)
+                                   svc=service, chat_fn=chat_fn)
     finally:
         managed_turn_scope.reset(scope_token)
 
@@ -3973,6 +3981,38 @@ async def test_legacy_failed_write_prompt_reports_recoverable_failure(tmp_projec
     assert "dialogue validation failed" in result.failure_message
     assert not any(action.startswith("write_prompt:") for action in result.actions)
     assert calls == 1
+    assert service.attempts == 1
+    assert offered_tools == {"get_status", "inspect_asset", "write_prompt", "start_h3_video"}
+
+
+@pytest.mark.asyncio
+async def test_managed_legacy_rejects_unplanned_mutation(tmp_projects_dir, monkeypatch):
+    from app.config import settings
+    from app.core.managed_runs.context import ManagedTurnScope, managed_turn_scope
+
+    monkeypatch.setattr(settings, "director_agent_runtime", "legacy")
+    project = create_project("Managed scope", "Original script")
+    calls = []
+
+    async def chat_fn(system, user, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return {"content": "", "thinking": "", "tool_calls": [
+                {"name": "set_script", "arguments": {"script": "Unauthorized rewrite"}},
+            ]}
+        return {"content": "No edit made.", "thinking": "", "tool_calls": []}
+
+    scope_token = managed_turn_scope.set(ManagedTurnScope(
+        project_id=project.id, run_id="mrun_test", event_id="start", shot_id="sht_test",
+    ))
+    try:
+        await handle_chat(project_id=project.id, message="Continue managed run",
+                          svc=object(), chat_fn=chat_fn)
+    finally:
+        managed_turn_scope.reset(scope_token)
+
+    assert load_project(project.id).script_text == "Original script"
+    assert "set_script" not in {tool["function"]["name"] for tool in calls[0]["tools"]}
 
 
 @pytest.mark.asyncio

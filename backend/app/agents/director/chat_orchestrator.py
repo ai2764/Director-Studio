@@ -487,6 +487,19 @@ def sanitize_tools_for_pipeline(
     from .service import _script_hash
 
     notes: list[str] = []
+    from ...core.managed_runs.context import managed_turn_scope
+    scope = managed_turn_scope.get()
+    if scope is not None and scope.project_id == project.id:
+        managed_tools = {"get_status", "inspect_asset", "write_prompt", "start_h3_video"}
+        allowed_tools = []
+        for item in tools:
+            name = _tool_name(item) if isinstance(item, dict) else ""
+            if name in managed_tools:
+                allowed_tools.append(item)
+            else:
+                notes.append(f"Skipped {name or '(missing name)'}: unavailable during a managed H3 run.")
+        return allowed_tools, notes
+
     if project.script_locked:
         unlocked_tools: list[dict[str, Any]] = []
         for item in tools:
@@ -505,11 +518,6 @@ def sanitize_tools_for_pipeline(
     if names and set(names) <= {"get_status", "status", "inspect_asset"}:
         return tools, notes
     if names and set(names) <= {"start_h3_video", "get_status", "inspect_asset"}:
-        return tools, notes
-    from ...core.managed_runs.context import managed_turn_scope
-    scope = managed_turn_scope.get()
-    if (scope is not None and scope.project_id == project.id and names
-            and set(names) <= {"start_h3_video", "write_prompt", "get_status", "inspect_asset"}):
         return tools, notes
     if names and set(names) <= {"queue_actor_design", "confirm_actor_design", "accept_actor_design"}:
         return tools, notes
@@ -1237,12 +1245,19 @@ async def orchestrate_chat(
             not isinstance(upload.get("classification"), dict)
             for upload in user_uploads
         )
-        return _director_tool_schemas(
+        schemas = _director_tool_schemas(
             current_project,
             current_message=message,
             allow_save_storyboard=allow_save_storyboard,
             include_chat_image_import=pending_uploads,
         )
+        from ...core.managed_runs.context import managed_turn_scope
+        scope = managed_turn_scope.get()
+        if scope is not None and scope.project_id == current_project.id:
+            managed_tools = {"get_status", "inspect_asset", "write_prompt", "start_h3_video"}
+            schemas = [schema for schema in schemas
+                       if schema["function"]["name"] in managed_tools]
+        return schemas
 
     context_blob = (
         _gpt_generation_context_blob(project, shots, message)
@@ -1507,6 +1522,10 @@ async def orchestrate_chat(
                     "accept_ref_frame",
                 }:
                     terminal_tool_reply = "\n".join(tool_notes).strip()
+                if tool["name"] == "write_prompt" and prompt_failure_message:
+                    from ...core.managed_runs.context import managed_turn_scope
+                    if managed_turn_scope.get() is not None:
+                        break
 
             for tool, unknown_payload in unknown_tool_results:
                 conversation.append(
