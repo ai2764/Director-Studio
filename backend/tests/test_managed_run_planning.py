@@ -231,3 +231,155 @@ def test_music_segment_change_invalidates_saved_plan() -> None:
 
     with pytest.raises(ValueError, match="changed"):
         run_selected(project.id, draft.run_id, [second.id], "landscape-480")
+
+
+def test_managed_tail_reference_does_not_invalidate_unchanged_plan() -> None:
+    from app.core.managed_runs.store import mark_tail_ready, pause_run, record_terminal
+    from app.core.projects.layouts import (
+        LayoutReference,
+        LayoutReviewStatus,
+        sync_selected_layout_refs,
+    )
+    from app.core.projects.store import load_shot
+    from app.core.projects.transitions import (
+        review_layout_reference,
+        select_layout_reference,
+    )
+    from app.core.schemas import JobStatus
+
+    project, first, second = _project_with_two_shots()
+    draft = create_draft(project.id, [
+        RunStep(shot_id=first.id),
+        RunStep(
+            shot_id=second.id,
+            tail_from_shot_id=first.id,
+            tail_reason="Continue the door",
+        ),
+    ])
+    running = run_selected(
+        project.id,
+        draft.run_id,
+        [first.id, second.id],
+        "landscape-480",
+    )
+    bind_job(project.id, running.run_id, first.id, "job_source")
+    running = record_terminal(
+        project.id,
+        "job_source",
+        JobStatus.succeeded,
+    )
+    target = load_shot(project.id, second.id)
+    layout = LayoutReference(
+        id="lref_managed_tail",
+        asset_id="lay_managed_tail",
+        purpose="managed continuity",
+        review_status=LayoutReviewStatus.pending_review,
+    )
+    target = target.model_copy(update={"layout_refs": [layout]})
+    target = review_layout_reference(
+        target,
+        layout.id,
+        LayoutReviewStatus.usable,
+        "Managed tail",
+        feedback_source="managed_run",
+    )
+    target = sync_selected_layout_refs(
+        select_layout_reference(target, layout.id, True)
+    )
+    save_shot(target)
+    mark_tail_ready(project.id, running.run_id, second.id, layout.id)
+    pause_run(project.id, running.run_id, "User paused")
+
+    resumed = run_selected(
+        project.id,
+        running.run_id,
+        [first.id, second.id],
+        None,
+    )
+
+    assert resumed.state == "active"
+    assert resumed.pending_shot_ids == [first.id, second.id]
+
+
+def test_literal_legacy_active_run_migrates_queue_and_fingerprint() -> None:
+    import json
+
+    from app.core.managed_runs.store import (
+        _fingerprint,
+        _legacy_fingerprint,
+        _run_dir,
+        record_terminal,
+    )
+    from app.core.schemas import JobStatus
+
+    project, first, second = _project_with_two_shots()
+    draft = create_draft(
+        project.id,
+        [RunStep(shot_id=first.id), RunStep(shot_id=second.id)],
+    )
+    legacy = draft.model_dump(mode="json")
+    for field in (
+        "selected_shot_ids",
+        "pending_shot_ids",
+        "skipped_shots",
+        "tail_source_job_ids",
+    ):
+        legacy.pop(field)
+    old_fingerprint = _legacy_fingerprint(project.id)
+    legacy.update({
+        "state": "active",
+        "current_index": 0,
+        "current_job_id": "job_legacy",
+        "pending_event_id": None,
+        "plan_fingerprint": old_fingerprint,
+        "current_fingerprint": old_fingerprint,
+    })
+    directory = _run_dir(project.id)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{draft.run_id}.json").write_text(
+        json.dumps(legacy),
+        encoding="utf-8",
+    )
+
+    migrated = load_run(project.id, draft.run_id)
+
+    assert migrated.pending_shot_ids == [first.id, second.id]
+    assert migrated.plan_fingerprint == _fingerprint(project.id)
+    advanced = record_terminal(
+        project.id,
+        "job_legacy",
+        JobStatus.succeeded,
+    )
+    assert advanced.current_job_id is None
+    assert advanced.pending_shot_ids == [second.id]
+    assert advanced.completed_job_ids[first.id] == "job_legacy"
+
+
+def test_bind_rejects_obsolete_selection_event() -> None:
+    project, first, second = _project_with_two_shots()
+    draft = create_draft(
+        project.id,
+        [RunStep(shot_id=first.id), RunStep(shot_id=second.id)],
+    )
+    running = run_selected(
+        project.id,
+        draft.run_id,
+        [first.id],
+        "landscape-480",
+    )
+    old_event = running.pending_event_id
+    request_stop(project.id, running.run_id)
+    finish_stop(project.id, running.run_id)
+    resumed = run_selected(project.id, running.run_id, [first.id], None)
+    assert resumed.pending_event_id != old_event
+
+    with pytest.raises(ValueError, match="event changed"):
+        bind_job(
+            project.id,
+            running.run_id,
+            first.id,
+            "job_old_event",
+            expected_event_id=old_event,
+        )
+
+    assert load_run(project.id, running.run_id).current_job_id is None

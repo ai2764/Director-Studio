@@ -60,6 +60,34 @@ class ShotVoiceRef(BaseModel):
         return self
 
 
+class ProjectMusicMaster(BaseModel):
+    filename: str
+    relative_path: str
+    duration_s: float = Field(gt=0)
+    content_sha256: str
+    source_format: str
+
+
+class ShotMusicSegment(BaseModel):
+    core_start_s: float = Field(ge=0)
+    core_end_s: float = Field(gt=0)
+    submit_start_s: float = Field(ge=0)
+    submit_end_s: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_intervals(self) -> "ShotMusicSegment":
+        if self.core_start_s >= self.core_end_s:
+            raise ValueError("music core interval must have positive duration")
+        if self.submit_start_s >= self.submit_end_s:
+            raise ValueError("music submit interval must have positive duration")
+        if (
+            self.submit_start_s > self.core_start_s
+            or self.submit_end_s < self.core_end_s
+        ):
+            raise ValueError("music submit interval must contain the core interval")
+        return self
+
+
 class AssetCoverageRecommendation(BaseModel):
     kind: Literal["actor", "scene", "prop", "costume", "layout", "other"]
     asset_id: str | None = None
@@ -138,6 +166,7 @@ class Shot(BaseModel):
     status: ShotStatus = ShotStatus.draft
     refs: list[ShotRef] = Field(default_factory=list)
     voice_refs: list[ShotVoiceRef] = Field(default_factory=list)
+    music_segment: ShotMusicSegment | None = None
     prompt_sections: PromptSections = Field(default_factory=PromptSections)
     dialogue: list[str] = Field(default_factory=list)
     layout_asset_id: str | None = None
@@ -201,6 +230,7 @@ class Project(BaseModel):
     created_at: str
     updated_at: str
     shot_ids: list[str] = Field(default_factory=list)
+    music_master: ProjectMusicMaster | None = None
     asset_coverage_review: AssetCoverageReview | None = None
 
 

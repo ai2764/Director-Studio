@@ -57,7 +57,12 @@ async def start_h3_video(project_id: str, shot_id: str, *, svc: Any,
             raise ValueError("Planned tail frame has not been attached to this Shot")
         if run.current_fingerprint and _fingerprint(project_id) != run.current_fingerprint:
             reason = "Shot brief or references changed after managed plan review"
-            pause_run(project_id, run.run_id, reason)
+            pause_run(
+                project_id,
+                run.run_id,
+                reason,
+                expected_event_id=scope.event_id,
+            )
             raise ValueError(reason)
         if not run.resolution_preset:
             raise ValueError("Managed H3 resolution was not selected")
@@ -76,7 +81,12 @@ async def start_h3_video(project_id: str, shot_id: str, *, svc: Any,
                 shot_id, svc, H3SubmitOptions(h3_provider="local", width=width, height=height)
             )
         except Exception as exc:
-            pause_run(project_id, run.run_id, f"H3 submission failed: {exc}")
+            pause_run(
+                project_id,
+                run.run_id,
+                f"H3 submission failed: {exc}",
+                expected_event_id=scope.event_id,
+            )
             # The canonical submit may fail after creating its durable Job.
             # A tagged orphan must not continue outside the stopped step.
             for started in list_jobs(limit=None, pipeline_id="h3_ref2va", project_id=project_id):
@@ -89,11 +99,17 @@ async def start_h3_video(project_id: str, shot_id: str, *, svc: Any,
             raise ValueError("H3 submit returned no Job ID")
         try:
             bind_job(project_id, run.run_id, shot_id, job_id,
-                     expected_fingerprint=starting_fingerprint)
+                     expected_fingerprint=starting_fingerprint,
+                     expected_event_id=scope.event_id)
         except ValueError as exc:
             # Stop may race the endpoint's asynchronous reference/prompt preflight.
             await cancel_job(job_id)
-            pause_run(project_id, run.run_id, f"H3 submission could not bind its Job: {exc}")
+            pause_run(
+                project_id,
+                run.run_id,
+                f"H3 submission could not bind its Job: {exc}",
+                expected_event_id=scope.event_id,
+            )
             raise
         finished = load_job(job_id)
         if finished is not None and finished.status in {

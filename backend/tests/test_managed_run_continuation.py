@@ -80,6 +80,39 @@ def test_sparse_selection_completes_without_replaying_earlier_shot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_obsolete_continuation_does_not_pause_resumed_batch(
+    monkeypatch,
+) -> None:
+    from app.agents.director.chat_orchestrator import ChatResult
+    from app.core.managed_runs import continuation
+
+    run = _run()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def delayed_agent_turn(current, _svc):
+        entered.set()
+        await release.wait()
+        return ChatResult(reply="Old managed turn ended without a Job")
+
+    monkeypatch.setattr(continuation, "_agent_turn", delayed_agent_turn)
+    task = asyncio.create_task(
+        continuation.continue_run(run.project_id, run.run_id)
+    )
+    await entered.wait()
+    request_stop(run.project_id, run.run_id)
+    finish_stop(run.project_id, run.run_id)
+    resumed = run_selected(run.project_id, run.run_id, ["sht_2"], None)
+    release.set()
+    await task
+
+    saved = load_run(run.project_id, run.run_id)
+    assert saved.state == "active"
+    assert saved.pending_event_id == resumed.pending_event_id
+    assert saved.pending_shot_ids == ["sht_2"]
+
+
+@pytest.mark.asyncio
 async def test_continuation_runs_only_first_selected_pending_shot(monkeypatch) -> None:
     from app.core.managed_runs import continuation
 
@@ -186,6 +219,7 @@ async def test_tail_for_unselected_source_uses_persisted_successful_job(
             ),
         ],
         "current_index": 1,
+        "selected_shot_ids": ["sht_2"],
         "pending_shot_ids": ["sht_2"],
         "tail_source_job_ids": {"sht_2": "job_existing"},
     }))

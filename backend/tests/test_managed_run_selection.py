@@ -209,3 +209,38 @@ def test_completed_job_is_preferred_over_a_newer_successful_generation() -> None
     ) == managed.id
     batch = build_execution_batch(project.id, run, [dependent.id])
     assert batch.tail_source_job_ids[dependent.id] == managed.id
+
+
+def test_execution_honors_validated_fallback_over_missing_completed_job() -> None:
+    from app.core.managed_runs.continuation import _tail_source_job_id
+
+    project, source, dependent = project_with_tail_dependency()
+    usable = save_h3_generation(
+        project.id, source.id, JobStatus.succeeded, b"usable"
+    )
+    run = ManagedRun(
+        run_id="mrun_missing_preferred",
+        project_id=project.id,
+        plan_fingerprint="fp",
+        completed_job_ids={source.id: "job_missing"},
+        steps=[
+            RunStep(shot_id=source.id),
+            RunStep(
+                shot_id=dependent.id,
+                tail_from_shot_id=source.id,
+                tail_reason="Continue the pose",
+            ),
+        ],
+    )
+    batch = build_execution_batch(project.id, run, [dependent.id])
+    execution = run.model_copy(update={
+        "selected_shot_ids": batch.selected_shot_ids,
+        "pending_shot_ids": batch.pending_shot_ids,
+        "tail_source_job_ids": batch.tail_source_job_ids,
+    })
+
+    assert batch.tail_source_job_ids[dependent.id] == usable.id
+    assert _tail_source_job_id(
+        execution,
+        execution.steps[1],
+    ) == usable.id

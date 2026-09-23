@@ -27,12 +27,20 @@ _continuation_tasks: dict[str, asyncio.Task[None]] = {}
 def _tail_source_job_id(run: ManagedRun, step: RunStep) -> str | None:
     if not step.tail_from_shot_id:
         return None
+    if step.tail_from_shot_id in run.selected_shot_ids:
+        return (
+            run.completed_job_ids.get(step.tail_from_shot_id)
+            or latest_successful_video_job_id(
+                run.project_id,
+                step.tail_from_shot_id,
+            )
+        )
     return (
-        run.completed_job_ids.get(step.tail_from_shot_id)
-        or run.tail_source_job_ids.get(step.shot_id)
+        run.tail_source_job_ids.get(step.shot_id)
         or latest_successful_video_job_id(
             run.project_id,
             step.tail_from_shot_id,
+            run.completed_job_ids.get(step.tail_from_shot_id),
         )
     )
 
@@ -114,10 +122,27 @@ async def prepare_planned_tail(run: ManagedRun, svc: Any) -> None:
             raise
         # The selected frame is durable. Give the Agent one informed chance to
         # author the prompt instead of repeating this same automatic draft.
-        mark_tail_ready(run.project_id, run.run_id, step.shot_id, layout_id)
-        record_prompt_retry(run.project_id, run.run_id, str(exc))
+        mark_tail_ready(
+            run.project_id,
+            run.run_id,
+            step.shot_id,
+            layout_id,
+            expected_event_id=run.pending_event_id,
+        )
+        record_prompt_retry(
+            run.project_id,
+            run.run_id,
+            str(exc),
+            expected_event_id=run.pending_event_id,
+        )
         return
-    mark_tail_ready(run.project_id, run.run_id, step.shot_id, layout_id)
+    mark_tail_ready(
+        run.project_id,
+        run.run_id,
+        step.shot_id,
+        layout_id,
+        expected_event_id=run.pending_event_id,
+    )
 
 
 async def _agent_turn(run: ManagedRun, svc: Any) -> Any:
@@ -198,6 +223,7 @@ async def continue_run(project_id: str, run_id: str) -> None:
         return
     if run.current_job_id or current_step(run) is None:
         return
+    event_id = run.pending_event_id
     try:
         if run.current_fingerprint and _fingerprint(project_id) != run.current_fingerprint:
             pause_run(project_id, run_id, "Shot brief or references changed after plan review")
@@ -208,23 +234,32 @@ async def continue_run(project_id: str, run_id: str) -> None:
         svc = DirectorService(plan_provider=DirectorLLMPlanProvider())
         await prepare_planned_tail(run, svc)
         latest = load_run(project_id, run_id)
-        if latest is None or latest.state != "active" or not latest.pending_event_id:
+        if (
+            latest is None
+            or latest.state != "active"
+            or latest.pending_event_id != event_id
+        ):
             return
         while latest is not None and latest.state == "active" and not latest.current_job_id:
+            turn_event_id = latest.pending_event_id
             result = await _agent_turn(latest, svc)
             latest = load_run(project_id, run_id)
             if latest is None or latest.state != "active" or latest.current_job_id:
                 break
+            if latest.pending_event_id != turn_event_id:
+                return
             if (getattr(result, "failure_code", "") == "PROMPT_GENERATION_FAILED"
                     and latest.prompt_retry_count < 1):
                 latest = record_prompt_retry(
                     project_id, run_id,
                     getattr(result, "failure_message", "") or result.reply,
+                    expected_event_id=turn_event_id,
                 )
                 continue
             pause_run(
                 project_id, run_id,
                 (getattr(result, "failure_message", "") or "Agent turn ended without starting the planned H3 job"),
+                expected_event_id=turn_event_id,
             )
             break
     except asyncio.CancelledError:
@@ -238,7 +273,14 @@ async def continue_run(project_id: str, run_id: str) -> None:
                 run_id, latest.current_job_id,
             )
             return
-        pause_run(project_id, run_id, f"Managed continuation failed: {exc}")
+        if latest is None or latest.pending_event_id != event_id:
+            return
+        pause_run(
+            project_id,
+            run_id,
+            f"Managed continuation failed: {exc}",
+            expected_event_id=event_id,
+        )
 
 
 def schedule_continuation(project_id: str) -> None:
@@ -280,7 +322,8 @@ def schedule_pending_runs() -> None:
             elif len(candidates) == 1:
                 try:
                     run = bind_job(project.id, run.run_id, step.shot_id, candidates[0].id,
-                                   expected_fingerprint=run.current_fingerprint)
+                                   expected_fingerprint=run.current_fingerprint,
+                                   expected_event_id=run.pending_event_id)
                 except ValueError as exc:
                     pause_run(project.id, run.run_id, f"Could not reconcile managed H3 Job: {exc}")
             run = active_run_for_project(project.id)

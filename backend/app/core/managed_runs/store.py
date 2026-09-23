@@ -28,15 +28,23 @@ def _run_dir(project_id: str) -> Path:
     return project_dir(project_id) / "managed_runs"
 
 
-def _fingerprint(project_id: str) -> str:
-    project = load_project(project_id)
-    if project is None:
-        raise ValueError("Project not found")
-    shots = list_shots(project_id)
-    if [shot.id for shot in shots] != project.shot_ids:
-        raise ValueError("Project Shot list is incomplete")
-    authored = [
-        {
+def _authored_shot_payload(shots, *, legacy: bool) -> list[dict]:
+    authored = []
+    for shot in shots:
+        managed_layout_assets = {
+            str(layout.asset_id)
+            for layout in shot.layout_refs
+            if layout.asset_id and layout.feedback_source == "managed_run"
+        }
+        refs = [
+            ref.model_dump(mode="json")
+            for ref in shot.refs
+            if legacy or not (
+                ref.role.value == "layout_ref_frame"
+                and ref.asset_id in managed_layout_assets
+            )
+        ]
+        item = {
             "shot_id": shot.id,
             "title": shot.title,
             "script_beat": shot.script_beat,
@@ -46,27 +54,49 @@ def _fingerprint(project_id: str) -> str:
             "composition": shot.composition,
             "duration_s": shot.duration_s,
             "dialogue": shot.dialogue,
-            "refs": [ref.model_dump(mode="json") for ref in shot.refs],
+            "refs": refs,
             "voice_refs": [ref.model_dump(mode="json") for ref in shot.voice_refs],
-            "music_segment": (
-                shot.music_segment.model_dump(mode="json")
-                if shot.music_segment else None
-            ),
-            "source_audio_path": shot.source_audio_path,
         }
-        for shot in shots
-    ]
-    payload = json.dumps(
-        [
-            project.script_text,
+        if not legacy:
+            item.update({
+                "music_segment": (
+                    shot.music_segment.model_dump(mode="json")
+                    if shot.music_segment else None
+                ),
+                "source_audio_path": shot.source_audio_path,
+            })
+        authored.append(item)
+    return authored
+
+
+def _project_fingerprint(project_id: str, *, legacy: bool) -> str:
+    project = load_project(project_id)
+    if project is None:
+        raise ValueError("Project not found")
+    shots = list_shots(project_id)
+    if [shot.id for shot in shots] != project.shot_ids:
+        raise ValueError("Project Shot list is incomplete")
+    authored = _authored_shot_payload(shots, legacy=legacy)
+    fingerprint_items = [project.script_text, project.shot_ids, authored]
+    if not legacy:
+        fingerprint_items.insert(
+            1,
             project.music_master.content_sha256 if project.music_master else None,
-            project.shot_ids,
-            authored,
-        ],
+        )
+    payload = json.dumps(
+        fingerprint_items,
         sort_keys=True,
         ensure_ascii=False,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _fingerprint(project_id: str) -> str:
+    return _project_fingerprint(project_id, legacy=False)
+
+
+def _legacy_fingerprint(project_id: str) -> str:
+    return _project_fingerprint(project_id, legacy=True)
 
 
 def _validate_steps(project_id: str, steps: list[RunStep]) -> None:
@@ -97,20 +127,50 @@ def _save_run(run: ManagedRun) -> ManagedRun:
     return run
 
 
+def _decode_run(project_id: str, content: str) -> ManagedRun:
+    payload = json.loads(content)
+    run = ManagedRun.model_validate(payload)
+    if "pending_shot_ids" in payload:
+        return run
+
+    plan_ids = [step.shot_id for step in run.steps]
+    pending = (
+        plan_ids[run.current_index:]
+        if run.state in {"active", "stopping", "paused", "stopped"}
+        else []
+    )
+    updates: dict[str, object] = {
+        "selected_shot_ids": plan_ids,
+        "pending_shot_ids": pending,
+        "skipped_shots": {},
+        "tail_source_job_ids": {},
+    }
+    try:
+        legacy_fingerprint = _legacy_fingerprint(project_id)
+        if run.plan_fingerprint == legacy_fingerprint:
+            current_fingerprint = _fingerprint(project_id)
+            updates["plan_fingerprint"] = current_fingerprint
+            if run.current_fingerprint in {"", legacy_fingerprint}:
+                updates["current_fingerprint"] = current_fingerprint
+    except ValueError:
+        pass
+    return run.model_copy(update=updates)
+
+
 def load_run(project_id: str, run_id: str) -> ManagedRun | None:
     if not run_id.startswith("mrun_") or not run_id[5:].isalnum():
         return None
     path = _run_dir(project_id) / f"{run_id}.json"
     if not path.is_file():
         return None
-    return ManagedRun.model_validate_json(path.read_text(encoding="utf-8"))
+    return _decode_run(project_id, path.read_text(encoding="utf-8"))
 
 
 def list_runs(project_id: str) -> list[ManagedRun]:
     directory = _run_dir(project_id)
     if not directory.is_dir():
         return []
-    runs = [ManagedRun.model_validate_json(path.read_text(encoding="utf-8"))
+    runs = [_decode_run(project_id, path.read_text(encoding="utf-8"))
             for path in directory.glob("mrun_*.json")]
     return sorted(runs, key=lambda run: (run.created_at, run.run_id), reverse=True)
 
@@ -135,11 +195,14 @@ def _plan_index(run: ManagedRun, shot_id: str | None) -> int:
 
 
 def bind_job(project_id: str, run_id: str, shot_id: str, job_id: str,
-             *, expected_fingerprint: str | None = None) -> ManagedRun:
+             *, expected_fingerprint: str | None = None,
+             expected_event_id: str | None = None) -> ManagedRun:
     with _project_lock(project_id):
         run = load_run(project_id, run_id)
         if run is None or run.state != "active":
             raise ValueError("Managed run was stopped before the H3 job could be bound")
+        if expected_event_id and run.pending_event_id != expected_event_id:
+            raise ValueError("Managed run event changed before the H3 job could be bound")
         step = current_step(run)
         if step is None or step.shot_id != shot_id:
             raise ValueError("H3 job is not for the next planned Shot")
@@ -192,11 +255,27 @@ def record_terminal(project_id: str, job_id: str, status: JobStatus, error: str 
         }))
 
 
-def mark_tail_ready(project_id: str, run_id: str, shot_id: str, layout_id: str) -> ManagedRun:
+def mark_tail_ready(
+    project_id: str,
+    run_id: str,
+    shot_id: str,
+    layout_id: str,
+    *,
+    expected_event_id: str | None = None,
+) -> ManagedRun:
     with _project_lock(project_id):
         run = load_run(project_id, run_id)
         step = current_step(run) if run is not None else None
-        if run is None or run.state != "active" or step is None or step.shot_id != shot_id:
+        if (
+            run is None
+            or run.state != "active"
+            or step is None
+            or step.shot_id != shot_id
+            or (
+                expected_event_id is not None
+                and run.pending_event_id != expected_event_id
+            )
+        ):
             raise ValueError("Managed run changed while preparing tail frame")
         prepared = dict(run.prepared_tail_layout_ids)
         prepared[shot_id] = layout_id
@@ -206,11 +285,19 @@ def mark_tail_ready(project_id: str, run_id: str, shot_id: str, layout_id: str) 
         }))
 
 
-def pause_run(project_id: str, run_id: str, reason: str) -> ManagedRun:
+def pause_run(
+    project_id: str,
+    run_id: str,
+    reason: str,
+    *,
+    expected_event_id: str | None = None,
+) -> ManagedRun:
     with _project_lock(project_id):
         run = load_run(project_id, run_id)
         if run is None:
             raise ValueError("Managed run not found")
+        if expected_event_id and run.pending_event_id != expected_event_id:
+            return run
         if run.state != "active":
             return run
         return _save_run(run.model_copy(update={
@@ -218,11 +305,19 @@ def pause_run(project_id: str, run_id: str, reason: str) -> ManagedRun:
         }))
 
 
-def record_prompt_retry(project_id: str, run_id: str, error: str) -> ManagedRun:
+def record_prompt_retry(
+    project_id: str,
+    run_id: str,
+    error: str,
+    *,
+    expected_event_id: str | None = None,
+) -> ManagedRun:
     with _project_lock(project_id):
         run = load_run(project_id, run_id)
         if run is None or run.state != "active" or run.current_job_id:
             raise ValueError("Managed run is no longer awaiting a prompt")
+        if expected_event_id and run.pending_event_id != expected_event_id:
+            raise ValueError("Managed run event changed before prompt retry")
         if run.prompt_retry_count >= 1:
             raise ValueError("Managed prompt retry budget reached")
         return _save_run(run.model_copy(update={
