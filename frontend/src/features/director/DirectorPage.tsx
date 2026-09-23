@@ -9,6 +9,7 @@ import { ShotWorkspace } from "./ShotWorkspace";
 import { ContextUsagePanel } from "./ContextUsage";
 import { ContextCompaction } from "./ContextCompaction";
 import { MobileShotDrawer } from "./MobileShotDrawer";
+import { MusicMasterControl } from "./MusicMasterControl";
 import {
   cancelDirectorChatSession,
   DirectorChatError,
@@ -746,6 +747,8 @@ function DirectorAgentWorkspace({
             </div>
           </div>
         </div>
+
+        <MusicMasterControl />
 
         {mobile && !chatOnly ? (
           <MobileShotDrawer shots={shots} onOpenImage={setLightbox} />

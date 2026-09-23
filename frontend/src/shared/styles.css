@@ -3772,6 +3772,19 @@ select {
   display: none;
 }
 
+.mobile-director-layout .music-master-control {
+  margin: 0;
+  padding-inline: 0.35rem;
+}
+
+.mobile-director-layout .music-master-label {
+  display: none;
+}
+
+.mobile-director-layout .music-master-error {
+  max-width: 10rem;
+}
+
 .mobile-director-layout .director-chat-header-row {
   align-items: center;
   flex-wrap: nowrap;
@@ -5685,6 +5698,90 @@ select {
 
 .project-scope-hint {
   margin: 0.15rem 0 0;
+}
+
+.music-master-control {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 46px;
+  margin: 0 -1rem;
+  padding: 0.45rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent-soft) 36%, var(--bg-panel));
+}
+
+.music-master-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.music-master-label {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.music-master-status {
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.78rem;
+}
+
+.music-master-status strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-master-status > span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.music-master-error {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--danger);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-master-action {
+  flex: 0 0 auto;
+  margin-left: auto;
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
+.music-master-error + .music-master-action {
+  margin-left: 0;
+}
+
+.music-master-action input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.music-master-action:focus-within {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.music-master-action.disabled {
+  cursor: wait;
+  opacity: 0.6;
 }
 
 .chat-log {

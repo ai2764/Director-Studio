@@ -100,6 +100,20 @@ export async function updateProject(
   return res.json();
 }
 
+export async function uploadMusicMaster(
+  projectId: string,
+  file: File,
+): Promise<Project> {
+  const body = new FormData();
+  body.append("file", file);
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/music-master`,
+    { method: "POST", body },
+  );
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
 export async function planProject(projectId: string): Promise<ProjectDetail> {
   const res = await fetch(`/api/projects/${projectId}/plan`, { method: "POST" });
   if (!res.ok) throw new Error(await parseError(res));

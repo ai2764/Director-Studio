@@ -6,6 +6,7 @@ import {
   chatWithDirectorStream,
   getDirectorChatSession,
   getDirectorVramStatus,
+  uploadMusicMaster,
 } from "./api";
 
 afterEach(() => {
@@ -70,6 +71,39 @@ it("uses multipart transport when Director chat includes images", async () => {
   const form = init.body as FormData;
   expect(form.get("message")).toBe("Inspect this");
   expect(form.getAll("images")).toEqual([file]);
+});
+
+it("uploads the selected song as the MV project master", async () => {
+  const updated = {
+    id: "prj_mv",
+    name: "Music video",
+    script_text: "",
+    mode: "mv",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:01Z",
+    shot_ids: [],
+    music_master: {
+      filename: "song.wav",
+      relative_path: "music/master.wav",
+      duration_s: 12.5,
+      content_sha256: "a".repeat(64),
+      source_format: "wav",
+    },
+  };
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => updated,
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const file = new File(["audio"], "song.wav", { type: "audio/wav" });
+
+  await expect(uploadMusicMaster("prj_mv", file)).resolves.toEqual(updated);
+
+  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(url).toBe("/api/projects/prj_mv/music-master");
+  expect(init.method).toBe("POST");
+  expect(init.body).toBeInstanceOf(FormData);
+  expect((init.body as FormData).get("file")).toBe(file);
 });
 
 it("fetches the global Director VRAM status", async () => {

@@ -163,6 +163,14 @@ export interface Shot {
 
 export type ProjectMode = "director" | "mv" | "json_production";
 
+export interface ProjectMusicMaster {
+  filename: string;
+  relative_path: string;
+  duration_s: number;
+  content_sha256: string;
+  source_format: string;
+}
+
 export interface AssetCoverageRecommendation {
   kind: "actor" | "scene" | "prop" | "costume" | "layout" | "other";
   asset_id?: string | null;
@@ -188,6 +196,7 @@ export interface Project {
   created_at: string;
   updated_at: string;
   shot_ids: string[];
+  music_master?: ProjectMusicMaster | null;
   asset_coverage_review?: AssetCoverageReview | null;
 }
 
