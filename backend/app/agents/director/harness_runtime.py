@@ -413,6 +413,8 @@ class BackendTurn:
             reply = "No storyboard save was confirmed in this turn."
         images = self.result_images + _layout_images(shots, only_shot_ids=self.touched) if self.touched else self.result_images
         return ChatResult(reply=reply, project=project, shots=shots, actions=self.actions,
+                          failure_code="PROMPT_GENERATION_FAILED" if self.terminal_failure else "",
+                          failure_message=self.terminal_failure or "",
                           images=images, thinking=result.get("thinking", ""), steps=self.notes)
 
 

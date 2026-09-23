@@ -153,6 +153,8 @@ class ChatImage:
 @dataclass
 class ChatResult:
     reply: str
+    failure_code: str = ""
+    failure_message: str = ""
     actions: list[str] = field(default_factory=list)
     project: Project | None = None
     shots: list[Shot] = field(default_factory=list)
@@ -1051,6 +1053,7 @@ async def orchestrate_chat(
     steps: list[str] = []
     storyboard_save_attempted = False
     storyboard_save_blocked = False
+    prompt_failure_message = ""
 
     async def progress(type_: str, text: str) -> None:
         """Local helper — also forwards to external on_progress as event dict."""
@@ -1113,6 +1116,8 @@ async def orchestrate_chat(
             all_think = (all_think + "\n" + thinking).strip() if all_think else thinking
         return ChatResult(
             reply=r,
+            failure_code="PROMPT_GENERATION_FAILED" if prompt_failure_message else "",
+            failure_message=prompt_failure_message,
             actions=acts,
             project=p,
             shots=sh,
@@ -1470,6 +1475,15 @@ async def orchestrate_chat(
                 }
                 for structured_result in structured_results:
                     tool_payload.update(structured_result)
+                if tool["name"] == "write_prompt":
+                    prompt_failure_message = (
+                        str(tool_payload.get("error") or "Prompt generation failed")
+                        if tool_payload.get("ok") is False else ""
+                    )
+                    if prompt_failure_message:
+                        from ...core.managed_runs.context import managed_turn_scope
+                        if managed_turn_scope.get() is not None:
+                            terminal_tool_reply = prompt_failure_message
                 if tool["name"] == "save_storyboard":
                     storyboard_retry_pending = (
                         tool_payload.get("ok") is False
@@ -1485,6 +1499,8 @@ async def orchestrate_chat(
                         ),
                     }
                 )
+                if tool_payload.get("concludes_turn") is True:
+                    terminal_tool_reply = str(tool_payload.get("reply") or "\n".join(tool_notes)).strip()
                 if tool["name"] in {
                     "queue_gpt_ref_frame",
                     "queue_actor_design",

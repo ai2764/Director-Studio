@@ -31,7 +31,12 @@ it("requires a reviewed plan and explicit local resolution before autonomous sta
   ]} onProjectChanged={() => {}} />);
 
   fireEvent.click(await screen.findByRole("button", { name: "Plan managed run" }));
+  const summary = await screen.findByText("Plan details");
+  const details = summary.closest("details");
+  expect(details?.open).toBe(false);
+  fireEvent.click(summary);
   expect(await screen.findByText(/Match the door/)).toBeTruthy();
+  expect(details?.open).toBe(true);
   expect((screen.getByRole("button", { name: "Start managed run" }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.change(screen.getByLabelText("Managed run resolution"), { target: { value: "portrait-768" } });
   fireEvent.click(screen.getByRole("button", { name: "Start managed run" }));
@@ -50,4 +55,17 @@ it("offers stop for an active local run", async () => {
     provider="local" presets={[]} onProjectChanged={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: "Stop managed run" }));
   await waitFor(() => expect(stopManagedRun).toHaveBeenCalledWith("prj_1", "mrun_2"));
+});
+
+it("explains what planning does without starting a video", async () => {
+  vi.mocked(getManagedRun).mockResolvedValue(null);
+  render(<ManagedRunControls projectId="prj_1" shots={[{ id: "sht_1", title: "Open" }]}
+    provider="local" presets={[]} onProjectChanged={() => {}} />);
+
+  const info = await screen.findByRole("button", { name: "About Plan managed run" });
+  expect(info.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(info);
+  expect(info.getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByText(/existing Shots.*tail-frame handoffs/)).toBeTruthy();
+  expect(screen.getByText(/No video starts until/)).toBeTruthy();
 });

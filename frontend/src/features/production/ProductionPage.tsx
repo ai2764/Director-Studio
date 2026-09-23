@@ -39,42 +39,6 @@ type ProjectLoadState = {
   status: "idle" | "loading" | "loaded" | "error";
 };
 
-function ProductionWorkflowProfile({ profile, error, job }: {
-  profile: H3ActiveProfile | null;
-  error: string | null;
-  job: H3JobRecord | null;
-}) {
-  return (
-    <div className="production-workflow-profile">
-      {profile ? (
-        <>
-          <span>{`Local · ComfyUI — ${profile.display_name}`}</span>
-          <small>{`Workflow: ${profile.display_name}`}</small>
-          {profile.warning ? (
-            <div className="banner" role="status">
-              <strong>Using Built-in Official H3</strong>
-              <span>{profile.warning.message}</span>
-            </div>
-          ) : null}
-        </>
-      ) : (
-        <span className="muted">
-          {error ? `Workflow status unavailable: ${error}` : "Loading local workflow…"}
-        </span>
-      )}
-      {job?.h3_profile_id ? (
-        <small>
-          Submitted workflow: {job.h3_profile_id === "builtin-official-h3"
-            ? "Built-in Official H3" : job.h3_profile_id}
-          {job.h3_profile_sha256 ? (
-            <code className="workflow-hash">{job.h3_profile_sha256}</code>
-          ) : null}
-        </small>
-      ) : null}
-    </div>
-  );
-}
-
 type DrawerTab = "layout" | "refs" | "prompt" | "run";
 function pictureLabel(ref: { role: string; picture_index: number }): string {
   if (ref.role === "layout_ref_frame") {
@@ -806,16 +770,25 @@ export function ProductionPage({
       title="Production"
       subtitle={
         projectId ? (
-          <>
-            Shot list → layout / refs / prompt → Submit H3. No separate approve step.
-          </>
+          <strong className="production-workflow-title">
+            {workflowProfile
+              ? `Local · ComfyUI — ${workflowProfile.display_name}`
+              : workflowProfileError
+                ? `Workflow status unavailable: ${workflowProfileError}`
+                : "Loading local workflow…"}
+          </strong>
         ) : (
           "Select a project in the header."
         )
       }
       className="production-page"
     >
-      <ProductionWorkflowProfile profile={workflowProfile} error={workflowProfileError} job={h3Job} />
+      {workflowProfile?.warning ? (
+        <div className="banner production-workflow-warning" role="status">
+          <strong>{`Using ${workflowProfile.display_name}`}</strong>
+          <span>{workflowProfile.warning.message}</span>
+        </div>
+      ) : null}
       {error ? <div className="banner error">{error}</div> : null}
       {projectId ? <ManagedRunControls projectId={projectId} shots={shots}
         provider={h3Provider} presets={localResolutions}

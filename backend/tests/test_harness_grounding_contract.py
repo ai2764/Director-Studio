@@ -70,6 +70,8 @@ def test_terminal_failure_does_not_restore_false_claim_around_text_tool_call(tmp
     assert "Shot 2 prompt completed" not in result.reply
     assert "Shot 2 prompt failed" in result.reply
     assert "not executed" in result.reply
+    assert result.failure_code == "PROMPT_GENERATION_FAILED"
+    assert result.failure_message == "Shot 2 prompt failed"
 
 
 @pytest.mark.asyncio

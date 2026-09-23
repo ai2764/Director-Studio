@@ -310,6 +310,63 @@ async def test_start_h3_video_submits_exact_next_shot_with_run_resolution(monkey
 
 
 @pytest.mark.asyncio
+async def test_managed_native_turn_ends_immediately_after_starting_h3(
+    monkeypatch, authorize_managed_turn,
+) -> None:
+    """A bound Comfy Job must not be followed by another GPU-backed LLM call."""
+    from app.agents.director.chat import handle_chat
+    from app.api import projects as projects_api
+
+    project = create_project("Managed terminal start", "A short scene")
+    shot = Shot(
+        id="sht_terminal_start", project_id=project.id, scene_id="scene_1",
+        title="Open", script_beat="A door opens.", duration_s=5,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    draft = create_draft(project.id, [RunStep(shot_id=shot.id)])
+    run = activate_run(project.id, draft.run_id, "landscape-480")
+    authorize_managed_turn(run)
+
+    async def fake_submit(shot_id, svc, options):
+        job = create_job(
+            pipeline_id="h3_ref2va", asset_kind="productions", name="managed",
+            project_id=project.id, params={"shot_id": shot_id},
+        )
+        updated = load_shot(project.id, shot_id).model_copy(update={"h3_job_id": job.id})
+        save_shot(updated)
+        return updated
+
+    calls = 0
+
+    async def chat_fn(system, user, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise AssertionError("start_h3_video must conclude the Agent turn")
+        return {
+            "content": "",
+            "tool_calls": [{
+                "name": "start_h3_video",
+                "arguments": {"shot_id": shot.id},
+            }],
+        }
+
+    monkeypatch.setattr(projects_api, "submit_shot_endpoint", fake_submit)
+    result = await handle_chat(
+        project_id=project.id,
+        message=f"Managed local H3 run {run.run_id}: start the planned Shot.",
+        svc=object(),
+        chat_fn=chat_fn,
+        managed_session_id="managed-terminal-start",
+    )
+
+    assert calls == 1
+    assert result.reply.startswith("Started local H3 video")
+    assert load_run(project.id, run.run_id).current_job_id is not None
+
+
+@pytest.mark.asyncio
 async def test_managed_run_does_not_accept_agent_resolution_override(monkeypatch, authorize_managed_turn) -> None:
     from app.agents.director.tool_handlers.video import start_h3_video
     from app.api import projects as projects_api
@@ -380,6 +437,8 @@ async def test_harness_tool_returns_bound_job_on_repeated_new_call_id(monkeypatc
     second = await turn.dispatch("tool", {"name": "start_h3_video", "arguments": {"shot_id": shot.id}, "call_id": "call-2"})
     third = await turn.dispatch("tool", {"name": "start_h3_video", "arguments": {"shot_id": shot.id}, "call_id": "call-3"})
     assert first["ok"] and second["ok"] and third["ok"]
+    assert first["concludes_turn"] is True
+    assert first["reply"].startswith("Started local H3 video")
     assert first["job_id"] == second["job_id"]
     assert second["job_id"] == third["job_id"]
     assert submitted == [shot.id]
@@ -423,6 +482,33 @@ async def test_stop_during_preflight_cancels_late_job(monkeypatch, authorize_man
         await task
     assert cancelled == [load_shot(project.id, shot.id).h3_job_id]
     assert load_run(project.id, draft.run_id).current_job_id is None
+
+
+@pytest.mark.asyncio
+async def test_stopped_managed_turn_cannot_fall_through_to_one_off(monkeypatch, authorize_managed_turn) -> None:
+    from app.agents.director.tool_handlers.video import start_h3_video
+    from app.api import projects as projects_api
+
+    project = create_project("Stopped managed turn", "A short scene")
+    shot = Shot(id="sht_stopped", project_id=project.id, scene_id="scene_1",
+                title="Open", script_beat="A door opens.", duration_s=5)
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    draft = create_draft(project.id, [RunStep(shot_id=shot.id)])
+    run = activate_run(project.id, draft.run_id, "landscape-480")
+    authorize_managed_turn(run)
+    request_stop(project.id, run.run_id)
+    submitted = []
+
+    async def fake_submit(*args, **kwargs):
+        submitted.append(args)
+        raise AssertionError("a stopped managed turn must not submit")
+
+    monkeypatch.setattr(projects_api, "submit_shot_endpoint", fake_submit)
+    with pytest.raises(ValueError, match="managed.*stopped"):
+        await start_h3_video(project.id, shot.id, svc=object(),
+                             one_off_authorized=True, resolution_preset="landscape-480")
+    assert submitted == []
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ import asyncio
 
 from app.core.managed_runs.models import RunStep
 from app.core.managed_runs.store import (
-    activate_run, bind_job, create_draft, load_run, record_terminal, request_stop,
+    activate_run, bind_job, create_draft, load_run, record_prompt_retry, record_terminal, request_stop,
 )
 from app.core.projects.models import Shot
 from app.core.projects.store import create_project, save_project, save_shot
@@ -90,6 +90,61 @@ async def test_planned_tail_uses_exact_completed_job_and_selects_for_h3(monkeypa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("needs_user_decision", [False, True])
+async def test_tail_prompt_failure_hands_selected_frame_and_error_to_agent(monkeypatch, needs_user_decision) -> None:
+    from app.core.managed_runs import continuation
+    from app.core.managed_runs.store import _save_run
+    from app.core.projects.store import load_shot
+    from app.core.projects.layouts import LayoutReference, LayoutReviewStatus
+    from app.agents.director.chat_orchestrator import ChatResult
+    from app.agents.director.tail_prompt_review import CreativeQuestion
+
+    run = _run()
+    run = _save_run(run.model_copy(update={"steps": [
+        RunStep(shot_id="sht_1"),
+        RunStep(shot_id="sht_2", tail_from_shot_id="sht_1", tail_reason="Continue motion"),
+    ]}))
+    bind_job(run.project_id, run.run_id, "sht_1", "job_first")
+    run = record_terminal(run.project_id, "job_first", JobStatus.succeeded)
+
+    def fake_extract(**kwargs):
+        shot = load_shot(run.project_id, "sht_2")
+        layout = LayoutReference(id="lref_tail", asset_id="lay_tail", purpose="continuity",
+                                 review_status=LayoutReviewStatus.pending_review)
+        save_shot(shot.model_copy(update={"layout_refs": [layout]}))
+        return {"layout_ref_id": layout.id, "layout_asset_id": layout.asset_id}
+
+    class FailingService:
+        async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
+            if needs_user_decision:
+                raise CreativeQuestion("Material review needs your decision: choose a camera angle")
+            raise ValueError("tail dialogue mismatch")
+
+    seen = []
+
+    async def fake_agent(current, svc):
+        seen.append((current.prompt_retry_count, current.prompt_retry_error,
+                     current.prepared_tail_layout_ids.get("sht_2")))
+        bind_job(current.project_id, current.run_id, "sht_2", "job_recovered")
+        return ChatResult(reply="Job started")
+
+    monkeypatch.setattr(continuation, "extract_clip_tail_frame", fake_extract)
+    monkeypatch.setattr(continuation, "_agent_turn", fake_agent)
+    monkeypatch.setattr("app.agents.director.DirectorService", lambda **kwargs: FailingService())
+    await continuation.continue_run(run.project_id, run.run_id)
+
+    saved = load_run(run.project_id, run.run_id)
+    if needs_user_decision:
+        assert seen == []
+        assert saved.state == "paused"
+        assert "choose a camera angle" in saved.paused_reason
+    else:
+        assert seen == [(1, "tail dialogue mismatch", "lref_tail")]
+        assert saved.current_job_id == "job_recovered"
+    assert load_shot(run.project_id, "sht_2").layout_refs[0].selected_for_h3 is True
+
+
+@pytest.mark.asyncio
 async def test_empty_agent_turn_pauses_instead_of_repeating(monkeypatch) -> None:
     from app.core.managed_runs import continuation
     run = _run()
@@ -102,6 +157,94 @@ async def test_empty_agent_turn_pauses_instead_of_repeating(monkeypatch) -> None
     await continuation.continue_run(run.project_id, run.run_id)
     assert calls == [0]
     assert load_run(run.project_id, run.run_id).state == "paused"
+
+
+@pytest.mark.asyncio
+async def test_prompt_failure_gets_one_fresh_agent_turn_with_error_feedback(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+    from app.agents.director.chat_orchestrator import ChatResult
+
+    run = _run()
+    attempts = []
+
+    async def fake_agent(current, svc):
+        attempts.append((current.prompt_retry_count, current.prompt_retry_error))
+        if len(attempts) == 1:
+            return ChatResult(reply="Prompt failed", failure_code="PROMPT_GENERATION_FAILED",
+                              failure_message="dialogue validation failed")
+        bind_job(current.project_id, current.run_id, "sht_1", "job_recovered")
+        return ChatResult(reply="Job started")
+
+    monkeypatch.setattr(continuation, "_agent_turn", fake_agent)
+    await continuation.continue_run(run.project_id, run.run_id)
+
+    saved = load_run(run.project_id, run.run_id)
+    assert attempts == [(0, ""), (1, "dialogue validation failed")]
+    assert saved.state == "active"
+    assert saved.current_job_id == "job_recovered"
+
+
+@pytest.mark.asyncio
+async def test_repeated_prompt_failure_pauses_without_third_agent_turn(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+    from app.agents.director.chat_orchestrator import ChatResult
+
+    run = _run()
+    attempts = []
+
+    async def fake_agent(current, svc):
+        attempts.append(current.prompt_retry_count)
+        return ChatResult(reply="Prompt failed", failure_code="PROMPT_GENERATION_FAILED",
+                          failure_message="dialogue validation failed")
+
+    monkeypatch.setattr(continuation, "_agent_turn", fake_agent)
+    await continuation.continue_run(run.project_id, run.run_id)
+
+    saved = load_run(run.project_id, run.run_id)
+    assert attempts == [0, 1]
+    assert saved.state == "paused"
+    assert "dialogue validation failed" in saved.paused_reason
+
+
+@pytest.mark.asyncio
+async def test_stop_during_failed_prompt_prevents_recovery_turn(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+    from app.agents.director.chat_orchestrator import ChatResult
+
+    run = _run()
+    attempts = []
+
+    async def fake_agent(current, svc):
+        attempts.append(current.current_index)
+        request_stop(current.project_id, current.run_id)
+        return ChatResult(reply="Prompt failed", failure_code="PROMPT_GENERATION_FAILED",
+                          failure_message="dialogue validation failed")
+
+    monkeypatch.setattr(continuation, "_agent_turn", fake_agent)
+    await continuation.continue_run(run.project_id, run.run_id)
+
+    assert attempts == [0]
+    assert load_run(run.project_id, run.run_id).state == "stopping"
+
+
+@pytest.mark.asyncio
+async def test_post_start_agent_error_does_not_pause_bound_job(monkeypatch) -> None:
+    """Once a Job is bound, its terminal event—not a late chat error—owns progress."""
+    from app.core.managed_runs import continuation
+
+    run = _run()
+
+    async def fake_agent(current, svc):
+        bind_job(current.project_id, current.run_id, "sht_1", "job_started")
+        raise RuntimeError("late final-response failure")
+
+    monkeypatch.setattr(continuation, "_agent_turn", fake_agent)
+    await continuation.continue_run(run.project_id, run.run_id)
+
+    saved = load_run(run.project_id, run.run_id)
+    assert saved.state == "active"
+    assert saved.current_job_id == "job_started"
+    assert saved.paused_reason == ""
 
 
 @pytest.mark.asyncio
@@ -215,6 +358,31 @@ async def test_restart_retries_stopping_run_cancellation(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_restart_cancels_late_tagged_job_after_run_was_stopped(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+    from app.core.managed_runs.store import finish_stop
+
+    run = _run()
+    request_stop(run.project_id, run.run_id)
+    finish_stop(run.project_id, run.run_id)
+    job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="late",
+                     project_id=run.project_id, params={
+                         "shot_id": "sht_1", "managed_run_id": run.run_id,
+                         "managed_step_shot_id": "sht_1", "managed_event_id": "start",
+                     })
+    cancelled = []
+
+    async def fake_cancel(job_id):
+        cancelled.append(job_id)
+
+    monkeypatch.setattr(continuation, "cancel_job", fake_cancel)
+    await continuation.reconcile_stopping_runs()
+
+    assert cancelled == [job.id]
+    assert load_run(run.project_id, run.run_id).state == "stopped"
+
+
+@pytest.mark.asyncio
 async def test_agent_continuation_gets_compact_job_feedback_in_isolated_session(monkeypatch) -> None:
     from app.core.managed_runs import continuation
     from app.api import projects as projects_api
@@ -229,6 +397,7 @@ async def test_agent_continuation_gets_compact_job_feedback_in_isolated_session(
     job.status = JobStatus.succeeded
     save_job(job)
     run = record_terminal(run.project_id, job.id, JobStatus.succeeded)
+    run = record_prompt_retry(run.project_id, run.run_id, "dialogue validation failed")
     captured = {}
 
     async def fake_chat(**kwargs):
@@ -247,6 +416,7 @@ async def test_agent_continuation_gets_compact_job_feedback_in_isolated_session(
     assert job.id in captured["message"]
     assert "succeeded" in captured["message"]
     assert "sht_2" in captured["message"]
+    assert "dialogue validation failed" in captured["message"]
 
 
 @pytest.mark.asyncio

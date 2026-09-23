@@ -52,11 +52,11 @@ def test_plan_route_saves_agent_tail_handoff_as_draft(monkeypatch) -> None:
             observed["system"] = system
             observed["user"] = user
             observed["format"] = kwargs.get("format")
-            return {"content": json.dumps({"steps": [
-                {"shot_id": first.id, "tail_from_shot_id": None, "tail_reason": ""},
-                {"shot_id": second.id, "tail_from_shot_id": first.id,
-                 "tail_reason": "The brief continues the door-closing state."},
-            ]})}
+            return {"content": json.dumps({"tail_handoffs": [{
+                "target_shot_id": second.id,
+                "source_shot_id": first.id,
+                "reason": "The brief continues the door-closing state.",
+            }]})}
         return chat_fn
 
     monkeypatch.setattr(projects_api, "_make_chat_fn", fake_make_chat_fn)
@@ -70,6 +70,83 @@ def test_plan_route_saves_agent_tail_handoff_as_draft(monkeypatch) -> None:
     assert body["steps"][1]["tail_reason"] == "The brief continues the door-closing state."
     assert "Continue from the prior door closing frame" in observed["user"]
     assert observed["format"]["type"] == "object"
+
+
+def test_plan_route_builds_complete_project_order_from_sparse_handoff_decisions(monkeypatch) -> None:
+    """The model chooses continuity; it must not have to copy the Shot roster."""
+    project, first, second = _two_shot_project()
+
+    async def fake_make_chat_fn(*, on_progress=None):
+        async def chat_fn(system, user, **kwargs):
+            return {"content": json.dumps({"tail_handoffs": [{
+                "target_shot_id": second.id,
+                "source_shot_id": first.id,
+                "reason": "Continue the closing door into the next opening frame.",
+            }]})}
+        return chat_fn
+
+    monkeypatch.setattr(projects_api, "_make_chat_fn", fake_make_chat_fn)
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/plan")
+
+    assert response.status_code == 200
+    assert response.json()["steps"] == [
+        {"shot_id": first.id, "tail_from_shot_id": None, "tail_reason": ""},
+        {
+            "shot_id": second.id,
+            "tail_from_shot_id": first.id,
+            "tail_reason": "Continue the closing door into the next opening frame.",
+        },
+    ]
+
+
+def test_plan_route_rejects_handoff_for_unknown_target(monkeypatch) -> None:
+    """A hallucinated target ID must not be silently ignored."""
+    project, first, _second = _two_shot_project()
+
+    async def fake_make_chat_fn(*, on_progress=None):
+        async def chat_fn(system, user, **kwargs):
+            return {"content": json.dumps({"tail_handoffs": [{
+                "target_shot_id": "sht_hallucinated",
+                "source_shot_id": first.id,
+                "reason": "Invalid target.",
+            }]})}
+        return chat_fn
+
+    monkeypatch.setattr(projects_api, "_make_chat_fn", fake_make_chat_fn)
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/plan")
+
+    assert response.status_code == 422
+    assert "unknown Shot" in response.json()["detail"]
+
+
+def test_plan_route_rejects_duplicate_handoff_target(monkeypatch) -> None:
+    """Conflicting model decisions for one target must not overwrite each other."""
+    project, first, second = _two_shot_project()
+
+    async def fake_make_chat_fn(*, on_progress=None):
+        async def chat_fn(system, user, **kwargs):
+            return {"content": json.dumps({"tail_handoffs": [
+                {
+                    "target_shot_id": second.id,
+                    "source_shot_id": first.id,
+                    "reason": "First decision.",
+                },
+                {
+                    "target_shot_id": second.id,
+                    "source_shot_id": first.id,
+                    "reason": "Conflicting duplicate.",
+                },
+            ]})}
+        return chat_fn
+
+    monkeypatch.setattr(projects_api, "_make_chat_fn", fake_make_chat_fn)
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/plan")
+
+    assert response.status_code == 422
+    assert "more than once" in response.json()["detail"]
 
 
 def test_start_reads_resolution_from_json_body() -> None:
@@ -131,6 +208,33 @@ def test_stop_marks_run_inactive_before_any_next_shot() -> None:
 
     assert response.status_code == 200
     assert response.json()["state"] == "stopped"
+
+
+def test_stop_cancels_tagged_job_created_before_binding(monkeypatch) -> None:
+    from app.api import managed_runs as managed_api
+    from app.core.jobs.store import create_job
+    from app.core.managed_runs.store import activate_run, load_run
+
+    project, first, second = _two_shot_project()
+    draft = create_draft(project.id, [RunStep(shot_id=first.id), RunStep(shot_id=second.id)])
+    run = activate_run(project.id, draft.run_id, "landscape-480")
+    job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="unbound",
+                     project_id=project.id, params={
+                         "shot_id": first.id, "managed_run_id": run.run_id,
+                         "managed_step_shot_id": first.id, "managed_event_id": "start",
+                     })
+    cancelled = []
+
+    async def fake_cancel(job_id):
+        cancelled.append((job_id, load_run(project.id, run.run_id).state))
+
+    monkeypatch.setattr(managed_api, "cancel_job", fake_cancel)
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/{run.run_id}/stop")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "stopped"
+    assert cancelled == [(job.id, "stopping")]
 
 
 def test_stop_marks_stopping_before_cancelling_bound_job(monkeypatch) -> None:

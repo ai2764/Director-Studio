@@ -19,8 +19,11 @@ async def start_h3_video(project_id: str, shot_id: str, *, svc: Any,
                          one_off_authorized: bool = False,
                          resolution_preset: str | None = None) -> dict[str, Any]:
     async with _submission_locks.setdefault(project_id, asyncio.Lock()):
+        scope = managed_turn_scope.get()
         run = active_run_for_project(project_id)
         if run is None:
+            if scope is not None:
+                raise ValueError("No active managed H3 run; managed turn stopped before video submission")
             if not one_off_authorized:
                 raise ValueError("No active managed H3 run or explicit one-off video request")
             if not resolution_preset:
@@ -39,7 +42,6 @@ async def start_h3_video(project_id: str, shot_id: str, *, svc: Any,
                 from ....core.jobs.shot_sync import on_pipeline_job_terminal
                 on_pipeline_job_terminal(finished)
             return {"ok": True, "shot_id": shot_id, "job_id": shot.h3_job_id}
-        scope = managed_turn_scope.get()
         if run.current_index >= len(run.steps) or run.steps[run.current_index].shot_id != shot_id:
             raise ValueError("Only the next planned Shot can start")
         if (scope is None or scope.project_id != project_id or scope.run_id != run.run_id
@@ -119,7 +121,8 @@ async def handle_video_tool(
         resolution_preset=args.get("resolution_preset"),
     )
     actions.append(f"start_h3_video:{result['shot_id']}:{result['job_id']}")
-    notes.append(f"Started local H3 video for Shot {result['shot_id']}; Job {result['job_id']}.")
+    reply = f"Started local H3 video for Shot {result['shot_id']}; Job {result['job_id']}."
+    notes.append(reply)
     if result_payloads is not None:
-        result_payloads.append(result)
+        result_payloads.append({**result, "concludes_turn": True, "reply": reply})
     return True

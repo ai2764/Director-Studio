@@ -7,11 +7,12 @@ import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ValidationError
 
-from ..core.managed_runs.models import ManagedRun, RunPlan
+from ..core.managed_runs.models import ManagedRun, RunPlan, RunStep
 from ..core.managed_runs.store import (
     activate_run, create_draft, finish_stop, list_runs, request_stop,
 )
-from ..core.jobs import cancel_job
+from ..core.jobs import cancel_job, list_jobs
+from ..core.schemas import JobStatus
 from ..core.projects.store import list_shots, load_project
 
 router = APIRouter(tags=["managed_runs"])
@@ -19,6 +20,27 @@ router = APIRouter(tags=["managed_runs"])
 
 class StartManagedRunBody(BaseModel):
     resolution_preset: str
+
+
+def _build_run_steps(shots, plan: RunPlan) -> list[RunStep]:
+    ordered_ids = [shot.id for shot in shots]
+    known_ids = set(ordered_ids)
+    target_ids: set[str] = set()
+    for handoff in plan.tail_handoffs:
+        if handoff.target_shot_id not in known_ids or handoff.source_shot_id not in known_ids:
+            raise ValueError("Tail handoff references an unknown Shot")
+        if handoff.target_shot_id in target_ids:
+            raise ValueError("Tail handoff target was listed more than once")
+        target_ids.add(handoff.target_shot_id)
+    by_target = {handoff.target_shot_id: handoff for handoff in plan.tail_handoffs}
+    return [
+        RunStep(
+            shot_id=shot_id,
+            tail_from_shot_id=(by_target[shot_id].source_shot_id if shot_id in by_target else None),
+            tail_reason=(by_target[shot_id].reason if shot_id in by_target else ""),
+        )
+        for shot_id in ordered_ids
+    ]
 
 
 @router.post("/projects/{project_id}/managed-run/plan", response_model=ManagedRun)
@@ -43,9 +65,11 @@ async def plan_managed_run(project_id: str) -> ManagedRun:
     )
     system = (
         "Plan local H3 video execution for the existing Shots. Return only JSON "
-        "matching the schema. Preserve every Shot ID and its order. "
-        "Only propose a tail-frame handoff when the Shot brief needs visual "
-        "continuity; give its concrete reason based on action, camera, and composition. "
+        "matching the schema. Return only visually necessary tail-frame handoffs; "
+        "the application owns the complete Shot list and execution order. For each "
+        "handoff, target_shot_id is the later Shot that inherits the final frame from "
+        "the earlier source_shot_id. Give a concrete reason based on action, camera, "
+        "and composition. "
         "Do not change Shot content."
     )
     response = await chat_fn(
@@ -55,7 +79,7 @@ async def plan_managed_run(project_id: str) -> ManagedRun:
     try:
         content = response.get("content") if isinstance(response, dict) else response
         plan = RunPlan.model_validate(json.loads(content) if isinstance(content, str) else content)
-        return create_draft(project_id, plan.steps)
+        return create_draft(project_id, _build_run_steps(shots, plan))
     except (ValueError, TypeError, ValidationError) as exc:
         raise HTTPException(422, f"Managed run plan was invalid: {exc}") from exc
 
@@ -85,9 +109,15 @@ async def stop_managed_run(project_id: str, run_id: str) -> ManagedRun:
         run = request_stop(project_id, run_id)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
-    if run.current_job_id:
+    pending_ids = [run.current_job_id] if run.current_job_id else []
+    pending_ids.extend(
+        job.id for job in list_jobs(limit=None, pipeline_id="h3_ref2va", project_id=project_id)
+        if (job.params or {}).get("managed_run_id") == run_id
+        and job.status in {JobStatus.queued, JobStatus.uploading, JobStatus.running}
+    )
+    for job_id in dict.fromkeys(pending_ids):
         try:
-            await cancel_job(run.current_job_id)
+            await cancel_job(job_id)
         except Exception as exc:
             # Keep stopping so no late Agent turn can submit. The user may
             # retry Stop, and startup reconciliation retries cancellation.

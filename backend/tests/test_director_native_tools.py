@@ -3930,6 +3930,52 @@ async def test_native_write_prompt_tool_is_executed_and_result_returns_to_model(
 
 
 @pytest.mark.asyncio
+async def test_legacy_failed_write_prompt_reports_recoverable_failure(tmp_projects_dir, monkeypatch):
+    from app.config import settings
+    from app.core.managed_runs.context import ManagedTurnScope, managed_turn_scope
+
+    monkeypatch.setattr(settings, "director_agent_runtime", "legacy")
+    project = create_project("Prompt failure", "An actor enters the hallway.")
+    shot = Shot(id="sht_failed_prompt", project_id=project.id, scene_id="sc01",
+                title="Hallway", script_beat="An actor enters.", duration_s=5,
+                status=ShotStatus.needs_review)
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    save_agent_context(project.id, AgentContext(
+        project_id=project.id, script_hash=_script_hash(project.script_text),
+        last_phase="awaiting_prompt", shot_summaries=[{"id": shot.id}],
+    ))
+
+    class FailingService:
+        async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
+            raise ValueError("dialogue validation failed")
+
+    calls = 0
+
+    async def chat_fn(system, user, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"content": "", "thinking": "", "tool_calls": [
+                {"name": "write_prompt", "arguments": {"shot_id": shot.id}}]}
+        return {"content": "Prompt could not be saved.", "thinking": "", "tool_calls": []}
+
+    scope_token = managed_turn_scope.set(ManagedTurnScope(
+        project_id=project.id, run_id="mrun_test", event_id="start", shot_id=shot.id,
+    ))
+    try:
+        result = await handle_chat(project_id=project.id, message="Write the Shot prompt",
+                                   svc=FailingService(), chat_fn=chat_fn)
+    finally:
+        managed_turn_scope.reset(scope_token)
+
+    assert result.failure_code == "PROMPT_GENERATION_FAILED"
+    assert "dialogue validation failed" in result.failure_message
+    assert not any(action.startswith("write_prompt:") for action in result.actions)
+    assert calls == 1
+
+
+@pytest.mark.asyncio
 async def test_director_fast_path_status_is_visible_in_english(tmp_projects_dir):
     project = create_project("English status", "An actor enters the hallway.")
 

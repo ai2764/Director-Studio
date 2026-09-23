@@ -149,6 +149,8 @@ def record_terminal(project_id: str, job_id: str, status: JobStatus, error: str 
             "current_index": next_index,
             "current_job_id": None,
             "completed_job_ids": completed,
+            "prompt_retry_count": 0,
+            "prompt_retry_error": "",
             "pending_event_id": f"{job_id}:{status.value}" if next_index < len(run.steps) else None,
             "state": "active" if next_index < len(run.steps) else "completed",
         }))
@@ -176,6 +178,19 @@ def pause_run(project_id: str, run_id: str, reason: str) -> ManagedRun:
             return run
         return _save_run(run.model_copy(update={
             "state": "paused", "pending_event_id": None, "paused_reason": reason,
+        }))
+
+
+def record_prompt_retry(project_id: str, run_id: str, error: str) -> ManagedRun:
+    with _project_lock(project_id):
+        run = load_run(project_id, run_id)
+        if run is None or run.state != "active" or run.current_job_id:
+            raise ValueError("Managed run is no longer awaiting a prompt")
+        if run.prompt_retry_count >= 1:
+            raise ValueError("Managed prompt retry budget reached")
+        return _save_run(run.model_copy(update={
+            "prompt_retry_count": run.prompt_retry_count + 1,
+            "prompt_retry_error": error[:1000],
         }))
 
 

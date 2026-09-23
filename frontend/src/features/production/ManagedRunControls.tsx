@@ -18,6 +18,7 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
   const [resolution, setResolution] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [showPlanHelp, setShowPlanHelp] = useState(false);
   const lastProgress = useRef("");
   const onChanged = useRef(onProjectChanged);
   onChanged.current = onProjectChanged;
@@ -89,25 +90,28 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
         </div>
         {run ? <span className={`status-chip status-${run.state}`}>{run.state}</span> : null}
       </div>
-      <p className="muted tiny">Review the shot order and continuity handoffs, choose one resolution, then let Director continue after each video. Stop at any time.</p>
-      {run?.state === "draft" ? <p className="muted tiny">Higher resolutions, especially 1080, may exceed available VRAM.</p> : null}
       {error ? <div className="banner error" role="alert">{error}</div> : null}
       {run?.paused_reason ? <div className="banner" role="status">{run.paused_reason}</div> : null}
       {run?.steps.length ? (
-        <ol className="managed-run-plan" aria-label="Managed run plan">
-          {run.steps.map((step, index) => (
-            <li key={step.shot_id} className={index < run.current_index ? "done" : index === run.current_index ? "current" : ""}>
-              <span className="managed-run-number">{String(index + 1).padStart(2, "0")}</span>
-              <span><strong>{shotName(step.shot_id)}</strong>
-                {run.state === "draft" ? <small>{shots.find((shot) => shot.id === step.shot_id)?.script_beat}</small> : null}
-                {run.state === "draft" && shots.find((shot) => shot.id === step.shot_id)?.camera_motion
-                  ? <small>Camera · {shots.find((shot) => shot.id === step.shot_id)?.camera_motion}</small> : null}
-                {step.tail_from_shot_id ? <small>Tail from {shotName(step.tail_from_shot_id)} · {step.tail_reason}</small> : null}
-              </span>
-            </li>
-          ))}
-        </ol>
+        <details className="managed-run-details" key={projectId}>
+          <summary>Plan details</summary>
+          <p className="muted tiny">Review the shot order and continuity handoffs. Stop at any time.</p>
+          <ol className="managed-run-plan" aria-label="Managed run plan">
+            {run.steps.map((step, index) => (
+              <li key={step.shot_id} className={index < run.current_index ? "done" : index === run.current_index ? "current" : ""}>
+                <span className="managed-run-number">{String(index + 1).padStart(2, "0")}</span>
+                <span><strong>{shotName(step.shot_id)}</strong>
+                  {run.state === "draft" ? <small>{shots.find((shot) => shot.id === step.shot_id)?.script_beat}</small> : null}
+                  {run.state === "draft" && shots.find((shot) => shot.id === step.shot_id)?.camera_motion
+                    ? <small>Camera · {shots.find((shot) => shot.id === step.shot_id)?.camera_motion}</small> : null}
+                  {step.tail_from_shot_id ? <small>Tail from {shotName(step.tail_from_shot_id)} · {step.tail_reason}</small> : null}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </details>
       ) : null}
+      {run?.state === "draft" ? <p className="muted tiny">Higher resolutions, especially 1080, may exceed available VRAM.</p> : null}
       {run?.state === "draft" ? (
         <label className="field-label managed-run-resolution">
           One resolution for all shots
@@ -121,8 +125,13 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
         <p className="muted tiny">Resolution · {presets.find((preset) => preset.id === run.resolution_preset)?.label || run.resolution_preset}</p>
       ) : null}
       <div className="managed-run-actions">
-        {!active ? <button type="button" className="btn secondary" disabled={busy}
-          onClick={() => void perform(() => planManagedRun(projectId))}>Plan managed run</button> : null}
+        {!active ? <div className="managed-run-plan-action">
+          <button type="button" className="btn secondary" disabled={busy}
+            onClick={() => void perform(() => planManagedRun(projectId))}>Plan managed run</button>
+          <button type="button" className="managed-run-info" aria-label="About Plan managed run"
+            aria-expanded={showPlanHelp} aria-controls="managed-run-plan-help"
+            onClick={() => setShowPlanHelp((shown) => !shown)}>i</button>
+        </div> : null}
         {run?.state === "draft" ? <button type="button" className="btn primary"
           disabled={busy || !resolution || !presets.some((preset) => preset.id === resolution)}
           onClick={() => void perform(() => startManagedRun(projectId, run.run_id, resolution))}>Start managed run</button> : null}
@@ -131,6 +140,9 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
           {run.state === "stopping" ? "Retry stop" : "Stop managed run"}
         </button> : null}
       </div>
+      {!active && showPlanHelp ? <p id="managed-run-plan-help" className="muted tiny managed-run-help">
+        Plan reviews the existing Shots and chooses tail-frame handoffs. It saves a draft for you to review. No video starts until you select a resolution and click Start managed run.
+      </p> : null}
     </section>
   );
 }

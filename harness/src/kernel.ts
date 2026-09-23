@@ -238,6 +238,7 @@ export async function runTurn(
   let failure: unknown;
   let compactionFailure: unknown;
   let initialContext: any;
+  let terminalToolReply: string | undefined;
   class FailClosedCompaction extends BasicCompaction {
     private committed: Awaited<ReturnType<BasicCompaction["compactRegion"]>> | null = null;
     private regionFailed = false;
@@ -318,6 +319,12 @@ export async function runTurn(
               call_id: String(exec.callId),
             });
             await refresh();
+            if (result && typeof result === "object" && result.concludes_turn === true) {
+              terminalToolReply = typeof result.reply === "string" ? result.reply : "";
+              exec.concludeTurn();
+              const { concludes_turn: _concludesTurn, reply: _reply, ...publicResult } = result;
+              return publicResult;
+            }
             return result;
           },
         }),
@@ -472,6 +479,10 @@ export async function runTurn(
     );
     await handle.agent.whenIdle();
     signal.throwIfAborted();
+    if (terminalToolReply !== undefined) {
+      await ctx.sessions.flush(handle.agent.session);
+      return { reply: terminalToolReply, thinking: "" };
+    }
     const events = handle.agent.session.events.slice(start);
     const end = events.findLast((e) => e.type === "turn/end");
     if (end?.type === "turn/end" && end.data.reason.kind === "error") {

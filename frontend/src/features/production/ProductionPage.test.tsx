@@ -178,8 +178,10 @@ describe("ProductionPage prompt refresh", () => {
   it("shows the resolved custom workflow in Production", async () => {
     vi.mocked(getProject).mockResolvedValue(detail(shot(emptyPrompt)));
     render(<ProductionPage active />);
-    expect(await screen.findByText("Workflow: My H3 Quality Profile")).toBeTruthy();
-    expect(screen.getByText("Local · ComfyUI — My H3 Quality Profile")).toBeTruthy();
+    expect(await screen.findByText("Local · ComfyUI — My H3 Quality Profile")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Production" })).toBeTruthy();
+    expect(screen.queryByText(/Shot list → layout/)).toBeNull();
+    expect(screen.queryByText("Workflow: My H3 Quality Profile")).toBeNull();
   });
 
   it("refreshes a damaged profile before local submission and again after completion while retaining the captured profile", async () => {
@@ -198,7 +200,7 @@ describe("ProductionPage prompt refresh", () => {
       return { ...ready, status: "queued", h3_job_id: captured.id };
     });
     render(<ProductionPage active />);
-    await screen.findByText("Workflow: My H3 Quality Profile");
+    await screen.findByText("Local · ComfyUI — My H3 Quality Profile");
     fetchH3ProfilesMock.mockResolvedValue({ active: {
       profile_id: "builtin-official-h3", display_name: "Built-in Official H3", source: "builtin",
       warning: { code: "profile_changed", message: "Custom workflow hash changed" },
@@ -209,14 +211,14 @@ describe("ProductionPage prompt refresh", () => {
     await waitFor(() => expect(submitShot).toHaveBeenCalled());
     expect(statusRefreshedBeforeSubmit).toBe(true);
     await screen.findByText("Custom workflow hash changed");
-    await screen.findByText(/Submitted workflow: Built-in Official H3/);
+    expect(screen.queryByText(/Submitted workflow:/)).toBeNull();
     fetchH3ProfilesMock.mockResolvedValue({ active: {
       profile_id: "custom-new", display_name: "Newly active profile", source: "custom", warning: null,
     }, profiles: [] });
     vi.mocked(getH3Job).mockResolvedValue({ ...captured, status: "succeeded", outputs: { video: { key: "video", filename: "done.mp4", url: "/done.mp4", label: "Video" } } });
-    await screen.findByText("Workflow: Newly active profile", {}, { timeout: 3500 });
-    expect(screen.getByText(/Submitted workflow: Built-in Official H3/)).toBeTruthy();
-    expect(screen.getByText(/official-hash/)).toBeTruthy();
+    await screen.findByText("Local · ComfyUI — Newly active profile", {}, { timeout: 3500 });
+    expect(screen.queryByText(/Submitted workflow:/)).toBeNull();
+    expect(screen.queryByText(/official-hash/)).toBeNull();
     expect(submitShot).toHaveBeenCalledTimes(1);
   });
 
@@ -238,14 +240,14 @@ describe("ProductionPage prompt refresh", () => {
       h3_provider: "local" as const, h3_profile_id: "custom-captured", h3_profile_sha256: "captured-hash" };
     vi.mocked(getH3Job).mockResolvedValue(job);
     render(<ProductionPage active />);
-    await screen.findByText("Workflow: My H3 Quality Profile");
+    await screen.findByText("Local · ComfyUI — My H3 Quality Profile");
     fireEvent.click(await screen.findByText("Corridor walk-in"));
     await waitFor(() => expect(getH3Job).toHaveBeenCalledWith("job-existing"));
     fetchH3ProfilesMock.mockResolvedValue({ active: { display_name: "Built-in Official H3", source: "builtin",
       warning: { code: "profile_changed", message: "Profile damaged during run" } }, profiles: [] });
     vi.mocked(getH3Job).mockResolvedValue({ ...job, status: "failed", error: "Output failed" });
     await screen.findByText("Profile damaged during run", {}, { timeout: 3500 });
-    expect(screen.getByText(/Submitted workflow: custom-captured/)).toBeTruthy();
+    expect(screen.queryByText(/Submitted workflow:/)).toBeNull();
     expect(submitShot).not.toHaveBeenCalled();
   });
 

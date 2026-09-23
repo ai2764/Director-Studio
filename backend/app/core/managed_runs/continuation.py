@@ -14,9 +14,10 @@ from ..schemas import JobStatus
 from ..projects.layouts import LayoutReviewStatus, sync_selected_layout_refs
 from ..projects.store import list_projects, load_shot, save_shot
 from ..projects.transitions import review_layout_reference, select_layout_reference
+from ...agents.director.tail_prompt_review import CreativeQuestion
 from .models import ManagedRun
 from .context import ManagedTurnScope, managed_turn_scope
-from .store import _fingerprint, active_run_for_project, bind_job, finish_stop, list_runs, load_run, mark_tail_ready, pause_run
+from .store import _fingerprint, active_run_for_project, bind_job, finish_stop, list_runs, load_run, mark_tail_ready, pause_run, record_prompt_retry
 
 logger = logging.getLogger("director_studio.managed_runs")
 _continuation_tasks: dict[str, asyncio.Task[None]] = {}
@@ -69,11 +70,23 @@ async def prepare_planned_tail(run: ManagedRun, svc: Any) -> None:
     if selected_layout.asset_id:
         from ...api.projects import _update_layout_asset_review
         _update_layout_asset_review(selected_layout.asset_id, LayoutReviewStatus.usable.value)
-    await svc.write_prompts_after_layout(step.shot_id)
+    selected_fingerprint = _fingerprint(run.project_id)
+    try:
+        await svc.write_prompts_after_layout(step.shot_id)
+    except CreativeQuestion:
+        raise
+    except Exception as exc:
+        if _fingerprint(run.project_id) != selected_fingerprint:
+            raise
+        # The selected frame is durable. Give the Agent one informed chance to
+        # author the prompt instead of repeating this same automatic draft.
+        mark_tail_ready(run.project_id, run.run_id, step.shot_id, layout_id)
+        record_prompt_retry(run.project_id, run.run_id, str(exc))
+        return
     mark_tail_ready(run.project_id, run.run_id, step.shot_id, layout_id)
 
 
-async def _agent_turn(run: ManagedRun, svc: Any) -> None:
+async def _agent_turn(run: ManagedRun, svc: Any) -> Any:
     from ...api.projects import _make_chat_fn
     from ...agents.director.chat import handle_chat
     from ..projects.chat_history import append_chat_message
@@ -103,6 +116,12 @@ async def _agent_turn(run: ManagedRun, svc: Any) -> None:
         "selected. Do not queue a new Layout or invent assets. If a required input is missing, "
         "explain the blocker and stop; do not retry blindly."
     )
+    if run.prompt_retry_error:
+        message += (
+            f" Previous prompt attempt failed: {run.prompt_retry_error}. "
+            "This is the final managed recovery attempt for this Shot. Use that concrete "
+            "error to change the prompt-writing approach; do not repeat the same submission."
+        )
     while True:
         latest = load_run(run.project_id, run.run_id)
         if latest is None or latest.state != "active" or latest.pending_event_id != run.pending_event_id:
@@ -130,6 +149,7 @@ async def _agent_turn(run: ManagedRun, svc: Any) -> None:
             history=[], managed_session_id=isolated_session,
         )
         append_chat_message(run.project_id, role="assistant", content=result.reply)
+        return result
     finally:
         managed_turn_scope.reset(token)
         await director_chat_sessions.finish(run.project_id, session.session_id or "")
@@ -154,15 +174,34 @@ async def continue_run(project_id: str, run_id: str) -> None:
         latest = load_run(project_id, run_id)
         if latest is None or latest.state != "active" or not latest.pending_event_id:
             return
-        await _agent_turn(latest, svc)
-        latest = load_run(project_id, run_id)
-        if (latest is not None and latest.state == "active"
-                and latest.current_index == run.current_index and not latest.current_job_id):
-            pause_run(project_id, run_id, "Agent turn ended without starting the planned H3 job")
+        while latest is not None and latest.state == "active" and not latest.current_job_id:
+            result = await _agent_turn(latest, svc)
+            latest = load_run(project_id, run_id)
+            if latest is None or latest.state != "active" or latest.current_job_id:
+                break
+            if (getattr(result, "failure_code", "") == "PROMPT_GENERATION_FAILED"
+                    and latest.prompt_retry_count < 1):
+                latest = record_prompt_retry(
+                    project_id, run_id,
+                    getattr(result, "failure_message", "") or result.reply,
+                )
+                continue
+            pause_run(
+                project_id, run_id,
+                (getattr(result, "failure_message", "") or "Agent turn ended without starting the planned H3 job"),
+            )
+            break
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         logger.exception("Managed H3 continuation failed for %s", run_id)
+        latest = load_run(project_id, run_id)
+        if latest is not None and latest.state == "active" and latest.current_job_id:
+            logger.warning(
+                "Managed run %s already bound Job %s; waiting for its terminal event",
+                run_id, latest.current_job_id,
+            )
+            return
         pause_run(project_id, run_id, f"Managed continuation failed: {exc}")
 
 
@@ -218,18 +257,30 @@ def schedule_pending_runs() -> None:
 
 
 async def reconcile_stopping_runs() -> None:
-    """Finish interrupted Stop requests before queued Jobs can be recovered."""
+    """Cancel bound and late tagged Jobs, including Jobs created after Stop."""
     for project in list_projects():
         for run in list_runs(project.id):
-            if run.state != "stopping":
+            if run.state not in {"stopping", "stopped"}:
                 continue
-            job = load_job(run.current_job_id) if run.current_job_id else None
-            if job is not None and job.status in {
-                JobStatus.queued, JobStatus.uploading, JobStatus.running,
-            }:
+            pending_ids = [run.current_job_id] if run.current_job_id else []
+            pending_ids.extend(
+                job.id for job in list_jobs(
+                    limit=None, pipeline_id="h3_ref2va", project_id=project.id,
+                )
+                if (job.params or {}).get("managed_run_id") == run.run_id
+                and job.status in {JobStatus.queued, JobStatus.uploading, JobStatus.running}
+            )
+            cancelled_all = True
+            for job_id in dict.fromkeys(pending_ids):
+                job = load_job(job_id)
+                if job is None or job.status not in {
+                    JobStatus.queued, JobStatus.uploading, JobStatus.running,
+                }:
+                    continue
                 try:
-                    await cancel_job(job.id)
+                    await cancel_job(job_id)
                 except Exception:
                     logger.exception("Could not confirm cancellation for managed run %s", run.run_id)
-                    continue
-            finish_stop(project.id, run.run_id)
+                    cancelled_all = False
+            if run.state == "stopping" and cancelled_all:
+                finish_stop(project.id, run.run_id)
