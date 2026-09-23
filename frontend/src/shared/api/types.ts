@@ -161,7 +161,7 @@ export interface Shot {
   meta?: Record<string, unknown>;
 }
 
-export type ProjectMode = "director" | "json_production";
+export type ProjectMode = "director" | "mv" | "json_production";
 
 export interface AssetCoverageRecommendation {
   kind: "actor" | "scene" | "prop" | "costume" | "layout" | "other";

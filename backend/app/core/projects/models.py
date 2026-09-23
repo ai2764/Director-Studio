@@ -218,6 +218,7 @@ class Shot(BaseModel):
 
 class ProjectMode(str, Enum):
     director = "director"
+    mv = "mv"
     json_production = "json_production"
 
 

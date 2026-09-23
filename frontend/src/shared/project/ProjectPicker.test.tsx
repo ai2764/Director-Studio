@@ -61,6 +61,27 @@ describe("ProjectPicker", () => {
     expect(screen.queryByRole("dialog", { name: "Create project" })).toBeNull();
   });
 
+  it("creates a Music Video project with the selected mode", async () => {
+    render(<ProjectPicker />);
+
+    fireEvent.click(screen.getByRole("button", { name: "New" }));
+    fireEvent.change(screen.getByPlaceholderText("Project name"), {
+      target: { value: "Song project" },
+    });
+    fireEvent.change(screen.getByLabelText("Mode"), {
+      target: { value: "mv" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() =>
+      expect(createAndSelect).toHaveBeenCalledWith(
+        "Song project",
+        "",
+        "mv",
+      ),
+    );
+  });
+
   it("cancels project creation without changing the header controls", () => {
     render(<ProjectPicker />);
 

@@ -43,6 +43,7 @@ from ..core.library.store import (
     load_asset,
     write_asset,
 )
+from ..core.media.music_segments import import_music_master, resolve_music_master
 from ..core.projects.models import (
     Project,
     ProjectMode,
@@ -1337,6 +1338,53 @@ async def delete_layout_reference_endpoint(
     return updated
 
 
+@router.post("/projects/{project_id}/music-master", response_model=Project)
+async def import_music_master_endpoint(
+    project_id: str,
+    file: UploadFile = File(...),
+) -> Project:
+    project = load_project(project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    if project.mode != ProjectMode.mv:
+        raise HTTPException(
+            409,
+            "Song masters are available only for Music Video projects",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Song master is empty")
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    if len(data) > max_bytes:
+        raise HTTPException(
+            400,
+            f"Song master exceeds {settings.max_upload_mb}MB",
+        )
+
+    previous = project.music_master
+    try:
+        master = import_music_master(
+            project.id,
+            file.filename or "master.wav",
+            data,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    updated = project.model_copy(update={"music_master": master})
+    save_project(updated)
+    if previous is not None and previous.relative_path != master.relative_path:
+        try:
+            old_path = resolve_music_master(
+                updated.model_copy(update={"music_master": previous})
+            )
+            old_path.unlink(missing_ok=True)
+        except ValueError:
+            pass
+    return updated
+
+
 @router.post(
     "/shots/{shot_id}/layouts/{layout_ref_id}/review",
     response_model=Shot,
@@ -1582,7 +1630,7 @@ async def patch_shot_endpoint(shot_id: str, body: ShotPatchBody) -> Shot:
     updates: dict[str, Any] = {}
     data = body.model_dump(exclude_unset=True)
     for key, val in data.items():
-        if val is not None:
+        if val is not None or key == "source_audio_path":
             updates[key] = val
     if "prompt_sections" in updates and isinstance(updates["prompt_sections"], dict):
         updates["prompt_sections"] = PromptSections.model_validate(

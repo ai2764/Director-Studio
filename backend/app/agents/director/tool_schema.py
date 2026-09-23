@@ -6,7 +6,7 @@ import re
 from typing import Any, Iterable
 
 from ...config import settings
-from ...core.projects.models import AssetCoverageReviewSubmission, Project
+from ...core.projects.models import AssetCoverageReviewSubmission, Project, ProjectMode
 from ...pipelines.h3_ref2va.resolutions import LOCAL_H3_PRESETS
 from .intent import (
     actor_design_intent,
@@ -597,6 +597,8 @@ def director_chat_guides(
     current_message: str = "",
 ) -> tuple[str, ...]:
     guides: list[str] = []
+    if project.mode == ProjectMode.mv:
+        guides.append("music-video-planning")
     if project.script_locked:
         guides.append("script-planning")
     if explicit_gpt_image_intent(current_message) and not actor_design_intent(

@@ -4,7 +4,9 @@ import pytest
 
 from app.api import projects as projects_api
 from app.agents.director import skill_loader, stage_guides
+from app.agents.director.tool_schema import director_chat_guides
 from app.config import settings
+from app.core.projects.models import Project, ProjectMode
 
 
 def _write_skill(path, token: str) -> None:
@@ -59,6 +61,25 @@ def test_script_planning_stage_guide_loads_as_a_non_empty_block():
     assert guide.startswith('<DIRECTOR_STAGE_GUIDE id="script-planning">\n')
     assert guide.endswith("\n</DIRECTOR_STAGE_GUIDE>")
     assert len(guide.splitlines()) > 3
+
+
+def test_mv_project_chat_always_loads_music_video_planning_guide():
+    project = Project(
+        id="prj_mv",
+        name="Music video",
+        script_text="",
+        mode=ProjectMode.mv,
+        created_at="2026-09-22T00:00:00+00:00",
+        updated_at="2026-09-22T00:00:00+00:00",
+    )
+
+    guides = director_chat_guides(
+        project,
+        include_visual_qc=False,
+        current_message="Plan the next lyric section",
+    )
+
+    assert guides == ("music-video-planning",)
 
 
 def test_stage_guide_registry_matches_non_empty_markdown_files():

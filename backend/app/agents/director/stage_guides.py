@@ -14,6 +14,7 @@ GUIDE_IDS = frozenset(
         "reference-frame-generation",
         "visual-qc",
         "h3-prompt-writing",
+        "music-video-planning",
         "video-qc",
     }
 )

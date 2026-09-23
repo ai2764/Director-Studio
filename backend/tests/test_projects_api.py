@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import wave
 from pathlib import Path
 from typing import Iterable
 
@@ -13,14 +14,22 @@ from PIL import Image
 from app.config import settings
 from app.core.projects.models import (
     Project,
+    ProjectMusicMaster,
     PromptSections,
     RefRole,
     Shot,
+    ShotMusicSegment,
     ShotRef,
     ShotStatus,
 )
 from app.core.projects.layouts import LayoutReference, LayoutReviewStatus
-from app.core.projects.store import create_project, load_shot, save_project, save_shot
+from app.core.projects.store import (
+    create_project,
+    load_project,
+    load_shot,
+    save_project,
+    save_shot,
+)
 from app.core.schemas import LibraryAsset
 from app.core.projects.chat_history import load_chat_history
 from app.core.vram import GenerationActiveError, GenerationReservation
@@ -1140,6 +1149,143 @@ def test_create_json_project(client):
     })
     assert response.status_code == 200
     assert response.json()["mode"] == "json_production"
+
+
+def test_create_mv_project(client):
+    response = client.post(
+        "/api/projects",
+        json={"name": "Song project", "script_text": "", "mode": "mv"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "mv"
+
+
+def test_legacy_project_and_shot_default_mv_audio_fields_to_none():
+    project = Project.model_validate(
+        {
+            "id": "prj_old",
+            "name": "Old",
+            "script_text": "",
+            "mode": "director",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+    )
+    shot = Shot(
+        id="sht_old",
+        project_id=project.id,
+        scene_id="sc1",
+        title="Old",
+        script_beat="beat",
+        duration_s=2,
+    )
+
+    assert project.music_master is None
+    assert shot.music_segment is None
+
+
+def test_music_segment_requires_submit_interval_to_contain_core():
+    with pytest.raises(ValueError, match="contain"):
+        ShotMusicSegment(
+            core_start_s=4.5,
+            core_end_s=8.0,
+            submit_start_s=5.0,
+            submit_end_s=8.5,
+        )
+
+
+def test_project_music_master_round_trips():
+    master = ProjectMusicMaster(
+        filename="song.wav",
+        relative_path="music/master.wav",
+        duration_s=325.12,
+        content_sha256="a" * 64,
+        source_format="wav",
+    )
+    project = Project(
+        id="prj_mv_master",
+        name="MV",
+        script_text="",
+        mode="mv",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+        music_master=master,
+    )
+
+    restored = Project.model_validate_json(project.model_dump_json())
+
+    assert restored.music_master == master
+
+
+def _silent_wav_bytes(duration_s: float = 0.25) -> bytes:
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(2)
+        wav.setframerate(32000)
+        wav.writeframes(b"\0\0\0\0" * int(32000 * duration_s))
+    return output.getvalue()
+
+
+def test_mv_music_master_upload_is_project_owned_and_relative(client):
+    project = create_project("MV", "", mode="mv")
+
+    response = client.post(
+        f"/api/projects/{project.id}/music-master",
+        files={"file": ("song.wav", _silent_wav_bytes(), "audio/wav")},
+    )
+
+    assert response.status_code == 200, response.text
+    master = response.json()["music_master"]
+    assert master["relative_path"] == "music/master.wav"
+    assert master["duration_s"] == pytest.approx(0.25, abs=0.05)
+    assert Path(master["relative_path"]).is_absolute() is False
+
+
+def test_director_project_cannot_import_music_master(client):
+    project = create_project("Director", "", mode="director")
+
+    response = client.post(
+        f"/api/projects/{project.id}/music-master",
+        files={"file": ("song.wav", _silent_wav_bytes(), "audio/wav")},
+    )
+
+    assert response.status_code == 409
+
+
+def test_invalid_music_master_replacement_keeps_previous_master(client):
+    project = create_project("MV", "", mode="mv")
+    initial = client.post(
+        f"/api/projects/{project.id}/music-master",
+        files={"file": ("song.wav", _silent_wav_bytes(), "audio/wav")},
+    )
+    assert initial.status_code == 200, initial.text
+    original = load_project(project.id).music_master
+
+    response = client.post(
+        f"/api/projects/{project.id}/music-master",
+        files={"file": ("broken.wav", b"not audio", "audio/wav")},
+    )
+
+    assert response.status_code == 400
+    assert load_project(project.id).music_master == original
+
+
+def test_resolve_music_master_rejects_path_escape(api_env):
+    from app.core.media.music_segments import resolve_music_master
+
+    project = create_project("MV", "", mode="mv")
+    project.music_master = ProjectMusicMaster(
+        filename="outside.wav",
+        relative_path="../outside.wav",
+        duration_s=1,
+        content_sha256="a" * 64,
+        source_format="wav",
+    )
+
+    with pytest.raises(ValueError, match="project directory"):
+        resolve_music_master(project)
 
 
 def test_legacy_project_json_defaults_script_lock_to_false():
@@ -2784,6 +2930,31 @@ def test_patch_shot_prompt(client, api_env):
     got = client.get(f"/api/shots/{shot.id}")
     assert got.status_code == 200
     assert got.json()["id"] == shot.id
+
+
+def test_patch_shot_can_clear_source_audio_path(client, api_env):
+    project = create_project("P", "script")
+    shot = Shot(
+        id="sht_clear_audio",
+        project_id=project.id,
+        scene_id="sc01",
+        title="t",
+        script_beat="beat",
+        duration_s=2.0,
+        source_audio_path=r"C:\audio\locked.wav",
+    )
+    save_shot(shot)
+    project.shot_ids = [shot.id]
+    save_project(project)
+
+    response = client.patch(
+        f"/api/shots/{shot.id}",
+        json={"source_audio_path": None},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["source_audio_path"] is None
+    assert load_shot(project.id, shot.id).source_audio_path is None
 
 
 def test_get_shot_404(client):
