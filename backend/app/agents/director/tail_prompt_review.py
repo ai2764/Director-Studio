@@ -155,10 +155,13 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             changed = shot.model_copy(update=patch)
             from .service import (
                 _apply_source_audio_contract,
+                _normalize_unambiguous_dialogue_language_tag,
                 parse_prompt_sections_json,
             )
-            sections = _apply_source_audio_contract(PromptSections(**parse_prompt_sections_json(
-                json.dumps(candidate.prompt_sections))), changed)
+            sections = PromptSections(**parse_prompt_sections_json(
+                json.dumps(candidate.prompt_sections)))
+            sections = _normalize_unambiguous_dialogue_language_tag(sections)
+            sections = _apply_source_audio_contract(sections, changed)
             changed = changed.model_copy(update={"prompt_sections": sections})
             contract_error = None
             try:

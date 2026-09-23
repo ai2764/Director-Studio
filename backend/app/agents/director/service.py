@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -242,6 +243,21 @@ def _apply_source_audio_contract(
             ),
         }
     )
+
+
+def _normalize_unambiguous_dialogue_language_tag(
+    sections: PromptSections,
+) -> PromptSections:
+    """Repair the local model's exact ``<d>English words</d>`` omission."""
+    detail = re.sub(
+        r"(<d>\s*)English(?=\s+\S)",
+        r"\1[English]",
+        sections.detailed_description,
+        flags=re.IGNORECASE,
+    )
+    if detail == sections.detailed_description:
+        return sections
+    return sections.model_copy(update={"detailed_description": detail})
 
 
 def recast_shot_assets(
@@ -2069,6 +2085,7 @@ class DirectorService:
 
             def parse_and_validate(value: str) -> PromptSections:
                 parsed = PromptSections(**parse_prompt_sections_json(value))
+                parsed = _normalize_unambiguous_dialogue_language_tag(parsed)
                 parsed = _apply_source_audio_contract(parsed, shot)
                 ordered_text = parsed.as_ordered_text()
                 validate_h3_prompt(ordered_text, shot.dialogue,

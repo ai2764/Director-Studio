@@ -110,6 +110,28 @@ async def test_one_repair_receives_both_binding_and_continuity_errors(tail_hando
 
 
 @pytest.mark.asyncio
+async def test_tail_prompt_normalizes_unambiguous_english_dialogue_tag(tail_handoff_shot):
+    project, shot = tail_handoff_shot
+    shot = shot.model_copy(update={"dialogue": ["Sure."]})
+    save_shot(shot)
+    malformed = candidate()
+    malformed["prompt_sections"]["detailed_description"] = (
+        "0-2 seconds: The dancer says <d>English Sure.</d> as the camera lowers. "
+        "2-6 seconds: She completes the floor move."
+    )
+    provider = Provider([malformed, verdict()])
+
+    updated = await DirectorService(
+        plan_provider=provider,
+        orchestrator=Orchestrator(),
+    ).write_prompts_after_layout(shot.id)
+
+    assert "<d>[English] Sure.</d>" in updated.prompt_sections.detailed_description
+    assert load_shot(project.id, shot.id) == updated
+    assert len(provider.text) == 2
+
+
+@pytest.mark.asyncio
 async def test_exhausted_review_retains_draft_and_reuses_observations_after_restart(tail_handoff_shot):
     project, shot = tail_handoff_shot
     provider = Provider([candidate(), verdict(False), candidate(), verdict(False)])

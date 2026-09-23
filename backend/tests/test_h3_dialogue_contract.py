@@ -228,6 +228,25 @@ async def test_plain_write_repairs_wrong_section_before_saving(saved_shot):
 
 
 @pytest.mark.asyncio
+async def test_plain_write_normalizes_unambiguous_english_dialogue_tag_before_saving(saved_shot):
+    malformed = prompt(
+        detailed_description='[Shot 1] The watchmaker says <d>English Hello.</d>'
+    )
+    provider = Provider([malformed])
+
+    updated = await DirectorService(
+        plan_provider=provider,
+        orchestrator=Orchestrator(),
+    ).write_prompts_after_layout(saved_shot.id)
+
+    assert updated.prompt_sections.detailed_description == (
+        '[Shot 1] The watchmaker says <d>[English] Hello.</d>'
+    )
+    assert load_shot(saved_shot.project_id, saved_shot.id) == updated
+    assert len(provider.requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_failed_repair_keeps_previously_saved_prompt(saved_shot):
     bad = prompt(overall_soundscape="The voice says Hello.")
     provider = Provider([bad, bad])
