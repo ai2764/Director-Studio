@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   getManagedRun, planManagedRun, runManagedSelection, stopManagedRun,
   type H3Provider, type LocalH3Resolution, type ManagedRun,
@@ -14,17 +14,39 @@ interface Props {
 }
 
 function defaultSelection(run: ManagedRun): Set<string> {
+  let desired: Set<string>;
   if (run.state === "draft") {
-    return new Set(
+    desired = new Set(
       run.selected_shot_ids?.length
         ? run.selected_shot_ids
         : run.steps.map((step) => step.shot_id),
     );
+  } else if (run.state === "paused" || run.state === "stopped") {
+    desired = new Set(run.pending_shot_ids ?? []);
+  } else {
+    desired = new Set();
   }
-  if (run.state === "paused" || run.state === "stopped") {
-    return new Set(run.pending_shot_ids ?? []);
+  return validSelection(run, desired);
+}
+
+function validSelection(run: ManagedRun, desired: Set<string>): Set<string> {
+  const valid = new Set<string>();
+  for (const step of run.steps) {
+    if (!desired.has(step.shot_id)) continue;
+    const sourceId = step.tail_from_shot_id;
+    if (!sourceId || run.completed_job_ids[sourceId] || valid.has(sourceId)) {
+      valid.add(step.shot_id);
+    }
   }
-  return new Set();
+  return valid;
+}
+
+function unavailableSource(run: ManagedRun, shotId: string, selected: Set<string>): string | null {
+  const stepIndex = run.steps.findIndex((step) => step.shot_id === shotId);
+  const sourceId = run.steps[stepIndex]?.tail_from_shot_id;
+  if (!sourceId || run.completed_job_ids[sourceId]) return null;
+  const sourceIndex = run.steps.findIndex((step) => step.shot_id === sourceId);
+  return sourceIndex >= 0 && sourceIndex < stepIndex && selected.has(sourceId) ? null : sourceId;
 }
 
 export function ManagedRunControls({ projectId, shots, provider, presets, onProjectChanged, onStateChange }: Props) {
@@ -44,7 +66,7 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
     onStateChanged.current?.(run?.state === "active" || run?.state === "stopping");
   }, [run?.state]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!run) {
       setSelected(new Set());
       return;
@@ -94,7 +116,6 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
     try {
       const next = await action();
       setRun(next);
-      setSelected(defaultSelection(next));
       if (next.resolution_preset) setResolution(next.resolution_preset);
       onChanged.current();
     } catch (cause) {
@@ -117,11 +138,12 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
   const selectionDisabled = busy || active || Boolean(run?.is_stale);
 
   function toggleShot(shotId: string) {
+    if (!run) return;
     setSelected((current) => {
       const next = new Set(current);
       if (next.has(shotId)) next.delete(shotId);
       else next.add(shotId);
-      return next;
+      return validSelection(run, next);
     });
   }
 
@@ -144,12 +166,13 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
           <summary>Plan details</summary>
           <p className="muted tiny">Choose any Shots to run. Generated Shots can be selected again.</p>
           <ol className="managed-run-plan" aria-label="Managed run plan">
-            {run.steps.map((step, index) => (
-              <li key={step.shot_id} className={index < run.current_index ? "done" : index === run.current_index ? "current" : ""}>
+            {run.steps.map((step, index) => {
+              const missingSourceId = unavailableSource(run, step.shot_id, selected);
+              return <li key={step.shot_id} className={index < run.current_index ? "done" : index === run.current_index ? "current" : ""}>
                 <label className="managed-run-shot-choice">
                   <input type="checkbox" checked={selected.has(step.shot_id)}
                     aria-label={`${shotName(step.shot_id)} Shot ${index + 1}`}
-                    disabled={selectionDisabled}
+                    disabled={selectionDisabled || Boolean(missingSourceId)}
                     onChange={() => toggleShot(step.shot_id)} />
                   <span className="managed-run-number">{String(index + 1).padStart(2, "0")}</span>
                   <span className="managed-run-shot-copy"><strong>{shotName(step.shot_id)}</strong>
@@ -159,12 +182,15 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
                   {run.state === "draft" && shots.find((shot) => shot.id === step.shot_id)?.camera_motion
                     ? <small>Camera · {shots.find((shot) => shot.id === step.shot_id)?.camera_motion}</small> : null}
                   {step.tail_from_shot_id ? <small>Tail from {shotName(step.tail_from_shot_id)} · {step.tail_reason}</small> : null}
+                  {missingSourceId
+                    ? <small className="managed-run-warning">Select {shotName(missingSourceId)} first or generate it successfully.</small>
+                    : null}
                   {(run.skipped_shots ?? {})[step.shot_id]
                     ? <small className="managed-run-warning">{run.skipped_shots[step.shot_id]}</small> : null}
                   </span>
                 </label>
-              </li>
-            ))}
+              </li>;
+            })}
           </ol>
         </details>
       ) : null}

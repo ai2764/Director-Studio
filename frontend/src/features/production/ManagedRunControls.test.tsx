@@ -70,11 +70,42 @@ it("allows a successful shot to be selected again after stop", async () => {
   renderControls();
 
   expect(await screen.findByText("Generated")).toBeTruthy();
+  expect((screen.getByRole("checkbox", { name: /Enter/ }) as HTMLInputElement).disabled).toBe(false);
   fireEvent.click(screen.getByRole("checkbox", { name: /Open/ }));
   fireEvent.click(screen.getByRole("button", { name: "Resume selected" }));
   await waitFor(() => expect(runManagedSelection).toHaveBeenCalledWith(
     "prj_1", "mrun_2", ["sht_1", "sht_2"], undefined,
   ));
+});
+
+it("disables a dependent shot until its ungenerated source is selected", async () => {
+  vi.mocked(getManagedRun).mockResolvedValue({
+    ...draftWithSelection,
+    state: "completed",
+    selected_shot_ids: [],
+  } as never);
+  renderControls();
+
+  const source = await screen.findByRole("checkbox", { name: /Open/ }) as HTMLInputElement;
+  const dependent = screen.getByRole("checkbox", { name: /Enter/ }) as HTMLInputElement;
+  expect(dependent.disabled).toBe(true);
+  expect(screen.getByText("Select Open first or generate it successfully.")).toBeTruthy();
+
+  fireEvent.click(source);
+  expect(dependent.disabled).toBe(false);
+});
+
+it("clears dependent selections when their ungenerated source is unchecked", async () => {
+  vi.mocked(getManagedRun).mockResolvedValue(draftWithSelection as never);
+  renderControls();
+
+  const source = await screen.findByRole("checkbox", { name: /Open/ }) as HTMLInputElement;
+  const dependent = screen.getByRole("checkbox", { name: /Enter/ }) as HTMLInputElement;
+  await waitFor(() => expect(dependent.checked).toBe(true));
+
+  fireEvent.click(source);
+  expect(dependent.checked).toBe(false);
+  expect(dependent.disabled).toBe(true);
 });
 
 it("shows persisted dependency warnings", async () => {
