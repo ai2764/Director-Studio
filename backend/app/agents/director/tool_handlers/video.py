@@ -6,7 +6,7 @@ import asyncio
 from typing import Any
 
 from ....core.jobs import cancel_job, list_jobs, load_job
-from ....core.managed_runs.store import _fingerprint, active_run_for_project, bind_job, pause_run
+from ....core.managed_runs.store import _fingerprint, active_run_for_project, bind_job, current_step, pause_run
 from ....core.managed_runs.context import managed_turn_scope
 from ....core.schemas import JobStatus
 from ..tool_schema import explicit_one_off_h3_intent
@@ -42,7 +42,8 @@ async def start_h3_video(project_id: str, shot_id: str, *, svc: Any,
                 from ....core.jobs.shot_sync import on_pipeline_job_terminal
                 on_pipeline_job_terminal(finished)
             return {"ok": True, "shot_id": shot_id, "job_id": shot.h3_job_id}
-        if run.current_index >= len(run.steps) or run.steps[run.current_index].shot_id != shot_id:
+        step = current_step(run)
+        if step is None or step.shot_id != shot_id:
             raise ValueError("Only the next planned Shot can start")
         if (scope is None or scope.project_id != project_id or scope.run_id != run.run_id
                 or scope.shot_id != shot_id):
@@ -52,11 +53,12 @@ async def start_h3_video(project_id: str, shot_id: str, *, svc: Any,
                     "already_started": True}
         if scope.event_id != run.pending_event_id:
             raise ValueError("Managed continuation event changed before submission")
-        step = run.steps[run.current_index]
         if step.tail_from_shot_id and shot_id not in run.prepared_tail_layout_ids:
             raise ValueError("Planned tail frame has not been attached to this Shot")
         if run.current_fingerprint and _fingerprint(project_id) != run.current_fingerprint:
-            raise ValueError("Shot brief or references changed after managed plan review")
+            reason = "Shot brief or references changed after managed plan review"
+            pause_run(project_id, run.run_id, reason)
+            raise ValueError(reason)
         if not run.resolution_preset:
             raise ValueError("Managed H3 resolution was not selected")
         if resolution_preset and resolution_preset != run.resolution_preset:

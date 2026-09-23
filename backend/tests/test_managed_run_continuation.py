@@ -9,6 +9,7 @@ from app.core.managed_runs.store import (
     activate_run,
     bind_job,
     create_draft,
+    current_step,
     finish_stop,
     load_run,
     record_prompt_retry,
@@ -76,6 +77,214 @@ def test_sparse_selection_completes_without_replaying_earlier_shot() -> None:
     assert completed.pending_shot_ids == []
     assert completed.current_index == len(completed.steps)
     assert completed.completed_job_ids == {"sht_2": "job_second"}
+
+
+@pytest.mark.asyncio
+async def test_continuation_runs_only_first_selected_pending_shot(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+
+    run = _run()
+    request_stop(run.project_id, run.run_id)
+    finish_stop(run.project_id, run.run_id)
+    resumed = run_selected(run.project_id, run.run_id, ["sht_2"], None)
+    started = []
+
+    async def fake_agent_turn(current, _svc):
+        step = current_step(current)
+        assert step is not None
+        started.append(step.shot_id)
+        bind_job(
+            current.project_id,
+            current.run_id,
+            step.shot_id,
+            "job_selected",
+        )
+
+    monkeypatch.setattr(continuation, "_agent_turn", fake_agent_turn)
+    await continuation.continue_run(resumed.project_id, resumed.run_id)
+
+    assert started == ["sht_2"]
+
+
+@pytest.mark.asyncio
+async def test_resume_skips_missing_dependent_but_starts_later_independent(
+    monkeypatch,
+) -> None:
+    from app.core.managed_runs import continuation
+
+    project = create_project("Selective", "Three shots")
+    source = Shot(
+        id="sht_source", project_id=project.id, scene_id="sc",
+        title="Source", script_beat="Source", duration_s=5,
+    )
+    dependent = Shot(
+        id="sht_dependent", project_id=project.id, scene_id="sc",
+        title="Dependent", script_beat="Dependent", duration_s=5,
+    )
+    independent = Shot(
+        id="sht_independent", project_id=project.id, scene_id="sc",
+        title="Independent", script_beat="Independent", duration_s=5,
+    )
+    for shot in (source, dependent, independent):
+        save_shot(shot)
+    save_project(project.model_copy(update={
+        "shot_ids": [source.id, dependent.id, independent.id],
+    }))
+    draft = create_draft(project.id, [
+        RunStep(shot_id=source.id),
+        RunStep(
+            shot_id=dependent.id,
+            tail_from_shot_id=source.id,
+            tail_reason="Continue the source pose",
+        ),
+        RunStep(shot_id=independent.id),
+    ])
+    resumed = run_selected(
+        project.id,
+        draft.run_id,
+        [dependent.id, independent.id],
+        "landscape-480",
+    )
+    assert dependent.id in resumed.skipped_shots
+
+    started = []
+
+    async def fake_agent_turn(current, _svc):
+        step = current_step(current)
+        assert step is not None
+        started.append(step.shot_id)
+        bind_job(
+            current.project_id,
+            current.run_id,
+            step.shot_id,
+            "job_independent",
+        )
+
+    monkeypatch.setattr(continuation, "_agent_turn", fake_agent_turn)
+    await continuation.continue_run(project.id, resumed.run_id)
+
+    assert started == [independent.id]
+
+
+@pytest.mark.asyncio
+async def test_tail_for_unselected_source_uses_persisted_successful_job(
+    monkeypatch,
+) -> None:
+    from app.core.managed_runs import continuation
+    from app.core.managed_runs.store import _save_run
+    from app.core.projects.layouts import LayoutReference, LayoutReviewStatus
+    from app.core.projects.store import load_shot
+
+    run = _run()
+    run = _save_run(run.model_copy(update={
+        "steps": [
+            RunStep(shot_id="sht_1"),
+            RunStep(
+                shot_id="sht_2",
+                tail_from_shot_id="sht_1",
+                tail_reason="Continue the door",
+            ),
+        ],
+        "current_index": 1,
+        "pending_shot_ids": ["sht_2"],
+        "tail_source_job_ids": {"sht_2": "job_existing"},
+    }))
+    captured = []
+
+    def fake_extract(**kwargs):
+        captured.append(kwargs)
+        shot = load_shot(run.project_id, "sht_2")
+        layout = LayoutReference(
+            id="lref_existing_tail",
+            purpose="continuity",
+            review_status=LayoutReviewStatus.pending_review,
+        )
+        save_shot(shot.model_copy(update={"layout_refs": [layout]}))
+        return {"layout_ref_id": layout.id, "layout_asset_id": None}
+
+    class FakeService:
+        async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
+            return None
+
+    monkeypatch.setattr(continuation, "extract_clip_tail_frame", fake_extract)
+    await continuation.prepare_planned_tail(run, FakeService())
+
+    assert captured[0]["source_job_id"] == "job_existing"
+
+
+@pytest.mark.asyncio
+async def test_rerun_source_replaces_prepared_tail_with_new_job(monkeypatch) -> None:
+    from app.core.managed_runs import continuation
+    from app.core.managed_runs.store import _save_run
+    from app.core.projects.layouts import (
+        ClipTailFrameOrigin,
+        LayoutReference,
+        LayoutReviewStatus,
+    )
+    from app.core.projects.store import load_shot
+
+    run = _run()
+    run = _save_run(run.model_copy(update={"steps": [
+        RunStep(shot_id="sht_1"),
+        RunStep(
+            shot_id="sht_2",
+            tail_from_shot_id="sht_1",
+            tail_reason="Continue the door",
+        ),
+    ]}))
+    bind_job(run.project_id, run.run_id, "sht_1", "job_new")
+    run = record_terminal(run.project_id, "job_new", JobStatus.succeeded)
+    target = load_shot(run.project_id, "sht_2")
+    old_layout = LayoutReference(
+        id="lref_old_tail",
+        purpose="old continuity",
+        review_status=LayoutReviewStatus.usable,
+        origin=ClipTailFrameOrigin(
+            source_shot_id="sht_1",
+            source_job_id="job_old",
+            source_generation=1,
+            output_kind="enhanced",
+            output_key="video",
+            source_filename="old.mp4",
+        ),
+    )
+    save_shot(target.model_copy(update={"layout_refs": [old_layout]}))
+    run = _save_run(run.model_copy(update={
+        "prepared_tail_layout_ids": {"sht_2": old_layout.id},
+    }))
+    captured = []
+
+    def fake_extract(**kwargs):
+        captured.append(kwargs)
+        shot = load_shot(run.project_id, "sht_2")
+        new_layout = LayoutReference(
+            id="lref_new_tail",
+            purpose="new continuity",
+            review_status=LayoutReviewStatus.pending_review,
+            origin=ClipTailFrameOrigin(
+                source_shot_id="sht_1",
+                source_job_id="job_new",
+                source_generation=2,
+                output_kind="enhanced",
+                output_key="video",
+                source_filename="new.mp4",
+            ),
+        )
+        save_shot(shot.model_copy(update={
+            "layout_refs": [*shot.layout_refs, new_layout],
+        }))
+        return {"layout_ref_id": new_layout.id, "layout_asset_id": None}
+
+    class FakeService:
+        async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
+            return None
+
+    monkeypatch.setattr(continuation, "extract_clip_tail_frame", fake_extract)
+    await continuation.prepare_planned_tail(run, FakeService())
+
+    assert captured[0]["source_job_id"] == "job_new"
+    saved = load_run(run.project_id, run.run_id)
+    assert saved.prepared_tail_layout_ids["sht_2"] == "lref_new_tail"
 
 
 @pytest.mark.asyncio
@@ -483,7 +692,9 @@ async def test_two_shots_advance_on_terminal_events_without_polling(monkeypatch)
     started = []
 
     async def fake_agent(current, svc):
-        shot_id = current.steps[current.current_index].shot_id
+        step = current_step(current)
+        assert step is not None
+        shot_id = step.shot_id
         job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name=shot_id,
                          project_id=current.project_id, params={"shot_id": shot_id})
         bind_job(current.project_id, current.run_id, shot_id, job.id)

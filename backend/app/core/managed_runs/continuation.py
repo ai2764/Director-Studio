@@ -15,32 +15,59 @@ from ..projects.layouts import LayoutReviewStatus, sync_selected_layout_refs
 from ..projects.store import list_projects, load_shot, save_shot
 from ..projects.transitions import review_layout_reference, select_layout_reference
 from ...agents.director.tail_prompt_review import CreativeQuestion
-from .models import ManagedRun
+from .models import ManagedRun, RunStep
 from .context import ManagedTurnScope, managed_turn_scope
-from .store import _fingerprint, active_run_for_project, bind_job, finish_stop, list_runs, load_run, mark_tail_ready, pause_run, record_prompt_retry
+from .selection import latest_successful_video_job_id
+from .store import _fingerprint, active_run_for_project, bind_job, current_step, finish_stop, list_runs, load_run, mark_tail_ready, pause_run, record_prompt_retry
 
 logger = logging.getLogger("director_studio.managed_runs")
 _continuation_tasks: dict[str, asyncio.Task[None]] = {}
 
 
+def _tail_source_job_id(run: ManagedRun, step: RunStep) -> str | None:
+    if not step.tail_from_shot_id:
+        return None
+    return (
+        run.completed_job_ids.get(step.tail_from_shot_id)
+        or run.tail_source_job_ids.get(step.shot_id)
+        or latest_successful_video_job_id(
+            run.project_id,
+            step.tail_from_shot_id,
+        )
+    )
+
+
 async def prepare_planned_tail(run: ManagedRun, svc: Any) -> None:
     """Use the exact successful source job authorized in the reviewed plan."""
-    if run.current_index >= len(run.steps):
+    step = current_step(run)
+    if step is None:
         return
-    step = run.steps[run.current_index]
     source_shot_id = step.tail_from_shot_id
     if not source_shot_id:
         return
-    source_job_id = run.completed_job_ids.get(source_shot_id)
+    source_job_id = _tail_source_job_id(run, step)
     if not source_job_id:
-        raise ValueError(f"Planned tail source Shot {source_shot_id} has no completed managed Job")
-    if step.shot_id in run.prepared_tail_layout_ids:
-        return
+        warning = run.skipped_shots.get(step.shot_id)
+        raise ValueError(
+            warning
+            or f"Planned tail source Shot {source_shot_id} has no successful video"
+        )
 
     # A restarted process may have extracted the frame before marking the step.
     target = load_shot(run.project_id, step.shot_id)
     if target is None:
         raise ValueError("Planned target Shot no longer exists")
+    prepared_layout_id = run.prepared_tail_layout_ids.get(step.shot_id)
+    prepared = next(
+        (layout for layout in target.layout_refs if layout.id == prepared_layout_id),
+        None,
+    )
+    if (
+        prepared is not None
+        and prepared.origin is not None
+        and prepared.origin.source_job_id == source_job_id
+    ):
+        return
     prior = next((layout for layout in target.layout_refs if layout.origin
                   and layout.origin.source_job_id == source_job_id), None)
     if prior is None:
@@ -57,7 +84,14 @@ async def prepare_planned_tail(run: ManagedRun, svc: Any) -> None:
         layout_id = prior.id
 
     latest = load_run(run.project_id, run.run_id)
-    if latest is None or latest.state != "active" or latest.current_index != run.current_index:
+    latest_step = current_step(latest) if latest is not None else None
+    if (
+        latest is None
+        or latest.state != "active"
+        or latest.pending_event_id != run.pending_event_id
+        or latest_step is None
+        or latest_step.shot_id != step.shot_id
+    ):
         return
     reviewed = review_layout_reference(
         target, layout_id, LayoutReviewStatus.usable,
@@ -92,7 +126,9 @@ async def _agent_turn(run: ManagedRun, svc: Any) -> Any:
     from ..projects.chat_history import append_chat_message
     from ..projects.chat_sessions import DirectorChatSessionConflict, director_chat_sessions
 
-    step = run.steps[run.current_index]
+    step = current_step(run)
+    if step is None:
+        return None
     shot = load_shot(run.project_id, step.shot_id)
     if shot is None:
         raise ValueError("Planned Shot no longer exists")
@@ -160,7 +196,7 @@ async def continue_run(project_id: str, run_id: str) -> None:
     run = load_run(project_id, run_id)
     if run is None or run.state != "active" or not run.pending_event_id:
         return
-    if run.current_job_id or run.current_index >= len(run.steps):
+    if run.current_job_id or current_step(run) is None:
         return
     try:
         if run.current_fingerprint and _fingerprint(project_id) != run.current_fingerprint:
@@ -229,7 +265,11 @@ def schedule_pending_runs() -> None:
     for project in list_projects():
         run = active_run_for_project(project.id)
         if run is not None and not run.current_job_id and run.pending_event_id:
-            step = run.steps[run.current_index]
+            step = current_step(run)
+            if step is None:
+                pause_run(project.id, run.run_id, "No pending Shot could be recovered")
+                schedule_continuation(project.id)
+                continue
             candidates = [job for job in list_jobs(
                 limit=None, pipeline_id="h3_ref2va", project_id=project.id,
             ) if (job.params or {}).get("managed_run_id") == run.run_id

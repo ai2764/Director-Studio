@@ -8,7 +8,7 @@ import json
 
 from app.agents.director.tool_schema import director_tool_schemas, offered_tool_names
 from app.core.managed_runs.models import RunStep
-from app.core.managed_runs.store import activate_run, bind_job, create_draft, list_runs, load_run, record_terminal, request_stop
+from app.core.managed_runs.store import activate_run, bind_job, create_draft, current_step, list_runs, load_run, record_terminal, request_stop
 from app.core.projects.models import Shot
 from app.core.projects.store import create_project, save_project, save_shot, load_shot
 from app.core.jobs.store import create_job, save_job
@@ -19,9 +19,11 @@ from app.core.managed_runs.context import ManagedTurnScope, managed_turn_scope
 @pytest.fixture
 def authorize_managed_turn():
     def authorize(run):
+        step = current_step(run)
+        assert step is not None
         managed_turn_scope.set(ManagedTurnScope(
             project_id=run.project_id, run_id=run.run_id,
-            event_id=run.pending_event_id or "", shot_id=run.steps[run.current_index].shot_id,
+            event_id=run.pending_event_id or "", shot_id=step.shot_id,
         ))
 
     yield authorize
@@ -307,6 +309,40 @@ async def test_start_h3_video_submits_exact_next_shot_with_run_resolution(monkey
     assert repeat["job_id"] == result["job_id"]
     assert repeat["already_started"] is True
     assert load_run(project.id, draft.run_id).current_job_id == result["job_id"]
+
+
+@pytest.mark.asyncio
+async def test_start_h3_video_pauses_stale_selection_before_submit(
+    monkeypatch, authorize_managed_turn,
+) -> None:
+    from app.agents.director.tool_handlers.video import start_h3_video
+    from app.api import projects as projects_api
+
+    project = create_project("Stale managed H3", "A short scene")
+    shot = Shot(
+        id="sht_stale", project_id=project.id, scene_id="scene_1",
+        title="Open", script_beat="A door opens.", duration_s=5,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    draft = create_draft(project.id, [RunStep(shot_id=shot.id)])
+    run = activate_run(project.id, draft.run_id, "landscape-480")
+    authorize_managed_turn(run)
+    save_shot(shot.model_copy(update={"script_beat": "The user changed the beat."}))
+    submitted = []
+
+    async def fake_submit(*args, **kwargs):
+        submitted.append(args)
+        raise AssertionError("stale selected runs must not submit")
+
+    monkeypatch.setattr(projects_api, "submit_shot_endpoint", fake_submit)
+    with pytest.raises(ValueError, match="changed after managed plan review"):
+        await start_h3_video(project.id, shot.id, svc=object())
+
+    assert submitted == []
+    saved = load_run(project.id, run.run_id)
+    assert saved.state == "paused"
+    assert "changed" in saved.paused_reason
 
 
 @pytest.mark.asyncio
