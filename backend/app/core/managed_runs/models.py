@@ -51,6 +51,10 @@ class ManagedRun(BaseModel):
     current_index: int = 0
     current_job_id: str | None = None
     completed_job_ids: dict[str, str] = Field(default_factory=dict)
+    selected_shot_ids: list[str] = Field(default_factory=list)
+    pending_shot_ids: list[str] = Field(default_factory=list)
+    skipped_shots: dict[str, str] = Field(default_factory=dict)
+    tail_source_job_ids: dict[str, str] = Field(default_factory=dict)
     pending_event_id: str | None = None
     prepared_tail_layout_ids: dict[str, str] = Field(default_factory=dict)
     processed_event_ids: list[str] = Field(default_factory=list)
@@ -58,3 +62,8 @@ class ManagedRun(BaseModel):
     prompt_retry_count: int = 0
     prompt_retry_error: str = ""
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class ManagedRunView(ManagedRun):
+    is_stale: bool = False
+    stale_reason: str = ""
