@@ -118,6 +118,8 @@ class CreativeQuestion(ValueError):
 
 async def draft_and_review(provider, project, shot, records, images, signature,
                            check_current, save_diagnostics):
+    from ...core.media.music_segments import music_prompt_context
+
     references = await observe_references_cached(provider, project.id, records, images, check_current)
     layouts = selected_layout_prompt_context(shot)
     confirmed = project.asset_coverage_review
@@ -127,6 +129,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
         confirmed_data = {"notes": confirmed.notes, "recommendations": [
             r.model_dump(mode="json") for r in confirmed.recommendations if r.resolution != "pending"]}
     fields = ("title", "script_beat", "shot_type", "camera_angle", "camera_motion", "composition", "duration_s", "dialogue", "feedback")
+    music_context = music_prompt_context(project, shot)
     request = {
         "script": project.script_text,
         "original_shot": {k: getattr(shot, k) for k in fields},
@@ -135,6 +138,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
         "references": references, "selected_layouts": layouts,
         "voice_refs": [v.model_dump(mode="json") for v in shot.voice_refs],
         "source_audio_active": bool(shot.source_audio_path),
+        "music_segment": music_context,
         "confirmed_project_review": confirmed_data,
     }
     attempts = []
@@ -166,7 +170,11 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             contract_error = None
             try:
                 validate_h3_prompt(sections.as_ordered_text(), changed.dialogue,
-                    audio_count=0 if changed.source_audio_path else len(changed.voice_refs),
+                    audio_count=(
+                        1
+                        if music_context is not None
+                        else 0 if changed.source_audio_path else len(changed.voice_refs)
+                    ),
                     required_picture_indices=[r.picture_index for r in changed.refs],
                     submitted_picture_indices=[r.picture_index for r in changed.refs])
             except ValueError as exc:

@@ -894,6 +894,7 @@ def test_save_storyboard_tool_exposes_the_complete_typed_shot_draft_shape():
         "composition",
         "duration_s",
         "dialogue",
+        "music_segment",
         "asset_matches",
         "voice_matches",
     }
@@ -969,6 +970,7 @@ def test_revise_shot_tool_only_accepts_partial_authored_fields():
         "composition",
         "duration_s",
         "dialogue",
+        "music_segment",
     }
     assert "refs" not in parameters["properties"]
     assert "layout_refs" not in parameters["properties"]
@@ -1035,6 +1037,53 @@ async def test_native_revise_shot_returns_only_persisted_target(
     # Adding neighboring shots must not amplify a single-shot tool response.
     assert len(json.dumps(payloads)) < 1000
     assert "one shot" in notes[0].lower()
+
+
+def test_revise_shot_persists_music_segment_only_for_mv_project(
+    tmp_projects_dir,
+):
+    from app.agents.director.service import DirectorService
+
+    segment = {
+        "core_start_s": 4.54,
+        "core_end_s": 13.08,
+        "submit_start_s": 4.04,
+        "submit_end_s": 13.83,
+    }
+    mv_project = create_project("MV", "song", mode="mv")
+    mv_shot = Shot(
+        id="sht_mv_segment",
+        project_id=mv_project.id,
+        scene_id="sc01",
+        title="Sing",
+        script_beat="Mia sings",
+        duration_s=9.79,
+    )
+    save_shot(mv_shot)
+    save_project(mv_project.model_copy(update={"shot_ids": [mv_shot.id]}))
+    svc = DirectorService(plan_provider=None)
+
+    revised = svc.revise_shot(
+        mv_project.id,
+        {"shot_id": mv_shot.id, "music_segment": segment},
+    )[0]
+
+    assert revised.music_segment.model_dump() == segment
+
+    director_project = create_project("Director", "scene")
+    director_shot = mv_shot.model_copy(update={
+        "id": "sht_director_segment",
+        "project_id": director_project.id,
+        "music_segment": None,
+    })
+    save_shot(director_shot)
+    save_project(director_project.model_copy(update={"shot_ids": [director_shot.id]}))
+
+    with pytest.raises(ValueError, match="Music Video"):
+        svc.revise_shot(
+            director_project.id,
+            {"shot_id": director_shot.id, "music_segment": segment},
+        )
 
 
 @pytest.mark.asyncio
@@ -1815,6 +1864,10 @@ async def test_native_save_storyboard_real_service_returns_the_stored_snapshot(
             "voice_refs": [
                 ref.model_dump(mode="json") for ref in shot.voice_refs
             ],
+            "music_segment": (
+                shot.music_segment.model_dump(mode="json")
+                if shot.music_segment else None
+            ),
         }
         for shot in stored
     ]

@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from ...core.projects.models import RefRole
+from ...core.projects.models import RefRole, ShotMusicSegment
 
 
 @runtime_checkable
@@ -117,6 +117,13 @@ class ShotDraft(BaseModel):
     )
     duration_s: float = 8.0
     dialogue: list[str] = Field(default_factory=list)
+    music_segment: ShotMusicSegment | None = Field(
+        default=None,
+        description=(
+            "MV-only song timestamps for readable lip sync. Leave null for "
+            "audio-free cutaways."
+        ),
+    )
     asset_matches: list[AssetMatchDraft] = Field(default_factory=list)
     voice_matches: list[VoiceMatchDraft] = Field(default_factory=list)
 
@@ -164,6 +171,8 @@ class ShotDraft(BaseModel):
             raise ValueError("voice match assets must be unique")
         if [voice.audio_index for voice in voices] != list(range(1, len(voices) + 1)):
             raise ValueError("audio_index must be contiguous and ordered from 1")
+        if self.music_segment is not None and voices:
+            raise ValueError("music_segment cannot be combined with voice matches")
         return self
 
 
@@ -221,6 +230,7 @@ class ShotRevisionSubmission(BaseModel):
     composition: str | None = None
     duration_s: float | None = None
     dialogue: list[str] | None = None
+    music_segment: ShotMusicSegment | None = None
 
     @field_validator(
         "shot_id",

@@ -2403,6 +2403,83 @@ def test_submit_h3_rejects_locked_source_audio_for_official_providers(
     assert started == []
 
 
+def test_submit_stages_mv_music_segment_as_audio_1(
+    client, api_env, monkeypatch
+):
+    _seed_layout(api_env["library"])
+    project = create_project("MV", "song", mode="mv")
+    uploaded = client.post(
+        f"/api/projects/{project.id}/music-master",
+        files={"file": ("song.wav", _silent_wav_bytes(3.0), "audio/wav")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    segment = ShotMusicSegment(
+        core_start_s=0.75,
+        core_end_s=1.75,
+        submit_start_s=0.5,
+        submit_end_s=2.75,
+    )
+    shot = Shot(
+        id="sht_mv_audio_1",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Sing",
+        script_beat="Readable singing",
+        duration_s=8.0,
+        status=ShotStatus.approved,
+        refs=[ShotRef(
+            role=RefRole.layout_ref_frame,
+            asset_id="lay_testlayout01",
+            picture_index=1,
+        )],
+        music_segment=segment,
+        prompt_sections=PromptSections(
+            subject_definitions="<Picture 1> controls composition. <Audio 1> is the submitted song excerpt.",
+            summary="The singer performs to the supplied excerpt.",
+            retention_analysis="Retain the singer and set.",
+            detailed_description="0–2.25 seconds: the singer performs in sync.",
+            overall_soundscape="<Audio 1> supplies the singing performance and timing.",
+            non_diegetic_music="The submitted excerpt is generation guidance.",
+        ),
+        layout_asset_id="lay_testlayout01",
+        layout_review_status="approved",
+    )
+    shot = shot.model_copy(update={"meta": _fresh_layout_prompt_meta(shot)})
+    save_shot(shot)
+    save_project((load_project(project.id) or project).model_copy(update={"shot_ids": [shot.id]}))
+
+    refreshed: list[str] = []
+
+    async def keep_current_prompt(shot_id):
+        refreshed.append(shot_id)
+        return load_shot(project.id, shot_id)
+
+    client.app.state.director_service.write_prompts_after_layout = keep_current_prompt
+    started: list[dict] = []
+
+    async def capture_start(job, *, images=None):
+        started.append({"job": job, "images": images or {}})
+        return job
+
+    import app.api.projects as projects_api
+
+    monkeypatch.setattr(projects_api, "start_pipeline_job", capture_start)
+
+    response = client.post(
+        f"/api/shots/{shot.id}/submit",
+        json={"h3_provider": "local", "width": 864, "height": 480},
+    )
+
+    assert response.status_code == 200, response.text
+    assert refreshed == [shot.id]
+    assert len(started) == 1
+    job = started[0]["job"]
+    assert job.params["audio_keys"] == ["music_audio_1"]
+    assert job.params["duration_s"] == pytest.approx(2.25)
+    assert started[0]["images"]["music_audio_1"][0] == "music_audio_1.wav"
+    assert started[0]["images"]["music_audio_1"][1][:4] == b"RIFF"
+
+
 def test_submit_refreshes_prompt_when_layout_provenance_is_stale(
     client, api_env, monkeypatch, enable_reference_review
 ):
@@ -2955,6 +3032,68 @@ def test_patch_shot_can_clear_source_audio_path(client, api_env):
     assert response.status_code == 200, response.text
     assert response.json()["source_audio_path"] is None
     assert load_shot(project.id, shot.id).source_audio_path is None
+
+
+def test_patch_shot_sets_and_clears_mv_music_segment(client, api_env):
+    project = create_project("MV", "song", mode="mv")
+    shot = Shot(
+        id="sht_patch_mv_segment",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Sing",
+        script_beat="beat",
+        duration_s=3.0,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    segment = {
+        "core_start_s": 1.0,
+        "core_end_s": 2.0,
+        "submit_start_s": 0.5,
+        "submit_end_s": 2.75,
+    }
+
+    response = client.patch(
+        f"/api/shots/{shot.id}",
+        json={"music_segment": segment},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["music_segment"] == segment
+    cleared = client.patch(
+        f"/api/shots/{shot.id}",
+        json={"music_segment": None},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["music_segment"] is None
+
+
+def test_patch_shot_rejects_music_segment_outside_mv(client, api_env):
+    project = create_project("Director", "scene")
+    shot = Shot(
+        id="sht_reject_mv_segment",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Speak",
+        script_beat="beat",
+        duration_s=3.0,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+
+    response = client.patch(
+        f"/api/shots/{shot.id}",
+        json={"music_segment": {
+            "core_start_s": 1.0,
+            "core_end_s": 2.0,
+            "submit_start_s": 0.5,
+            "submit_end_s": 2.75,
+        }},
+    )
+
+    assert response.status_code == 400
+    assert "Music Video" in response.text
+    assert load_shot(project.id, shot.id).music_segment is None
 
 
 def test_get_shot_404(client):

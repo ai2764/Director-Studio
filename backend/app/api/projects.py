@@ -43,13 +43,19 @@ from ..core.library.store import (
     load_asset,
     write_asset,
 )
-from ..core.media.music_segments import import_music_master, resolve_music_master
+from ..core.media.music_segments import (
+    import_music_master,
+    music_prompt_signature,
+    prepare_music_segment,
+    resolve_music_master,
+)
 from ..core.projects.models import (
     Project,
     ProjectMode,
     PromptSections,
     RefRole,
     Shot,
+    ShotMusicSegment,
     ShotRef,
     ShotVoiceRef,
     ShotStatus,
@@ -250,6 +256,7 @@ class ShotPatchBody(BaseModel):
     layout_asset_id: str | None = None
     scene_id: str | None = None
     source_audio_path: str | None = None
+    music_segment: ShotMusicSegment | None = None
 
 
 class ShotMaterialSelection(BaseModel):
@@ -1627,10 +1634,13 @@ async def reject_ref_frame_endpoint(
 async def patch_shot_endpoint(shot_id: str, body: ShotPatchBody) -> Shot:
     """Edit refs, prompt sections, duration, dialogue, etc. (LLM not required)."""
     shot = _find_shot(shot_id)
+    project = load_project(shot.project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
     updates: dict[str, Any] = {}
     data = body.model_dump(exclude_unset=True)
     for key, val in data.items():
-        if val is not None or key == "source_audio_path":
+        if val is not None or key in {"source_audio_path", "music_segment"}:
             updates[key] = val
     if "prompt_sections" in updates and isinstance(updates["prompt_sections"], dict):
         updates["prompt_sections"] = PromptSections.model_validate(
@@ -1653,6 +1663,16 @@ async def patch_shot_endpoint(shot_id: str, body: ShotPatchBody) -> Shot:
     payload = shot.model_dump(mode="python")
     payload.update(updates)
     shot = Shot.model_validate(payload)
+    if shot.music_segment is not None and project.mode != ProjectMode.mv:
+        raise HTTPException(
+            400,
+            "music_segment is available only for Music Video projects",
+        )
+    if shot.music_segment is not None and shot.voice_refs:
+        raise HTTPException(
+            400,
+            "MV music segments cannot be combined with Voice references",
+        )
     if "voice_refs" in updates:
         try:
             _validate_voice_refs(shot)
@@ -1660,6 +1680,10 @@ async def patch_shot_endpoint(shot_id: str, body: ShotPatchBody) -> Shot:
             raise _http_value_error(exc) from exc
         meta = dict(shot.meta or {})
         meta["prompt_voice_signature"] = ""
+        shot = shot.model_copy(update={"meta": meta})
+    if "music_segment" in updates:
+        meta = dict(shot.meta or {})
+        meta["prompt_music_signature"] = ""
         shot = shot.model_copy(update={"meta": meta})
     save_shot(shot)
     return shot
@@ -1860,6 +1884,17 @@ async def submit_shot_endpoint(
     the Director Agent before preflight. Matching prompts do not wake the LLM.
     """
     shot = _find_shot(shot_id)
+    project = load_project(shot.project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    if shot.music_segment is not None and project.mode != ProjectMode.mv:
+        raise HTTPException(400, "Music segments require a Music Video project")
+    music_active = project.mode == ProjectMode.mv and shot.music_segment is not None
+    if music_active and shot.voice_refs:
+        raise HTTPException(
+            400,
+            "MV music segments cannot be combined with Voice references",
+        )
     from ..core.managed_runs.context import managed_turn_scope
     from ..core.managed_runs.store import active_run_for_project
 
@@ -1952,6 +1987,10 @@ async def submit_shot_endpoint(
     current_picture_signature = picture_ref_signature(shot.refs)
     picture_contract_present = "prompt_picture_signature" in (shot.meta or {})
     current_voice_signature = _voice_signature(shot.voice_refs)
+    current_music_signature = music_prompt_signature(project, shot)
+    prompt_music_signature = str(
+        (shot.meta or {}).get("prompt_music_signature") or ""
+    )
     voice_contract_present = bool(shot.voice_refs) or (
         "prompt_voice_signature" in (shot.meta or {})
     )
@@ -1963,8 +2002,13 @@ async def submit_shot_endpoint(
         )
         or (
             not shot.source_audio_path
+            and not music_active
             and voice_contract_present
             and prompt_voice_signature != current_voice_signature
+        )
+        or (
+            music_active
+            and prompt_music_signature != current_music_signature
         )
     ):
         try:
@@ -1994,7 +2038,11 @@ async def submit_shot_endpoint(
         validate_h3_prompt(
             prompt_text,
             list(shot.dialogue),
-            audio_count=0 if shot.source_audio_path else len(shot.voice_refs),
+            audio_count=(
+                1 if music_active
+                else 0 if shot.source_audio_path
+                else len(shot.voice_refs)
+            ),
             required_picture_indices=required_layout_indices,
             submitted_picture_indices=(
                 ref.picture_index for ref in shot.refs
@@ -2004,10 +2052,15 @@ async def submit_shot_endpoint(
         raise _http_value_error(e) from e
 
     try:
+        effective_duration_s = (
+            shot.music_segment.submit_end_s - shot.music_segment.submit_start_s
+            if music_active and shot.music_segment is not None
+            else shot.duration_s
+        )
         frames = (
-            frames_for_audio_seconds(shot.duration_s)
-            if shot.source_audio_path
-            else frames_for_seconds(shot.duration_s)
+            frames_for_audio_seconds(effective_duration_s)
+            if shot.source_audio_path or music_active
+            else frames_for_seconds(effective_duration_s)
         )
     except ValueError as e:
         raise _http_value_error(e) from e
@@ -2019,7 +2072,18 @@ async def submit_shot_endpoint(
 
     image_keys = list(images.keys())
     audio_keys: list[str] = []
-    if not shot.source_audio_path:
+    if music_active and shot.music_segment is not None:
+        try:
+            prepared_music = prepare_music_segment(project, shot.music_segment)
+        except ValueError as e:
+            raise _http_value_error(e) from e
+        audio_keys.append("music_audio_1")
+        images["music_audio_1"] = (
+            prepared_music.filename,
+            prepared_music.data,
+        )
+        effective_duration_s = prepared_music.duration_s
+    elif not shot.source_audio_path:
         try:
             resolved_voice_refs = _validate_voice_refs(shot)
         except ValueError as e:
@@ -2028,7 +2092,6 @@ async def submit_shot_endpoint(
             key = f"voice_audio_{ref.audio_index}"
             audio_keys.append(key)
             images[key] = (audio_path.name, audio_path.read_bytes())
-    project = load_project(shot.project_id)
     portrait = bool(
         project
         and any(
@@ -2073,7 +2136,7 @@ async def submit_shot_endpoint(
             "prompt": prompt_text,
             "dialogue": list(shot.dialogue),
             "frames": frames,
-            "duration_s": shot.duration_s,
+            "duration_s": effective_duration_s,
             "image_keys": image_keys,
             "audio_keys": audio_keys,
             "native_audio_key": native_audio_key,

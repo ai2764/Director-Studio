@@ -9,7 +9,7 @@ import json
 from app.agents.director.tool_schema import director_tool_schemas, offered_tool_names
 from app.core.managed_runs.models import RunStep
 from app.core.managed_runs.store import activate_run, bind_job, create_draft, current_step, list_runs, load_run, record_terminal, request_stop
-from app.core.projects.models import Shot
+from app.core.projects.models import ProjectMusicMaster, Shot, ShotMusicSegment
 from app.core.projects.store import create_project, save_project, save_shot, load_shot
 from app.core.jobs.store import create_job, save_job
 from app.core.schemas import JobStatus
@@ -277,6 +277,44 @@ def test_compact_context_shows_prior_successful_h3_dimensions() -> None:
     assert state["shots"][1]["latest_successful_h3"] is None
     assert any(preset["id"] == "portrait-768" and preset["width"] == 768
                and preset["height"] == 1376 for preset in state["local_h3_resolution_presets"])
+
+
+def test_mv_context_exposes_song_master_and_saved_shot_segment() -> None:
+    from app.agents.director.chat_context import project_context_blob
+
+    project = create_project("MV", "[0.0-1.0] sing", mode="mv")
+    project = project.model_copy(update={
+        "music_master": ProjectMusicMaster(
+            filename="song.wav",
+            relative_path="music/master.wav",
+            duration_s=30.0,
+            content_sha256="a" * 64,
+            source_format="wav",
+        ),
+    })
+    segment = ShotMusicSegment(
+        core_start_s=1.0,
+        core_end_s=2.0,
+        submit_start_s=0.5,
+        submit_end_s=2.75,
+    )
+    shot = Shot(
+        id="sht_mv_context",
+        project_id=project.id,
+        scene_id="scene_1",
+        title="Sing",
+        script_beat="Readable singing.",
+        duration_s=2.25,
+        music_segment=segment,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+
+    state = json.loads(project_context_blob(project, [shot], message="继续规划"))
+
+    assert state["project"]["mode"] == "mv"
+    assert state["project"]["music_master"]["duration_s"] == 30.0
+    assert state["shots"][0]["music_segment"] == segment.model_dump(mode="json")
 
 
 @pytest.mark.asyncio

@@ -20,7 +20,7 @@ Every video Shot uses H3 Ref2AV. Express a single state, first/last intent, firs
 - Request the source-song segment only when a clearly readable mouth must synchronize to singing, yodeling, or speech. A cutaway, rear view, distant figure, environment, prop, or reaction normally receives no generation audio even though the master song continues in the final edit.
 - When source audio is used, preserve the core content interval and prefer a wider generation interval. Start with about 0.5 seconds of pre-roll and 0.75 seconds of post-roll, then adjust around breaths, singer changes, song boundaries, and provider limits. Overlap between neighboring generation windows is allowed.
 - Never shorten away required words or the landing of a sustained note merely to fit a convenient duration. Reduce handles first; split only at a defensible musical boundary.
-- Until the project exposes a real source-audio binding, record the exact core and proposed generation intervals in the Shot plan and state plainly that audio is not yet attached. Do not substitute a Voice asset.
+- Set `music_segment` only for face-readable song speech, singing, or yodeling. `core_start_s/core_end_s` protect the edit content; `submit_start_s/submit_end_s` add generation handles. The canonical H3 submit path extracts that interval from the Project song master as Audio 1. Do not create or request a Voice Library asset for a song excerpt.
 
 ## Visual proposals and assets
 

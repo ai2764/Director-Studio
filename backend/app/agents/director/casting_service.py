@@ -364,6 +364,7 @@ def _shot_from_draft(
         status=status,
         refs=refs,
         voice_refs=voice_refs,
+        music_segment=draft.music_segment,
         dialogue=list(draft.dialogue),
         blocked_reasons=blocked,
         prompt_sections=PromptSections(),

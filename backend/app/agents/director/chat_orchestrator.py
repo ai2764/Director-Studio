@@ -712,6 +712,10 @@ def _storyboard_snapshot(shots: list[Shot]) -> dict[str, Any]:
                 "voice_refs": [
                     ref.model_dump(mode="json") for ref in shot.voice_refs
                 ],
+                "music_segment": (
+                    shot.music_segment.model_dump(mode="json")
+                    if shot.music_segment else None
+                ),
             }
             for shot in shots
         ]

@@ -13,6 +13,10 @@ from typing import Any
 from ...config import settings
 from ...core.jobs import create_job, load_job, start_pipeline_job
 from ...core.library.store import load_asset
+from ...core.media.music_segments import (
+    music_prompt_context,
+    music_prompt_signature,
+)
 from ...core.h3.prompt import (
     validate_h3_prompt,
     validate_required_picture_bindings,
@@ -20,6 +24,7 @@ from ...core.h3.prompt import (
 from ...core.projects.models import (
     AgentContext,
     Project,
+    ProjectMode,
     PromptSections,
     RefRole,
     Shot,
@@ -160,6 +165,7 @@ def _same_storyboard_definition(left: Shot, right: Shot) -> bool:
         all(getattr(left, field) == getattr(right, field) for field in authored_fields)
         and picture_ref_signature(left.refs) == picture_ref_signature(right.refs)
         and voice_ref_signature(left.voice_refs) == voice_ref_signature(right.voice_refs)
+        and left.music_segment == right.music_segment
     )
 
 _KIND_TO_MATCH_ROLE = {
@@ -297,6 +303,10 @@ def _shot_context_summary(shot: Shot) -> dict[str, Any]:
         "asset_ids": [ref.asset_id for ref in shot.refs],
         "blocked_reasons": list(shot.blocked_reasons),
         "dialogue": list(shot.dialogue),
+        "music_segment": (
+            shot.music_segment.model_dump(mode="json")
+            if shot.music_segment else None
+        ),
     }
 
 
@@ -346,6 +356,8 @@ class DirectorService:
         if validated.expected_last_shot_id != tail:
             raise ValueError("Storyboard tail changed; inspect the last Shot before appending again.")
         inventory, index = _inventory(project_id), _asset_index(project_id)
+        if validated.shot.music_segment is not None and project.mode != ProjectMode.mv:
+            raise ValueError("music_segment is available only for Music Video projects")
         _validate_storyboard_bindings([validated.shot], inventory=inventory, index=index)
         shot = _shot_from_draft(project_id, validated.shot, inventory=inventory, index=index,
                                 script_text=project.script_text or "")
@@ -394,6 +406,16 @@ class DirectorService:
             exclude={"shot_id"},
             exclude_unset=True,
         )
+        if "music_segment" in authored_updates:
+            authored_updates["music_segment"] = validated.music_segment
+        if (
+            authored_updates.get("music_segment") is not None
+            and project.mode != ProjectMode.mv
+        ):
+            raise ValueError("music_segment is available only for Music Video projects")
+        resulting_music = authored_updates.get("music_segment", shot.music_segment)
+        if resulting_music is not None and shot.voice_refs:
+            raise ValueError("music_segment cannot be combined with Voice references")
         meta = dict(shot.meta or {})
         if shot.h3_job_id:
             superseded = list(meta.get("superseded_h3_job_ids") or [])
@@ -403,6 +425,8 @@ class DirectorService:
         meta["prompt_layout_signature"] = ""
         meta["prompt_picture_signature"] = ""
         meta["prompt_voice_signature"] = ""
+        if "music_segment" in authored_updates:
+            meta["prompt_music_signature"] = ""
 
         revised = shot.model_copy(
             update={
@@ -669,6 +693,10 @@ class DirectorService:
             raise ValueError(f"invalid storyboard draft: {exc}") from exc
         if not validated:
             raise ValueError("storyboard must contain at least one shot")
+        if project.mode != ProjectMode.mv and any(
+            draft.music_segment is not None for draft in validated
+        ):
+            raise ValueError("music_segment is available only for Music Video projects")
 
         existing_shots = list_shots(project_id)
         existing_by_id = {shot.id: shot for shot in existing_shots}
@@ -1841,6 +1869,7 @@ class DirectorService:
             "prompt_layout_signature": layout_prompt_signature(candidate),
             "prompt_picture_signature": picture_ref_signature(candidate.refs),
             "prompt_voice_signature": voice_ref_signature(candidate.voice_refs),
+            "prompt_music_signature": music_prompt_signature(project, candidate),
             "material_review_pending": False,
         })
         meta.pop("material_changes", None)
@@ -2035,6 +2064,17 @@ class DirectorService:
                 }
             )
         voice_refs_json = json.dumps(prompt_voice_refs, ensure_ascii=False)
+        music_context = music_prompt_context(project, shot)
+        effective_duration_s = (
+            float(music_context["generation_duration_s"])
+            if music_context is not None
+            else shot.duration_s
+        )
+        effective_audio_count = (
+            1
+            if music_context is not None
+            else 0 if shot.source_audio_path else len(shot.voice_refs)
+        )
 
         keep = bool(getattr(settings, "llm_keep_loaded", True))
         async with self.orchestrator.llm_session(release_on_exit=not keep):
@@ -2047,7 +2087,7 @@ class DirectorService:
                 camera_angle=shot.camera_angle,
                 camera_motion=shot.camera_motion,
                 composition=shot.composition,
-                duration_s=shot.duration_s,
+                duration_s=effective_duration_s,
                 dialogue_json=json.dumps(shot.dialogue),
                 refs_json=refs_json,
                 selected_layouts_json=selected_layouts_json,
@@ -2056,6 +2096,10 @@ class DirectorService:
                     ensure_ascii=False,
                 ),
                 voice_refs_json=voice_refs_json,
+                music_segment_json=json.dumps(
+                    music_context,
+                    ensure_ascii=False,
+                ),
                 layout_asset_id=selected_layout_asset_id,
                 feedback=(shot.feedback or "") + (f"\nCurrent user revision request: {revision_request}" if revision_request else ""),
                 context_json=context_json,
@@ -2065,7 +2109,7 @@ class DirectorService:
             if preserve_prompt:
                 try:
                     validate_h3_prompt(shot.prompt_sections.as_ordered_text(), shot.dialogue,
-                                       audio_count=0 if shot.source_audio_path else len(shot.voice_refs),
+                                       audio_count=effective_audio_count,
                                        required_picture_indices=[r.picture_index for r in shot.refs],
                                        submitted_picture_indices=[r.picture_index for r in shot.refs])
                 except ValueError:
@@ -2089,7 +2133,7 @@ class DirectorService:
                 parsed = _apply_source_audio_contract(parsed, shot)
                 ordered_text = parsed.as_ordered_text()
                 validate_h3_prompt(ordered_text, shot.dialogue,
-                                   audio_count=0 if shot.source_audio_path else len(shot.voice_refs),
+                                   audio_count=effective_audio_count,
                                    required_picture_indices=(required_ordinary_picture_indices
                                                              if review else []),
                                    submitted_picture_indices=[r.picture_index for r in shot.refs])
@@ -2139,6 +2183,7 @@ class DirectorService:
         meta["prompt_layout_signature"] = layout_prompt_signature(shot)
         meta["prompt_picture_signature"] = picture_ref_signature(shot.refs)
         meta["prompt_voice_signature"] = voice_ref_signature(shot.voice_refs)
+        meta["prompt_music_signature"] = music_prompt_signature(project, shot)
         meta["material_review_pending"] = False
         meta.pop("material_changes", None)
         if shot.script_beat != original_shot["script_beat"]:

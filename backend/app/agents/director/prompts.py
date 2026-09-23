@@ -172,6 +172,11 @@ Output rules:
   <Audio N> tag at least once, state the named speaker identity and delivery it controls,
   and never copy words from the reference recording. The same tag may be referenced
   again where it clarifies action or sound; the shot dialogue below is the new performance.
+- When the MV song segment is non-null, <Audio 1> is the exact excerpt submitted for
+  this generation. Bind <Audio 1> as the singing, speech, musical, and performance-timing
+  source. Synchronize clearly readable lips to it. Express action time relative to the
+  submitted excerpt: generation second 0 equals submit_start_s, while the core interval
+  marks the edit content protected inside the wider generation window.
 - Treat each ref's approved_description and approved_notes as authoritative for
   identity, wardrobe, set and prop appearance; never replace them with guesses.
 - Use visual_analysis for what the selected Picture visibly establishes. Asset names
@@ -204,6 +209,7 @@ PROMPT_SECTIONS_USER_TEMPLATE = """Shot:
 - selected Layout context (actual Picture bindings): {selected_layouts_json}
 - reviewed tail-frame handoff (null when no extracted tail is selected): {tail_frame_handoff_json}
 - voice refs (audio order): {voice_refs_json}
+- MV song segment (null when absent): {music_segment_json}
 - layout_asset_id: {layout_asset_id}
 - human feedback: {feedback}
 

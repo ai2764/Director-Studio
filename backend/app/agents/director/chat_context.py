@@ -209,6 +209,10 @@ def project_context_blob(
             return summary
         return {
             **summary,
+            "music_segment": (
+                shot.music_segment.model_dump(mode="json")
+                if shot.music_segment else None
+            ),
             "material_review_pending": bool(
                 (shot.meta or {}).get("material_review_pending")
             ),
@@ -242,7 +246,12 @@ def project_context_blob(
         "project": {
             "id": project.id,
             "name": project.name,
+            "mode": project.mode.value,
             "script_locked": project.script_locked,
+            "music_master": (
+                project.music_master.model_dump(mode="json")
+                if project.music_master else None
+            ),
         },
         "script_chars": len(script),
         "script_hash": script_hash,

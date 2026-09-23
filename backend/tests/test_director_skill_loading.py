@@ -82,6 +82,19 @@ def test_mv_project_chat_always_loads_music_video_planning_guide():
     assert guides == ("music-video-planning",)
 
 
+def test_music_video_guide_teaches_job_time_song_segments():
+    guide = (
+        stage_guides._guides_dir() / "music-video-planning.md"
+    ).read_text(encoding="utf-8")
+
+    assert "music_segment" in guide
+    assert "core_start_s/core_end_s" in guide
+    assert "submit_start_s/submit_end_s" in guide
+    assert "Audio 1" in guide
+    assert "canonical H3 submit" in guide
+    assert "Until the project exposes a real source-audio binding" not in guide
+
+
 def test_stage_guide_registry_matches_non_empty_markdown_files():
     guide_dir = stage_guides._guides_dir()
     guide_files = {path.stem for path in guide_dir.glob("*.md")}
