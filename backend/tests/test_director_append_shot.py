@@ -4,7 +4,7 @@ import json
 import pytest
 
 from app.config import settings
-from app.core.projects.models import Shot
+from app.core.projects.models import ProjectMode, Shot
 from app.core.projects.store import create_project, list_shots, load_project, save_project, save_shot, shots_dir
 from app.agents.director.service import DirectorService, _script_hash
 from test_harness_integration import real_sidecar
@@ -88,7 +88,7 @@ async def test_real_node_append_roundtrip(board, real_sidecar, monkeypatch, runt
 
     handler = handle_harness_chat if runtime == "harness" else handle_chat
     result = await handler(project_id=project.id, message="Add one final wave shot.", svc=svc, chat_fn=inference)
-    assert calls == 3
+    assert calls == (2 if status_first else 1)
     svc.plan_project.assert_not_called()
     assert "append_shot" in result.actions and "plan_shots" not in result.actions
     assert "not saved" not in result.reply
@@ -96,7 +96,7 @@ async def test_real_node_append_roundtrip(board, real_sidecar, monkeypatch, runt
     assert {k: snapshot(project)[k] for k in before} == before
 
 
-@pytest.mark.parametrize("bad", ["hash", "tail", "old_id", "unknown_field", "asset", "missing_tail", "bool", "nan", "infinity", "negative", "null"])
+@pytest.mark.parametrize("bad", ["hash", "tail", "old_id", "unknown_field", "asset", "missing_tail", "missing_duration", "bool", "nan", "infinity", "negative", "null"])
 def test_bad_append_is_write_free(board, bad):
     project, svc = board
     request = payload(project)
@@ -106,12 +106,65 @@ def test_bad_append_is_write_free(board, bad):
     elif bad == "unknown_field": request["shot"]["h3_job_id"] = "overwrite"
     elif bad == "asset": request["shot"]["asset_matches"] = [{"role": "actor", "asset_id": "missing"}]
     elif bad == "missing_tail": del request["expected_last_shot_id"]
+    elif bad == "missing_duration": del request["shot"]["duration_s"]
     else: request["shot"]["duration_s"] = {"bool": True, "nan": "NaN", "infinity": "Infinity", "negative": -1, "null": None}[bad]
     before = snapshot(project)
     with pytest.raises(ValueError):
         svc.append_shot(project.id, request)
     assert snapshot(project) == before
     assert load_project(project.id) == project
+
+
+def test_mv_append_rejects_a_beat_outside_the_authorized_test_span(board):
+    _project, svc = board
+    script = (
+        "AUTHORIZED TEST SPAN ONLY: 00:00.000–00:20.800\n"
+        "The paper Alps unfold while the song plays."
+    )
+    project = create_project("MV append", script, mode=ProjectMode.mv)
+    request = payload(project)
+    request["shot"].update(
+        script_beat="00:20.800–00:24.400 — The camera crosses the paper Alps.",
+        duration_s=4.0,
+    )
+
+    with pytest.raises(ValueError, match="authorized.*span|span.*authorized"):
+        svc.append_shot(project.id, request)
+
+    assert load_project(project.id).shot_ids == []
+    assert list_shots(project.id) == []
+
+
+@pytest.mark.asyncio
+async def test_native_append_concludes_the_turn_with_persisted_success(board):
+    from app.agents.director.chat import handle_chat
+
+    project, svc = board
+    calls = 0
+
+    async def inference(system, user, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise AssertionError("a successful single-Shot append must conclude the turn")
+        return {
+            "content": "",
+            "tool_calls": [
+                {"name": "append_shot", "arguments": payload(project)}
+            ],
+        }
+
+    result = await handle_chat(
+        project_id=project.id,
+        message="Add this as the next shot; we'll discuss the shots one at a time.",
+        svc=svc,
+        chat_fn=inference,
+    )
+
+    assert calls == 1
+    assert result.reply == "Appended 1 new shot at the end."
+    assert "append_shot" in result.actions
+    assert len(list_shots(project.id)) == 5
 
 
 def test_append_empty_board_and_id_collision(board, monkeypatch):

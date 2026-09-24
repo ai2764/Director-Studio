@@ -328,6 +328,68 @@ def _find_shot(shot_id: str) -> Shot | None:
     return None
 
 
+_TIMECODE_PATTERN = r"\d{1,3}:\d{2}(?:\.\d{1,3})?"
+_SPAN_SEPARATOR_PATTERN = r"(?:-|\N{EN DASH}|\N{EM DASH}|to)"
+_AUTHORIZED_MV_SPAN_RE = re.compile(
+    rf"AUTHORIZED[^\r\n:]{{0,80}}SPAN[^\r\n:]{{0,40}}:\s*"
+    rf"(?P<start>{_TIMECODE_PATTERN})\s*{_SPAN_SEPARATOR_PATTERN}\s*"
+    rf"(?P<end>{_TIMECODE_PATTERN})",
+    re.IGNORECASE,
+)
+_LEADING_MV_BEAT_SPAN_RE = re.compile(
+    rf"^\s*(?P<start>{_TIMECODE_PATTERN})\s*{_SPAN_SEPARATOR_PATTERN}\s*"
+    rf"(?P<end>{_TIMECODE_PATTERN})(?=\s|$)",
+    re.IGNORECASE,
+)
+
+
+def _timecode_seconds(value: str) -> float:
+    minutes_text, seconds_text = value.split(":", 1)
+    seconds = float(seconds_text)
+    if seconds >= 60:
+        raise ValueError(f"invalid song timecode: {value}")
+    return int(minutes_text) * 60 + seconds
+
+
+def _validate_mv_append_timing(project: Project, draft: ShotDraft) -> None:
+    """Keep an isolated MV append inside an explicitly authorized song window."""
+    if project.mode != ProjectMode.mv:
+        return
+    script = project.script_text or ""
+    authorized = _AUTHORIZED_MV_SPAN_RE.search(script)
+    if authorized is None:
+        return
+    authorized_start = _timecode_seconds(authorized.group("start"))
+    authorized_end = _timecode_seconds(authorized.group("end"))
+    if authorized_start >= authorized_end:
+        raise ValueError("The MV authorized test span must have positive duration.")
+
+    beat = _LEADING_MV_BEAT_SPAN_RE.search(draft.script_beat or "")
+    if beat is None:
+        raise ValueError(
+            "MV append script_beat must begin with a song timestamp range while "
+            "the project has an authorized test span."
+        )
+    beat_start = _timecode_seconds(beat.group("start"))
+    beat_end = _timecode_seconds(beat.group("end"))
+    if beat_start >= beat_end:
+        raise ValueError("The MV shot timestamp range must have positive duration.")
+    if beat_start < authorized_start or beat_end > authorized_end:
+        raise ValueError(
+            "The MV shot timestamp range falls outside the authorized test span "
+            f"({authorized.group('start')}-{authorized.group('end')})."
+        )
+
+    segment = draft.music_segment
+    if segment is not None and (
+        segment.core_start_s < authorized_start
+        or segment.core_end_s > authorized_end
+    ):
+        raise ValueError(
+            "The MV music core interval falls outside the authorized test span."
+        )
+
+
 class DirectorService:
     """Orchestrates plan → context save → reference-frame jobs → prompt rewrite."""
 
@@ -358,6 +420,7 @@ class DirectorService:
         inventory, index = _inventory(project_id), _asset_index(project_id)
         if validated.shot.music_segment is not None and project.mode != ProjectMode.mv:
             raise ValueError("music_segment is available only for Music Video projects")
+        _validate_mv_append_timing(project, validated.shot)
         _validate_storyboard_bindings([validated.shot], inventory=inventory, index=index)
         shot = _shot_from_draft(project_id, validated.shot, inventory=inventory, index=index,
                                 script_text=project.script_text or "")

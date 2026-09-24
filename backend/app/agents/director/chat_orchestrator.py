@@ -1085,7 +1085,7 @@ async def orchestrate_chat(
         if "save_storyboard" in acts:
             shot_count = len(sh)
             r = f"Storyboard saved: {shot_count} shot{'s' if shot_count != 1 else ''}."
-        elif "append_shot" in acts and _claims_completed_storyboard(r):
+        elif "append_shot" in acts:
             count = acts.count("append_shot")
             r = f"Appended {count} new shot{'s' if count != 1 else ''} at the end."
         elif (
@@ -1520,6 +1520,7 @@ async def orchestrate_chat(
                 )
                 if tool_payload.get("concludes_turn") is True:
                     terminal_tool_reply = str(tool_payload.get("reply") or "\n".join(tool_notes)).strip()
+                    break
                 if tool["name"] in {
                     "queue_gpt_ref_frame",
                     "queue_actor_design",

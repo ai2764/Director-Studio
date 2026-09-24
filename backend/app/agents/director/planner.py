@@ -181,6 +181,9 @@ class NewShotDraft(ShotDraft):
 
     model_config = ConfigDict(extra="forbid")
     shot_id: None = None
+    # An append is a small, isolated write, so silently inheriting ShotDraft's
+    # generic eight-second default can persist a duration the model never chose.
+    duration_s: float
 
     @field_validator("duration_s", mode="before")
     @classmethod

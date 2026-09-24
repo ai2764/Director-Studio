@@ -404,7 +404,7 @@ class BackendTurn:
             # Keep the model's explanation and partial-work details. A successful
             # save is only one operation, not proof that the entire turn finished.
             reply = f"Storyboard saved: {len(shots)} shots.\n\n" + reply
-        elif "append_shot" in self.actions and _claims_completed_storyboard(reply):
+        elif "append_shot" in self.actions:
             count = self.actions.count("append_shot")
             reply = f"Appended {count} new shot{'s' if count != 1 else ''} at the end."
         elif self.storyboard_failed and "append_shot" not in self.actions:

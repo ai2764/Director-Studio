@@ -87,7 +87,14 @@ async def handle_project_tool(
         shot = svc.append_shot(project_id, AppendShotSubmission.model_validate(args))
         actions.append("append_shot")
         if result_payloads is not None:
-            result_payloads.append({"ok": True, "shot": storyboard_snapshot([shot])["shots"][0]})
+            result_payloads.append(
+                {
+                    "ok": True,
+                    "shot": storyboard_snapshot([shot])["shots"][0],
+                    "concludes_turn": True,
+                    "reply": "Appended 1 new shot at the end.",
+                }
+            )
         notes.append(f"Appended one Shot ({shot.id}) at the end; all existing Shots and production state were preserved.")
         return True
 
