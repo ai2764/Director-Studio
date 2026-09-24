@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
-from typing import Any, Callable
+import os
+import re
+import uuid
+from collections.abc import Callable
+from typing import Any
 
 from ....core.projects.models import AssetCoverageReview, Project, Shot
-from ....core.projects.store import save_project
+from ....core.projects.store import project_dir, save_project
+from ..intent import normalize_text
 from ..planner import (
     AppendShotSubmission,
     ShotRefsPatchSubmission,
@@ -17,6 +24,54 @@ from ..planner import (
 from ..service import _script_hash
 
 logger = logging.getLogger("director_studio.director.tool_handlers.project")
+
+_STORYBOARD_REPLACEMENT_WARNING = (
+    "保存新的 storyboard 会清除当前全部 {shot_count} 个 shots，并用新计划全量重写。"
+    "当前没有修改任何 shot。若要继续，请在下一条消息中明确回复："
+    "确认清除并重写全部 shots"
+)
+
+
+def _storyboard_replacement_path(project_id: str):
+    return project_dir(project_id) / "agent" / "pending_storyboard_replacement.json"
+
+
+def _load_storyboard_replacement(project_id: str) -> dict[str, Any] | None:
+    path = _storyboard_replacement_path(project_id)
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
+def _save_storyboard_replacement(project_id: str, proposal: dict[str, Any]) -> None:
+    path = _storyboard_replacement_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(proposal, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+
+
+def _storyboard_state_hash(shots: list[Shot]) -> str:
+    payload = [shot.model_dump(mode="json") for shot in shots]
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _confirms_storyboard_replacement(message: str) -> bool:
+    text = normalize_text(message)
+    return bool(
+        re.fullmatch(
+            r"(?:我)?(?:确认|同意)(?:清除|删除)(?:并)?(?:重写|替换)"
+            r"(?:全部|所有)\s*(?:shots?|镜头)[。.!！\s]*|"
+            r"(?:i\s+)?(?:confirm|agree\s+to)\s+(?:clear|delete|remove)\s+"
+            r"all\s+shots\s+and\s+(?:rewrite|replace)\s+(?:the\s+)?"
+            r"(?:storyboard|shots)[。.!！\s]*",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 async def handle_project_tool(
@@ -98,8 +153,82 @@ async def handle_project_tool(
         notes.append(f"Appended one Shot ({shot.id}) at the end; all existing Shots and production state were preserved.")
         return True
 
+    if name == "confirm_storyboard_replacement":
+        pending = _load_storyboard_replacement(project_id)
+        if pending is None or pending.get("state") != "pending":
+            raise ValueError("No pending storyboard replacement exists for this project")
+        if (
+            not _confirms_storyboard_replacement(user_feedback)
+            or normalize_text(user_feedback)
+            == normalize_text(str(pending.get("request_message") or ""))
+        ):
+            raise ValueError(
+                "请在后续消息中明确回复“确认清除并重写全部 shots”；"
+                "ok、继续或附带修改要求都不会授权全量替换。"
+            )
+        current_shots = refresh_shots()
+        if _storyboard_state_hash(current_shots) != pending.get("storyboard_state_hash"):
+            pending["state"] = "stale"
+            _save_storyboard_replacement(project_id, pending)
+            raise ValueError(
+                "The storyboard changed after the replacement warning. "
+                "Review the current shots and propose the replacement again."
+            )
+        submission = StoryboardSubmission.model_validate(pending["submission"])
+        confirmed_feedback = (
+            f"{pending.get('request_message', '')}\n\n"
+            f"Explicit destructive confirmation: {user_feedback}"
+        ).strip()
+        persisted = await svc.save_storyboard(
+            project_id,
+            submission.shots,
+            submission.expected_script_hash,
+            user_feedback=confirmed_feedback,
+            requested_minimum_duration_s=float(
+                pending.get("requested_minimum_duration_s") or 0.0
+            ),
+        )
+        pending["state"] = "confirmed"
+        _save_storyboard_replacement(project_id, pending)
+        actions.append("save_storyboard")
+        if result_payloads is not None:
+            result_payloads.append({"storyboard": storyboard_snapshot(persisted)})
+        notes.append(
+            f"Saved the confirmed complete storyboard replacement: {len(persisted)} "
+            f"shot{'s' if len(persisted) != 1 else ''}."
+        )
+        return True
+
     if name == "save_storyboard":
         submission = StoryboardSubmission.model_validate(args)
+        current_shots = refresh_shots()
+        if current_shots:
+            proposal = {
+                "id": f"sbrep_{uuid.uuid4().hex[:12]}",
+                "submission": submission.model_dump(mode="json"),
+                "request_message": user_feedback,
+                "requested_minimum_duration_s": requested_minimum_duration_s,
+                "storyboard_state_hash": _storyboard_state_hash(current_shots),
+                "shot_count": len(current_shots),
+                "state": "pending",
+            }
+            _save_storyboard_replacement(project_id, proposal)
+            warning = _STORYBOARD_REPLACEMENT_WARNING.format(
+                shot_count=len(current_shots)
+            )
+            actions.append(f"propose_storyboard_replacement:{proposal['id']}")
+            if result_payloads is not None:
+                result_payloads.append(
+                    {
+                        "ok": True,
+                        "confirmation_required": True,
+                        "proposal_id": proposal["id"],
+                        "concludes_turn": True,
+                        "reply": warning,
+                    }
+                )
+            notes.append(warning)
+            return True
         persisted = await svc.save_storyboard(
             project_id,
             submission.shots,

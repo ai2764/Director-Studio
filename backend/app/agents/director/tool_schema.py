@@ -86,7 +86,9 @@ IMAGE_TOOLS = frozenset(
     }
 )
 PLAN_TOOLS = frozenset({"plan_shots", "plan"})
-STORYBOARD_TOOLS = frozenset({"save_storyboard"})
+STORYBOARD_TOOLS = frozenset(
+    {"save_storyboard", "confirm_storyboard_replacement"}
+)
 SCRIPT_TOOLS = frozenset({"set_script"})
 
 
@@ -335,14 +337,20 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "save_storyboard",
             "description": (
-                "Persist the exact complete ordered storyboard you authored for the "
-                "current screenplay. Use PROJECT_STATE.script_hash. Preserve every "
+                "Propose or persist the exact complete ordered storyboard you authored "
+                "for the current screenplay. If any Shots already exist, this first "
+                "records a pending destructive replacement and asks the user for a later "
+                "explicit confirmation; it does not save. Use PROJECT_STATE.script_hash. Preserve every "
                 "existing Shot's PROJECT_STATE id in shot_id, and omit shot_id only "
                 "for a genuinely new Shot. For adding one Shot at the end, use append_shot instead."
             ),
             "parameters": StoryboardSubmission.model_json_schema(),
         },
     },
+    function_tool(
+        "confirm_storyboard_replacement",
+        "Execute the exact pending complete storyboard replacement only when the current user message explicitly says they confirm clearing and rewriting all Shots. Never use for ok, continue, or a reply that also changes the proposal.",
+    ),
     {
         "type": "function",
         "function": {

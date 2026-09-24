@@ -200,6 +200,8 @@ async def execute_tools(
             if handled_project_tool:
                 if name in STORYBOARD_TOOLS and "save_storyboard" in actions:
                     storyboard_save_failed = False
+                if result_payloads and result_payloads[-1].get("concludes_turn") is True:
+                    break
                 continue
             if await handle_layout_tool(
                 name=name,

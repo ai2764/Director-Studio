@@ -1877,16 +1877,6 @@ async def test_native_save_storyboard_rejects_stale_hash_as_a_tool_failure(
     tmp_projects_dir,
 ):
     project = create_project("Stale native save", "INT. ROOM - NIGHT\nApproved beat.")
-    old = Shot(
-        id="sht_native_stale_old",
-        project_id=project.id,
-        scene_id="sc01",
-        title="Existing plan",
-        script_beat="The existing shot remains untouched.",
-        duration_s=5.0,
-    )
-    save_shot(old)
-    save_project(project.model_copy(update={"shot_ids": [old.id]}))
     captured_followup: dict = {}
 
     class _Service:
@@ -1952,11 +1942,11 @@ async def test_native_save_storyboard_rejects_stale_hash_as_a_tool_failure(
         "Storyboard was not saved; existing project shots remain unchanged."
     )
     assert load_project(project.id).script_text == project.script_text
-    assert load_shot(project.id, old.id).model_dump() == old.model_dump()
+    assert list_shots(project.id) == []
 
 
 @pytest.mark.asyncio
-async def test_failed_storyboard_save_blocks_later_layout_work_in_same_batch(
+async def test_storyboard_replacement_warning_concludes_batch_before_layout(
     tmp_projects_dir,
 ):
     project = create_project("Blocked downstream layout", "INT. ROOM - DAY\nMia waits.")
@@ -1976,13 +1966,14 @@ async def test_failed_storyboard_save_blocks_later_layout_work_in_same_batch(
         layout_calls = 0
 
         async def save_storyboard(self, *args, **kwargs):
-            raise ValueError("candidate rejected")
+            raise AssertionError("replacement must not save before confirmation")
 
         async def queue_reference_frame(self, *args, **kwargs):
             self.layout_calls += 1
             raise AssertionError("layout work must not run after a failed save")
 
     svc = _Service()
+    payloads = []
     notes, _ = await _run_tools(
         project_id=project.id,
         tools=[
@@ -2013,10 +2004,14 @@ async def test_failed_storyboard_save_blocks_later_layout_work_in_same_batch(
         ],
         svc=svc,
         actions=[],
+        result_payloads=payloads,
+        user_feedback="Replace the storyboard and generate its Layout.",
     )
 
     assert svc.layout_calls == 0
-    assert any("queue_ref_frame blocked" in note for note in notes)
+    assert payloads[-1]["confirmation_required"] is True
+    assert payloads[-1]["concludes_turn"] is True
+    assert "确认清除并重写全部 shots" in notes[-1]
 
 
 @pytest.mark.asyncio
@@ -2058,17 +2053,8 @@ async def test_native_semantic_rejection_returns_to_same_agent_for_a_repaired_sa
         "Semantic repair",
         "INT. ARCHIVE - NIGHT\nMara finds a recorder, hears her own warning, and backs away.",
     )
-    old = Shot(
-        id="sht_semantic_repair_old",
-        project_id=project.id,
-        scene_id="sc00",
-        title="Old storyboard",
-        script_beat="The old plan survives until a repair passes.",
-        duration_s=12.0,
-    )
-    save_shot(old)
     save_project(
-        project.model_copy(update={"script_locked": True, "shot_ids": [old.id]})
+        project.model_copy(update={"script_locked": True})
     )
 
     class _ValidationProvider:
@@ -2164,9 +2150,7 @@ async def test_native_semantic_rejection_returns_to_same_agent_for_a_repaired_sa
             assert tool_payload["issues"] == [
                 "Shot 1 contradicts the screenplay by having Mara destroy the recorder."
             ]
-            assert [shot.model_dump() for shot in list_shots(project.id)] == [
-                old.model_dump()
-            ]
+            assert list_shots(project.id) == []
             return {
                 "content": "",
                 "thinking": "I will repair my own candidate.",
@@ -2421,28 +2405,8 @@ async def test_native_malformed_semantic_verdict_is_a_transactional_tool_failure
     )
     screenplay = "INT. ARCHIVE - NIGHT\nMara listens to the intact recorder."
     project = create_project("Malformed semantic verdict", screenplay)
-    old = Shot(
-        id="sht_malformed_verdict_old",
-        project_id=project.id,
-        scene_id="sc00",
-        title="Existing grounded plan",
-        script_beat="Mara watches the intact recorder from across the archive.",
-        duration_s=8.0,
-        refs=[
-            ShotRef(
-                role=RefRole.actor,
-                asset_id=actor.id,
-                file_key="master",
-                picture_index=1,
-                notes="existing-ref",
-            )
-        ],
-    )
-    save_shot(old)
     save_project(
-        project.model_copy(
-            update={"script_locked": True, "shot_ids": [old.id]}
-        )
+        project.model_copy(update={"script_locked": True})
     )
 
     class _MalformedProvider:
@@ -2524,12 +2488,12 @@ async def test_native_malformed_semantic_verdict_is_a_transactional_tool_failure
     assert captured_payload["ok"] is False
     assert "invalid structured verdict" in captured_payload["error"]
     assert result.actions == ["llm"]
-    assert [shot.model_dump() for shot in list_shots(project.id)] == [old.model_dump()]
+    assert list_shots(project.id) == []
     persisted = load_project(project.id)
     assert persisted is not None
     assert persisted.script_text == screenplay
     assert persisted.script_locked is True
-    assert persisted.shot_ids == [old.id]
+    assert persisted.shot_ids == []
     assert load_asset("actors", actor.id).project_id is None
     assert load_asset("scenes", scene.id).project_id is None
 
@@ -2542,16 +2506,6 @@ async def test_native_storyboard_submission_budget_blocks_a_fourth_save(
         "Bounded repairs",
         "INT. ROOM - NIGHT\nMara listens to the intact recorder.",
     )
-    old = Shot(
-        id="sht_bounded_old",
-        project_id=project.id,
-        scene_id="sc00",
-        title="Existing bounded plan",
-        script_beat="This plan survives all rejected submissions.",
-        duration_s=60.0,
-    )
-    save_shot(old)
-    save_project(project.model_copy(update={"shot_ids": [old.id]}))
 
     class _Service:
         def __init__(self):
@@ -2646,11 +2600,11 @@ async def test_native_storyboard_submission_budget_blocks_a_fourth_save(
     assert "unresolved issues" in result.reply.lower()
     assert "new user turn" in result.reply.lower()
     assert "nothing was persisted" in result.reply.lower()
-    assert [shot.model_dump() for shot in list_shots(project.id)] == [old.model_dump()]
+    assert list_shots(project.id) == []
     persisted = load_project(project.id)
     assert persisted is not None
     assert persisted.script_text == project.script_text
-    assert persisted.shot_ids == [old.id]
+    assert persisted.shot_ids == []
 
 
 @pytest.mark.asyncio
@@ -2818,24 +2772,15 @@ async def test_storyboard_submission_budget_resets_on_a_new_user_turn(
         "Fresh turn budget",
         "INT. ROOM - NIGHT\nThe approved recorder remains intact.",
     )
-    old = Shot(
-        id="sht_fresh_turn_old",
-        project_id=project.id,
-        scene_id="sc00",
-        title="Existing fresh-turn plan",
-        script_beat="Preserve this plan while candidates are discussed.",
-        duration_s=12.0,
-    )
-    save_shot(old)
     save_project(
-        project.model_copy(update={"script_locked": True, "shot_ids": [old.id]})
+        project.model_copy(update={"script_locked": True})
     )
     save_agent_context(
         project.id,
         AgentContext(
             project_id=project.id,
             script_hash=_script_hash(project.script_text),
-            shot_summaries=[{"id": old.id}],
+            shot_summaries=[],
         ),
     )
 
@@ -2892,12 +2837,12 @@ async def test_storyboard_submission_budget_resets_on_a_new_user_turn(
     assert svc.calls == 4
     assert "unresolved candidate 4" in second.reply.lower()
     assert "blocked" not in second.reply.lower()
-    assert [shot.model_dump() for shot in list_shots(project.id)] == [old.model_dump()]
+    assert list_shots(project.id) == []
     persisted = load_project(project.id)
     assert persisted is not None
     assert persisted.script_text == project.script_text
     assert persisted.script_locked is True
-    assert persisted.shot_ids == [old.id]
+    assert persisted.shot_ids == []
 
 
 @pytest.mark.asyncio
@@ -2952,19 +2897,8 @@ async def test_textual_storyboard_batch_uses_the_same_three_submission_budget(
         "Textual storyboard budget",
         "INT. ROOM - NIGHT\nThe approved recorder remains intact.",
     )
-    old = Shot(
-        id="sht_textual_budget_old",
-        project_id=project.id,
-        scene_id="sc00",
-        title="Existing textual plan",
-        script_beat="Keep the approved recorder intact.",
-        duration_s=12.0,
-    )
-    save_shot(old)
     save_project(
-        project.model_copy(
-            update={"script_locked": True, "shot_ids": [old.id]}
-        )
+        project.model_copy(update={"script_locked": True})
     )
 
     class _Service:
@@ -3009,12 +2943,12 @@ async def test_textual_storyboard_batch_uses_the_same_three_submission_budget(
     assert "blocked" in result.reply.lower()
     assert "three" in result.reply.lower() or "3" in result.reply
     assert result.actions == ["llm"]
-    assert [shot.model_dump() for shot in list_shots(project.id)] == [old.model_dump()]
+    assert list_shots(project.id) == []
     persisted = load_project(project.id)
     assert persisted is not None
     assert persisted.script_text == project.script_text
     assert persisted.script_locked is True
-    assert persisted.shot_ids == [old.id]
+    assert persisted.shot_ids == []
 
 
 @pytest.mark.asyncio

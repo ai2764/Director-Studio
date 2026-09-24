@@ -15,13 +15,14 @@ def project_context_blob(
     message: str = "",
     focused: bool = False,
 ) -> str:
+    from ...core.jobs.store import list_jobs
+    from ...core.schemas import JobStatus
+    from ...pipelines.h3_ref2va.resolutions import list_local_resolutions
     from .context_io import load_agent_context
     from .intent import explicit_layout_generation_intent, shot_ref
     from .service import _inventory, _script_hash
     from .tool_handlers.actor import _load_proposal
-    from ...core.jobs.store import list_jobs
-    from ...core.schemas import JobStatus
-    from ...pipelines.h3_ref2va.resolutions import list_local_resolutions
+    from .tool_handlers.project import _load_storyboard_replacement
 
     inv = _inventory(project.id)
     script = project.script_text or ""
@@ -33,6 +34,7 @@ def project_context_blob(
     )
     coverage_review = project.asset_coverage_review
     pending_actor = _load_proposal(project.id)
+    pending_storyboard_replacement = _load_storyboard_replacement(project.id)
     latest_successful_h3: dict[str, Any] = {}
     for job in list_jobs(limit=None, pipeline_id="h3_ref2va", project_id=project.id):
         params = job.params or {}
@@ -299,6 +301,16 @@ def project_context_blob(
                 "status": "awaiting_text_confirmation",
             }
             if pending_actor and pending_actor.get("state") == "pending"
+            else None
+        ),
+        "pending_storyboard_replacement": (
+            {
+                "proposal_id": pending_storyboard_replacement["id"],
+                "shot_count": pending_storyboard_replacement["shot_count"],
+                "status": "awaiting_explicit_destructive_confirmation",
+            }
+            if pending_storyboard_replacement
+            and pending_storyboard_replacement.get("state") == "pending"
             else None
         ),
         "shots": [shot_context(i + 1, shot) for i, shot in enumerate(shots)],
