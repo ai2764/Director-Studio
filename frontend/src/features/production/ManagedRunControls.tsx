@@ -49,6 +49,11 @@ function unavailableSource(run: ManagedRun, shotId: string, selected: Set<string
   return sourceIndex >= 0 && sourceIndex < stepIndex && selected.has(sourceId) ? null : sourceId;
 }
 
+function displayableRun(run: ManagedRun | null): ManagedRun | null {
+  if (!run?.is_stale) return run;
+  return run.state === "active" || run.state === "stopping" ? run : null;
+}
+
 export function ManagedRunControls({ projectId, shots, provider, presets, onProjectChanged, onStateChange }: Props) {
   const [run, setRun] = useState<ManagedRun | null>(null);
   const [open, setOpen] = useState(false);
@@ -98,8 +103,9 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
     setSelected(new Set());
     getManagedRun(projectId).then((next) => {
       if (!cancelled) {
-        setRun(next);
-        if (next?.resolution_preset) setResolution(next.resolution_preset);
+        const displayRun = displayableRun(next);
+        setRun(displayRun);
+        if (displayRun?.resolution_preset) setResolution(displayRun.resolution_preset);
       }
     }).catch((cause) => {
       if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
@@ -113,7 +119,7 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
     const timer = window.setInterval(() => {
       getManagedRun(projectId).then((next) => {
         if (cancelled || !next) return;
-        setRun(next);
+        setRun(displayableRun(next));
         const progress = `${next.run_id}:${next.state}:${next.current_index}:${next.current_job_id}`;
         if (progress !== lastProgress.current) {
           lastProgress.current = progress;
@@ -131,8 +137,9 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
     setError("");
     try {
       const next = await action();
-      setRun(next);
-      if (next.resolution_preset) setResolution(next.resolution_preset);
+      const displayRun = displayableRun(next);
+      setRun(displayRun);
+      if (displayRun?.resolution_preset) setResolution(displayRun.resolution_preset);
       onChanged.current();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

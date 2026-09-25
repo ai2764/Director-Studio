@@ -476,6 +476,47 @@ describe("ProductionPage prompt refresh", () => {
     expect(onReviewMaterials).not.toHaveBeenCalled();
   });
 
+  it("refreshes managed run state after Dashboard materials are saved", async () => {
+    const withReference = {
+      ...shot(generatedPrompt),
+      refs: [
+        { role: "actor" as const, asset_id: "act_mia", picture_index: 1, file_key: "master" },
+      ],
+    };
+    const updated = { ...withReference, refs: [] };
+    const savedRun = {
+      run_id: "mrun_old", project_id: "prj_test", state: "stopped",
+      resolution_preset: "landscape-480", current_index: 0, current_job_id: null,
+      pending_event_id: null, paused_reason: "", is_stale: false, stale_reason: "",
+      selected_shot_ids: ["sht_1"], pending_shot_ids: ["sht_1"], skipped_shots: {},
+      tail_source_job_ids: {}, completed_job_ids: {},
+      steps: [{ shot_id: "sht_1", tail_from_shot_id: null, tail_reason: "" }],
+    };
+    vi.mocked(getProject).mockResolvedValue(detail(withReference));
+    replaceShotMaterialsMock.mockResolvedValueOnce(updated);
+    getManagedRunMock
+      .mockResolvedValueOnce(savedRun)
+      .mockResolvedValueOnce({
+        ...savedRun,
+        is_stale: true,
+        stale_reason: "Shot brief, order, dialogue, references, or audio changed",
+      });
+    render(<ProductionPage active mobile />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Managed run/ }));
+    expect(await screen.findByRole("button", { name: "Resume selected" })).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit materials" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Picture 1 · act_mia" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Managed run/ }));
+    expect(await screen.findByRole("button", { name: "Plan managed run" })).toBeTruthy();
+    expect(screen.queryByText("Shot brief, order, dialogue, references, or audio changed")).toBeNull();
+  });
+
   it("runs a ready Shot at the resolution selected in mobile Production", async () => {
     const ready = {
       ...shot(generatedPrompt),

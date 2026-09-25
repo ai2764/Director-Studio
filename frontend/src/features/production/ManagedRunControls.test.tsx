@@ -12,7 +12,7 @@ vi.mock("./api", () => ({
 
 afterEach(() => {
   cleanup();
-  vi.clearAllMocks();
+  vi.resetAllMocks();
 });
 
 const draftWithSelection = {
@@ -157,7 +157,7 @@ it("defaults a completed batch to no selected shots", async () => {
   expect((action as HTMLButtonElement).disabled).toBe(true);
 });
 
-it("leaves only Plan again when the saved plan is stale", async () => {
+it("returns to clean planning state when the saved inactive plan is stale", async () => {
   vi.mocked(getManagedRun).mockResolvedValue({
     ...stoppedRun,
     is_stale: true,
@@ -166,8 +166,8 @@ it("leaves only Plan again when the saved plan is stale", async () => {
   renderControls();
   await openManager();
 
-  expect(await screen.findByText("Shot brief or audio changed")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Plan again" })).toBeTruthy();
+  expect(screen.queryByText("Shot brief or audio changed")).toBeNull();
+  expect(screen.getByRole("button", { name: "Plan managed run" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Resume selected" })).toBeNull();
 });
 

@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 
 from app.config import settings
+from app.agents.director.material_review import observe_reference
 from app.agents.director.service import DirectorService
 from app.core.projects.models import (
     AssetCoverageRecommendation,
@@ -78,6 +79,78 @@ class Provider:
         if self.mutate:
             self.mutate("prompt", len(self.text))
         return json.dumps(sections(self.count))
+
+
+class ObservationProvider:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.systems = []
+
+    async def complete_with_images(self, system, user, *, images, guides=()):
+        assert len(images) == 1
+        self.systems.append(system)
+        return self.responses.pop(0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", [
+    json.dumps([{
+        "readable": True,
+        "description": "Tao faces the camera in a centered head-and-shoulders portrait.",
+        "concerns": ["Sunglasses obscure his eyes."],
+    }]),
+    json.dumps([{"text": json.dumps({
+        "readable": True,
+        "description": "Tao faces the camera in a centered head-and-shoulders portrait.",
+        "concerns": ["Sunglasses obscure his eyes."],
+    })}]),
+])
+async def test_reference_observation_accepts_safe_singleton_wrappers(raw):
+    result = await observe_reference(
+        ObservationProvider([raw]),
+        {"picture_index": 2, "asset_id": "act_tao_face"},
+        "encoded-image",
+    )
+
+    assert result["description"] == "Tao faces the camera in a centered head-and-shoulders portrait."
+    assert result["concerns"] == ["Sunglasses obscure his eyes."]
+
+
+@pytest.mark.asyncio
+async def test_reference_observation_repairs_invalid_structure_once():
+    provider = ObservationProvider([
+        json.dumps([{"id": "img-001", "role": "assistant", "content": "analysis"}]),
+        json.dumps({
+            "readable": True,
+            "description": "Tao is centered against a plain white background.",
+            "concerns": [],
+        }),
+    ])
+
+    result = await observe_reference(
+        provider,
+        {"picture_index": 2, "asset_id": "act_tao_face"},
+        "encoded-image",
+    )
+
+    assert result["description"] == "Tao is centered against a plain white background."
+    assert len(provider.systems) == 2
+    assert "exactly one JSON object" in provider.systems[1]
+
+
+@pytest.mark.asyncio
+async def test_reference_observation_stops_after_one_structure_repair():
+    malformed = json.dumps([{"id": "img-001", "role": "assistant", "content": "analysis"}])
+    provider = ObservationProvider([malformed, malformed])
+
+    with pytest.raises(ValueError, match="ReferenceObservation"):
+        await observe_reference(
+            provider,
+            {"picture_index": 2, "asset_id": "act_tao_face"},
+            "encoded-image",
+        )
+
+    assert len(provider.systems) == 2
 
 
 class TailHandoffProvider(Provider):
