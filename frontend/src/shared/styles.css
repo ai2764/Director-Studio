@@ -2832,15 +2832,62 @@ h2 {
   max-height: calc(100vh - 260px);
 }
 
-.managed-run-card {
-  display: grid;
-  gap: 0.65rem;
-  padding: 0.9rem 1rem;
-  margin-bottom: 0.9rem;
-  border: 1px solid var(--border);
-  border-radius: 0.85rem;
+.managed-run-launch { margin-bottom: 0.9rem; }
+.managed-run-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 2.35rem;
+  padding: 0.42rem 0.65rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.65rem;
   background: var(--bg-panel);
+  color: var(--text);
+  font: 650 0.82rem var(--font);
+  cursor: pointer;
 }
+.managed-run-trigger:hover,
+.managed-run-trigger[aria-expanded="true"] { border-color: var(--accent); background: var(--bg-elev); }
+.managed-run-trigger:focus-visible,
+.managed-run-close:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.managed-run-trigger-mark { color: var(--accent); font-size: 0.68rem; }
+.managed-run-trigger-state { padding-left: 0.55rem; border-left: 1px solid var(--border); color: var(--muted); font-size: 0.72rem; font-weight: 500; }
+.managed-run-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  background: rgb(10 12 14 / 58%);
+  backdrop-filter: blur(4px);
+}
+.managed-run-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: min(820px, calc(100dvh - 2rem));
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 1rem;
+  background: var(--bg-panel);
+  color: var(--text);
+  box-shadow: 0 28px 80px rgb(0 0 0 / 38%);
+}
+.managed-run-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+.managed-run-dialog-header h2 { margin: 0.1rem 0 0; font-size: 1.05rem; }
+.managed-run-dialog-status { display: flex; align-items: center; gap: 0.65rem; }
+.managed-run-close { display: grid; place-items: center; width: 2rem; height: 2rem; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; color: var(--text); font-size: 1.25rem; line-height: 1; cursor: pointer; }
+.managed-run-close:hover { border-color: var(--accent); }
+.managed-run-dialog-body { display: grid; min-height: 0; gap: 0.75rem; overflow: auto; padding: 1rem 1.1rem 1.1rem; }
+.managed-run-dialog-body > p { margin: 0; }
 
 .managed-run-heading,
 .managed-run-actions {
@@ -2851,8 +2898,6 @@ h2 {
   flex-wrap: wrap;
 }
 
-.managed-run-heading h2 { margin: 0.1rem 0 0; font-size: 1rem; }
-.managed-run-card > p { margin: 0; }
 .managed-run-plan-action { display: flex; align-items: center; gap: 0.4rem; }
 .managed-run-info { display: inline-grid; place-items: center; width: 1.8rem; height: 1.8rem; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; color: var(--muted); font: 700 0.85rem var(--font); cursor: pointer; }
 .managed-run-info:hover, .managed-run-info[aria-expanded="true"] { color: var(--text); border-color: var(--accent); }
@@ -2876,7 +2921,13 @@ h2 {
 .managed-run-plan li .managed-run-warning { margin-top: 0.18rem; color: var(--warning); }
 
 @media (max-width: 760px) {
-  .mobile-production-review > .managed-run-card { margin: 0.7rem 1rem; }
+  .mobile-production-review > .managed-run-launch { margin: 0.7rem 1rem; }
+  .managed-run-trigger { width: 100%; justify-content: flex-start; }
+  .managed-run-trigger-state { margin-left: auto; }
+  .managed-run-backdrop { place-items: end stretch; padding: max(0.5rem, env(safe-area-inset-top)) 0 0; }
+  .managed-run-dialog { width: 100%; max-height: calc(100dvh - max(0.5rem, env(safe-area-inset-top))); border-right: 0; border-bottom: 0; border-left: 0; border-radius: 1rem 1rem 0 0; }
+  .managed-run-dialog-header { padding: 0.85rem 1rem 0.75rem; }
+  .managed-run-dialog-body { padding: 0.85rem 1rem max(1rem, env(safe-area-inset-bottom)); }
   .managed-run-actions .btn { flex: 1 1 auto; }
 }
 

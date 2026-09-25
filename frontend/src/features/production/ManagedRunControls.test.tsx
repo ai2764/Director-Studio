@@ -45,6 +45,23 @@ function renderControls() {
   ]} onProjectChanged={() => {}} />);
 }
 
+async function openManager() {
+  const trigger = await screen.findByRole("button", { name: /Managed run/ });
+  fireEvent.click(trigger);
+  return screen.findByRole("dialog", { name: "Managed run" });
+}
+
+it("keeps managed run controls behind a compact dialog trigger", async () => {
+  vi.mocked(getManagedRun).mockResolvedValue(null);
+  renderControls();
+
+  expect(await screen.findByRole("button", { name: "Managed run" })).toBeTruthy();
+  expect(screen.queryByRole("dialog", { name: "Managed run" })).toBeNull();
+
+  await openManager();
+  expect(screen.getByRole("button", { name: "Plan managed run" })).toBeTruthy();
+});
+
 it("defaults a fresh plan to all shots and submits only checked shots", async () => {
   vi.mocked(getManagedRun).mockResolvedValue(null);
   vi.mocked(planManagedRun).mockResolvedValue(draftWithSelection as never);
@@ -52,6 +69,7 @@ it("defaults a fresh plan to all shots and submits only checked shots", async ()
     ...draftWithSelection, state: "active", pending_shot_ids: ["sht_1"],
   } as never);
   renderControls();
+  await openManager();
 
   fireEvent.click(await screen.findByRole("button", { name: "Plan managed run" }));
   expect((await screen.findByRole("checkbox", { name: /Open/ }) as HTMLInputElement).checked).toBe(true);
@@ -68,6 +86,7 @@ it("allows a successful shot to be selected again after stop", async () => {
   vi.mocked(getManagedRun).mockResolvedValue(stoppedRun as never);
   vi.mocked(runManagedSelection).mockResolvedValue(stoppedRun as never);
   renderControls();
+  await openManager();
 
   expect(await screen.findByText("Generated")).toBeTruthy();
   expect((screen.getByRole("checkbox", { name: /Enter/ }) as HTMLInputElement).disabled).toBe(false);
@@ -85,6 +104,7 @@ it("disables a dependent shot until its ungenerated source is selected", async (
     selected_shot_ids: [],
   } as never);
   renderControls();
+  await openManager();
 
   const source = await screen.findByRole("checkbox", { name: /Open/ }) as HTMLInputElement;
   const dependent = screen.getByRole("checkbox", { name: /Enter/ }) as HTMLInputElement;
@@ -98,6 +118,7 @@ it("disables a dependent shot until its ungenerated source is selected", async (
 it("clears dependent selections when their ungenerated source is unchecked", async () => {
   vi.mocked(getManagedRun).mockResolvedValue(draftWithSelection as never);
   renderControls();
+  await openManager();
 
   const source = await screen.findByRole("checkbox", { name: /Open/ }) as HTMLInputElement;
   const dependent = screen.getByRole("checkbox", { name: /Enter/ }) as HTMLInputElement;
@@ -116,6 +137,7 @@ it("shows persisted dependency warnings", async () => {
     skipped_shots: { sht_2: "Source Shot has no successful video" },
   } as never);
   renderControls();
+  await openManager();
 
   expect(await screen.findByText("Source Shot has no successful video")).toBeTruthy();
 });
@@ -127,6 +149,7 @@ it("defaults a completed batch to no selected shots", async () => {
     pending_shot_ids: [],
   } as never);
   renderControls();
+  await openManager();
 
   const action = await screen.findByRole("button", { name: "Run selected" });
   expect((screen.getByRole("checkbox", { name: /Open/ }) as HTMLInputElement).checked).toBe(false);
@@ -141,6 +164,7 @@ it("leaves only Plan again when the saved plan is stale", async () => {
     stale_reason: "Shot brief or audio changed",
   } as never);
   renderControls();
+  await openManager();
 
   expect(await screen.findByText("Shot brief or audio changed")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Plan again" })).toBeTruthy();
@@ -150,6 +174,7 @@ it("leaves only Plan again when the saved plan is stale", async () => {
 it("disables Run selected when no shots are checked", async () => {
   vi.mocked(getManagedRun).mockResolvedValue(draftWithSelection as never);
   renderControls();
+  await openManager();
 
   fireEvent.click(await screen.findByRole("checkbox", { name: /Open/ }));
   fireEvent.click(screen.getByRole("checkbox", { name: /Enter/ }));
@@ -169,6 +194,7 @@ it("offers stop for an active local run", async () => {
   vi.mocked(stopManagedRun).mockResolvedValue({ ...active, state: "stopped" } as never);
   render(<ManagedRunControls projectId="prj_1" shots={[{ id: "sht_1", title: "Open" }]}
     provider="local" presets={[]} onProjectChanged={() => {}} />);
+  await openManager();
   fireEvent.click(await screen.findByRole("button", { name: "Stop managed run" }));
   await waitFor(() => expect(stopManagedRun).toHaveBeenCalledWith("prj_1", "mrun_2"));
 });
@@ -177,6 +203,7 @@ it("explains what planning does without starting a video", async () => {
   vi.mocked(getManagedRun).mockResolvedValue(null);
   render(<ManagedRunControls projectId="prj_1" shots={[{ id: "sht_1", title: "Open" }]}
     provider="local" presets={[]} onProjectChanged={() => {}} />);
+  await openManager();
 
   const info = await screen.findByRole("button", { name: "About Plan managed run" });
   expect(info.getAttribute("aria-expanded")).toBe("false");
@@ -184,4 +211,23 @@ it("explains what planning does without starting a video", async () => {
   expect(info.getAttribute("aria-expanded")).toBe("true");
   expect(screen.getByText(/existing Shots.*tail-frame handoffs/)).toBeTruthy();
   expect(screen.getByText(/No video starts until/)).toBeTruthy();
+});
+
+it("closes the dialog without stopping an active run", async () => {
+  const active = {
+    ...draftWithSelection,
+    state: "active",
+    resolution_preset: "portrait-768",
+    current_job_id: "job_1",
+    pending_shot_ids: ["sht_1", "sht_2"],
+  } as const;
+  vi.mocked(getManagedRun).mockResolvedValue(active as never);
+  renderControls();
+  await openManager();
+
+  fireEvent.keyDown(window, { key: "Escape" });
+
+  expect(screen.queryByRole("dialog", { name: "Managed run" })).toBeNull();
+  expect(stopManagedRun).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: /Managed run/ })).toBeTruthy();
 });

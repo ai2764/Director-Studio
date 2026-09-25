@@ -51,11 +51,14 @@ function unavailableSource(run: ManagedRun, shotId: string, selected: Set<string
 
 export function ManagedRunControls({ projectId, shots, provider, presets, onProjectChanged, onStateChange }: Props) {
   const [run, setRun] = useState<ManagedRun | null>(null);
+  const [open, setOpen] = useState(false);
   const [resolution, setResolution] = useState("");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [showPlanHelp, setShowPlanHelp] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
   const lastProgress = useRef("");
   const onChanged = useRef(onProjectChanged);
   onChanged.current = onProjectChanged;
@@ -65,6 +68,19 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
   useEffect(() => {
     onStateChanged.current?.(run?.state === "active" || run?.state === "stopping");
   }, [run?.state]);
+
+  useEffect(() => {
+    if (!open) return;
+    closeRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [open]);
 
   useLayoutEffect(() => {
     if (!run) {
@@ -147,15 +163,41 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
     });
   }
 
+  function closeManager() {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  const remaining = run?.pending_shot_ids?.length ?? 0;
+  const triggerSummary = !run
+    ? "Managed run"
+    : `${run.state}${remaining ? ` · ${remaining} remaining` : ""}`;
+
   return (
-    <section className="managed-run-card" aria-label="Managed local H3 run">
-      <div className="managed-run-heading">
-        <div>
-          <span className="mobile-eyebrow">Local · ComfyUI</span>
-          <h2>Managed run</h2>
-        </div>
-        {run ? <span className={`status-chip status-${run.state}`}>{run.state}</span> : null}
-      </div>
+    <div className="managed-run-launch">
+      <button ref={triggerRef} type="button" className="managed-run-trigger"
+        aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
+        <span className="managed-run-trigger-mark" aria-hidden="true">▶</span>
+        <span>Managed run</span>
+        {run ? <span className={`managed-run-trigger-state status-${run.state}`}>{triggerSummary}</span> : null}
+      </button>
+
+      {open ? <div className="managed-run-backdrop" onMouseDown={(event) => {
+        if (event.target === event.currentTarget) closeManager();
+      }}>
+      <section className="managed-run-dialog" role="dialog" aria-modal="true" aria-labelledby="managed-run-title">
+        <header className="managed-run-dialog-header">
+          <div>
+            <span className="mobile-eyebrow">Local · ComfyUI</span>
+            <h2 id="managed-run-title">Managed run</h2>
+          </div>
+          <div className="managed-run-dialog-status">
+            {run ? <span className={`status-chip status-${run.state}`}>{run.state}</span> : null}
+            <button ref={closeRef} type="button" className="managed-run-close"
+              aria-label="Close managed run" onClick={closeManager}>×</button>
+          </div>
+        </header>
+        <div className="managed-run-dialog-body">
       {error ? <div className="banner error" role="alert">{error}</div> : null}
       {run?.is_stale && run.stale_reason
         ? <div className="banner error" role="alert">{run.stale_reason}</div>
@@ -233,6 +275,9 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
       {!active && showPlanHelp ? <p id="managed-run-plan-help" className="muted tiny managed-run-help">
         Plan reviews the existing Shots and chooses tail-frame handoffs. It saves a draft for you to review. No video starts until you select a resolution and click Start managed run.
       </p> : null}
-    </section>
+        </div>
+      </section>
+      </div> : null}
+    </div>
   );
 }
