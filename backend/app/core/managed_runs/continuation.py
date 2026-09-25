@@ -24,6 +24,46 @@ logger = logging.getLogger("director_studio.managed_runs")
 _continuation_tasks: dict[str, asyncio.Task[None]] = {}
 
 
+def _clear_unplanned_managed_tails(run: ManagedRun, step: RunStep) -> None:
+    """Remove stale managed continuity Pictures from an independent step."""
+    target = load_shot(run.project_id, step.shot_id)
+    if target is None:
+        raise ValueError("Planned target Shot no longer exists")
+    stale_ids = {
+        layout.id
+        for layout in target.layout_refs
+        if layout.selected_for_h3
+        and layout.feedback_source == "managed_run"
+        and layout.origin is not None
+        and layout.origin.kind == "clip_tail_frame"
+    }
+    if not stale_ids:
+        return
+    updated_layouts = [
+        layout.model_copy(update={"selected_for_h3": False})
+        if layout.id in stale_ids else layout
+        for layout in target.layout_refs
+    ]
+    stale_assets = {
+        layout.asset_id
+        for layout in target.layout_refs
+        if layout.id in stale_ids
+    }
+    updated = target.model_copy(update={
+        "layout_refs": updated_layouts,
+        "layout_asset_id": (
+            None if target.layout_asset_id in stale_assets
+            else target.layout_asset_id
+        ),
+    })
+    updated = sync_selected_layout_refs(updated)
+    meta = dict(updated.meta or {})
+    meta["prompt_picture_signature"] = ""
+    meta["prompt_layout_signature"] = ""
+    meta["material_review_pending"] = True
+    save_shot(updated.model_copy(update={"meta": meta}))
+
+
 def _tail_source_job_id(run: ManagedRun, step: RunStep) -> str | None:
     if not step.tail_from_shot_id:
         return None
@@ -52,6 +92,7 @@ async def prepare_planned_tail(run: ManagedRun, svc: Any) -> None:
         return
     source_shot_id = step.tail_from_shot_id
     if not source_shot_id:
+        _clear_unplanned_managed_tails(run, step)
         return
     source_job_id = _tail_source_job_id(run, step)
     if not source_job_id:

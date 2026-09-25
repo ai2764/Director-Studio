@@ -247,6 +247,72 @@ async def test_tail_for_unselected_source_uses_persisted_successful_job(
 
 
 @pytest.mark.asyncio
+async def test_unplanned_step_deselects_stale_managed_tail_but_preserves_manual_layout() -> None:
+    from app.core.managed_runs import continuation
+    from app.core.projects.layouts import (
+        ClipTailFrameOrigin,
+        LayoutReference,
+        LayoutReviewStatus,
+        sync_selected_layout_refs,
+    )
+    from app.core.projects.store import load_shot
+
+    run = _run()
+    target = load_shot(run.project_id, "sht_1")
+    stale_tail = LayoutReference(
+        id="lref_stale_managed_tail",
+        asset_id="lay_stale_tail",
+        purpose="old managed continuity",
+        review_status=LayoutReviewStatus.usable,
+        feedback_source="managed_run",
+        selected_for_h3=True,
+        origin=ClipTailFrameOrigin(
+            source_shot_id="sht_previous",
+            source_job_id="job_previous",
+            source_generation=1,
+            output_kind="enhanced",
+            output_key="video",
+            source_filename="previous.mp4",
+        ),
+    )
+    manual_layout = LayoutReference(
+        id="lref_manual",
+        asset_id="lay_manual",
+        purpose="user-selected composition",
+        review_status=LayoutReviewStatus.usable,
+        selected_for_h3=True,
+    )
+    target = sync_selected_layout_refs(target.model_copy(update={
+        "layout_refs": [stale_tail, manual_layout],
+        "layout_asset_id": stale_tail.asset_id,
+        "meta": {
+            "prompt_picture_signature": "old-picture-signature",
+            "prompt_layout_signature": "old-layout-signature",
+            "material_review_pending": False,
+        },
+    }))
+    save_shot(target)
+
+    class FakeService:
+        async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
+            raise AssertionError("an unplanned tail cleanup must not draft a prompt")
+
+    await continuation.prepare_planned_tail(run, FakeService())
+
+    saved = load_shot(run.project_id, "sht_1")
+    layouts = {layout.id: layout for layout in saved.layout_refs}
+    assert layouts[stale_tail.id].selected_for_h3 is False
+    assert layouts[manual_layout.id].selected_for_h3 is True
+    assert saved.layout_asset_id == manual_layout.asset_id
+    assert [ref.asset_id for ref in saved.refs if ref.role.value == "layout_ref_frame"] == [
+        manual_layout.asset_id,
+    ]
+    assert saved.meta["prompt_picture_signature"] == ""
+    assert saved.meta["prompt_layout_signature"] == ""
+    assert saved.meta["material_review_pending"] is True
+
+
+@pytest.mark.asyncio
 async def test_rerun_source_replaces_prepared_tail_with_new_job(monkeypatch) -> None:
     from app.core.managed_runs import continuation
     from app.core.managed_runs.store import _save_run
