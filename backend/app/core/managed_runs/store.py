@@ -326,6 +326,46 @@ def record_prompt_retry(
         }))
 
 
+def abandon_tail_handoff(
+    project_id: str,
+    run_id: str,
+    shot_id: str,
+    reason: str,
+    *,
+    expected_event_id: str | None = None,
+) -> ManagedRun:
+    """Drop an incompatible planned tail while keeping the current Shot runnable."""
+    with _project_lock(project_id):
+        run = load_run(project_id, run_id)
+        step = current_step(run) if run is not None else None
+        if (
+            run is None
+            or run.state != "active"
+            or run.current_job_id
+            or step is None
+            or step.shot_id != shot_id
+            or (
+                expected_event_id is not None
+                and run.pending_event_id != expected_event_id
+            )
+        ):
+            raise ValueError("Managed run changed while abandoning tail handoff")
+        steps = [
+            item.model_copy(update={"tail_from_shot_id": None, "tail_reason": ""})
+            if item.shot_id == shot_id else item
+            for item in run.steps
+        ]
+        prepared = dict(run.prepared_tail_layout_ids)
+        prepared.pop(shot_id, None)
+        return _save_run(run.model_copy(update={
+            "steps": steps,
+            "prepared_tail_layout_ids": prepared,
+            "prompt_retry_count": 1,
+            "prompt_retry_error": reason[:1000],
+            "current_fingerprint": _fingerprint(project_id),
+        }))
+
+
 def create_draft(project_id: str, steps: list[RunStep]) -> ManagedRun:
     with _project_lock(project_id):
         _validate_steps(project_id, steps)

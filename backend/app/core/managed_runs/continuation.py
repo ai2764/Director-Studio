@@ -18,7 +18,19 @@ from ...agents.director.tail_prompt_review import CreativeQuestion
 from .models import ManagedRun, RunStep
 from .context import ManagedTurnScope, managed_turn_scope
 from .selection import latest_successful_video_job_id
-from .store import _fingerprint, active_run_for_project, bind_job, current_step, finish_stop, list_runs, load_run, mark_tail_ready, pause_run, record_prompt_retry
+from .store import (
+    _fingerprint,
+    abandon_tail_handoff,
+    active_run_for_project,
+    bind_job,
+    current_step,
+    finish_stop,
+    list_runs,
+    load_run,
+    mark_tail_ready,
+    pause_run,
+    record_prompt_retry,
+)
 
 logger = logging.getLogger("director_studio.managed_runs")
 _continuation_tasks: dict[str, asyncio.Task[None]] = {}
@@ -317,9 +329,27 @@ async def continue_run(project_id: str, run_id: str) -> None:
                     expected_event_id=turn_event_id,
                 )
                 continue
+            failure_message = getattr(result, "failure_message", "") or result.reply
+            failed_step = current_step(latest)
+            if (
+                getattr(result, "failure_code", "") == "PROMPT_GENERATION_FAILED"
+                and latest.prompt_retry_count >= 1
+                and failed_step is not None
+                and failed_step.tail_from_shot_id
+                and failure_message.startswith("Prompt continuity review:")
+            ):
+                _clear_unplanned_managed_tails(latest, failed_step)
+                latest = abandon_tail_handoff(
+                    project_id,
+                    run_id,
+                    failed_step.shot_id,
+                    "The planned continuity tail was rejected and removed. Write this Shot independently without a tail frame.",
+                    expected_event_id=turn_event_id,
+                )
+                continue
             pause_run(
                 project_id, run_id,
-                (getattr(result, "failure_message", "") or "Agent turn ended without starting the planned H3 job"),
+                (failure_message or "Agent turn ended without starting the planned H3 job"),
                 expected_event_id=turn_event_id,
             )
             break

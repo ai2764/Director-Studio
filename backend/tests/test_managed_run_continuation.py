@@ -506,6 +506,76 @@ async def test_tail_prompt_failure_hands_selected_frame_and_error_to_agent(monke
 
 
 @pytest.mark.asyncio
+async def test_rejected_tail_continuity_falls_back_to_independent_shot(monkeypatch) -> None:
+    from app.agents.director.chat_orchestrator import ChatResult
+    from app.core.managed_runs import continuation
+    from app.core.managed_runs.store import _save_run
+    from app.core.projects.layouts import ClipTailFrameOrigin, LayoutReference, LayoutReviewStatus
+    from app.core.projects.store import load_shot
+
+    run = _run()
+    run = _save_run(run.model_copy(update={"steps": [
+        RunStep(shot_id="sht_1"),
+        RunStep(shot_id="sht_2", tail_from_shot_id="sht_1", tail_reason="Continue motion"),
+    ]}))
+    bind_job(run.project_id, run.run_id, "sht_1", "job_first")
+    run = record_terminal(run.project_id, "job_first", JobStatus.succeeded)
+
+    def fake_extract(**kwargs):
+        shot = load_shot(run.project_id, "sht_2")
+        layout = LayoutReference(
+            id="lref_bad_tail",
+            asset_id="lay_bad_tail",
+            purpose="continuity",
+            review_status=LayoutReviewStatus.pending_review,
+            origin=ClipTailFrameOrigin(
+                source_shot_id="sht_1",
+                source_job_id="job_first",
+                source_generation=1,
+                output_kind="enhanced",
+                output_key="video",
+                source_filename="video.mp4",
+            ),
+        )
+        save_shot(shot.model_copy(update={"layout_refs": [layout]}))
+        return {"layout_ref_id": layout.id, "layout_asset_id": layout.asset_id}
+
+    class FailingService:
+        async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
+            raise ValueError("Prompt continuity review: tail and target are incompatible")
+
+    attempts = []
+
+    async def fake_agent(current, svc):
+        step = current_step(current)
+        attempts.append((current.prompt_retry_count, step.tail_from_shot_id))
+        if len(attempts) == 1:
+            return ChatResult(
+                reply="Prompt failed",
+                failure_code="PROMPT_GENERATION_FAILED",
+                failure_message="Prompt continuity review: tail and target are incompatible",
+            )
+        bind_job(current.project_id, current.run_id, "sht_2", "job_without_tail")
+        return ChatResult(reply="Job started")
+
+    monkeypatch.setattr(continuation, "extract_clip_tail_frame", fake_extract)
+    monkeypatch.setattr(continuation, "_agent_turn", fake_agent)
+    monkeypatch.setattr("app.agents.director.DirectorService", lambda **kwargs: FailingService())
+
+    await continuation.continue_run(run.project_id, run.run_id)
+
+    saved = load_run(run.project_id, run.run_id)
+    target = load_shot(run.project_id, "sht_2")
+    assert attempts == [(1, "sht_1"), (1, None)]
+    assert saved.state == "active"
+    assert saved.current_job_id == "job_without_tail"
+    assert saved.steps[1].tail_from_shot_id is None
+    assert "sht_2" not in saved.prepared_tail_layout_ids
+    assert target.layout_refs[0].selected_for_h3 is False
+    assert target.layout_asset_id is None
+
+
+@pytest.mark.asyncio
 async def test_empty_agent_turn_pauses_instead_of_repeating(monkeypatch) -> None:
     from app.core.managed_runs import continuation
     run = _run()
