@@ -320,6 +320,7 @@ async def test_rerun_source_replaces_prepared_tail_with_new_job(monkeypatch) -> 
         ClipTailFrameOrigin,
         LayoutReference,
         LayoutReviewStatus,
+        sync_selected_layout_refs,
     )
     from app.core.projects.store import load_shot
 
@@ -337,8 +338,11 @@ async def test_rerun_source_replaces_prepared_tail_with_new_job(monkeypatch) -> 
     target = load_shot(run.project_id, "sht_2")
     old_layout = LayoutReference(
         id="lref_old_tail",
+        asset_id="lay_old_tail",
         purpose="old continuity",
         review_status=LayoutReviewStatus.usable,
+        feedback_source="managed_run",
+        selected_for_h3=True,
         origin=ClipTailFrameOrigin(
             source_shot_id="sht_1",
             source_job_id="job_old",
@@ -348,7 +352,17 @@ async def test_rerun_source_replaces_prepared_tail_with_new_job(monkeypatch) -> 
             source_filename="old.mp4",
         ),
     )
-    save_shot(target.model_copy(update={"layout_refs": [old_layout]}))
+    manual_layout = LayoutReference(
+        id="lref_manual",
+        asset_id="lay_manual",
+        purpose="manual composition",
+        review_status=LayoutReviewStatus.usable,
+        selected_for_h3=True,
+    )
+    save_shot(sync_selected_layout_refs(target.model_copy(update={
+        "layout_refs": [old_layout, manual_layout],
+        "layout_asset_id": old_layout.asset_id,
+    })))
     run = _save_run(run.model_copy(update={
         "prepared_tail_layout_ids": {"sht_2": old_layout.id},
     }))
@@ -359,6 +373,7 @@ async def test_rerun_source_replaces_prepared_tail_with_new_job(monkeypatch) -> 
         shot = load_shot(run.project_id, "sht_2")
         new_layout = LayoutReference(
             id="lref_new_tail",
+            asset_id="lay_new_tail",
             purpose="new continuity",
             review_status=LayoutReviewStatus.pending_review,
             origin=ClipTailFrameOrigin(
@@ -373,7 +388,7 @@ async def test_rerun_source_replaces_prepared_tail_with_new_job(monkeypatch) -> 
         save_shot(shot.model_copy(update={
             "layout_refs": [*shot.layout_refs, new_layout],
         }))
-        return {"layout_ref_id": new_layout.id, "layout_asset_id": None}
+        return {"layout_ref_id": new_layout.id, "layout_asset_id": new_layout.asset_id}
 
     class FakeService:
         async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
@@ -383,6 +398,15 @@ async def test_rerun_source_replaces_prepared_tail_with_new_job(monkeypatch) -> 
     await continuation.prepare_planned_tail(run, FakeService())
 
     assert captured[0]["source_job_id"] == "job_new"
+    updated = load_shot(run.project_id, "sht_2")
+    layouts = {layout.id: layout for layout in updated.layout_refs}
+    assert layouts[old_layout.id].selected_for_h3 is False
+    assert layouts[manual_layout.id].selected_for_h3 is True
+    assert layouts["lref_new_tail"].selected_for_h3 is True
+    assert [ref.asset_id for ref in updated.refs if ref.role.value == "layout_ref_frame"] == [
+        manual_layout.asset_id,
+        "lay_new_tail",
+    ]
     saved = load_run(run.project_id, run.run_id)
     assert saved.prepared_tail_layout_ids["sht_2"] == "lref_new_tail"
 

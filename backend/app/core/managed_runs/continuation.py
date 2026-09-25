@@ -64,6 +64,26 @@ def _clear_unplanned_managed_tails(run: ManagedRun, step: RunStep) -> None:
     save_shot(updated.model_copy(update={"meta": meta}))
 
 
+def _replace_managed_tail_selection(target: Any, layout_id: str) -> Any:
+    """Activate one managed tail while retaining prior tails as inactive history."""
+    updated_layouts = [
+        layout.model_copy(update={"selected_for_h3": False})
+        if (
+            layout.id != layout_id
+            and layout.selected_for_h3
+            and layout.feedback_source == "managed_run"
+            and layout.origin is not None
+            and layout.origin.kind == "clip_tail_frame"
+        )
+        else layout
+        for layout in target.layout_refs
+    ]
+    updated = target.model_copy(update={"layout_refs": updated_layouts})
+    return sync_selected_layout_refs(
+        select_layout_reference(updated, layout_id, True)
+    )
+
+
 def _tail_source_job_id(run: ManagedRun, step: RunStep) -> str | None:
     if not step.tail_from_shot_id:
         return None
@@ -147,7 +167,7 @@ async def prepare_planned_tail(run: ManagedRun, svc: Any) -> None:
         f"Pre-authorized continuity handoff: {step.tail_reason}",
         feedback_source="managed_run",
     )
-    selected = sync_selected_layout_refs(select_layout_reference(reviewed, layout_id, True))
+    selected = _replace_managed_tail_selection(reviewed, layout_id)
     save_shot(selected)
     selected_layout = next(layout for layout in selected.layout_refs if layout.id == layout_id)
     if selected_layout.asset_id:
