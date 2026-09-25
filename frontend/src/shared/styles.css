@@ -3672,14 +3672,9 @@ select {
 
 .mobile-library-preview-strip {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.55rem;
-  overflow-x: auto;
   padding: 0 0.7rem 0.7rem;
-  scrollbar-width: none;
-}
-
-.mobile-library-preview-strip::-webkit-scrollbar {
-  display: none;
 }
 
 .mobile-library-preview-card {
