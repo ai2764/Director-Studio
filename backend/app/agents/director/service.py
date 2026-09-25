@@ -488,6 +488,9 @@ class DirectorService:
         meta["prompt_layout_signature"] = ""
         meta["prompt_picture_signature"] = ""
         meta["prompt_voice_signature"] = ""
+        meta.pop("prompt_revision_request", None)
+        meta.pop("prompt_revision_requests", None)
+        meta["material_review_pending"] = False
         if "music_segment" in authored_updates:
             meta["prompt_music_signature"] = ""
 
@@ -1907,6 +1910,7 @@ class DirectorService:
                 raise ValueError("Reference image content changed during prompt review; review again")
 
         check_current()
+        was_pending = bool((shot.meta or {}).get("material_review_pending"))
         meta = {**shot.meta, "material_review_pending": True}
         if revision_request.strip():
             history = list(meta.get("prompt_revision_requests", []))
@@ -1914,6 +1918,9 @@ class DirectorService:
                 history.append(revision_request)
             meta["prompt_revision_requests"] = history[-6:]
             meta["prompt_revision_request"] = revision_request
+        elif not was_pending:
+            meta.pop("prompt_revision_request", None)
+            meta.pop("prompt_revision_requests", None)
         shot = shot.model_copy(update={"meta": meta})
         save_shot(shot)
         original_shot = shot.model_dump(mode="json")

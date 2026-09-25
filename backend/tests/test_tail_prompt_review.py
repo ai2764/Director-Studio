@@ -132,6 +132,30 @@ async def test_tail_prompt_normalizes_unambiguous_english_dialogue_tag(tail_hand
 
 
 @pytest.mark.asyncio
+async def test_automatic_tail_rewrite_does_not_reuse_completed_revision_request(tail_handoff_shot):
+    project, shot = tail_handoff_shot
+    stale_request = "Replace the handheld VCR shot with a steady profile dolly."
+    shot = shot.model_copy(update={"meta": {
+        **shot.meta,
+        "prompt_revision_request": stale_request,
+        "prompt_revision_requests": [stale_request],
+        "material_review_pending": False,
+    }})
+    save_shot(shot)
+    provider = Provider([candidate(), verdict()])
+
+    updated = await DirectorService(
+        plan_provider=provider,
+        orchestrator=Orchestrator(),
+    ).write_prompts_after_layout(shot.id)
+
+    assert all(stale_request not in user for _, user in provider.text)
+    assert "prompt_revision_request" not in updated.meta
+    assert "prompt_revision_requests" not in updated.meta
+    assert len(provider.text) == 2
+
+
+@pytest.mark.asyncio
 async def test_exhausted_review_retains_draft_and_reuses_observations_after_restart(tail_handoff_shot):
     project, shot = tail_handoff_shot
     provider = Provider([candidate(), verdict(False), candidate(), verdict(False)])

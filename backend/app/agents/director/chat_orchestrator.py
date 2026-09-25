@@ -1331,8 +1331,20 @@ async def orchestrate_chat(
             conversation[0]["images"] = vision_b64
         final_reply = ""
         storyboard_retry_pending = False
+        from ...core.managed_runs.context import managed_turn_scope
+        managed_scope = managed_turn_scope.get()
+        tool_turn_limit = (
+            5
+            if managed_scope is not None and managed_scope.project_id == project_id
+            else 4
+        )
+        safety_limit_reply = (
+            "Tool calling exceeded the managed-turn safety limit."
+            if tool_turn_limit > 4
+            else "Tool calling exceeded the four-turn safety limit."
+        )
 
-        for _tool_turn in range(4):
+        for _tool_turn in range(tool_turn_limit):
             native_content, native_think, native_tools = _native_reply(raw)
             if native_think:
                 await progress("think", native_think)
@@ -1571,12 +1583,12 @@ async def orchestrate_chat(
                 if followup_think:
                     await progress("think", followup_think)
                 break
-            if _tool_turn == 3:
+            if _tool_turn == tool_turn_limit - 1:
                 final_content, final_think, final_tools = _native_reply(raw)
                 if final_think:
                     await progress("think", final_think)
                 final_reply = (
-                    "Tool calling exceeded the four-turn safety limit."
+                    safety_limit_reply
                     if final_tools
                     else final_content or final_reply
                 )
@@ -1584,7 +1596,7 @@ async def orchestrate_chat(
                     storyboard_save_blocked = True
                 break
         else:
-            final_reply = "Tool calling exceeded the four-turn safety limit."
+            final_reply = safety_limit_reply
 
         if not final_reply:
             refreshed_project = load_project(project_id)

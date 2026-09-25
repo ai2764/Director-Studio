@@ -441,6 +441,66 @@ async def test_managed_native_turn_ends_immediately_after_starting_h3(
 
 
 @pytest.mark.asyncio
+async def test_managed_native_turn_can_reach_h3_start_after_four_preflight_tools(
+    monkeypatch, authorize_managed_turn,
+) -> None:
+    """Managed recovery must not pause merely because preflight used four tool turns."""
+    from app.agents.director.chat import handle_chat
+    from app.api import projects as projects_api
+
+    project = create_project("Managed preflight budget", "A short scene")
+    shot = Shot(
+        id="sht_preflight_budget", project_id=project.id, scene_id="scene_1",
+        title="Open", script_beat="A door opens.", duration_s=5,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    draft = create_draft(project.id, [RunStep(shot_id=shot.id)])
+    run = activate_run(project.id, draft.run_id, "landscape-480")
+    authorize_managed_turn(run)
+
+    async def fake_submit(shot_id, svc, options):
+        job = create_job(
+            pipeline_id="h3_ref2va", asset_kind="productions", name="managed",
+            project_id=project.id, params={"shot_id": shot_id},
+        )
+        updated = load_shot(project.id, shot_id).model_copy(update={"h3_job_id": job.id})
+        save_shot(updated)
+        return updated
+
+    calls = 0
+
+    async def chat_fn(system, user, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls <= 4:
+            return {
+                "content": "",
+                "tool_calls": [{"name": "get_status", "arguments": {}}],
+            }
+        return {
+            "content": "",
+            "tool_calls": [{
+                "name": "start_h3_video",
+                "arguments": {"shot_id": shot.id},
+            }],
+        }
+
+    monkeypatch.setattr(projects_api, "submit_shot_endpoint", fake_submit)
+    result = await handle_chat(
+        project_id=project.id,
+        message=f"Managed local H3 run {run.run_id}: recover and start the planned Shot.",
+        svc=object(),
+        chat_fn=chat_fn,
+        managed_session_id="managed-preflight-budget",
+    )
+
+    assert calls == 5
+    assert result.reply.startswith("Started local H3 video")
+    assert load_run(project.id, run.run_id).current_job_id is not None
+
+
+@pytest.mark.asyncio
 async def test_managed_run_does_not_accept_agent_resolution_override(monkeypatch, authorize_managed_turn) -> None:
     from app.agents.director.tool_handlers.video import start_h3_video
     from app.api import projects as projects_api

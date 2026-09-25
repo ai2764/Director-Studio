@@ -415,6 +415,9 @@ def test_revise_shot_preserves_neighbors_and_production_inputs(director_dirs):
                 "prompt_layout_signature": f"layout_sig_{index}",
                 "prompt_picture_signature": f"picture_sig_{index}",
                 "prompt_voice_signature": f"voice_sig_{index}",
+                "prompt_revision_request": "Use the old locked-off framing.",
+                "prompt_revision_requests": ["Use the old locked-off framing."],
+                "material_review_pending": True,
                 "keep": f"value_{index}",
             },
         )
@@ -458,6 +461,9 @@ def test_revise_shot_preserves_neighbors_and_production_inputs(director_dirs):
     assert revised.meta["prompt_layout_signature"] == ""
     assert revised.meta["prompt_picture_signature"] == ""
     assert revised.meta["prompt_voice_signature"] == ""
+    assert "prompt_revision_request" not in revised.meta
+    assert "prompt_revision_requests" not in revised.meta
+    assert revised.meta["material_review_pending"] is False
     assert revised.meta["keep"] == "value_2"
     assert revised.status == ShotStatus.needs_review
 
