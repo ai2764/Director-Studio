@@ -17,6 +17,36 @@ def with_dialogue(shot):
                                        quote="Visitor: Bonjour."))]})
 
 
+def test_new_writer_schema_excludes_legacy_binding_metadata_but_reader_accepts_it():
+    from jsonschema import Draft202012Validator, ValidationError
+    from app.agents.director.tail_prompt_review import candidate_schema, PromptCandidate
+    response = candidate()
+    response["dialogue_uses"] = [dict(line_ids=["line-1"], speaker_id="visitor", block_indexes=[0])]
+    assert PromptCandidate.model_validate(response).dialogue_uses[0].speaker_id == "visitor"
+    with pytest.raises(ValidationError):
+        Draft202012Validator(candidate_schema()).validate(response)
+
+
+@pytest.mark.asyncio
+async def test_tail_one_repair_gets_schema_and_picture_defects(tail_handoff_shot):
+    _, shot = tail_handoff_shot
+    shot = with_dialogue(shot)
+    save_shot(shot)
+    bad = candidate()
+    bad["prompt_sections"]["subject_definitions"] = "The dancer (Picture 1)."
+    bad["prompt_sections"]["detailed_description"] += " {{speech:line-1}}"
+    bad["dialogue_uses"] = [dict(line_id="line-1", speaker_id="visitor", block_indexes=[0])]
+    good = candidate()
+    good["prompt_sections"]["detailed_description"] += " {{speech:line-1}}"
+    provider = Provider([bad, good, verdict()])
+    saved = await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+    repair = json.loads(provider.text[1][1])["repair"]
+    assert "line_ids" in repair["error"]
+    assert "<Picture 1>" in repair["error"]
+    assert "<d>[French] Bonjour.</d>" in saved.prompt_sections.detailed_description
+    assert len(provider.text) == 3
+
+
 @pytest.mark.asyncio
 async def test_tail_reference_compiles_before_review_and_persists_real_attribution(tail_handoff_shot):
     project, shot = tail_handoff_shot

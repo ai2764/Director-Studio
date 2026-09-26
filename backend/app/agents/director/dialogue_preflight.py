@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 
+from pydantic import ValidationError
+
+from ...core.h3.prompt import validate_required_picture_bindings
+from ...core.prompt_errors import PromptFailureError
 from ...core.projects.models import ProjectMode, PromptSections
 from ...core.projects.dialogue import (DialogueLine, DialogueContractError, DialogueIssue,
     dialogue_contract_signature, dialogue_evidence_version, verify_dialogue_sources, digest)
@@ -15,17 +20,17 @@ from .planner import _extract_json_payload, parse_prompt_sections_json
 
 WRITER_CONTRACT = """
 Director internal response contract (the final H3 prompt still has exactly six sections):
-Return {"prompt_sections": {the six nonempty section strings}, "dialogue_uses": [...]}.
+Return {"prompt_sections": {the six nonempty section strings}}.
 Place {{speech:line_id}} in detailed_description where each source line is spoken.
 The backend emits <d>[Language] exact source words</d> and attribution metadata; do not
-write those blocks yourself. You may omit dialogue_uses or return an empty list for these
-references. Cover every supplied line ID once in source order, including distinct IDs for
-repeated words. To split one line across cuts, use {{speech:line_id:start:end}} with zero-based
+write those blocks or dialogue_uses yourself. This internal response contract overrides
+the final-H3 dialogue formatting instructions above. For revisions, replace existing
+speech blocks with the corresponding source references. Cover every supplied line ID
+once in source order, including distinct IDs for repeated words. To split one line across
+cuts, use {{speech:line_id:start:end}} with zero-based
 Unicode character offsets and an exclusive end. Those spans must be contiguous and cover
 the entire source text once in order. Different speakers get their own references.
-Existing final H3 drafts may retain valid <d> blocks with explicit dialogue_uses entries:
-line_ids:[source line IDs], speaker_id:source narrative ID, block_indexes:[zero-based <d>
-occurrences]. Never mix final blocks and speech references. Keep prose, pacing, camera and acting choices free;
+Keep prose, pacing, camera and acting choices free;
 make prose consistent with attribution. Do not rewrite source words or reassign speakers.
 Respect the current directing requirements, including each speaker's language/accent, without
 changing dialogue to simulate accent. A missing Voice asset does not reassign dialogue.
@@ -35,6 +40,61 @@ conflict remains, report optional dialogue_conflicts entries with line_id, actua
 an exact quote including the speech block, and confidence: clear or uncertain. Do not invent
 findings merely because a character lacks a reference or because the staging is unusual.
 """
+
+
+@contextmanager
+def collect_prompt_contract_errors(raw: str, *, required_picture_indices=(),
+                                   required_layout_indices=(), submitted_picture_indices=None):
+    """Give one repair independent protocol defects without modifying the candidate.
+
+    Complete sections remain readable when the dialogue envelope fails validation.
+    Preserve the primary error and its typed issues; inspect only actual H3 sections
+    for reference tags, never metadata or arbitrary prose outside the sections.
+    """
+    original = None
+    try:
+        yield
+    except ValueError as exc:
+        original = exc
+
+    picture_errors = []
+    try:
+        payload = _extract_json_payload(raw)
+        section_payload = payload.get("prompt_sections", payload) if isinstance(payload, dict) else None
+        sections = parse_prompt_sections_json(json.dumps(section_payload))
+        text = "\n".join(sections.values())
+    except (ValueError, TypeError):
+        text = None
+    if text is not None:
+        submitted = tuple(submitted_picture_indices) if submitted_picture_indices is not None else None
+        for indices, label, allowed in (
+            (required_picture_indices, "required Picture", submitted),
+            (required_layout_indices, "selected Layout", None),
+        ):
+            try:
+                validate_required_picture_bindings(text, indices,
+                    submitted_picture_indices=allowed, binding_label=label)
+            except PromptFailureError as exc:
+                if original is None or str(exc) not in str(original):
+                    picture_errors.append(exc)
+    if not picture_errors:
+        if original is not None:
+            raise original
+        return
+    issues = list(getattr(original, "issues", []))
+    if isinstance(original, ValidationError):
+        issues.append(DialogueIssue(code="prompt_schema_invalid",
+            expected="valid prompt envelope and dialogue metadata", actual=str(original),
+            action="Repair the reported schema fields. For dialogue, use speech references "
+                   "and omit dialogue_uses in the writer response."))
+    issues.extend(DialogueIssue(code="picture_binding_invalid", actual=str(exc),
+        expected="literal <Picture N> tags for the required submitted references",
+        action="Correct reference tags in the prompt sections; preserve the creative prose.")
+        for exc in picture_errors)
+    error = PromptFailureError("contract", "; ".join(
+        ([str(original)] if original is not None else []) + [str(exc) for exc in picture_errors]))
+    error.issues = issues
+    raise error from original
 
 
 async def prepare_dialogue(project, shot, provider):

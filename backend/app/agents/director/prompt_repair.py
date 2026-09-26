@@ -96,7 +96,10 @@ def merge_repair(raw, previous, *, envelope=False):
             if isinstance(base.get(key), dict) and isinstance(patch.get(key), dict):
                 merged[key] = {**base[key], **patch[key]}
         changed_detail = merged.get("prompt_sections", {}).get("detailed_description") != base.get("prompt_sections", {}).get("detailed_description")
-        if changed_detail and "dialogue_uses" in base and "dialogue_uses" not in patch:
+        patch_sections = patch.get("prompt_sections", patch)
+        fresh_detail = patch_sections.get("detailed_description") if isinstance(patch_sections, dict) else None
+        fresh_placeholders = isinstance(fresh_detail, str) and "{{speech:" in fresh_detail
+        if (changed_detail or fresh_placeholders) and "dialogue_uses" in base and "dialogue_uses" not in patch:
             merged.pop("dialogue_uses", None)
     else:
         if set(patch) - set(PromptSections.model_fields):
@@ -113,6 +116,8 @@ def repair_request(user, repair):
             f"Previous prompt JSON failed: {repair['error']}\n"
             f"{issue_details}"
             f"Rejected candidate:\n{repair['rejected_candidate']}\n"
-            "Return corrected fields in the same JSON envelope as the candidate. If detailed_description changes, return fresh dialogue_uses when attribution is required. "
+            "Return corrected fields in the same JSON envelope as the candidate. "
+            "For source-backed dialogue, return detailed_description with {{speech:line_id}} references "
+            "and omit dialogue_uses; the backend compiles attribution. "
             "Repair only the listed defects. Keep all valid content, creative prose, exact dialogue and reference bindings. "
             "The merged six sections will be revalidated.")

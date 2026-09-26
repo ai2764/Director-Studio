@@ -100,7 +100,8 @@ async def start_h3_video(project_id: str, shot_id: str, *, svc: Any,
         try:
             bind_job(project_id, run.run_id, shot_id, job_id,
                      expected_fingerprint=starting_fingerprint,
-                     expected_event_id=scope.event_id)
+                     expected_event_id=scope.event_id,
+                     allow_prompt_refinement=True)
         except ValueError as exc:
             # Stop may race the endpoint's asynchronous reference/prompt preflight.
             await cancel_job(job_id)

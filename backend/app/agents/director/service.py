@@ -2070,10 +2070,16 @@ class DirectorService:
         candidate = candidate.model_copy(update={"meta": meta, "blocked_reasons": []})
         from .reference_facts import certify_reference_prompt
         candidate.meta["prompt_reference_contract"] = certify_reference_prompt(project, candidate)
-        from ...core.projects.store import save_shot_if_current
+        from ...core.managed_runs.prompt_commit import save_reviewed_tail_prompt
         from .prompt_retry import assert_prompt_only_candidate
         assert_prompt_only_candidate(candidate)
-        save_shot_if_current(candidate, check_current=check_current)
+        try:
+            save_reviewed_tail_prompt(candidate, check_current=check_current)
+        except ValueError as exc:
+            _save_prompt_failure_diagnostics(candidate, [{
+                "stage": "managed_publication", "raw": candidate.model_dump_json(), "error": str(exc),
+            }])
+            raise
         save_agent_context(project.id, _build_context(project, list_shots(project.id), phase="awaiting_h3"))
         return candidate
 
@@ -2394,27 +2400,32 @@ class DirectorService:
 
             def parse_and_validate(value: str) -> PromptSections:
                 nonlocal dialogue_draft
-                dialogue_draft = parse_dialogue_draft(value) if dialogue_lines else None
-                parsed = dialogue_draft.prompt_sections if dialogue_draft else PromptSections(**parse_prompt_sections_json(value))
-                parsed = _apply_source_audio_contract(parsed, shot)
-                if dialogue_draft:
-                    dialogue_draft = dialogue_draft.model_copy(update={"prompt_sections": parsed})
-                    dialogue_draft = compile_dialogue_draft(dialogue_draft, dialogue_lines)
-                    parsed = dialogue_draft.prompt_sections
-                ordered_text = parsed.as_ordered_text()
-                validate_h3_prompt(ordered_text, shot.dialogue,
-                                   audio_count=effective_audio_count,
-                                   required_picture_indices=(required_ordinary_picture_indices
-                                                             if review else []),
-                                   submitted_picture_indices=[r.picture_index for r in shot.refs])
-                validate_required_picture_bindings(
-                    ordered_text,
-                    required_layout_indices,
-                    submitted_picture_indices=(
-                        ref.picture_index for ref in shot.refs
-                    ),
-                    binding_label="selected Layout",
-                )
+                from .dialogue_preflight import collect_prompt_contract_errors
+                with collect_prompt_contract_errors(value,
+                        required_picture_indices=required_ordinary_picture_indices if review else [],
+                        required_layout_indices=required_layout_indices,
+                        submitted_picture_indices=[r.picture_index for r in shot.refs]):
+                    dialogue_draft = parse_dialogue_draft(value) if dialogue_lines else None
+                    parsed = dialogue_draft.prompt_sections if dialogue_draft else PromptSections(**parse_prompt_sections_json(value))
+                    parsed = _apply_source_audio_contract(parsed, shot)
+                    if dialogue_draft:
+                        dialogue_draft = dialogue_draft.model_copy(update={"prompt_sections": parsed})
+                        dialogue_draft = compile_dialogue_draft(dialogue_draft, dialogue_lines)
+                        parsed = dialogue_draft.prompt_sections
+                    ordered_text = parsed.as_ordered_text()
+                    validate_h3_prompt(ordered_text, shot.dialogue,
+                                       audio_count=effective_audio_count,
+                                       required_picture_indices=(required_ordinary_picture_indices
+                                                                 if review else []),
+                                       submitted_picture_indices=[r.picture_index for r in shot.refs])
+                    validate_required_picture_bindings(
+                        ordered_text,
+                        required_layout_indices,
+                        submitted_picture_indices=(
+                            ref.picture_index for ref in shot.refs
+                        ),
+                        binding_label="selected Layout",
+                    )
                 return parsed
 
             try:

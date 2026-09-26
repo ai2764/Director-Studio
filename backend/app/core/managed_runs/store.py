@@ -228,7 +228,8 @@ def _plan_index(run: ManagedRun, shot_id: str | None) -> int:
 
 def bind_job(project_id: str, run_id: str, shot_id: str, job_id: str,
              *, expected_fingerprint: str | None = None,
-             expected_event_id: str | None = None) -> ManagedRun:
+             expected_event_id: str | None = None,
+             allow_prompt_refinement: bool = False) -> ManagedRun:
     with _project_lock(project_id):
         run = load_run(project_id, run_id)
         if run is None or run.state != "active":
@@ -240,6 +241,17 @@ def bind_job(project_id: str, run_id: str, shot_id: str, job_id: str,
             raise ValueError("H3 job is not for the next planned Shot")
         if run.current_job_id is not None:
             raise ValueError("The next planned Shot already has an H3 job")
+        if allow_prompt_refinement and expected_event_id and run.recovery_history:
+            # Canonical submit may refresh a stale prompt. Adopt only the exact
+            # reviewed refinement published for this submission event, not any
+            # freshly observed project fingerprint or another turn's edit.
+            receipt = run.recovery_history[-1]
+            if (receipt.get("kind") == "prompt_refinement"
+                    and receipt.get("shot_id") == shot_id
+                    and receipt.get("event_id") == expected_event_id
+                    and receipt.get("before_fingerprint") == expected_fingerprint
+                    and receipt.get("after_fingerprint") == run.current_fingerprint):
+                expected_fingerprint = run.current_fingerprint
         current_fingerprint = _fingerprint(project_id)
         if expected_fingerprint and (
             run.current_fingerprint != expected_fingerprint
