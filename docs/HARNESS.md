@@ -206,3 +206,40 @@ bytes/mtimes, rejected writes, replay and ID collision, native execution and a
 real Node sidecar roundtrip with a scripted model. Both status-before-append and
 status-after-append are covered. This verifies tool execution, not Qwen's
 natural-language tool selection rate; no new live-model estimate is claimed.
+
+## Task-context pilot (P0/P1A)
+
+`DS_DIRECTOR_TASK_CONTEXT_MODE` accepts `off` (default), `shadow`, or `pilot`.
+`DS_DIRECTOR_TASK_CONTEXT_PROJECTS` is a JSON array of explicitly allowed project
+IDs (default `[]`). Both gates must allow a Director project; MV is unchanged.
+No environment or live project configuration is enabled by the implementation.
+Return the mode to `off` to use the existing context path on subsequent turns.
+
+- `shadow` builds a read-only comparison and logs request shapes but sends the
+  existing model input. It neither adds inference calls nor enforces pilot gaps.
+- `pilot` starts chat in `overview`. The same agent can choose `shot_prompt` with
+  `set_task_context`, or read a versioned, project-scoped source page with
+  `read_task_context`. Subsequent pages require the first page's version.
+- The view filters existing tools; it does not grant business authority, reset
+  budgets, change script locks, or start a second agent loop. Upload classification
+  and terminal-failure tool restrictions remain in place.
+- Normal and tail writers share current source evidence, preserving visual
+  inspection, dialogue compilation, voice mapping and exact selected tail origin.
+  Missing evidence/capacity returns nonterminal `CONTEXT_REQUIRED` before candidate
+  generation. Only a newly read, resolved missing source can unlock that rejected
+  preflight once; saved or unknown mutation outcomes cannot be replayed this way.
+- Source versions include selected file bytes. Save checks reject stale evidence;
+  paging is not permission to concatenate incompatible versions or bypass capacity.
+
+The `director_studio.context_metrics` logger emits character counts, image counts,
+source keys and an input digest, not script bodies, image bytes or exact token
+usage. Full system instructions, history and tool schemas still cost context;
+existing template duplication is intentionally retained. Capacity is a heuristic,
+not a tokenizer guarantee. Snapshot validation currently reads the project's
+sources repeatedly; smaller packets do not prove lower latency or I/O.
+
+Engineering fixtures and remaining live-evaluation requirements are recorded in
+[the pilot verification report](superpowers/reports/2026-09-26-task-context-pilot-verification.md).
+Real-model quality is not established by deterministic fixture tests. Keep default
+off until an authorized same-model/sample comparison passes. P1B mutation/state
+unification, persistent operation receipts and managed-run redesign are not included.
