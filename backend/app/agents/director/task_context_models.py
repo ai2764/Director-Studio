@@ -66,3 +66,5 @@ class TaskContextState(BaseModel):
     retrieved_versions: dict[str, str]
     context_epoch: int = 0
     read_pages: set[tuple[str, str, int, int]] = Field(default_factory=set)
+    writer_receipts: dict[str, dict] = Field(default_factory=dict)
+    source_keys: list[str] = Field(default_factory=list)

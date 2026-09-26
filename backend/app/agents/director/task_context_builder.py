@@ -21,6 +21,13 @@ def require_complete(packet):
     return packet
 
 
+def writer_task_context(packet, *, dialogue_lines, reference_evidence):
+    require_complete(packet)
+    return {"schema_version": packet.schema_version, "task": packet.task.model_dump(mode="json"),
+        "source_versions": packet.source_versions, "authority": packet.authority, "facts": packet.facts,
+        "verified_dialogue_lines": dialogue_lines, "reviewed_references": reference_evidence}
+
+
 def build_task_packet(snapshot, request, *, authority, max_chars, extra_sources=()):
     pid = snapshot.project_id
     keys = {f"project:{pid}", f"script:{pid}"}

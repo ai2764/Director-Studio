@@ -32,6 +32,21 @@ def _file_identity(path):
     return {"filename": path.name, "content_sha256": signature}
 
 
+def shot_source_payload(project, shot):
+    from .chat_context import verified_dialogue_lines
+    lines = verified_dialogue_lines(project, shot)
+    selected = selected_layout_prompt_context(shot)
+    origins = {layout.asset_id: layout.origin.model_dump(mode="json")
+               for layout in shot.layout_refs if layout.selected_for_h3 and layout.origin}
+    selected = [{**item, **({"origin": origins[item["asset_id"]]}
+                 if item["asset_id"] in origins else {})} for item in selected]
+    return {**authored_payload(shot), "prompt_sections": shot.prompt_sections.model_dump(mode="json"),
+        "prompt_revision_request": shot.meta.get("prompt_revision_request"),
+        "prompt_revision_requests": shot.meta.get("prompt_revision_requests", []),
+        "dialogue_sources": [line.model_dump(mode="json") for line in lines] if lines else [],
+        "selected_layouts": selected}
+
+
 def _capture_once(project_id):
     project = load_project(project_id)
     if project is None:
@@ -59,30 +74,28 @@ def _capture_once(project_id):
     shot_data = {}
     for persisted in shots:
         shot = sync_selected_layout_refs(persisted)
-        from .chat_context import verified_dialogue_lines
-        lines = verified_dialogue_lines(project, shot)
-        evidence = [line.model_dump(mode="json") for line in lines] if lines else []
-        selected = selected_layout_prompt_context(shot)
-        origins = {layout.asset_id: layout.origin.model_dump(mode="json")
-                   for layout in shot.layout_refs if layout.selected_for_h3 and layout.origin}
-        selected = [{**item, **({"origin": origins[item["asset_id"]]}
-                     if item["asset_id"] in origins else {})} for item in selected]
-        data = {**authored_payload(shot), "prompt_sections": shot.prompt_sections.model_dump(mode="json"),
-            "prompt_revision_request": shot.meta.get("prompt_revision_request"),
-            "prompt_revision_requests": shot.meta.get("prompt_revision_requests", []),
-            "dialogue_sources": evidence, "selected_layouts": selected}
+        data = shot_source_payload(project, shot)
         refs, missing, keys = [], [], []
         if shot.refs:
             try:
                 refs = capture_references(shot)[0]
-            except (OSError, ValueError) as exc:
-                missing.append({"code": "CONTEXT_SOURCE_MISSING", "source_key": f"shot:{shot.id}",
-                                "detail": str(exc)})
+            except (OSError, ValueError):
+                # Preserve exact lookup handles even when one Picture is missing.
+                for ref in sorted(shot.refs, key=lambda r: r.picture_index):
+                    try:
+                        item = capture_references(shot.model_copy(update={
+                            "refs": [ref.model_copy(update={"picture_index": 1})]}))[0][0]
+                    except (OSError, ValueError):
+                        item = {"asset_id": ref.asset_id, "file_key": ref.file_key, "missing": True}
+                    refs.append({**item, "picture_index": ref.picture_index})
         for ref, record in zip(sorted(shot.refs, key=lambda r: r.picture_index), refs):
             kind = role_to_library_kind(ref.role.value) or "other"
-            key = add(f"asset:{kind}:{ref.asset_id}:{record['file_key']}",
+            key = add(f"asset:{kind}:{ref.asset_id}:{ref.file_key or 'default'}",
                 {k: v for k, v in record.items() if k not in {"picture_index", "reference_notes"}})
             keys.append(key)
+            record["source_key"] = key
+            if record.get("missing"):
+                missing.append({"code": "CONTEXT_SOURCE_MISSING", "source_key": key})
         voices = []
         for voice in shot.voice_refs:
             asset = load_asset("voices", voice.asset_id)
@@ -140,3 +153,15 @@ def assert_packet_current(packet) -> None:
         record = current.sources.get(key)
         if record is None or record.version != version:
             raise ContextChanged(key)
+
+
+def rebase_writer_revision_request(packet, project, shot):
+    """A known self-write may update request bookkeeping, never other inputs."""
+    payload = shot_source_payload(project, shot)
+    original = packet.facts["target"]
+    allowed = {"prompt_revision_request", "prompt_revision_requests"}
+    if any(original.get(k) != payload.get(k) for k in set(original) | set(payload) if k not in allowed):
+        raise ContextChanged(f"shot:{shot.id}")
+    packet.source_versions[f"shot:{shot.id}"] = digest(payload)
+    packet.facts["target"] = payload
+    packet.facts["revision_history"] = payload["prompt_revision_requests"]

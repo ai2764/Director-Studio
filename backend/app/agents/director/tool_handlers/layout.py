@@ -7,6 +7,7 @@ import re
 from typing import Any, Callable
 
 from ....config import settings
+from ..task_context_builder import ContextRequired
 from ....core.library.store import load_asset
 from ....core.projects.layouts import (
     GptLayoutBrief,
@@ -686,6 +687,12 @@ async def handle_layout_tool(
                                         "reviewed_picture_indices": [r["picture_index"] for r in review.get("references", [])],
                                         "review_reason": decision.get("reason", "")})
             touched.add(s2.id)
+        except ContextRequired as e:
+            if result_payloads is not None:
+                result_payloads.append({"ok": False, "code": e.code, "shot_id": shot.id,
+                    "missing": e.packet.missing, "available_context": e.packet.available_context,
+                    "concludes_turn": False, "error": str(e)})
+            notes.append("Prompt input needs additional evidence or context capacity; no candidate was generated.")
         except Exception as e:
             logger.exception("write_prompt tool failed")
             notes.append(f"Prompt writing failed: {e}")

@@ -165,6 +165,9 @@ async def run_prompt_retry(project_id, request, svc):
             if latest and latest.get("retry_id") == request.retry_id and latest.get("state") == "executing":
                 latest["state"] = "pending"
                 _save(project_id, latest)
+        from .task_context_builder import ContextRequired
+        if isinstance(exc, ContextRequired):
+            raise
         if isinstance(exc, Exception) and not isinstance(exc, PromptFailureError):
             raise PromptFailureError("unknown", str(exc)) from exc
         raise

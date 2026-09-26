@@ -59,6 +59,10 @@ def observe_request(path: str, messages: list[dict], *, tools=None,
         from ...core.projects.store import load_project
         if context_mode(load_project(_project.get())) == "off":
             return
+        if not source_keys:
+            from .task_context_runtime import current_task_context
+            state = current_task_context(_project.get())
+            source_keys = state.source_keys if state else ()
         record_request_shape(request_shape(path=path, messages=messages, tools=tools or [],
             image_count=image_count, source_keys=list(source_keys)))
     except Exception:

@@ -340,7 +340,9 @@ class BackendTurn:
             (version, raw_fingerprint) in self.calls
             or (version, fingerprint) in self.calls
         ):
-            return {"ok": False, "error": "Repeated call rejected. Inspect the existing outcome; do not replay a mutation."}
+            from .task_context_runtime import context_retry_ready
+            if name != "write_prompt" or not context_retry_ready(self.project_id, args.get("shot_id")):
+                return {"ok": False, "error": "Repeated call rejected. Inspect the existing outcome; do not replay a mutation."}
         if self.expected_state is not None and version != self.expected_state:
             return {"ok": False, "error": "Project changed since inference. Refresh context and reconsider the call."}
         if self.storyboard_failed and name in IMAGE_TOOLS:
@@ -382,7 +384,7 @@ class BackendTurn:
             result.update(ok=False, error="No successful operation confirmed. " + " ".join(notes))
         if name == "save_storyboard":
             self.storyboard_failed = not result["ok"]
-        if name == "write_prompt" and not result["ok"]:
+        if name == "write_prompt" and not result["ok"] and result.get("code") != "CONTEXT_REQUIRED":
             self.prompt_failure_kind = result.get("failure_kind", "unknown")
             failure = str(result.get("error") or "Prompt generation failed.")
             self.terminal_failure = (

@@ -1542,7 +1542,7 @@ async def orchestrate_chat(
                     prompt_failure_kind = tool_payload.get("failure_kind", "unknown")
                     prompt_failure_message = (
                         str(tool_payload.get("error") or "Prompt generation failed")
-                        if tool_payload.get("ok") is False else ""
+                        if tool_payload.get("ok") is False and tool_payload.get("code") != "CONTEXT_REQUIRED" else ""
                     )
                     if prompt_failure_message:
                         from ...core.managed_runs.context import managed_turn_scope

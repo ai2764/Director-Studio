@@ -190,3 +190,11 @@ def test_packet_budget_reserves_system_history_tools_output_and_images(monkeypat
         messages=[{"role": "user", "content": "H" * 1000}], tools=[], image_count=1, context_capacity=4000)
     assert 0 < available < (4000 - 1000 - 2048) * 4 - 2000
     assert available_packet_chars(system="S" * 100000, messages=[], tools=[], context_capacity=4000) == 0
+
+
+def test_packet_budget_does_not_count_base64_as_text():
+    from app.agents.director.task_context_runtime import available_packet_chars
+    plain = [{"role": "user", "content": "Inspect this"}]
+    media = [{**plain[0], "images": ["BASE64" * 100000]}]
+    assert available_packet_chars(system="S", messages=plain, tools=[], image_count=1) == available_packet_chars(
+        system="S", messages=media, tools=[], image_count=1)

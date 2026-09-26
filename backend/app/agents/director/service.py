@@ -72,6 +72,9 @@ from .planner import (
     role_to_ref_role,
 )
 from . import prompts as prompt_text
+from .task_context_runtime import scoped_prompt_writer, prepare_writer_packet
+from .task_context_builder import ContextRequired, writer_task_context
+from .task_context_snapshot import assert_packet_current, rebase_writer_revision_request
 from .asset_catalog import (
     LIBRARY_KINDS,
     _asset_index,
@@ -1990,7 +1993,7 @@ class DirectorService:
         self._asset_observations[(project_id, asset_id, record["file_key"])] = observation
         return observation
 
-    async def _write_tail_prompt(self, shot, project, original_shot, revision_request):
+    async def _write_tail_prompt(self, shot, project, original_shot, revision_request, task_packet=None):
         from .material_review import capture_references
         from .tail_prompt_review import draft_and_review
         from .brief import directing_requests
@@ -2006,6 +2009,8 @@ class DirectorService:
         def check_current():
             from .prompt_retry import assert_prompt_retry_inputs_current
             assert_prompt_retry_inputs_current()
+            if task_packet is not None:
+                assert_packet_current(task_packet)
             current = load_shot(project.id, shot.id)
             current_project = load_project(project.id)
             if (current is None or current.model_dump(mode="json") != original_shot
@@ -2035,12 +2040,14 @@ class DirectorService:
         shot = shot.model_copy(update={"meta": meta})
         save_shot(shot)
         original_shot = shot.model_dump(mode="json")
+        if task_packet is not None:
+            rebase_writer_revision_request(task_packet, project, shot)
         records, images, signature = capture_references(shot)
         keep = bool(getattr(settings, "llm_keep_loaded", True))
         async with self.orchestrator.llm_session(release_on_exit=not keep):
             await self.orchestrator.ensure_llm_ready()
             candidate = await draft_and_review(self.plan_provider, project, shot, records, images,
-                signature, check_current, _save_prompt_failure_diagnostics)
+                signature, check_current, _save_prompt_failure_diagnostics, task_packet=task_packet)
         check_current()
         meta = dict(candidate.meta)
         layouts = selected_layout_prompt_context(candidate)
@@ -2070,10 +2077,13 @@ class DirectorService:
         save_agent_context(project.id, _build_context(project, list_shots(project.id), phase="awaiting_h3"))
         return candidate
 
+    @scoped_prompt_writer
     async def write_prompts_after_layout(self, shot_id: str, *, revision_request: str = "") -> Shot:
         from .prompt_retry import record_prompt_failure, complete_prompt_retry
         try:
             saved = await self._write_prompts_after_layout_impl(shot_id, revision_request=revision_request)
+        except ContextRequired:
+            raise  # No candidate was executed; this is an evidence preflight receipt.
         except Exception as exc:
             try:
                 shot = _find_shot(shot_id)
@@ -2101,8 +2111,9 @@ class DirectorService:
         if project is None:
             raise ValueError(f"project not found: {shot.project_id}")
 
+        task_packet = prepare_writer_packet(project, shot.id, revision_request)
         if any(item["origin_kind"] == "clip_tail_frame" for item in selected_layout_prompt_context(shot)):
-            return await self._write_tail_prompt(shot, project, original_shot, revision_request)
+            return await self._write_tail_prompt(shot, project, original_shot, revision_request, task_packet)
 
         from .material_review import capture_references, review_references, tail_frame_review_signature
         from .brief import directing_requests
@@ -2118,6 +2129,8 @@ class DirectorService:
         def check_current():
             from .prompt_retry import assert_prompt_retry_inputs_current
             assert_prompt_retry_inputs_current()
+            if task_packet is not None:
+                assert_packet_current(task_packet)
             current = load_shot(shot.project_id, shot.id)
             current_project = load_project(shot.project_id)
             if (current is None or current.model_dump(mode="json") != original_shot
@@ -2164,7 +2177,7 @@ class DirectorService:
                         review["handoff_signature"] = tail_frame_review_signature(project, shot, review_signature)
             shot = shot.model_copy(update={"meta": {**shot.meta, "material_review": review}})
 
-        ctx = load_agent_context(shot.project_id)
+        ctx = load_agent_context(shot.project_id) if task_packet is None else None
         if ctx is not None:
             current_summary = _shot_context_summary(shot)
             refreshed_summaries: list[dict[str, Any]] = []
@@ -2298,6 +2311,18 @@ class DirectorService:
         keep = bool(getattr(settings, "llm_keep_loaded", True))
         async with self.orchestrator.llm_session(release_on_exit=not keep):
             await self.orchestrator.ensure_llm_ready()
+            from .dialogue_preflight import (prepare_dialogue, parse_dialogue_draft,
+                WRITER_CONTRACT, prompt_dialogue_record, dialogue_contract_current)
+            from ...core.h3.dialogue_binding import compile_dialogue_draft
+            dialogue_lines = await prepare_dialogue(project, shot, self.plan_provider)
+            check_current()
+            if task_packet is not None:
+                canonical = writer_task_context(task_packet,
+                    dialogue_lines=[line.model_dump(mode="json") for line in dialogue_lines] if dialogue_lines else [],
+                    reference_evidence=(review or {}).get("references", []))
+                if shot.script_beat != task_packet.facts["target"]["script_beat"]:
+                    canonical["derived_candidate_not_persisted"] = {"script_beat": shot.script_beat}
+                context_json = json.dumps(canonical, ensure_ascii=False)
             user = prompt_text.PROMPT_SECTIONS_USER_TEMPLATE.format(
                 title=shot.title,
                 scene_id=shot.scene_id,
@@ -2323,11 +2348,6 @@ class DirectorService:
                 feedback=(shot.feedback or "") + (f"\nCurrent user revision request: {revision_request}" if revision_request else ""),
                 context_json=context_json,
             )
-            from .dialogue_preflight import (prepare_dialogue, parse_dialogue_draft,
-                WRITER_CONTRACT, prompt_dialogue_record, dialogue_contract_current)
-            from ...core.h3.dialogue_binding import compile_dialogue_draft
-            dialogue_lines = await prepare_dialogue(project, shot, self.plan_provider)
-            check_current()
             user += "\nCurrent directing requirements:\n" + json.dumps(directing_requests(project), ensure_ascii=False)
             if dialogue_lines:
                 user += "\nSource dialogue lines:\n" + json.dumps([line.model_dump(mode="json") for line in dialogue_lines], ensure_ascii=False)

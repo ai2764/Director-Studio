@@ -94,3 +94,18 @@ async def test_chat_metrics_measure_final_messages_and_tools(context_case, monke
     assert shapes[0]["tool_schema_chars"] == len(json.dumps([tool], ensure_ascii=False, sort_keys=True))
     assert shapes[0]["image_count"] == 1
     assert "PRIVATE" not in json.dumps(shapes)
+
+
+def test_final_request_observation_includes_active_source_manifest(context_case, monkeypatch):
+    from app.agents.director.task_context_runtime import task_context_scope
+    from app.agents.director.task_context_models import TaskContextState, TaskRequest
+    project, target, _ = context_case
+    monkeypatch.setattr(settings, "director_task_context_mode", "pilot")
+    monkeypatch.setattr(settings, "director_task_context_projects", [project.id])
+    shapes = []
+    monkeypatch.setattr(metrics, "record_request_shape", shapes.append)
+    state = TaskContextState(project_id=project.id, request=TaskRequest(), retrieved_versions={},
+                             source_keys=[f"shot:{target.id}"])
+    with task_context_scope(state), metrics.metrics_scope(project.id):
+        metrics.observe_request("writer.generate", [{"role": "user", "content": "private prose"}])
+    assert shapes[0]["source_keys"] == [f"shot:{target.id}"]

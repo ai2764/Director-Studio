@@ -155,7 +155,7 @@ Do not redesign the shot, enforce aesthetics or reject a feasible camera move.
 
 
 async def draft_and_review(provider, project, shot, records, images, signature,
-                           check_current, save_diagnostics):
+                           check_current, save_diagnostics, *, task_packet=None):
     from ...core.media.music_segments import music_prompt_context
     from .brief import directing_requests
 
@@ -202,6 +202,15 @@ async def draft_and_review(provider, project, shot, records, images, signature,
     dialogue_lines = await prepare_dialogue(project, shot, provider)
     check_current()
     request["dialogue_lines"] = [line.model_dump(mode="json") for line in dialogue_lines] if dialogue_lines else []
+    if task_packet is not None:
+        from .task_context_builder import writer_task_context
+        request["task_context"] = writer_task_context(task_packet,
+            dialogue_lines=request["dialogue_lines"], reference_evidence=references)
+        facts = task_packet.facts
+        request.update(script=facts["script"],
+            original_shot={k: facts["target"][k] for k in fields},
+            voice_refs=facts["voice_refs"], revision_history=facts["revision_history"],
+            selected_layouts=facts["target"]["selected_layouts"])
     draft_instructions = DRAFT_INSTRUCTIONS + REFERENCE_WRITER_CONTRACT + (WRITER_CONTRACT + "\nRetain the existing tail envelope's shot_patch, reason and blocking_question fields too." if dialogue_lines else "")
     from .prompt_retry import prompt_only_retry_active, prompt_only_repair, PROMPT_ONLY_INSTRUCTIONS
     if prompt_only_retry_active():
