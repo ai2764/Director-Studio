@@ -176,7 +176,7 @@ async def test_one_repair_receives_both_binding_and_continuity_errors(tail_hando
 
 
 @pytest.mark.asyncio
-async def test_tail_prompt_normalizes_unambiguous_english_dialogue_tag(tail_handoff_shot):
+async def test_tail_prompt_reports_malformed_legacy_language_tag(tail_handoff_shot):
     project, shot = tail_handoff_shot
     from app.core.projects.dialogue import apply_dialogue_update
     from test_director_dialogue_attribution import line_payload
@@ -188,16 +188,18 @@ async def test_tail_prompt_normalizes_unambiguous_english_dialogue_tag(tail_hand
         "0-2 seconds: The dancer says <d>English Sure.</d> as the camera lowers. "
         "2-6 seconds: She completes the floor move."
     )
-    provider = Provider([malformed, verdict()])
+    provider = Provider([malformed, verdict(), malformed, verdict()])
 
-    updated = await DirectorService(
-        plan_provider=provider,
-        orchestrator=Orchestrator(),
-    ).write_prompts_after_layout(shot.id)
+    with pytest.raises(ValueError, match="dialogue_block_invalid.*detailed_description.*English Sure"):
+        await DirectorService(
+            plan_provider=provider,
+            orchestrator=Orchestrator(),
+        ).write_prompts_after_layout(shot.id)
 
-    assert "<d>[English] Sure.</d>" in updated.prompt_sections.detailed_description
-    assert load_shot(project.id, shot.id) == updated
-    assert len(provider.text) == 2
+    assert load_shot(project.id, shot.id).prompt_sections == shot.prompt_sections
+    assert len(provider.text) == 4
+    repair = json.loads(provider.text[2][1])["repair"]
+    assert repair["issues"][0]["actual"] == "<d>English Sure.</d>"
 
 
 @pytest.mark.asyncio

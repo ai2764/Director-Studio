@@ -94,6 +94,7 @@ async def execute_tools(
     on_progress: ProgressFn | None = None,
     result_payloads: list[dict[str, Any]] | None = None,
     user_feedback: str = "",
+    user_message_id: str | None = None,
     previous_assistant: str = "",
     requested_minimum_duration_s: float = 0.0,
     storyboard_budget: Any | None = None,
@@ -101,11 +102,16 @@ async def execute_tools(
     user_uploads: list[dict[str, Any]] | None = None,
 ) -> tuple[list[str], set[str]]:
     """Execute tool list; return (note lines for LLM/user, shot ids touched for images)."""
+    # Control-flow receipts must exist even for callers that only consume notes.
+    if result_payloads is None:
+        result_payloads = []
     notes: list[str] = []
     touched: set[str] = set()
     prompt_written_shot_ids: set[str] = set()
     budget = storyboard_budget or runtime.storyboard_budget_factory()
     storyboard_save_failed = False
+    from .turn_identity import current_user_message_id
+    user_message_id = user_message_id or current_user_message_id(project_id, user_feedback)
 
     def refresh_shots() -> list[Shot]:
         return list_shots(project_id)
@@ -183,6 +189,7 @@ async def execute_tools(
             ):
                 continue
             handled_project_tool = await handle_project_tool(
+                user_message_id=user_message_id,
                 name=name,
                 args=args,
                 project_id=project_id,
@@ -220,6 +227,8 @@ async def execute_tools(
                 on_progress=on_progress,
                 refresh_shots=refresh_shots,
             ):
+                if result_payloads and result_payloads[-1].get("concludes_turn") is True:
+                    break
                 continue
             if await handle_media_tool(
                 name=name,

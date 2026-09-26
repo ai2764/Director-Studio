@@ -692,7 +692,9 @@ async def handle_layout_tool(
             if result_payloads is not None:
                 from ....core.h3.errors import prompt_failure_kind
                 result_payloads.append({"ok": False, "shot_id": shot.id, "error": str(e),
-                                        "failure_kind": prompt_failure_kind(e)})
+                                        "failure_kind": prompt_failure_kind(e),
+                                        "concludes_turn": True,
+                                        "reply": f"Prompt writing did not complete: {e}. Existing storyboard was preserved; no broader rewrite was attempted."})
 
     elif name == "reject_layout" or name == "reject":
         shot = resolve_shot(

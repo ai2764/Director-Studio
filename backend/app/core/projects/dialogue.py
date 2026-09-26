@@ -30,6 +30,13 @@ class DialogueLine(BaseModel):
     source: DialogueSource
 
 
+class DialogueLanguageUpdate(BaseModel):
+    """Change a saved line's language without resubmitting its spoken words."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    line_id: str = Field(min_length=1)
+    language: str = Field(min_length=1)
+
+
 class DialogueIssue(BaseModel):
     code: str
     line_id: str | None = None
@@ -42,9 +49,44 @@ class DialogueIssue(BaseModel):
 class DialogueContractError(PromptFailureError):
     def __init__(self, issues: list[DialogueIssue]):
         self.issues = issues
-        super().__init__("contract", "; ".join(
-            f"{i.code} ({i.line_id or 'dialogue'}): expected {i.expected!r}, "
-            f"got {i.actual!r}. {i.action}" for i in issues))
+        descriptions = []
+        for issue in issues:
+            details = []
+            if issue.expected:
+                details.append(f"expected {issue.expected!r}")
+            if issue.actual:
+                details.append(f"got {issue.actual!r}")
+            description = f"{issue.code} ({issue.line_id or 'dialogue'})"
+            if details:
+                description += ": " + ", ".join(details)
+            if issue.action:
+                description += ". " + issue.action
+            descriptions.append(description)
+        super().__init__("contract", "; ".join(descriptions))
+
+
+_H3_PROTOCOL_TAG = re.compile(
+    r"<\s*/?\s*(?:d|scenetrans|cutoff)\s*>|<\s*(?:Picture|Audio|Subject)\s+\d+\s*>",
+    re.IGNORECASE,
+)
+
+
+def validate_authored_dialogue(dialogue: list[str] | None = None,
+                               lines: list[DialogueLine] | None = None) -> None:
+    """Keep generation protocol tags out of newly authored spoken words."""
+    issues = []
+    entries = [(f"dialogue[{index}]", text) for index, text in enumerate(dialogue or [])]
+    entries.extend((line.line_id, line.text) for line in lines or [])
+    for line_id, text in entries:
+        match = _H3_PROTOCOL_TAG.search(text)
+        if match:
+            issues.append(DialogueIssue(
+                code="dialogue_protocol_markup", line_id=line_id,
+                expected="raw spoken words", actual=match.group(0),
+                action="Remove H3 prompt markup from authored dialogue; keep only the spoken words.",
+            ))
+    if issues:
+        raise DialogueContractError(issues)
 
 
 def project_dialogue(lines: list[DialogueLine]) -> list[str]:
@@ -80,6 +122,42 @@ def apply_dialogue_update(shot, updates: dict):
     """Apply an authored mutation; derived grounding never calls this function."""
     from .models import Shot
     updates = dict(updates)
+    if "dialogue_language_updates" in updates and updates["dialogue_language_updates"] is None:
+        raise ValueError("dialogue_language_updates must be a nonempty list")
+    language_updates = updates.pop("dialogue_language_updates", None)
+    if language_updates is not None:
+        if "dialogue" in updates or "dialogue_lines" in updates:
+            raise ValueError("dialogue_language_updates cannot be combined with dialogue or dialogue_lines")
+        if updates.get("scene_id", shot.scene_id) != shot.scene_id:
+            raise ValueError("dialogue_language_updates cannot change scene_id or source provenance")
+        if not shot.dialogue_lines:
+            raise ValueError("dialogue_language_updates requires saved attributed dialogue_lines")
+        patches = [DialogueLanguageUpdate.model_validate(item) for item in language_updates]
+        if not patches:
+            raise ValueError("dialogue_language_updates must contain at least one line")
+        by_id = {patch.line_id: patch.language for patch in patches}
+        if len(by_id) != len(patches):
+            raise ValueError("dialogue_language_updates contains duplicate line_id values")
+        unknown_ids = sorted(set(by_id) - {line.line_id for line in shot.dialogue_lines})
+        if unknown_ids:
+            raise ValueError("dialogue_language_updates contains unknown line_id values: "
+                             + ", ".join(unknown_ids))
+        lines = [line.model_copy(update={"language": by_id.get(line.line_id, line.language)})
+                 for line in shot.dialogue_lines]
+        if lines != shot.dialogue_lines and any(line.source.kind == "shot_revision" for line in lines):
+            version = revision_digest(shot.scene_id, lines)
+            lines = [line.model_copy(update={"source": line.source.model_copy(
+                update={"source_hash": version})}) if line.source.kind == "shot_revision"
+                else line for line in lines]
+        updates["dialogue_lines"] = lines
+        updates["dialogue"] = list(shot.dialogue)
+    if "dialogue" in updates:
+        if language_updates is None:
+            validate_authored_dialogue(updates["dialogue"])
+    if updates.get("dialogue_lines") is not None:
+        if language_updates is None:
+            validate_authored_dialogue(lines=[DialogueLine.model_validate(x)
+                                              for x in updates["dialogue_lines"]])
     if ("dialogue_lines" not in updates and "dialogue" not in updates
             and updates.get("scene_id", shot.scene_id) != shot.scene_id
             and shot.dialogue_lines is not None
@@ -92,7 +170,8 @@ def apply_dialogue_update(shot, updates: dict):
         else:
             updates["dialogue"] = project_dialogue(lines)
         # An unchanged dashboard round-trip is not a new authored revision.
-        if lines != shot.dialogue_lines or updates.get("scene_id", shot.scene_id) != shot.scene_id:
+        if language_updates is None and (lines != shot.dialogue_lines
+                                         or updates.get("scene_id", shot.scene_id) != shot.scene_id):
             scene_id = updates.get("scene_id", shot.scene_id)
             version = revision_digest(scene_id, lines)
             lines = [line.model_copy(update={"source": DialogueSource(kind="shot_revision",
@@ -121,26 +200,62 @@ def verify_dialogue_sources(project, shot, lines: list[DialogueLine]) -> None:
     previous_script_end = -1
     for line in lines:
         source = line.source
-        valid = source.scene_id == shot.scene_id
+        def reject(code, expected, actual, action):
+            issues.append(DialogueIssue(code=code, line_id=line.line_id,
+                expected=str(expected), actual=str(actual), evidence=source.quote, action=action))
+
+        if source.kind == "script" and not project.script_text.strip():
+            issues.append(missing_dialogue_source_issue(shot, line.line_id))
+            continue
+        if source.scene_id != shot.scene_id:
+            reject("dialogue_source_scene_mismatch", shot.scene_id, source.scene_id,
+                   "Resolve this line against the current shot scene; do not relabel unsupported evidence.")
+            continue
         if source.kind == "shot_revision":
-            valid = valid and source.source_hash == authored_hash and lines == shot.dialogue_lines
-        else:
-            quotes = list(re.finditer(re.escape(source.quote), project.script_text))
-            words = list(re.finditer(r"\s+".join(re.escape(x) for x in line.text.split()), source.quote))
-            valid = (valid and source.source_hash == script_hash
-                and len(quotes) > source.occurrence and len(words) == 1
-                and _dialogue_text(line.text) in _dialogue_text(source.quote)
-                and line.speaker_name in source.quote)
-            if valid:
-                quote_start = quotes[source.occurrence].start()
-                start, end = quote_start + words[0].start(), quote_start + words[0].end()
-                valid = start >= previous_script_end
-                previous_script_end = max(previous_script_end, end)
-        if not valid:
-            issues.append(DialogueIssue(code="dialogue_source_stale", line_id=line.line_id,
-                evidence=source.quote, action="Resolve this occurrence from the current scene/source; do not guess."))
+            if source.source_hash != authored_hash or lines != shot.dialogue_lines:
+                reject("dialogue_source_stale", f"persisted authored revision {authored_hash}",
+                       f"submitted revision {source.source_hash}; matches saved lines: {lines == shot.dialogue_lines}",
+                       "Reload the current explicitly authored dialogue revision; do not create approval by grounding.")
+            continue
+        if source.source_hash != script_hash:
+            reject("dialogue_source_stale", script_hash, source.source_hash,
+                   "Resolve the quote again from the current script version; do not merely replace its hash.")
+            continue
+        quotes = list(re.finditer(re.escape(source.quote), project.script_text))
+        if not quotes:
+            reject("dialogue_source_quote_mismatch", "verbatim excerpt in the current script", source.quote,
+                   "Copy an exact script excerpt including this line and its speaker cue.")
+            continue
+        if source.occurrence >= len(quotes):
+            reject("dialogue_source_occurrence_mismatch", f"occurrence 0 through {len(quotes) - 1}", source.occurrence,
+                   "Select the zero-based occurrence of this exact quote in the current script.")
+            continue
+        words = list(re.finditer(r"\s+".join(re.escape(x) for x in line.text.split()), source.quote))
+        if len(words) != 1 or _dialogue_text(line.text) not in _dialogue_text(source.quote):
+            reject("dialogue_source_text_mismatch", f"one occurrence of {line.text!r}", source.quote,
+                   "Choose an exact source excerpt containing this dialogue once; preserve the shot's spoken words.")
+            continue
+        if line.speaker_name not in source.quote:
+            reject("dialogue_source_speaker_mismatch", f"speaker cue for {line.speaker_name!r}", source.quote,
+                   "Resolve the speaker from the source cue; request explicit attribution if ambiguous.")
+            continue
+        quote_start = quotes[source.occurrence].start()
+        start, end = quote_start + words[0].start(), quote_start + words[0].end()
+        if start < previous_script_end:
+            reject("dialogue_source_occurrence_mismatch", f"source offset at or after {previous_script_end}", start,
+                   "Resolve distinct source occurrences in shot dialogue order; do not reuse an earlier occurrence.")
+        previous_script_end = max(previous_script_end, end)
     if issues:
         raise DialogueContractError(issues)
+
+
+def missing_dialogue_source_issue(shot, line_id: str | None = None) -> DialogueIssue:
+    return DialogueIssue(code="dialogue_source_missing", line_id=line_id,
+        expected="a nonempty script or an explicitly authored dialogue revision",
+        actual=f"empty project script for shot {shot.id}, scene {shot.scene_id}",
+        evidence=json.dumps(shot.dialogue, ensure_ascii=False),
+        action="Provide the script with speaker cues or explicit speaker-attributed dialogue for this shot. "
+               "Existing shot text alone does not authorize inferred speakers; retry after the source is supplied.")
 
 
 def dialogue_contract_signature(project, shot, lines, directing_requests) -> str:

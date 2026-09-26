@@ -85,6 +85,7 @@ async def handle_project_tool(
     notes: list[str],
     result_payloads: list[dict[str, Any]] | None,
     user_feedback: str,
+    user_message_id: str,
     requested_minimum_duration_s: float,
     refresh_shots: Callable[[], list[Shot]],
     storyboard_snapshot: Callable[[list[Shot]], dict[str, Any]],
@@ -103,10 +104,13 @@ async def handle_project_tool(
         from ..brief import remember_directing_request
         remember_directing_request(project_id, user_feedback)
         actions.append("set_script")
+        existing = refresh_shots()
         notes.append(
             f"Saved the script ({len(script)} characters). "
-            "Review asset coverage or explicitly skip it before storyboarding; "
-            "do not jump directly to composition."
+            + ("Existing shots, dialogue, references and production state were preserved. "
+               "Saving script evidence does not request a storyboard replacement. "
+               "Use the existing shot IDs for any requested local follow-up."
+               if existing else "Review asset coverage or explicitly skip it before storyboarding; do not jump directly to composition.")
         )
         return True
 
@@ -157,12 +161,23 @@ async def handle_project_tool(
 
     if name == "confirm_storyboard_replacement":
         pending = _load_storyboard_replacement(project_id)
-        if pending is None or pending.get("state") != "pending":
+        if pending is None:
             raise ValueError("No pending storyboard replacement exists for this project")
+        if args.get("proposal_id") != pending["id"]:
+            raise ValueError("Storyboard proposal changed; confirm the currently displayed proposal")
+        if not pending.get("request_message_id") or "changes" not in pending:
+            raise ValueError("Legacy proposal needs a fresh validated preview and confirmation; existing shots were preserved")
+        if pending.get("state") == "confirmed":
+            if result_payloads is not None:
+                result_payloads.append({"ok": True, "already_applied": True,
+                    "proposal_id": pending["id"], "storyboard": pending.get("result")})
+            notes.append("This storyboard proposal was already applied; no changes were repeated.")
+            return True
+        if pending.get("state") not in {"pending", "failed"}:
+            raise ValueError("Storyboard proposal is stale or executing; refresh its status")
         if (
             not _confirms_storyboard_replacement(user_feedback)
-            or normalize_text(user_feedback)
-            == normalize_text(str(pending.get("request_message") or ""))
+            or user_message_id == pending.get("request_message_id")
         ):
             raise ValueError(
                 "请在后续消息中明确回复“确认清除并重写全部 shots”；"
@@ -181,16 +196,28 @@ async def handle_project_tool(
             f"{pending.get('request_message', '')}\n\n"
             f"Explicit destructive confirmation: {user_feedback}"
         ).strip()
-        persisted = await svc.save_storyboard(
-            project_id,
-            submission.shots,
-            submission.expected_script_hash,
-            user_feedback=confirmed_feedback,
-            requested_minimum_duration_s=float(
-                pending.get("requested_minimum_duration_s") or 0.0
-            ),
-        )
+        from ....core.managed_runs.store import _project_lock
+        with _project_lock(project_id):
+            latest = _load_storyboard_replacement(project_id)
+            if latest != pending:
+                raise ValueError("Storyboard proposal changed before confirmation")
+            pending.update(state="executing", confirmation_message_id=user_message_id)
+            _save_storyboard_replacement(project_id, pending)
+        try:
+            persisted = await svc.save_storyboard(
+                project_id, submission.shots, submission.expected_script_hash,
+                user_feedback=confirmed_feedback,
+                requested_minimum_duration_s=float(pending.get("requested_minimum_duration_s") or 0.0),
+            )
+        except BaseException as exc:
+            # Cancellation is not an Exception. Release the claim only when the
+            # authored board is unchanged; an uncertain write requires review.
+            unchanged = _storyboard_state_hash(refresh_shots()) == pending["storyboard_state_hash"]
+            pending.update(state="failed" if unchanged else "stale", error=str(exc) or type(exc).__name__)
+            _save_storyboard_replacement(project_id, pending)
+            raise
         pending["state"] = "confirmed"
+        pending["result"] = storyboard_snapshot(persisted)
         _save_storyboard_replacement(project_id, pending)
         actions.append("save_storyboard")
         if result_payloads is not None:
@@ -204,22 +231,45 @@ async def handle_project_tool(
     if name == "save_storyboard":
         submission = StoryboardSubmission.model_validate(args)
         from ..brief import remember_directing_request
-        remember_directing_request(project_id, user_feedback)
         current_shots = refresh_shots()
         if current_shots:
+            preview = await svc.preview_storyboard(project_id, submission.shots,
+                submission.expected_script_hash, user_feedback=user_feedback,
+                requested_minimum_duration_s=requested_minimum_duration_s)
+            by_id = {shot.id: shot for shot in preview}
+            removed_dialogue = [{"shot_id": shot.id, "lines": shot.dialogue}
+                for shot in current_shots if shot.dialogue and
+                (shot.id not in by_id or any(line not in by_id[shot.id].dialogue for line in shot.dialogue))]
+            changes = {"removed_shot_ids": [s.id for s in current_shots if s.id not in by_id],
+                       "removed_dialogue": removed_dialogue}
             proposal = {
                 "id": f"sbrep_{uuid.uuid4().hex[:12]}",
-                "submission": submission.model_dump(mode="json"),
+                "submission": submission.model_dump(mode="json", exclude_unset=True),
                 "request_message": user_feedback,
+                "request_message_id": user_message_id,
+                "changes": changes,
                 "requested_minimum_duration_s": requested_minimum_duration_s,
                 "storyboard_state_hash": _storyboard_state_hash(current_shots),
                 "shot_count": len(current_shots),
                 "state": "pending",
             }
-            _save_storyboard_replacement(project_id, proposal)
+            from ....core.managed_runs.store import _project_lock
+            with _project_lock(project_id):
+                previous = _load_storyboard_replacement(project_id)
+                if previous and previous.get("state") == "executing":
+                    raise ValueError("Storyboard replacement is executing; wait for its outcome")
+                if (previous and previous.get("state") == "pending"
+                    and previous.get("request_message_id") and "changes" in previous
+                    and previous["submission"] == proposal["submission"]
+                    and previous["storyboard_state_hash"] == proposal["storyboard_state_hash"]):
+                    proposal = previous
+                _save_storyboard_replacement(project_id, proposal)
+            remember_directing_request(project_id, user_feedback)
             warning = _STORYBOARD_REPLACEMENT_WARNING.format(
                 shot_count=len(current_shots)
             )
+            if removed_dialogue:
+                warning += "\n将删除或替换的原对白：" + json.dumps(removed_dialogue, ensure_ascii=False)
             actions.append(f"propose_storyboard_replacement:{proposal['id']}")
             if result_payloads is not None:
                 result_payloads.append(
@@ -227,6 +277,7 @@ async def handle_project_tool(
                         "ok": True,
                         "confirmation_required": True,
                         "proposal_id": proposal["id"],
+                        "changes": changes,
                         "concludes_turn": True,
                         "reply": warning,
                     }
@@ -252,6 +303,8 @@ async def handle_project_tool(
     if name == "patch_shot_refs":
         submission = ShotRefsPatchSubmission.model_validate(args)
         persisted = svc.patch_shot_refs(project_id, submission.updates)
+        from ..brief import remember_directing_request
+        remember_directing_request(project_id, user_feedback)
         actions.append("patch_shot_refs")
         if result_payloads is not None:
             result_payloads.append({"storyboard": storyboard_snapshot(persisted)})
@@ -302,6 +355,8 @@ async def handle_project_tool(
         return True
 
     if name in {"plan_shots", "plan"}:
+        if refresh_shots():
+            raise ValueError("Existing shots require a validated save_storyboard proposal and explicit replacement confirmation; legacy plan_shots cannot bypass it")
         if not (project.script_text or "").strip():
             notes.append("Cannot plan shots: the project has no script")
             return True

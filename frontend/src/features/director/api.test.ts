@@ -73,6 +73,20 @@ it("uses multipart transport when Director chat includes images", async () => {
   expect(form.getAll("images")).toEqual([file]);
 });
 
+it("carries retry authority as typed data instead of chat text", async () => {
+  const receipt = { retry_id: "r1", shot_id: "s1", source_version: "v1" };
+  const stream = new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode('data: {"type":"result","data":{"reply":"saved"}}\n\n'));
+    controller.close();
+  } });
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, body: stream });
+  vi.stubGlobal("fetch", fetchMock);
+  await chatWithDirectorStream("prj_test", "Retry prompt", [], {}, [], undefined, receipt);
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+    message: "Retry prompt", history: [], prompt_retry: receipt,
+  });
+});
+
 it("uploads the selected song as the MV project master", async () => {
   const updated = {
     id: "prj_mv",

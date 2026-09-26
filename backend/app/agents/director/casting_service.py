@@ -94,7 +94,7 @@ def _heuristic_match(
             role=ref_role,
             asset_id=asset_id,
             index=index,
-            notes="llm-cast" if match.asset_id == asset_id else "llm-cast-fallback",
+            notes=match.notes if "notes" in match.model_fields_set else ("llm-cast" if match.asset_id == asset_id else "llm-cast-fallback"),
             file_key=requested_key,
             picture_index=match.picture_index,
         )

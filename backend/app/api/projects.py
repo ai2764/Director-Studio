@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from ..agents.director import DirectorService
 from ..agents.director.llm_plan_provider import DirectorLLMPlanProvider
+from ..agents.director.prompt_retry import PromptRetryRequest, pending_prompt_retry, run_prompt_retry
 from ..agents.director.planner import role_to_library_kind
 from ..agents.director.skill_loader import with_director_skill
 from ..config import settings
@@ -187,6 +188,7 @@ class ChatHistoryItem(BaseModel):
 class ChatBody(BaseModel):
     message: str = Field(min_length=1)
     history: list[ChatHistoryItem] = Field(default_factory=list)
+    prompt_retry: PromptRetryRequest | None = None
 
 
 class ChatMessage(BaseModel):
@@ -208,6 +210,7 @@ class ChatResponse(BaseModel):
     images: list[ChatImageOut] = Field(default_factory=list)
     thinking: str = ""
     steps: list[str] = Field(default_factory=list)
+    prompt_retry: PromptRetryRequest | None = None
 
 
 class ChatSessionStatus(BaseModel):
@@ -561,7 +564,25 @@ def _chat_result_to_response(result) -> ChatResponse:
         ],
         thinking=getattr(result, "thinking", "") or "",
         steps=list(getattr(result, "steps", None) or []),
+        prompt_retry=(pending_prompt_retry(result.project.id)
+                      if getattr(result, "failure_code", None) == "PROMPT_GENERATION_FAILED" else None),
     )
+
+
+async def _run_scoped_prompt_retry(project_id, request, svc, on_progress=None):
+    from ..agents.director.chat_orchestrator import ChatResult
+    from ..core.prompt_errors import PromptFailureError
+    if on_progress:
+        await on_progress({"type": "status", "text": f"Repairing prompt for {request.shot_id}"})
+    try:
+        shot = await run_prompt_retry(project_id, request, svc)
+    except PromptFailureError as exc:
+        return ChatResult(reply=f"Prompt repair did not complete: {exc}", actions=[],
+                          project=load_project(project_id), shots=list_shots(project_id),
+                          failure_code="PROMPT_GENERATION_FAILED", failure_message=str(exc))
+    return ChatResult(reply="Prompt saved. The authored shot and references were preserved.",
+                      actions=[f"write_prompt:{shot.id}"], project=load_project(project_id),
+                      shots=list_shots(project_id))
 
 
 async def _make_chat_fn(
@@ -873,9 +894,9 @@ async def project_chat_endpoint(
         history = agent_history(stored_history)
         if not history:
             history = [{"role": h.role, "content": h.content} for h in (body.history or [])]
-        chat_fn = await _make_chat_fn(on_progress=None)
+        chat_fn = None if body.prompt_retry else await _make_chat_fn(on_progress=None)
         append_chat_message(project_id, role="user", content=msg)
-        result = await handle_chat(
+        result = await _run_scoped_prompt_retry(project_id, body.prompt_retry, svc) if body.prompt_retry else await handle_chat(
             project_id=project_id,
             message=msg,
             svc=svc,
@@ -886,6 +907,7 @@ async def project_chat_endpoint(
         append_chat_message(
             project_id, role="assistant", content=response.reply,
             images=[DirectorChatImage.model_validate(image.model_dump()) for image in response.images],
+            prompt_retry=response.prompt_retry.model_dump() if response.prompt_retry else None,
         )
         return response
     except ValueError as e:
@@ -1049,6 +1071,7 @@ async def _project_chat_stream_response(
     user_image_captions: list[str] | None = None,
     user_history_images: list[DirectorChatImage] | None = None,
     user_upload_dir: Path | None = None,
+    prompt_retry: PromptRetryRequest | None = None,
 ):
     from ..agents.director.chat import handle_chat
 
@@ -1075,7 +1098,7 @@ async def _project_chat_stream_response(
     async def on_progress(ev: dict) -> None:
         await queue.put(ev)
 
-    chat_fn = await _make_chat_fn(on_progress=on_progress)
+    chat_fn = None if prompt_retry else await _make_chat_fn(on_progress=on_progress)
     try:
         session = await director_chat_sessions.reserve(project_id)
     except DirectorChatSessionConflict as exc:
@@ -1094,7 +1117,7 @@ async def _project_chat_stream_response(
 
     async def runner() -> None:
         try:
-            result = await handle_chat(
+            result = await _run_scoped_prompt_retry(project_id, prompt_retry, svc, on_progress) if prompt_retry else await handle_chat(
                 project_id=project_id,
                 message=msg,
                 svc=svc,
@@ -1113,6 +1136,7 @@ async def _project_chat_stream_response(
                     DirectorChatImage.model_validate(image.model_dump())
                     for image in response.images
                 ],
+                prompt_retry=response.prompt_retry.model_dump() if response.prompt_retry else None,
             )
             await queue.put(
                 {"type": "result", "data": response.model_dump(mode="json")}
@@ -1218,6 +1242,7 @@ async def project_chat_stream_endpoint(
         message=body.message,
         request_history=body.history,
         svc=svc,
+        prompt_retry=body.prompt_retry,
     )
 
 

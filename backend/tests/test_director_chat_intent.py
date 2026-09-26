@@ -546,7 +546,7 @@ def test_parse_tools_fence():
     assert tools[0]["name"] == "plan_shots"
 
 
-def test_sanitize_tools_blocks_image_after_set_script():
+def test_sanitize_tools_preserves_existing_shots_after_set_script():
     from app.agents.director.chat import sanitize_tools_for_pipeline
     from app.core.projects.models import Project
 
@@ -565,12 +565,12 @@ def test_sanitize_tools_blocks_image_after_set_script():
     out, notes = sanitize_tools_for_pipeline(tools, project=project, shots=_shots())
     names = [t["name"] for t in out]
     assert "set_script" in names
-    assert "plan_shots" in names
-    assert "queue_ref_frame" not in names
-    assert any("plan_shots" in n or "拆镜" in n for n in notes)
+    assert "plan_shots" not in names
+    assert "queue_ref_frame" in names
+    assert not notes
 
 
-def test_sanitize_tools_stale_shots_forces_plan_not_image():
+def test_sanitize_tools_stale_shots_do_not_authorize_replanning():
     from app.agents.director.chat import sanitize_tools_for_pipeline
     from app.core.projects.models import Project
 
@@ -586,9 +586,9 @@ def test_sanitize_tools_stale_shots_forces_plan_not_image():
     tools = [{"name": "queue_ref_frame", "args": {"shot_index": 1}}]
     out, notes = sanitize_tools_for_pipeline(tools, project=project, shots=_shots())
     names = [t["name"] for t in out]
-    assert "queue_ref_frame" not in names
-    assert "plan_shots" in names
-    assert notes
+    assert "queue_ref_frame" in names
+    assert "plan_shots" not in names
+    assert not notes
 
 
 def test_split_thinking():

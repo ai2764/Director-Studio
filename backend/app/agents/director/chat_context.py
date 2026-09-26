@@ -58,9 +58,11 @@ def project_context_blob(
     # Suggested next step for the model (also enforced in tool sanitizer).
     if not script.strip():
         next_step = "ask_or_set_script"
-    elif (not shots or shots_stale) and not coverage_current:
+    elif shots_stale:
+        next_step = "review_existing_shots"
+    elif not shots and not coverage_current:
         next_step = "review_asset_coverage"
-    elif not shots or shots_stale:
+    elif not shots:
         next_step = "save_storyboard"
     elif explicit_layout_generation_intent(message) and any(
         (s.status.value if hasattr(s.status, "value") else str(s.status))
@@ -213,6 +215,17 @@ def project_context_blob(
             return summary
         if focused and target_shot is None:
             return summary
+        dialogue_lines = shot.dialogue_lines
+        if dialogue_lines is None:
+            from ...core.projects.dialogue import DialogueLine, verify_dialogue_sources
+            try:
+                cached = (shot.meta.get("prompt_dialogue_contract") or {}).get("lines", [])
+                lines = [DialogueLine.model_validate(item) for item in cached]
+                if lines:
+                    verify_dialogue_sources(project, shot, lines)
+                    dialogue_lines = lines
+            except (ValueError, TypeError, KeyError):
+                pass  # Stale evidence must not supply IDs for a language-only edit.
         return {
             **summary,
             "music_segment": (
@@ -230,7 +243,7 @@ def project_context_blob(
             "blocked": shot.blocked_reasons,
             "script_beat": (shot.script_beat or "")[:1200],
             "dialogue": list(shot.dialogue),
-            "dialogue_lines": [line.model_dump(mode="json") for line in shot.dialogue_lines] if shot.dialogue_lines is not None else None,
+            "dialogue_lines": [line.model_dump(mode="json") for line in dialogue_lines] if dialogue_lines is not None else None,
             "shot_type": shot.shot_type,
             "camera_angle": shot.camera_angle,
             "camera_motion": shot.camera_motion,
@@ -317,13 +330,18 @@ def project_context_blob(
                 "proposal_id": pending_storyboard_replacement["id"],
                 "shot_count": pending_storyboard_replacement["shot_count"],
                 "status": "awaiting_explicit_destructive_confirmation",
+                "changes": pending_storyboard_replacement.get("changes", {}),
+                "last_error": pending_storyboard_replacement.get("error"),
             }
             if pending_storyboard_replacement
-            and pending_storyboard_replacement.get("state") == "pending"
+            and pending_storyboard_replacement.get("state") in {"pending", "failed"}
             else None
         ),
         "shots": [shot_context(i + 1, shot) for i, shot in enumerate(shots)],
         "note": (
+            "Script evidence changed. Review the affected existing Shots and repair only the requested fields or prompts. "
+            "A stale script version does not authorize replacing the storyboard. Retain existing Shot IDs."
+            if shots_stale else
             "Review asset coverage before storyboarding when useful. This is advisory: "
             "save_storyboard and plan_shots remain available, and the user may persist status=skipped."
             if next_step == "review_asset_coverage"
@@ -331,7 +349,7 @@ def project_context_blob(
             "For a user-requested end addition, use append_shot only and preserve existing Shots, even if stale. Otherwise, if shots_stale_vs_script=true or recommended_next_step=save_storyboard, "
             "author and call save_storyboard against script_hash; do not call queue_ref_frame first. "
             "plan_shots remains available only for compatibility."
-            if shots_stale or next_step == "save_storyboard"
+            if next_step == "save_storyboard"
             else None
         ),
     }

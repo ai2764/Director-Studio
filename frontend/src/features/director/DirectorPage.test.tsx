@@ -386,6 +386,7 @@ describe("Director shot actions", () => {
       {
         id: "prompt-failure",
         role: "assistant",
+        prompt_retry: { retry_id: "retry1", shot_id: "shot1", source_version: "version1" },
         content:
           "Prompt generation did not complete after bounded internal repair. The saved storyboard was not changed to work around it. detailed_description <d> block 1 must contain [Language] and spoken words only",
         images: [],
@@ -404,13 +405,24 @@ describe("Director shot actions", () => {
 
     await waitFor(() => expect(chatWithDirectorStream).toHaveBeenCalledWith(
       "prj_test",
-      expect.stringMatching(/Retry the previous failed H3 prompt once.*Correct only the reported prompt validation error/is),
+      "Retry prompt",
       [],
       expect.any(Object),
       [],
       expect.any(AbortSignal),
+      { retry_id: "retry1", shot_id: "shot1", source_version: "version1" },
     ));
     expect(draft.value).toBe("Keep this unsent note");
+  });
+
+  it("does not infer retry authority from failure keywords", async () => {
+    getDirectorChatHistoryMock.mockResolvedValue([{
+      id: "failure-text-only", role: "assistant",
+      content: "PROMPT_GENERATION_FAILED: Prompt generation did not complete after bounded internal repair.",
+    }]);
+    render(<DirectorPage />);
+    await screen.findByText(/PROMPT_GENERATION_FAILED:/);
+    expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
   });
 
   it("does not offer prompt retry for an older or unrelated failure", async () => {

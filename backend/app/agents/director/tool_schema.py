@@ -350,6 +350,8 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     function_tool(
         "confirm_storyboard_replacement",
         "Execute the exact pending complete storyboard replacement only when the current user message explicitly says they confirm clearing and rewriting all Shots. Never use for ok, continue, or a reply that also changes the proposal.",
+        {"proposal_id": {"type": "string", "description": "Exact proposal_id from PROJECT_STATE.pending_storyboard_replacement."}},
+        required=["proposal_id"],
     ),
     {
         "type": "function",
@@ -372,7 +374,8 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "Update only explicitly supplied authored fields on exactly one "
                 "existing Shot. Preserves neighboring Shots, Picture and voice refs, "
                 "Layouts, and historical jobs while invalidating that Shot's stale "
-                "prompt and active H3 link."
+                "prompt and active H3 link. For a language-only dialogue change, use "
+                "dialogue_language_updates with saved line_id and language; do not retype words."
             ),
             "parameters": ShotRevisionSubmission.model_json_schema(),
         },

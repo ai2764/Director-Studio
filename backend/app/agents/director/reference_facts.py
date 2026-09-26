@@ -74,14 +74,13 @@ def sanitize_observation(observation, sources):
 
 def reference_sources(project, record):
     """Source authority comes from storage, never from the model's own label."""
-    from .brief import directing_requests
+    from .brief import directing_request_sources
     sources = []
     for key in ("approved_notes", "approved_description"):
         if record.get(key):
             sources.append(dict(id=key, kind="library_metadata", text=record[key]))
     if project is not None:
-        for index, text in enumerate(directing_requests(project)):
-            sources.append(dict(id=f"request-{index}-{digest(text)[:12]}", kind="user_directing_request", text=text))
+        sources.extend(directing_request_sources(project))
     return sources
 
 
@@ -163,6 +162,10 @@ Reference evidence carries separate facts, sources, concerns and uncertainties. 
 remain model observations; cited_source_kind identifies only a quoted source, not confirmation
 or proof that the model interpretation is true. Follow the latest applicable explicit
 user choice; do not let an older script or a speculative visual label silently replace it.
+User request sources retain their original message identity and script version. They are
+chronological requests, not blanket current approvals. A script change alone does not revoke
+a request; apply later replacements and removals to earlier intent. Reference notes describe
+the intended contribution and limits of that particular image, not facts visible in its pixels.
 Do not assert values for not_visible/uncertain attributes. Conflicting or omitted descriptions
 are unresolved evidence, not alternative appearance instructions. Preserve one narrative identity
 across that person's different views. Choose camera, movement, staging and performance freely.

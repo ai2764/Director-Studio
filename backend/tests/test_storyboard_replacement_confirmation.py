@@ -3,6 +3,7 @@ import json
 import pytest
 from app.agents.director.chat import _project_context_blob, _run_tools, handle_chat
 from app.agents.director.service import _script_hash
+from app.agents.director.tool_handlers.project import _load_storyboard_replacement
 from app.core.projects.models import Shot
 from app.core.projects.store import create_project, list_shots, save_project, save_shot
 
@@ -51,6 +52,9 @@ class RecordingService:
     def __init__(self, returned_shots):
         self.returned_shots = returned_shots
         self.calls = []
+
+    async def preview_storyboard(self, *args, **kwargs):
+        return self.returned_shots
 
     async def save_storyboard(
         self,
@@ -109,6 +113,8 @@ async def test_existing_storyboard_save_becomes_a_confirmation_proposal(
         "proposal_id": actions[0].split(":", 1)[1],
         "shot_count": 1,
         "status": "awaiting_explicit_destructive_confirmation",
+        "changes": {"removed_shot_ids": [], "removed_dialogue": []},
+        "last_error": None,
     }
 
 
@@ -136,7 +142,7 @@ async def test_storyboard_replacement_requires_explicit_later_confirmation(
         actions = []
         notes, _ = await _run_tools(
             project_id=project.id,
-            tools=[{"name": "confirm_storyboard_replacement", "args": {}}],
+            tools=[{"name": "confirm_storyboard_replacement", "args": {"proposal_id": _load_storyboard_replacement(project.id)["id"]}}],
             svc=service,
             actions=actions,
             user_feedback=message,
@@ -149,7 +155,7 @@ async def test_storyboard_replacement_requires_explicit_later_confirmation(
     payloads = []
     await _run_tools(
         project_id=project.id,
-        tools=[{"name": "confirm_storyboard_replacement", "args": {}}],
+        tools=[{"name": "confirm_storyboard_replacement", "args": {"proposal_id": _load_storyboard_replacement(project.id)["id"]}}],
         svc=service,
         actions=actions,
         result_payloads=payloads,
@@ -269,7 +275,7 @@ async def test_storyboard_change_invalidates_the_pending_replacement(
     actions = []
     notes, _ = await _run_tools(
         project_id=project.id,
-        tools=[{"name": "confirm_storyboard_replacement", "args": {}}],
+        tools=[{"name": "confirm_storyboard_replacement", "args": {"proposal_id": _load_storyboard_replacement(project.id)["id"]}}],
         svc=service,
         actions=actions,
         user_feedback="确认清除并重写全部 shots",

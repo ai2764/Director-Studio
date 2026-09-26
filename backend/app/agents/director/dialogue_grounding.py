@@ -4,7 +4,10 @@ from __future__ import annotations
 import hashlib
 import json
 
-from ...core.projects.dialogue import DialogueContractError, DialogueIssue, DialogueLine, verify_dialogue_sources
+from pydantic import BaseModel, ConfigDict, Field
+
+from ...core.projects.dialogue import (DialogueContractError, DialogueIssue, DialogueLine,
+    missing_dialogue_source_issue, verify_dialogue_sources)
 from .planner import _extract_json_payload
 from .brief import directing_requests
 
@@ -23,25 +26,49 @@ Language/accent requirements guide delivery; do not rewrite dialogue to simulate
 """
 
 
+class GroundingResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dialogue_lines: list[DialogueLine] = Field(default_factory=list)
+    issues: list[DialogueIssue] = Field(default_factory=list)
+
+
 async def ground_dialogue(project, shot, provider) -> list[DialogueLine]:
     if not shot.dialogue:
         return []
     if shot.dialogue_lines is not None:
         verify_dialogue_sources(project, shot, shot.dialogue_lines)
         return shot.dialogue_lines
+    if not project.script_text.strip():
+        raise DialogueContractError([missing_dialogue_source_issue(shot)])
     request = {"script": project.script_text,
         "script_hash": hashlib.sha256(project.script_text.encode()).hexdigest(),
         "scene_id": shot.scene_id, "shot_id": shot.id, "script_beat": shot.script_beat,
         "dialogue": shot.dialogue, "directing_requests": directing_requests(project)}
-    raw = await provider.complete(GROUNDING_INSTRUCTIONS, json.dumps(request, ensure_ascii=False))
-    payload = _extract_json_payload(raw)
-    if not isinstance(payload, dict):
-        raise DialogueContractError([DialogueIssue(code="dialogue_source_unresolved")])
-    if payload.get("issues"):
-        raise DialogueContractError([DialogueIssue.model_validate(i) for i in payload["issues"]])
-    lines = [DialogueLine.model_validate(x) for x in payload.get("dialogue_lines", [])]
-    if any(line.source.kind != "script" for line in lines):
-        raise DialogueContractError([DialogueIssue(code="dialogue_source_unresolved",
-            action="Grounding cannot authorize a new authored revision.")])
-    verify_dialogue_sources(project, shot, lines)
-    return lines
+    correction = ""
+    for attempt in range(2):
+        raw = await provider.complete(GROUNDING_INSTRUCTIONS, json.dumps(request, ensure_ascii=False) + correction)
+        try:
+            response = GroundingResponse.model_validate(_extract_json_payload(raw))
+        except ValueError as exc:
+            error = DialogueContractError([DialogueIssue(code="dialogue_grounding_structure",
+                expected="JSON with dialogue_lines and issues matching the grounding schema", actual=str(exc),
+                action="Return the complete corrected grounding object using only supplied script evidence.")])
+        else:
+            if response.issues:
+                raise DialogueContractError(response.issues)
+            lines = response.dialogue_lines
+            if any(line.source.kind != "script" for line in lines):
+                raise DialogueContractError([DialogueIssue(code="dialogue_source_unresolved",
+                    expected="script evidence", actual="model-authored revision",
+                    action="Grounding cannot authorize a new authored revision.")])
+            try:
+                verify_dialogue_sources(project, shot, lines)
+            except DialogueContractError as exc:
+                error = exc
+            else:
+                return lines
+        if attempt:
+            raise error
+        correction = (f"\nCorrect this grounding response once using the concrete validation feedback: {error}"
+                      f"\nPrevious response: {raw}\nDo not invent evidence or user approval. "
+                      "Return issues if the supplied source cannot resolve attribution.")

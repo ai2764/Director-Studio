@@ -914,6 +914,7 @@ def test_save_storyboard_tool_exposes_the_complete_typed_shot_draft_shape():
     assert "movement" in shot_schema["properties"]["camera_motion"]["description"]
     assert "screen positions" in shot_schema["properties"]["composition"]["description"]
     assert set(parameters["$defs"]["AssetMatchDraft"]["properties"]) == {
+        "notes",
         "role",
         "asset_id",
         "file_key",
@@ -943,6 +944,7 @@ def test_patch_shot_refs_tool_only_accepts_exact_reference_updates():
     assert patch_schema["required"] == ["shot_id", "refs"]
     assert patch_schema["additionalProperties"] is False
     assert set(parameters["$defs"]["OrderedAssetMatchDraft"]["properties"]) == {
+        "notes",
         "role",
         "asset_id",
         "file_key",
@@ -973,6 +975,7 @@ def test_revise_shot_tool_only_accepts_partial_authored_fields():
         "dialogue",
         "music_segment",
         "dialogue_lines",
+        "dialogue_language_updates",
     }
     assert "refs" not in parameters["properties"]
     assert "layout_refs" not in parameters["properties"]
@@ -1971,6 +1974,9 @@ async def test_storyboard_replacement_warning_concludes_batch_before_layout(
 
         async def save_storyboard(self, *args, **kwargs):
             raise AssertionError("replacement must not save before confirmation")
+
+        async def preview_storyboard(self, *args, **kwargs):
+            return [old]
 
         async def queue_reference_frame(self, *args, **kwargs):
             self.layout_calls += 1

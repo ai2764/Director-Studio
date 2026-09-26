@@ -165,6 +165,8 @@ def _same_storyboard_definition(left: Shot, right: Shot) -> bool:
     return (
         all(getattr(left, field) == getattr(right, field) for field in authored_fields)
         and picture_ref_signature(left.refs) == picture_ref_signature(right.refs)
+        and {(r.role, r.asset_id, r.file_key, r.picture_index): r.notes for r in left.refs}
+        == {(r.role, r.asset_id, r.file_key, r.picture_index): r.notes for r in right.refs}
         and voice_ref_signature(left.voice_refs) == voice_ref_signature(right.voice_refs)
         and left.music_segment == right.music_segment
     )
@@ -473,6 +475,16 @@ class DirectorService:
             exclude={"shot_id"},
             exclude_unset=True,
         )
+        if authored_updates.get("dialogue_language_updates") is not None:
+            from ...core.projects.dialogue import DialogueLine, verify_dialogue_sources
+            lines = shot.dialogue_lines
+            if lines is None:
+                cached = (shot.meta.get("prompt_dialogue_contract") or {}).get("lines", [])
+                lines = [DialogueLine.model_validate(item) for item in cached]
+            if not lines:
+                raise ValueError("Language-only edit needs current attributed dialogue; resolve source lines first")
+            verify_dialogue_sources(project, shot, lines)
+            shot = shot.model_copy(update={"dialogue_lines": lines})
         if "duration_s" in authored_updates:
             from .brief import validate_shot_duration
             validate_shot_duration(authored_updates["duration_s"])
@@ -553,6 +565,7 @@ class DirectorService:
         index = _asset_index(project_id)
         replacements: dict[str, Shot] = {}
         for update in validated:
+            original = by_id[update.shot_id]
             refs: list[ShotRef] = []
             for match in update.refs:
                 role = role_to_ref_role(match.role)
@@ -567,16 +580,17 @@ class DirectorService:
                         f"{match.asset_id!r}"
                     )
                 file_key = match.file_key or _default_file_key(role, asset)
+                old_ref = next((ref for ref in original.refs
+                    if (ref.role, ref.asset_id, ref.file_key) == (role, asset.id, file_key)), None)
                 refs.append(
                     ShotRef(
                         role=role,
                         asset_id=asset.id,
                         picture_index=int(match.picture_index or 0),
                         file_key=file_key,
-                        notes="agent-ref-patch",
+                        notes=match.notes if "notes" in match.model_fields_set else (old_ref.notes if old_ref else ""),
                     )
                 )
-            original = by_id[update.shot_id]
             previous_refs = sorted(original.refs, key=lambda item: item.picture_index)
             current_refs = sorted(refs, key=lambda item: item.picture_index)
 
@@ -620,8 +634,11 @@ class DirectorService:
                 and previous_by_identity[ref_identity(ref)].picture_index
                 != ref.picture_index
             ]
+            notes_changed = [ref_payload(ref) for ref in current_refs
+                if ref_identity(ref) in previous_by_identity
+                and previous_by_identity[ref_identity(ref)].notes != ref.notes]
             meta = dict(original.meta or {})
-            if added or removed or reordered:
+            if added or removed or reordered or notes_changed:
                 meta["prompt_picture_signature"] = ""
                 meta["prompt_layout_signature"] = ""
                 meta["material_review_pending"] = True
@@ -630,6 +647,8 @@ class DirectorService:
                     "removed": removed,
                     "reordered": reordered,
                 }
+                if notes_changed:
+                    meta["material_changes"]["notes_changed"] = notes_changed
             replacements[update.shot_id] = original.model_copy(
                 update={"refs": refs, "meta": meta}
             )
@@ -734,6 +753,11 @@ class DirectorService:
         )
         return persisted
 
+    async def preview_storyboard(self, project_id, drafts, expected_script_hash, **kwargs):
+        """Run the same candidate checks as publication, without authored writes."""
+        return await self.save_storyboard(project_id, drafts, expected_script_hash,
+                                         _preview_only=True, **kwargs)
+
     async def save_storyboard(
         self,
         project_id: str,
@@ -742,6 +766,7 @@ class DirectorService:
         *,
         user_feedback: str = "",
         requested_minimum_duration_s: float = 0.0,
+        _preview_only: bool = False,
     ) -> list[Shot]:
         """Validate and persist an ordered Agent-authored storyboard transactionally."""
         project = load_project(project_id)
@@ -772,6 +797,17 @@ class DirectorService:
 
         existing_shots = list_shots(project_id)
         existing_by_id = {shot.id: shot for shot in existing_shots}
+        project_snapshot = project.model_dump(mode="json", exclude={"updated_at"})
+        preserve_dialogue_ids = {draft.shot_id for draft in validated
+            if draft.shot_id in existing_by_id and not
+            {"dialogue", "dialogue_lines"}.intersection(draft.model_fields_set)}
+        # Omission means preserve, not delete. Explicit [] remains an authored deletion.
+        validated = [draft.model_copy(update={
+            "dialogue": existing_by_id[draft.shot_id].dialogue,
+            "dialogue_lines": existing_by_id[draft.shot_id].dialogue_lines,
+        }) if draft.shot_id in existing_by_id and not
+            {"dialogue", "dialogue_lines"}.intersection(draft.model_fields_set) else draft
+            for draft in validated]
         requested_existing_ids = [
             draft.shot_id for draft in validated if draft.shot_id
         ]
@@ -788,7 +824,6 @@ class DirectorService:
             )
 
         from .brief import minimum_duration as authored_minimum, directing_requests, remember_directing_request
-        remember_directing_request(project_id, user_feedback)
         minimum_duration = max(float(requested_minimum_duration_s or 0.0),
                                authored_minimum(project, user_feedback) if project.mode != ProjectMode.mv else 0.0)
         total_duration = sum(draft.duration_s for draft in validated)
@@ -809,7 +844,19 @@ class DirectorService:
         )
         shots: list[Shot] = []
         retained_existing_ids: set[str] = set()
-        for draft in validated:
+        for position, draft in enumerate(validated):
+            existing = existing_by_id.get(draft.shot_id or "")
+            if existing is not None:
+                matches = []
+                for match in draft.asset_matches:
+                    role = role_to_ref_role(match.role)
+                    key = match.file_key or _default_file_key(role, index.get(match.asset_id))
+                    old_ref = next((r for r in existing.refs
+                        if (r.role, r.asset_id, r.file_key) == (role, match.asset_id, key)), None)
+                    matches.append(match.model_copy(update={"notes": old_ref.notes})
+                        if old_ref is not None and "notes" not in match.model_fields_set else match)
+                draft = draft.model_copy(update={"asset_matches": matches})
+                validated[position] = draft
             candidate = _shot_from_draft(
                 project_id,
                 draft,
@@ -817,7 +864,9 @@ class DirectorService:
                 index=index,
                 script_text=project.script_text or "",
             )
-            existing = existing_by_id.get(draft.shot_id or "")
+            if draft.shot_id in preserve_dialogue_ids:
+                # A round-trip of omitted dialogue is not a new author approval.
+                candidate = candidate.model_copy(update={"dialogue_lines": existing.dialogue_lines})
             if existing is None:
                 # Compatibility for an older Agent/client that omitted shot_id:
                 # an exact, unused storyboard definition is still the same Shot.
@@ -849,7 +898,7 @@ class DirectorService:
         )
         validation_user = prompt_text.STORYBOARD_VALIDATION_USER_TEMPLATE.format(
             script_text=project.script_text,
-            user_feedback="\n\n".join(dict.fromkeys([*directing_requests(project), user_feedback])),
+            user_feedback="\n\n".join([*directing_requests(project), user_feedback]),
             requested_minimum_duration_s=minimum_duration,
             candidate_json=candidate_json,
         )
@@ -891,8 +940,17 @@ class DirectorService:
         if not validation.valid:
             raise StoryboardValidationError(validation.issues)
 
-        replace_project_shots(project_id, shots)
-        _claim_storyboard_assets(project_id, shots, index=index)
+        from ...core.managed_runs.store import _project_lock
+        with _project_lock(project_id):
+            current = load_project(project_id)
+            if (current is None or current.model_dump(mode="json", exclude={"updated_at"}) != project_snapshot
+                    or list_shots(project_id) != existing_shots):
+                raise ValueError("Project or storyboard changed during candidate validation; refresh before saving")
+            if _preview_only:
+                return shots
+            replace_project_shots(project_id, shots)
+            _claim_storyboard_assets(project_id, shots, index=index)
+            remember_directing_request(project_id, user_feedback)
         persisted = list_shots(project_id)
         refreshed = load_project(project_id) or project
         save_agent_context(
@@ -1910,6 +1968,8 @@ class DirectorService:
         model = str(getattr(self.plan_provider, "model", ""))
 
         def check_current():
+            from .prompt_retry import assert_prompt_retry_inputs_current
+            assert_prompt_retry_inputs_current()
             current = load_shot(project.id, shot.id)
             current_project = load_project(project.id)
             if (current is None or current.model_dump(mode="json") != original_shot
@@ -1924,7 +1984,10 @@ class DirectorService:
         check_current()
         was_pending = bool((shot.meta or {}).get("material_review_pending"))
         meta = {**shot.meta, "material_review_pending": True}
-        if revision_request.strip():
+        from .prompt_retry import prompt_only_retry_active
+        if prompt_only_retry_active():
+            pass  # The failed operation already recorded its exact revision history.
+        elif revision_request.strip():
             history = list(meta.get("prompt_revision_requests", []))
             if not history or history[-1] != revision_request:
                 history.append(revision_request)
@@ -1965,17 +2028,39 @@ class DirectorService:
         from .reference_facts import certify_reference_prompt
         candidate.meta["prompt_reference_contract"] = certify_reference_prompt(project, candidate)
         from ...core.projects.store import save_shot_if_current
+        from .prompt_retry import assert_prompt_only_candidate
+        assert_prompt_only_candidate(candidate)
         save_shot_if_current(candidate, check_current=check_current)
         save_agent_context(project.id, _build_context(project, list_shots(project.id), phase="awaiting_h3"))
         return candidate
 
     async def write_prompts_after_layout(self, shot_id: str, *, revision_request: str = "") -> Shot:
+        from .prompt_retry import record_prompt_failure, complete_prompt_retry
+        try:
+            saved = await self._write_prompts_after_layout_impl(shot_id, revision_request=revision_request)
+        except Exception as exc:
+            try:
+                shot = _find_shot(shot_id)
+                if shot is not None:
+                    record_prompt_failure(shot, revision_request, exc)
+            except Exception:
+                logger.exception("Could not record prompt retry for %s", shot_id)
+            raise
+        try:
+            complete_prompt_retry(saved)
+        except Exception:
+            logger.exception("Could not finalize prompt retry for %s", shot_id)
+        return saved
+
+    async def _write_prompts_after_layout_impl(self, shot_id: str, *, revision_request: str = "") -> Shot:
         """Wake LLM, reload context from disk, fill PromptSections for the shot."""
         shot = _find_shot(shot_id)
         if shot is None:
             raise ValueError(f"shot not found: {shot_id}")
         original_shot = shot.model_dump(mode="json")
         shot = sync_selected_layout_refs(shot)
+        from .prompt_retry import assert_prompt_only_candidate
+        assert_prompt_only_candidate(shot)
         project = load_project(shot.project_id)
         if project is None:
             raise ValueError(f"project not found: {shot.project_id}")
@@ -1995,6 +2080,8 @@ class DirectorService:
         needs_handoff_review = False
 
         def check_current():
+            from .prompt_retry import assert_prompt_retry_inputs_current
+            assert_prompt_retry_inputs_current()
             current = load_shot(shot.project_id, shot.id)
             current_project = load_project(shot.project_id)
             if (current is None or current.model_dump(mode="json") != original_shot
@@ -2109,6 +2196,7 @@ class DirectorService:
                     "role": ref.role.value,
                     "asset_id": ref.asset_id,
                     "asset_name": asset.name if asset else "",
+                    "reference_notes": ref.notes,
                     "file_key": ref.file_key or "",
                     "picture_index": ref.picture_index,
                     "reference_evidence": next((item for item in review["references"]
@@ -2201,7 +2289,7 @@ class DirectorService:
             )
             from .dialogue_preflight import (prepare_dialogue, parse_dialogue_draft,
                 WRITER_CONTRACT, prompt_dialogue_record, dialogue_contract_current)
-            from ...core.h3.dialogue_binding import annotate_speakers
+            from ...core.h3.dialogue_binding import compile_dialogue_draft
             dialogue_lines = await prepare_dialogue(project, shot, self.plan_provider)
             check_current()
             user += "\nCurrent directing requirements:\n" + json.dumps(directing_requests(project), ensure_ascii=False)
@@ -2209,6 +2297,9 @@ class DirectorService:
                 user += "\nSource dialogue lines:\n" + json.dumps([line.model_dump(mode="json") for line in dialogue_lines], ensure_ascii=False)
                 user += "\nExisting prompt, if present: preserve valid creative choices while repairing attribution or applying the current requested revision:\n" + shot.prompt_sections.model_dump_json()
             writer_instructions = prompt_text.H3_PROMPT_INSTRUCTIONS + REFERENCE_WRITER_CONTRACT + (WRITER_CONTRACT if dialogue_lines else "")
+            from .prompt_retry import prompt_only_retry_active, PROMPT_ONLY_INSTRUCTIONS
+            if prompt_only_retry_active():
+                writer_instructions += PROMPT_ONLY_INSTRUCTIONS
             dialogue_draft = None
             preserve_prompt = bool(decision and not decision["rewrite_prompt"]
                                    and decision["brief"] is None and not needs_handoff_review
@@ -2222,7 +2313,7 @@ class DirectorService:
                 except ValueError:
                     preserve_prompt = False
             check_current()
-            from .prompt_repair import repair_key, load_repair, save_repair, clear_repair, merge_repair, repair_request
+            from .prompt_repair import repair_key, load_repair, save_repair, clear_repair, merge_repair, repair_request, require_repair_progress
             draft_key = repair_key(project, shot, review_signature, revision_request,
                                    str(getattr(self.plan_provider, "model", "")),
                                    reference_evidence=(review or {}).get("references", []))
@@ -2249,11 +2340,11 @@ class DirectorService:
                 nonlocal dialogue_draft
                 dialogue_draft = parse_dialogue_draft(value) if dialogue_lines else None
                 parsed = dialogue_draft.prompt_sections if dialogue_draft else PromptSections(**parse_prompt_sections_json(value))
-                parsed = _normalize_unambiguous_dialogue_language_tag(parsed)
                 parsed = _apply_source_audio_contract(parsed, shot)
                 if dialogue_draft:
                     dialogue_draft = dialogue_draft.model_copy(update={"prompt_sections": parsed})
-                    parsed = annotate_speakers(dialogue_draft, dialogue_lines)
+                    dialogue_draft = compile_dialogue_draft(dialogue_draft, dialogue_lines)
+                    parsed = dialogue_draft.prompt_sections
                 ordered_text = parsed.as_ordered_text()
                 validate_h3_prompt(ordered_text, shot.dialogue,
                                    audio_count=effective_audio_count,
@@ -2274,7 +2365,9 @@ class DirectorService:
                 prompt_sections = parse_and_validate(raw)
             except Exception as first_err:
                 check_current()
-                repair = repair_request(user, {"error": str(first_err), "rejected_candidate": raw})
+                require_repair_progress(previous_repair, raw, first_err)
+                repair = repair_request(user, {"error": str(first_err), "rejected_candidate": raw,
+                    "issues": [issue.model_dump(mode="json") for issue in getattr(first_err, "issues", [])]})
                 raw2 = None
                 try:
                     raw2 = await self.plan_provider.complete(
@@ -2291,6 +2384,7 @@ class DirectorService:
                         {"stage": "initial", "raw": raw, "error": str(first_err)},
                         {"stage": "repair", "raw": raw2, "error": str(second_err)},
                     ])
+                    require_repair_progress({"rejected_candidate": raw, "error": str(first_err)}, raw2, second_err)
                     raise
 
             check_current()
@@ -2338,6 +2432,8 @@ class DirectorService:
         )
         from ...core.projects.store import save_shot_if_current
         shot.meta["prompt_reference_contract"] = certify_reference_prompt(project, shot)
+        from .prompt_retry import assert_prompt_only_candidate
+        assert_prompt_only_candidate(shot)
         save_shot_if_current(shot, check_current=check_current)
 
         all_shots = list_shots(shot.project_id)

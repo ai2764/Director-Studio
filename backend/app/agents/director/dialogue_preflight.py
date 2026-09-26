@@ -6,7 +6,7 @@ import json
 from ...core.projects.models import ProjectMode, PromptSections
 from ...core.projects.dialogue import (DialogueLine, DialogueContractError, DialogueIssue,
     dialogue_contract_signature, verify_dialogue_sources, digest)
-from ...core.h3.dialogue_binding import (DialoguePromptDraft, annotate_speakers,
+from ...core.h3.dialogue_binding import (DialoguePromptDraft,
     validate_dialogue_uses, speech_blocks)
 from .brief import directing_requests
 from .dialogue_grounding import ground_dialogue
@@ -16,10 +16,16 @@ from .planner import _extract_json_payload, parse_prompt_sections_json
 WRITER_CONTRACT = """
 Director internal response contract (the final H3 prompt still has exactly six sections):
 Return {"prompt_sections": {the six nonempty section strings}, "dialogue_uses": [...]}.
-Each dialogue_use has line_ids:[source line IDs], speaker_id:source narrative ID,
-block_indexes:[zero-based <d> occurrences in detailed_description]. Cover every line/block
-once, in order. Same-speaker lines may share a block, and a line may span blocks across cuts.
-Different speakers need separate blocks. Keep prose, pacing, camera and acting choices free;
+Place {{speech:line_id}} in detailed_description where each source line is spoken.
+The backend emits <d>[Language] exact source words</d> and attribution metadata; do not
+write those blocks yourself. You may omit dialogue_uses or return an empty list for these
+references. Cover every supplied line ID once in source order, including distinct IDs for
+repeated words. To split one line across cuts, use {{speech:line_id:start:end}} with zero-based
+Unicode character offsets and an exclusive end. Those spans must be contiguous and cover
+the entire source text once in order. Different speakers get their own references.
+Existing final H3 drafts may retain valid <d> blocks with explicit dialogue_uses entries:
+line_ids:[source line IDs], speaker_id:source narrative ID, block_indexes:[zero-based <d>
+occurrences]. Never mix final blocks and speech references. Keep prose, pacing, camera and acting choices free;
 make prose consistent with attribution. Do not rewrite source words or reassign speakers.
 Respect the current directing requirements, including each speaker's language/accent, without
 changing dialogue to simulate accent. A missing Voice asset does not reassign dialogue.
@@ -52,18 +58,22 @@ def parse_dialogue_draft(raw: str) -> DialoguePromptDraft:
     if isinstance(payload, dict) and "prompt_sections" not in payload:
         # Report malformed section data before the missing binding envelope.
         parse_prompt_sections_json(raw)
-    if not isinstance(payload, dict) or "dialogue_uses" not in payload:
+    section_payload = payload.get("prompt_sections") if isinstance(payload, dict) else None
+    detail = section_payload.get("detailed_description", "") if isinstance(section_payload, dict) else ""
+    detail = detail if isinstance(detail, str) else ""
+    if not isinstance(payload, dict) or ("dialogue_uses" not in payload and "{{speech" not in detail):
         raise DialogueContractError([DialogueIssue(code="dialogue_bindings_missing",
-            action="Return prompt_sections plus dialogue_uses using the supplied source line IDs.")])
+            expected="prompt_sections with {{speech:line_id}} references or explicit dialogue_uses",
+            actual=str(payload), action="Place supplied source IDs in speech references, or bind every existing speech block.")])
     sections = PromptSections(**parse_prompt_sections_json(json.dumps(payload.get("prompt_sections"))))
-    return DialoguePromptDraft(prompt_sections=sections, dialogue_uses=payload["dialogue_uses"],
+    return DialoguePromptDraft(prompt_sections=sections, dialogue_uses=payload.get("dialogue_uses", []),
         dialogue_conflicts=payload.get("dialogue_conflicts", []))
 
 
 def prompt_dialogue_record(project, shot, lines, draft):
     if lines is None:
         return None
-    uses = [use.model_dump(mode="json") for use in draft.dialogue_uses] if draft else []
+    uses = [use.model_dump(mode="json", exclude_none=True) for use in draft.dialogue_uses] if draft else []
     source = dialogue_contract_signature(project, shot, lines, directing_requests(project))
     signature = digest([source, shot.prompt_sections.model_dump(mode="json"), uses])
     return {"lines": [x.model_dump(mode="json") for x in lines], "uses": uses, "signature": signature,

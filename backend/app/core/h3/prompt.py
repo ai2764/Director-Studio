@@ -59,9 +59,26 @@ def compose_h3_prompt(sections: PromptSections) -> str:
 
 def _dialogue_text(text: str) -> str:
     """Ignore formatting whitespace, not words or punctuation."""
-    normalized = " ".join(text.split())
-    # Joining continued Chinese <d> blocks must not introduce a word separator.
-    return re.sub(r"(?<=[\u3400-\u9fff]) (?=[\u3400-\u9fff])", "", normalized)
+    return " ".join(text.split())
+
+
+def dialogue_timeline_matches(spoken: list[str], expected: str) -> bool:
+    """Match all source characters, allowing a cut anywhere in the speech.
+
+    Only a block boundary may consume source whitespace without spoken text.
+    Internal block words, punctuation and spaces must still match exactly.
+    This applies to raw final H3 as well as compiled source references.
+    """
+    source = _dialogue_text(expected)
+    cursor = 0
+    for words in spoken:
+        words = _dialogue_text(words)
+        if cursor < len(source) and source[cursor] == " ":
+            cursor += 1
+        if not words or not source.startswith(words, cursor):
+            return False
+        cursor += len(words)
+    return cursor == len(source)
 
 
 def _spoken_dialogue_text(text: str) -> str:
@@ -150,7 +167,7 @@ def _validate_dialogue(bodies: dict[str, str], dialogue: list[str]) -> None:
     # Compare the ordered spoken timeline, allowing scripted repetitions,
     # multiple lines in one block, and continuation across shot cuts. When no
     # dialogue is specified, source-audio/lyric cues retain their existing role.
-    if expected and _dialogue_text(" ".join(spoken)) != _dialogue_text(" ".join(expected)):
+    if expected and not dialogue_timeline_matches(spoken, " ".join(expected)):
         raise ValueError(
             "detailed_description <d> dialogue does not match shot.dialogue in order "
             "(missing, repeated, reordered, or changed words). "

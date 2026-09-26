@@ -11,6 +11,30 @@ from ...core.projects.models import PromptSections
 from ...core.managed_runs.context import managed_turn_scope
 from .planner import _extract_json_payload
 from .brief import directing_requests
+from ...core.prompt_errors import PromptFailureError, prompt_failure_kind
+
+
+class PromptRepairNoProgress(PromptFailureError):
+    def __init__(self, message, original=None):
+        kind = prompt_failure_kind(original) if original else "candidate"
+        super().__init__(kind, "Prompt repair made no progress: " + message)
+        self.issues = getattr(original, "issues", [])
+
+
+def require_repair_progress(previous, raw, error):
+    """Stop identical candidate + identical failure, independent of creative wording."""
+    if not previous or not raw:
+        return
+    def candidate(value):
+        try:
+            return _extract_json_payload(value)
+        except (ValueError, TypeError):
+            return value
+    if (candidate(previous.get("rejected_candidate")) == candidate(raw)
+            and previous.get("error") == str(error)):
+        raise PromptRepairNoProgress(
+            "The same candidate failed the same validation. Review its source or provide a new direction. " + str(error), error
+        ) from error
 
 
 def repair_key(project, shot, signature, revision_request, model, *, reference_evidence=None):
@@ -82,8 +106,13 @@ def merge_repair(raw, previous, *, envelope=False):
 
 
 def repair_request(user, repair):
+    issues = repair.get("issues") or []
+    issue_details = ("Structured validation issues:\n"
+                     + json.dumps(issues, ensure_ascii=False) + "\n") if issues else ""
     return (f"Original shot/context request:\n{user}\n\n"
             f"Previous prompt JSON failed: {repair['error']}\n"
+            f"{issue_details}"
             f"Rejected candidate:\n{repair['rejected_candidate']}\n"
             "Return corrected fields in the same JSON envelope as the candidate. If detailed_description changes, return fresh dialogue_uses when attribution is required. "
-            "Keep all valid content, exact dialogue and reference bindings. The merged six sections will be revalidated.")
+            "Repair only the listed defects. Keep all valid content, creative prose, exact dialogue and reference bindings. "
+            "The merged six sections will be revalidated.")

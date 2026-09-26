@@ -17,7 +17,7 @@ from pydantic import (
 )
 
 from ...core.projects.models import RefRole, ShotMusicSegment
-from ...core.projects.dialogue import DialogueLine
+from ...core.projects.dialogue import DialogueLanguageUpdate, DialogueLine, validate_authored_dialogue
 
 
 @runtime_checkable
@@ -48,6 +48,11 @@ class AssetMatchDraft(BaseModel):
     asset_id: str
     file_key: str | None = None
     picture_index: int | None = Field(default=None, ge=1, le=9)
+    notes: str = Field(default="", description=(
+        "Free-text instruction for what this reference contributes and any limits on its use. "
+        "Keep the user's intended purpose; omit to preserve existing notes, or use an empty "
+        "string to clear them. Source user messages remain in directing-request evidence."
+    ))
 
     @field_validator("role")
     @classmethod
@@ -158,6 +163,7 @@ class ShotDraft(BaseModel):
 
     @model_validator(mode="after")
     def _validate_picture_order(self) -> "ShotDraft":
+        validate_authored_dialogue(self.dialogue, self.dialogue_lines)
         matches = list(self.asset_matches)
         if len(matches) > 9:
             raise ValueError("H3 supports at most 9 asset matches")
@@ -236,6 +242,7 @@ class ShotRevisionSubmission(BaseModel):
     duration_s: float | None = None
     dialogue: list[str] | None = None
     dialogue_lines: list[DialogueLine] | None = None
+    dialogue_language_updates: list[DialogueLanguageUpdate] | None = Field(default=None, min_length=1)
     music_segment: ShotMusicSegment | None = None
 
     @field_validator(
@@ -269,10 +276,24 @@ class ShotRevisionSubmission(BaseModel):
             raise ValueError("dialogue must be a list")
         return list(value)
 
+    @field_validator("dialogue_language_updates")
+    @classmethod
+    def _require_language_updates(cls, value: list[DialogueLanguageUpdate] | None):
+        if value is None:
+            raise ValueError("dialogue_language_updates must be a nonempty list")
+        return value
+
     @model_validator(mode="after")
     def _require_authored_update(self) -> "ShotRevisionSubmission":
         if self.model_fields_set <= {"shot_id"}:
             raise ValueError("at least one authored shot field must be supplied")
+        if self.dialogue_language_updates is not None and {"dialogue", "dialogue_lines"} & self.model_fields_set:
+            raise ValueError("dialogue_language_updates cannot be combined with dialogue or dialogue_lines")
+        if self.dialogue_language_updates is not None:
+            ids = [item.line_id for item in self.dialogue_language_updates]
+            if len(set(ids)) != len(ids):
+                raise ValueError("dialogue_language_updates contains duplicate line_id values")
+        validate_authored_dialogue(self.dialogue, self.dialogue_lines)
         return self
 
 

@@ -43,6 +43,8 @@ class BackendTurn:
 
     def __init__(self, project_id, message, svc, chat_fn, *, images=None, captions=None, on_progress=None, compact_only=False, history=None):
         self.project_id, self.message = project_id, message
+        from .turn_identity import current_user_message_id
+        self.user_message_id = current_user_message_id(project_id, message)
         self.compact_only = compact_only
         self.seed_history = list(history or [])
         self.svc, self.chat_fn, self.on_progress = svc, chat_fn, on_progress
@@ -348,6 +350,7 @@ class BackendTurn:
             project_id=self.project_id, tools=[requested], svc=self.svc,
             actions=self.actions, on_progress=self.on_progress, result_payloads=payloads,
             user_feedback=self.message, requested_minimum_duration_s=_requested_minimum_duration_s(self.message),
+            user_message_id=self.user_message_id,
             previous_assistant=(
                 str(self.seed_history[-1].get("content") or "")
                 if self.seed_history and self.seed_history[-1].get("role") == "assistant"
@@ -469,15 +472,9 @@ async def handle_harness_chat(*, project_id, message, svc, chat_fn=None, history
 
 
 def _needs_fresh_storyboard(project, shots) -> bool:
-    from .context_io import load_agent_context
-    from .service import _script_hash
-
-    script = (project.script_text or "").strip()
-    if not script:
-        return False
-    planned = load_agent_context(project.id)
-    planned_hash = (planned.script_hash if planned else "") or ""
-    return not shots or planned_hash != _script_hash(script)
+    # Existing shot IDs remain usable after a script edit. Their derived data
+    # must pass current source checks; replacing all shots is not a prerequisite.
+    return bool((project.script_text or "").strip()) and not shots
 
 
 def harness_session_id(project_id: str) -> str:

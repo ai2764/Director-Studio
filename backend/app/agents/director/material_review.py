@@ -13,6 +13,7 @@ from ...config import settings
 
 from ...core.library.images import resolve_asset_image
 from ...core.library.store import load_asset
+from ...core.prompt_errors import PromptFailureError
 from ...core.projects.models import Project, Shot
 from ...core.projects.layouts import selected_layout_prompt_context
 from .asset_catalog import LIBRARY_KINDS, _script_hash
@@ -270,7 +271,7 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
                 if recommendation.resolution != "pending"
             ][:20],
         }
-    raw = await provider.complete(
+    system = (
         "Make a reference review decision for exactly one shot after ALL its current Pictures were "
         "visually inspected. Return only JSON with required fields brief (replacement Creative brief "
         "or null to keep it), rewrite_prompt (boolean), reason (concise), blocking_question (one "
@@ -293,8 +294,12 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
         "only about a conflict that remains in those requirements, not an already resolved label mismatch. "
         "confirmed_project_review contains durable choices recorded for the current script. Treat those "
         "choices as authoritative and do not reopen them unless a newly changed Picture creates a new, "
-        "concrete conflict." + REFERENCE_WRITER_CONTRACT,
-        json.dumps({"script": project.script_text, "shot": {
+        "concrete conflict." + REFERENCE_WRITER_CONTRACT
+    )
+    from .prompt_retry import prompt_only_retry_active, PROMPT_ONLY_INSTRUCTIONS
+    if prompt_only_retry_active():
+        system += PROMPT_ONLY_INSTRUCTIONS
+    request = {"script": project.script_text, "shot": {
             "title": shot.title, "brief": shot.script_beat, "duration_s": shot.duration_s,
             "dialogue": shot.dialogue, "shot_type": shot.shot_type,
             "camera_angle": shot.camera_angle, "camera_motion": shot.camera_motion,
@@ -302,10 +307,23 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
             "prompt_sections": shot.prompt_sections.model_dump(),
             "material_changes": (shot.meta or {}).get("material_changes", {}),
             }, "references": reviewed, "tail_frames": tail_frames,
-                "confirmed_project_review": confirmed_project_review}, ensure_ascii=False), guides=(),
-    )
-    decision = MaterialDecision.model_validate(_extract_json_payload(raw))
-    check_current()
+                "confirmed_project_review": confirmed_project_review}
+    for attempt in range(2):
+        raw = await provider.complete(system, json.dumps(request, ensure_ascii=False), guides=())
+        check_current()
+        try:
+            decision = MaterialDecision.model_validate(_extract_json_payload(raw))
+        except ValueError as exc:
+            if attempt:
+                raise PromptFailureError("candidate", f"material_decision_structure: {exc}") from exc
+            request["correction"] = {
+                "instruction": "Repair the decision structure once. Return only the allowed decision fields; "
+                               "preserve the evidence and user intent. Do not return prompt_sections.",
+                "validation_error": str(exc), "previous_response": raw,
+                "schema": MaterialDecision.model_json_schema(),
+            }
+        else:
+            break
     if decision.blocking_question:
         raise ValueError(f"Material review needs your decision: {decision.blocking_question}")
     if tail_frames and not decision.tail_frame_handoff:

@@ -10,13 +10,13 @@ from ...core.h3.prompt import validate_h3_prompt
 from ...core.h3.errors import PromptFailureError
 from ...core.projects.layouts import selected_layout_prompt_context
 from ...core.projects.models import PromptSections
-from ...core.h3.dialogue_binding import DialogueUse, DialogueConflict, DialoguePromptDraft, annotate_speakers
+from ...core.h3.dialogue_binding import DialogueUse, DialogueConflict, DialoguePromptDraft, compile_dialogue_draft
 from .dialogue_preflight import prepare_dialogue, prompt_dialogue_record, WRITER_CONTRACT
 from .reference_facts import reference_context_signature, reference_intent_signature, REFERENCE_WRITER_CONTRACT
 from .material_review import observe_references_cached, tail_frame_review_signature
 from .planner import _extract_json_payload
 from .prompts import H3_PROMPT_INSTRUCTIONS
-from .prompt_repair import repair_key, load_repair, save_repair, clear_repair, merge_repair
+from .prompt_repair import repair_key, load_repair, save_repair, clear_repair, merge_repair, require_repair_progress
 
 
 class ShotPatch(BaseModel):
@@ -203,10 +203,13 @@ async def draft_and_review(provider, project, shot, records, images, signature,
     check_current()
     request["dialogue_lines"] = [line.model_dump(mode="json") for line in dialogue_lines] if dialogue_lines else []
     draft_instructions = DRAFT_INSTRUCTIONS + REFERENCE_WRITER_CONTRACT + (WRITER_CONTRACT + "\nRetain the existing tail envelope's shot_patch, reason and blocking_question fields too." if dialogue_lines else "")
+    from .prompt_retry import prompt_only_retry_active, prompt_only_repair, PROMPT_ONLY_INSTRUCTIONS
+    if prompt_only_retry_active():
+        draft_instructions += PROMPT_ONLY_INSTRUCTIONS
     attempts = []
     draft_key = repair_key(project, shot, signature, shot.meta.get("prompt_revision_request", ""),
                            str(getattr(provider, "model", "")), reference_evidence=references)
-    repair = load_repair(shot, draft_key)
+    repair = prompt_only_repair(load_repair(shot, draft_key))
     for attempt in range(2):
         raw = None
         audit_raw = None
@@ -230,17 +233,20 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             )
             sections = PromptSections(**parse_prompt_sections_json(
                 json.dumps(candidate.prompt_sections)))
-            sections = _normalize_unambiguous_dialogue_language_tag(sections)
+            if not dialogue_lines:
+                sections = _normalize_unambiguous_dialogue_language_tag(sections)
             sections = _apply_source_audio_contract(sections, changed)
             changed = changed.model_copy(update={"prompt_sections": sections})
             contract_error = None
+            contract_issues = []
             dialogue_draft = None
             try:
                 if dialogue_lines:
                     dialogue_draft = DialoguePromptDraft(prompt_sections=sections,
                         dialogue_uses=candidate.dialogue_uses or [],
                         dialogue_conflicts=candidate.dialogue_conflicts)
-                    sections = annotate_speakers(dialogue_draft, dialogue_lines)
+                    dialogue_draft = compile_dialogue_draft(dialogue_draft, dialogue_lines)
+                    sections = dialogue_draft.prompt_sections
                     changed = changed.model_copy(update={"prompt_sections": sections})
                 validate_h3_prompt(sections.as_ordered_text(), changed.dialogue,
                     audio_count=(
@@ -254,6 +260,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                 # A readable draft can be reviewed even with a missing tag. Give the
                 # one repair BOTH faults, rather than exhausting it on the first gate.
                 contract_error = str(exc)
+                contract_issues = getattr(exc, "issues", [])
             tail_indices = {item["picture_index"] for item in layouts if item["origin_kind"] == "clip_tail_frame"}
             audit_request = {
                 "revision_request": request["revision_request"],
@@ -283,8 +290,10 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             if contract_error or not verdict.valid:
                 kind = ("contract" if contract_error else
                         "tail_incompatible" if verdict.failure_kind == "reference_conflict" else "candidate")
-                raise PromptFailureError(kind, "Prompt continuity review: " + "; ".join(
+                error = PromptFailureError(kind, "Prompt continuity review: " + "; ".join(
                     ([contract_error] if contract_error else []) + verdict.issues))
+                error.issues = contract_issues
+                raise error
             review = {
                 "signature": signature,
                 "facts_signature": reference_context_signature(project, records),
@@ -313,8 +322,11 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             if attempt:
                 save_repair(shot, draft_key, raw, exc, audit_raw)
                 save_diagnostics(shot, attempts)
+                require_repair_progress(repair, raw, exc)
                 raise
-            repair = {"rejected_candidate": raw, "review": audit_raw, "error": str(exc)}
+            require_repair_progress(repair, raw, exc)
+            repair = {"rejected_candidate": raw, "review": audit_raw, "error": str(exc),
+                      "issues": [item.model_dump(mode="json") for item in getattr(exc, "issues", [])]}
         except Exception as exc:
             save_diagnostics(shot, [*attempts, {"stage": "transport", "raw": raw,
                                               "review_raw": audit_raw, "error": str(exc)}])

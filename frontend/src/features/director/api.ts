@@ -126,6 +126,12 @@ export interface ChatImage {
   shot_id?: string | null;
 }
 
+export interface PromptRetryRequest {
+  retry_id: string;
+  shot_id: string;
+  source_version: string;
+}
+
 export interface ChatMessage {
   id?: string;
   role: "user" | "assistant";
@@ -136,6 +142,7 @@ export interface ChatMessage {
   thinking?: string;
   /** Pipeline steps: GPU queue, tools, etc. */
   steps?: string[];
+  prompt_retry?: PromptRetryRequest | null;
 }
 
 export async function getDirectorChatHistory(projectId: string): Promise<ChatMessage[]> {
@@ -176,6 +183,7 @@ export interface ChatResponse {
   images?: ChatImage[];
   thinking?: string;
   steps?: string[];
+  prompt_retry?: PromptRetryRequest | null;
 }
 
 export interface ChatCompactionResult {
@@ -255,7 +263,9 @@ export async function chatWithDirectorStream(
   handlers: ChatStreamHandlers = {},
   images: File[] = [],
   signal?: AbortSignal,
+  promptRetry?: PromptRetryRequest,
 ): Promise<ChatResponse> {
+  if (promptRetry && images.length) throw new Error("Prompt retry cannot include new images");
   const serializedHistory = history.map((h) => ({ role: h.role, content: h.content }));
   let path = `/api/projects/${projectId}/chat/stream`;
   let body: BodyInit;
@@ -269,7 +279,7 @@ export async function chatWithDirectorStream(
     body = form;
     headers = { Accept: "text/event-stream" };
   } else {
-    body = JSON.stringify({ message, history: serializedHistory });
+    body = JSON.stringify({ message, history: serializedHistory, ...(promptRetry ? { prompt_retry: promptRetry } : {}) });
     headers = { "Content-Type": "application/json", Accept: "text/event-stream" };
   }
   const res = await fetch(path, { method: "POST", headers, body, signal });

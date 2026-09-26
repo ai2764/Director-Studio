@@ -503,6 +503,12 @@ def sanitize_tools_for_pipeline(
     if not tools:
         return [], notes
 
+    # A changed script invalidates derived evidence, not the authored board.
+    # Per-shot source/reference checks still gate publication. Never inject a
+    # destructive re-plan as a side effect of a local operation on existing shots.
+    if shots:
+        return tools, notes
+
     names = [_tool_name(t) for t in tools if isinstance(t, dict)]
     # Read-only tools must never implicitly replace a board (including before
     # or after an append on a stale board).
@@ -1268,6 +1274,8 @@ async def orchestrate_chat(
         + f"USER:\n{message}\n"
     )
     requested_minimum_duration_s = _requested_minimum_duration_s(message)
+    from .turn_identity import current_user_message_id
+    user_message_id = current_user_message_id(project_id, message)
     storyboard_budget = _StoryboardSubmissionBudget()
     offered_tool_schemas = tool_schemas_for(project)
     chat_guides = _director_chat_guides(
@@ -1487,6 +1495,7 @@ async def orchestrate_chat(
                     on_progress=progress_event,
                     result_payloads=structured_results,
                     user_feedback=message,
+                    user_message_id=user_message_id,
                     requested_minimum_duration_s=requested_minimum_duration_s,
                     storyboard_budget=storyboard_budget,
                     images=attached_images,
@@ -1647,6 +1656,7 @@ async def orchestrate_chat(
             actions=actions,
             on_progress=progress_event,
             user_feedback=message,
+            user_message_id=user_message_id,
             requested_minimum_duration_s=requested_minimum_duration_s,
             storyboard_budget=storyboard_budget,
             images=attached_images,

@@ -242,11 +242,11 @@ async def test_plain_write_repairs_wrong_section_before_saving(saved_shot):
 
 
 @pytest.mark.asyncio
-async def test_plain_write_normalizes_unambiguous_english_dialogue_tag_before_saving(saved_shot):
+async def test_plain_write_repairs_legacy_protocol_using_source_reference(saved_shot):
     malformed = prompt(
         detailed_description='[Shot 1] The watchmaker says <d>English Hello.</d>'
     )
-    provider = Provider([malformed])
+    provider = Provider([malformed, prompt(detailed_description='[Shot 1] The watchmaker says {{speech:l1}}')])
 
     updated = await DirectorService(
         plan_provider=provider,
@@ -256,7 +256,8 @@ async def test_plain_write_normalizes_unambiguous_english_dialogue_tag_before_sa
     assert '<d>[English] Hello.</d>' in updated.prompt_sections.detailed_description
     assert '<d>English' not in updated.prompt_sections.detailed_description
     assert load_shot(saved_shot.project_id, saved_shot.id) == updated
-    assert len(provider.requests) == 1
+    assert len(provider.requests) == 2
+    assert "dialogue_block_invalid" in provider.requests[1]
 
 
 @pytest.mark.asyncio

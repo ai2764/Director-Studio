@@ -753,7 +753,7 @@ async def test_backend_tools_validate_refresh_and_deduplicate(tmp_projects_dir):
     assert load_project(project.id).script_text == "A cat opens a box."
 
 
-def test_stale_storyboard_does_not_offer_tools_the_pipeline_will_reject(
+def test_stale_script_keeps_local_prompt_tools_available(
     tmp_projects_dir,
 ):
     from app.agents.director.harness_runtime import BackendTurn
@@ -774,8 +774,10 @@ def test_stale_storyboard_does_not_offer_tools_the_pipeline_will_reject(
     names = {tool["function"]["name"] for tool in context["tools"]}
 
     assert "save_storyboard" in names
-    assert "write_prompt" not in names
-    assert "queue_ref_frame" not in names
+    assert "write_prompt" in names
+    assert "queue_ref_frame" in names
+    # Staleness is reported, but does not mandate full-board replacement.
+    assert json.loads(context["state"])["recommended_next_step"] == "review_existing_shots"
 
 
 @pytest.mark.asyncio

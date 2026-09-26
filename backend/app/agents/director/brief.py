@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+import uuid
 
 from ...core.projects.models import AgentContext
 from ...core.projects.store import load_project
@@ -35,11 +36,23 @@ def requested_minimum_duration_s(text: str) -> float:
     return int(clock.group(1)) * 60 + int(clock.group(2)) if clock else 0.0
 
 
-def directing_requests(project) -> list[str]:
+def directing_request_sources(project) -> list[dict]:
+    """Original authored requests, ordered by receipt; never current confirmations."""
     context = load_agent_context(project.id)
     record = (context.extra if context else {}).get("directing_brief", {})
     script_hash = hashlib.sha256(project.script_text.encode()).hexdigest()
-    return list(record.get("messages", [])) if record.get("script_hash") == script_hash else []
+    entries = record.get("sources")
+    if entries is None:
+        # Preserve legacy requests and their original script version during migration.
+        entries = [dict(id=f"request-{index}-{hashlib.sha256(text.encode()).hexdigest()[:12]}",
+                        source_message_id=None, text=text, script_hash=record.get("script_hash"))
+                   for index, text in enumerate(record.get("messages", []))]
+    return [{**entry, "kind": "user_directing_request",
+             "script_current": entry.get("script_hash") == script_hash} for entry in entries]
+
+
+def directing_requests(project) -> list[str]:
+    return [source["text"] for source in directing_request_sources(project)]
 
 
 def remember_directing_request(project_id: str, message: str) -> None:
@@ -48,12 +61,21 @@ def remember_directing_request(project_id: str, message: str) -> None:
     project = load_project(project_id)
     if project is None:
         return
-    messages = directing_requests(project)
-    if message in messages:
+    from ...core.projects.chat_history import load_chat_history
+    sources = directing_request_sources(project)
+    source_message = next((item for item in reversed(load_chat_history(project_id))
+                           if item.role == "user" and item.content == message), None)
+    source_message_id = source_message.id if source_message else None
+    if source_message_id and any(source.get("source_message_id") == source_message_id for source in sources):
+        return
+    if not source_message_id and sources and sources[-1]["text"] == message:
         return
     context = load_agent_context(project_id) or AgentContext(project_id=project_id, script_hash="")
-    record = {"script_hash": hashlib.sha256(project.script_text.encode()).hexdigest(),
-              "messages": [*messages, message]}
+    sources.append(dict(id=source_message_id or f"request-{uuid.uuid4().hex}",
+                        source_message_id=source_message_id, text=message,
+                        script_hash=hashlib.sha256(project.script_text.encode()).hexdigest()))
+    record = {"sources": [{key: value for key, value in source.items()
+                            if key not in {"kind", "script_current"}} for source in sources]}
     save_agent_context(project_id, context.model_copy(update={"extra": {**context.extra, "directing_brief": record}}))
 
 
