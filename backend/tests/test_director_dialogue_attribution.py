@@ -187,8 +187,10 @@ def certify_test_shot(project, shot, name="Speaker"):
         {"line_ids": [f"l{i + 1}"], "speaker_id": "char_1", "block_indexes": [i]}
         for i in range(len(shot.dialogue))])
     shot = shot.model_copy(update={"prompt_sections": annotate_speakers(draft, shot.dialogue_lines)})
-    return shot.model_copy(update={"meta": {**shot.meta,
+    shot = shot.model_copy(update={"meta": {**shot.meta,
         "prompt_dialogue_contract": prompt_dialogue_record(project, shot, shot.dialogue_lines, draft)}})
+    from test_reference_facts import certify_reference_test_shot
+    return certify_reference_test_shot(project, shot)
 
 
 class Orchestrator:

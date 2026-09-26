@@ -2343,6 +2343,8 @@ def test_submit_rejects_prompt_picture_tag_without_a_matching_shot_ref(
             non_diegetic_music="No music.",
         ),
     )
+    from test_reference_facts import certify_reference_test_shot
+    shot = certify_reference_test_shot(project, shot)
     save_shot(shot)
     save_project(project.model_copy(update={"shot_ids": [shot.id]}))
 
@@ -2388,6 +2390,8 @@ def test_submit_h3_rejects_locked_source_audio_for_official_providers(
         source_audio_path=str(audio_path),
     )
     shot = shot.model_copy(update={"meta": _fresh_layout_prompt_meta(shot)})
+    from test_reference_facts import certify_reference_test_shot
+    shot = certify_reference_test_shot(project, shot)
     save_shot(shot)
     project.shot_ids = [shot.id]
     save_project(project)

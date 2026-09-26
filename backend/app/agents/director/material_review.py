@@ -18,6 +18,10 @@ from ...core.projects.layouts import selected_layout_prompt_context
 from .asset_catalog import LIBRARY_KINDS, _script_hash
 from .planner import _extract_json_payload, role_to_library_kind
 from .vision import image_bytes_to_b64_jpeg
+from .reference_facts import (VisualFact, ObservationConflict, validate_observation_sources,
+    sanitize_observation, REFERENCE_POLICY_VERSION, sourced_records,
+    reference_context_signature, reference_intent_signature, persist_reference_facts,
+    REFERENCE_WRITER_CONTRACT)
 
 
 class ReferenceObservation(BaseModel):
@@ -25,6 +29,9 @@ class ReferenceObservation(BaseModel):
     readable: StrictBool
     description: str = Field(min_length=1, max_length=2400)
     concerns: list[str] = Field(max_length=8)
+    facts: list[VisualFact] = Field(default_factory=list, max_length=24)
+    conflicts: list[ObservationConflict] = Field(default_factory=list, max_length=8)
+    uncertainties: list[ObservationConflict] = Field(default_factory=list, max_length=16)
 
     @field_validator("concerns")
     @classmethod
@@ -62,7 +69,7 @@ def _parse_reference_observation(raw: str) -> ReferenceObservation:
             continue
         if (
             isinstance(payload, dict)
-            and not ReferenceObservation.model_fields.keys() <= payload.keys()
+            and not {"readable", "description", "concerns"} <= payload.keys()
             and isinstance(payload.get("text"), str)
         ):
             payload = _extract_json_payload(payload["text"])
@@ -125,40 +132,60 @@ async def observe_reference(provider, record: dict, image: str, *, brief: str = 
         "Asset names may be arbitrary labels, not literal descriptions. Flag conflicts or "
         "uncertainty, never invent unseen details. A multi-view sheet may depict one subject. "
         "Return only JSON: readable (boolean), description (concise text), concerns (list of "
-        "short strings). Set readable=false if the image cannot be inspected reliably."
+        "short strings), facts (list), conflicts (list). Each fact has attribute, value, "
+        "visibility (observed/not_visible/uncertain), evidence; use value=null for unseen/uncertain "
+        "attributes. Optional source_id and source_quote must cite supplied sources exactly; "
+        "copy source_id from sources[].id and source_quote verbatim in its original language, "
+        "never a translation or paraphrase. If no exact citation applies, omit both fields. "
+        "never claim user authority for an observation. Do not equate metadata with visible pixels. "
+        "Self-check contradictory labels and conflicts with current sourced requirements. Each conflict "
+        "has attribute, an exact quote from your CURRENT returned description, and reason. "
+        "Report only unresolved mutually incompatible claims. Missing metadata or an asset label "
+        "that omits visible details is not a conflict. If reinspection resolves an earlier mistake, "
+        "return the corrected observation with no conflict for that mistake; do not quote the old response. "
+        "Keep description internally "
+        "consistent; if conflict cannot be resolved, report it rather than choose an unsupported label. "
+        "A crop is not evidence of the hidden garment. Multi-view sheets depict views, not extra people. "
+        "Latest applicable user requests guide intent, not what pixels visibly contain. "
+        "Set readable=false only if the image itself cannot be inspected reliably."
     )
     user = f"{label}\nCurrent brief: {brief}\nReference: " + json.dumps(record, ensure_ascii=False)
-    raw = await inspect(
-        system,
-        user,
-        images=[image], guides=(),
-    )
-    try:
-        observation = _parse_reference_observation(raw)
-    except ValueError:
-        raw = await inspect(
-            system
-            + " The previous response had an invalid structure. Return exactly one JSON object "
-              "with only readable, description, and concerns; do not return an array, message "
-              "envelope, content block, markdown, or commentary.",
-            user,
-            images=[image], guides=(),
-        )
-        observation = _parse_reference_observation(raw)
-    if not observation.readable:
-        raise ValueError("image is not reliably readable")
-    return {**record, **observation.model_dump()}
+    sources = record.get("sources", [])
+    correction = ""
+    for attempt in range(2):
+        raw = await inspect(system + (" Return exactly one JSON object, no message envelope." if attempt else ""),
+                            user + correction, images=[image], guides=())
+        try:
+            observation = _parse_reference_observation(raw)
+            validate_observation_sources(observation, sources)
+        except ValueError as exc:
+            if attempt:
+                raise
+            correction = f"\nRepair the observation structure/source evidence: {exc}\nPrevious response: {raw}"
+            continue
+        if not observation.readable:
+            raise ValueError("image is not reliably readable")
+        if observation.conflicts and not attempt:
+            correction = ("\nReinspect only this image to resolve these specific disputes; preserve valid "
+                          "observations. Do not infer hidden details. Return a corrected full observation.\n"
+                          + observation.model_dump_json())
+            continue
+        return {**record, **sanitize_observation(observation, sources)}
 
 
 async def observe_references_cached(provider, project_id, records, images, check_current):
     """Persist shot-independent visual facts even when subsequent prompt writing fails."""
+    from ...core.projects.store import load_project
+    project = load_project(project_id)
+    if project is not None:
+        records = sourced_records(project, records)
     reviewed = []
     for record, image in zip(records, images, strict=True):
         check_current()
         stable_record = {k: v for k, v in record.items()
                          if k not in {"picture_index", "reference_notes"}}
         identity = {
-            "version": 3, "record": stable_record,
+            "version": 4, "fact_policy": REFERENCE_POLICY_VERSION, "record": stable_record,
             "model": str(getattr(provider, "model", "")),
             "provider": type(provider).__qualname__,
             "endpoint": str(getattr(getattr(provider, "client", None), "base_url", "")),
@@ -168,10 +195,11 @@ async def observe_references_cached(provider, project_id, records, images, check
         observation = None
         try:
             observation = ReferenceObservation.model_validate_json(path.read_text(encoding="utf-8"))
+            validate_observation_sources(observation, record.get("sources", []))
             if not observation.readable:
                 observation = None
         except (OSError, ValueError):
-            pass
+            observation = None
         if observation is None:
             try:
                 result = await observe_reference(provider, record, image)
@@ -188,8 +216,10 @@ async def observe_references_cached(provider, project_id, records, images, check
                 logging.getLogger(__name__).exception("Could not cache visual observation")
             finally:
                 temporary.unlink(missing_ok=True)
-        reviewed.append({**record, **observation.model_dump()})
+        reviewed.append({**record, **observation.model_dump(), "observation_model": {
+            key: identity[key] for key in ("model", "provider", "endpoint", "fact_policy")}})
     check_current()
+    persist_reference_facts(project_id, reviewed, check_current)
     return reviewed
 
 
@@ -220,15 +250,7 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
     inspect = getattr(provider, "complete_with_images", None)
     if not callable(inspect):
         raise ValueError("Material review requires a vision-capable provider; no text-only fallback")
-    reviewed = []
-    for record, image in zip(records, images, strict=True):
-        check_current()
-        label = f"Picture {record['picture_index']}"
-        try:
-            observation = await observe_reference(provider, record, image, brief=shot.script_beat)
-        except Exception as exc:
-            raise ValueError(f"Material review incomplete at {label}; {len(reviewed)}/{len(records)} reviewed: {exc}") from exc
-        reviewed.append(observation)
+    reviewed = await observe_references_cached(provider, project.id, records, images, check_current)
     check_current()
     by_picture = {item["picture_index"]: item for item in reviewed}
     tail_frames = [
@@ -271,7 +293,7 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
         "only about a conflict that remains in those requirements, not an already resolved label mismatch. "
         "confirmed_project_review contains durable choices recorded for the current script. Treat those "
         "choices as authoritative and do not reopen them unless a newly changed Picture creates a new, "
-        "concrete conflict.",
+        "concrete conflict." + REFERENCE_WRITER_CONTRACT,
         json.dumps({"script": project.script_text, "shot": {
             "title": shot.title, "brief": shot.script_beat, "duration_s": shot.duration_s,
             "dialogue": shot.dialogue, "shot_type": shot.shot_type,
@@ -290,6 +312,8 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
         raise ValueError("Material review missing tail-frame handoff for selected clip tail")
     return {
         "signature": signature,
+        "facts_signature": reference_context_signature(project, records),
+        "intent_signature": reference_intent_signature(shot),
         "handoff_signature": tail_frame_review_signature(project, shot, signature),
         "references": reviewed,
         "decision": decision.model_dump(),

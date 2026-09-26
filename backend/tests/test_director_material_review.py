@@ -564,7 +564,8 @@ async def test_same_asset_file_replacement_invalidates_review(material_shot):
     first = await svc.write_prompts_after_layout(shot.id)
     Image.effect_noise((640, 480), 70).convert("RGB").save(files[0])
     second = await svc.write_prompts_after_layout(shot.id)
-    assert len(provider.visual) == 18  # whole current pack, not just the changed image
+    assert len(provider.visual) == 10  # Only changed bytes need new vision; decision still sees all nine.
+    assert "Picture 1" in provider.visual[-1][0]
     assert first.meta["material_review"]["signature"] != second.meta["material_review"]["signature"]
 
 

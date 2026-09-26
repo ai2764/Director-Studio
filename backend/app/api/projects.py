@@ -1999,8 +1999,10 @@ async def submit_shot_endpoint(
         "prompt_voice_signature" in (shot.meta or {})
     )
     from ..agents.director.dialogue_preflight import dialogue_contract_current, require_current_dialogue_contract
+    from ..agents.director.reference_facts import reference_contract_current, require_current_reference_contract
     if (
         not dialogue_contract_current(project, shot)
+        or not reference_contract_current(project, shot)
         or (picture_contract_present and prompt_picture_signature != current_picture_signature)
         or (
             layout_contract_present
@@ -2033,6 +2035,7 @@ async def submit_shot_endpoint(
 
     try:
         require_current_dialogue_contract(project, shot)
+        require_current_reference_contract(project, shot)
         assert_h3_submittable(shot)
     except ValueError as e:
         raise _http_value_error(e) from e
@@ -2140,8 +2143,15 @@ async def submit_shot_endpoint(
         raise HTTPException(409, "Shot or script changed before submission; refresh before submitting")
     try:
         require_current_dialogue_contract(latest_project, latest_shot)
+        require_current_reference_contract(latest_project, latest_shot)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+    reference_evidence = (latest_shot.meta.get("material_review") or {}).get("references", [])
+    if latest_project.mode == ProjectMode.director and latest_shot.refs:
+        import hashlib
+        staged_hashes = [hashlib.sha256(images[key][1]).hexdigest() for key in image_keys]
+        if staged_hashes != [record.get("content_sha256") for record in reference_evidence]:
+            raise HTTPException(409, "reference_input_changed: staged images differ from reviewed references; refresh before submitting")
     job = create_job(
         pipeline_id="h3_ref2va",
         asset_kind="productions",
@@ -2152,6 +2162,8 @@ async def submit_shot_endpoint(
             "prompt": prompt_text,
             "dialogue": list(shot.dialogue),
             "dialogue_contract": shot.meta.get("prompt_dialogue_contract"),
+            "reference_contract": latest_shot.meta.get("prompt_reference_contract"),
+            "reference_evidence": reference_evidence,
             "frames": frames,
             "duration_s": effective_duration_s,
             "image_keys": image_keys,

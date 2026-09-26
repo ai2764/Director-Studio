@@ -1962,6 +1962,8 @@ class DirectorService:
                     *(meta.get("superseded_h3_job_ids") or []), shot.h3_job_id]))
             candidate = candidate.model_copy(update={"h3_job_id": None, "status": ShotStatus.needs_review})
         candidate = candidate.model_copy(update={"meta": meta, "blocked_reasons": []})
+        from .reference_facts import certify_reference_prompt
+        candidate.meta["prompt_reference_contract"] = certify_reference_prompt(project, candidate)
         from ...core.projects.store import save_shot_if_current
         save_shot_if_current(candidate, check_current=check_current)
         save_agent_context(project.id, _build_context(project, list_shots(project.id), phase="awaiting_h3"))
@@ -1986,6 +1988,8 @@ class DirectorService:
 
         directing_snapshot = directing_requests(project)
         review = (shot.meta or {}).get("material_review")
+        from .reference_facts import (reference_review_current, reference_intent_signature,
+            certify_reference_prompt, REFERENCE_WRITER_CONTRACT)
         review_signature = None
         decision = None
         needs_handoff_review = False
@@ -2021,7 +2025,8 @@ class DirectorService:
                 not review or review.get("handoff_signature") != handoff_signature
                 or not (review.get("decision") or {}).get("tail_frame_handoff")
             ))
-            if was_pending or not review or review.get("signature") != review_signature or needs_handoff_review:
+            if (was_pending or not review or review.get("signature") != review_signature
+                    or needs_handoff_review or not reference_review_current(project, shot, records)):
                 keep = bool(getattr(settings, "llm_keep_loaded", True))
                 async with self.orchestrator.llm_session(release_on_exit=not keep):
                     await self.orchestrator.ensure_llm_ready()
@@ -2031,6 +2036,7 @@ class DirectorService:
                 decision = review["decision"]
                 if decision["brief"] is not None:
                     shot = shot.model_copy(update={"script_beat": decision["brief"]})
+                    review["intent_signature"] = reference_intent_signature(shot)
                     if handoff_signature:
                         review["handoff_signature"] = tail_frame_review_signature(project, shot, review_signature)
             shot = shot.model_copy(update={"meta": {**shot.meta, "material_review": review}})
@@ -2105,6 +2111,8 @@ class DirectorService:
                     "asset_name": asset.name if asset else "",
                     "file_key": ref.file_key or "",
                     "picture_index": ref.picture_index,
+                    "reference_evidence": next((item for item in review["references"]
+                        if item["picture_index"] == ref.picture_index), None) if review else None,
                     "approved_notes": asset.notes if asset else "",
                     "approved_description": (
                         str((asset.meta or {}).get("description") or "")
@@ -2200,7 +2208,7 @@ class DirectorService:
             if dialogue_lines:
                 user += "\nSource dialogue lines:\n" + json.dumps([line.model_dump(mode="json") for line in dialogue_lines], ensure_ascii=False)
                 user += "\nExisting prompt, if present: preserve valid creative choices while repairing attribution or applying the current requested revision:\n" + shot.prompt_sections.model_dump_json()
-            writer_instructions = prompt_text.H3_PROMPT_INSTRUCTIONS + (WRITER_CONTRACT if dialogue_lines else "")
+            writer_instructions = prompt_text.H3_PROMPT_INSTRUCTIONS + REFERENCE_WRITER_CONTRACT + (WRITER_CONTRACT if dialogue_lines else "")
             dialogue_draft = None
             preserve_prompt = bool(decision and not decision["rewrite_prompt"]
                                    and decision["brief"] is None and not needs_handoff_review
@@ -2216,7 +2224,8 @@ class DirectorService:
             check_current()
             from .prompt_repair import repair_key, load_repair, save_repair, clear_repair, merge_repair, repair_request
             draft_key = repair_key(project, shot, review_signature, revision_request,
-                                   str(getattr(self.plan_provider, "model", "")))
+                                   str(getattr(self.plan_provider, "model", "")),
+                                   reference_evidence=(review or {}).get("references", []))
             previous_repair = load_repair(shot, draft_key) if not preserve_prompt else None
             preserved_raw = json.dumps({"prompt_sections": shot.prompt_sections.model_dump(),
                 "dialogue_uses": shot.meta.get("prompt_dialogue_contract", {}).get("uses", [])}) if dialogue_lines else shot.prompt_sections.model_dump_json()
@@ -2328,6 +2337,7 @@ class DirectorService:
             }
         )
         from ...core.projects.store import save_shot_if_current
+        shot.meta["prompt_reference_contract"] = certify_reference_prompt(project, shot)
         save_shot_if_current(shot, check_current=check_current)
 
         all_shots = list_shots(shot.project_id)

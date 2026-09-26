@@ -13,11 +13,12 @@ from .planner import _extract_json_payload
 from .brief import directing_requests
 
 
-def repair_key(project, shot, signature, revision_request, model):
+def repair_key(project, shot, signature, revision_request, model, *, reference_evidence=None):
+    from .reference_facts import REFERENCE_POLICY_VERSION
     authored = shot.model_dump(mode="json", exclude={"meta", "status", "h3_job_id", "ref_frame_job_id"})
     payload = [project.script_text, directing_requests(project),
                project.asset_coverage_review.model_dump(mode="json") if project.asset_coverage_review else None,
-               authored, signature, model,
+               authored, signature, model, REFERENCE_POLICY_VERSION, reference_evidence,
                revision_request if managed_turn_scope.get() is None else ""]
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 

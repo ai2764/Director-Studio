@@ -12,6 +12,7 @@ from ...core.projects.layouts import selected_layout_prompt_context
 from ...core.projects.models import PromptSections
 from ...core.h3.dialogue_binding import DialogueUse, DialogueConflict, DialoguePromptDraft, annotate_speakers
 from .dialogue_preflight import prepare_dialogue, prompt_dialogue_record, WRITER_CONTRACT
+from .reference_facts import reference_context_signature, reference_intent_signature, REFERENCE_WRITER_CONTRACT
 from .material_review import observe_references_cached, tail_frame_review_signature
 from .planner import _extract_json_payload
 from .prompts import H3_PROMPT_INSTRUCTIONS
@@ -201,10 +202,10 @@ async def draft_and_review(provider, project, shot, records, images, signature,
     dialogue_lines = await prepare_dialogue(project, shot, provider)
     check_current()
     request["dialogue_lines"] = [line.model_dump(mode="json") for line in dialogue_lines] if dialogue_lines else []
-    draft_instructions = DRAFT_INSTRUCTIONS + (WRITER_CONTRACT + "\nRetain the existing tail envelope's shot_patch, reason and blocking_question fields too." if dialogue_lines else "")
+    draft_instructions = DRAFT_INSTRUCTIONS + REFERENCE_WRITER_CONTRACT + (WRITER_CONTRACT + "\nRetain the existing tail envelope's shot_patch, reason and blocking_question fields too." if dialogue_lines else "")
     attempts = []
     draft_key = repair_key(project, shot, signature, shot.meta.get("prompt_revision_request", ""),
-                           str(getattr(provider, "model", "")))
+                           str(getattr(provider, "model", "")), reference_evidence=references)
     repair = load_repair(shot, draft_key)
     for attempt in range(2):
         raw = None
@@ -286,6 +287,8 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                     ([contract_error] if contract_error else []) + verdict.issues))
             review = {
                 "signature": signature,
+                "facts_signature": reference_context_signature(project, records),
+                "intent_signature": reference_intent_signature(changed),
                 "handoff_signature": tail_frame_review_signature(project, changed, signature),
                 "references": references,
                 "decision": {"brief": patch.get("script_beat"), "shot_patch": patch,

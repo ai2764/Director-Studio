@@ -65,7 +65,8 @@ def _seed_actor(project_id: str, asset_id: str = "act_mia") -> LibraryAsset:
 
     directory = asset_dir("actors", asset_id, project_id=project_id)
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "master.png").write_bytes(b"fake-image" * 400)
+    from PIL import Image
+    Image.effect_noise((128, 128), 30).convert("RGB").save(directory / "master.png")
     return write_asset(
         LibraryAsset(
             id=asset_id,
