@@ -8,6 +8,23 @@ from typing import Any
 from ...core.projects.models import Project, RefRole, Shot
 
 
+def verified_dialogue_lines(project, shot):
+    """Current explicit bindings or source-verified cached grounding."""
+    if shot.dialogue_lines is not None:
+        return shot.dialogue_lines
+    from ...core.projects.dialogue import DialogueLine, verify_dialogue_sources
+    try:
+        cached = (shot.meta.get("dialogue_grounding") or
+                  shot.meta.get("prompt_dialogue_contract") or {}).get("lines", [])
+        lines = [DialogueLine.model_validate(item) for item in cached]
+        if lines:
+            verify_dialogue_sources(project, shot, lines)
+            return lines
+    except (ValueError, TypeError, KeyError):
+        pass
+    return None
+
+
 def project_context_blob(
     project: Project,
     shots: list[Shot],
@@ -215,18 +232,7 @@ def project_context_blob(
             return summary
         if focused and target_shot is None:
             return summary
-        dialogue_lines = shot.dialogue_lines
-        if dialogue_lines is None:
-            from ...core.projects.dialogue import DialogueLine, verify_dialogue_sources
-            try:
-                cached = (shot.meta.get("dialogue_grounding") or
-                          shot.meta.get("prompt_dialogue_contract") or {}).get("lines", [])
-                lines = [DialogueLine.model_validate(item) for item in cached]
-                if lines:
-                    verify_dialogue_sources(project, shot, lines)
-                    dialogue_lines = lines
-            except (ValueError, TypeError, KeyError):
-                pass  # Stale evidence must not supply IDs for a language-only edit.
+        dialogue_lines = verified_dialogue_lines(project, shot)
         return {
             **summary,
             "music_segment": (
