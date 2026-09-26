@@ -20,7 +20,10 @@ from .task_context_models import TaskSnapshot, SourceRecord
 class ContextChanged(ValueError):
     code = "CONTEXT_CHANGED"
 
-    def __init__(self, source_key="snapshot"):
+    def __init__(self, source_key="snapshot", *, expected_version=None, actual_version=None):
+        self.source_key = source_key
+        self.expected_version = expected_version
+        self.actual_version = actual_version
         super().__init__(f"CONTEXT_CHANGED: {source_key}; reload current evidence")
 
 

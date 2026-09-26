@@ -75,6 +75,70 @@ def test_read_then_ui_reference_change_cannot_be_silently_adopted(material_shot,
     assert load_shot(project.id, shot.id).prompt_sections == shot.prompt_sections
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime", ["harness", "legacy"])
+async def test_stale_read_preflight_refreshes_without_generation_failure(material_shot, monkeypatch, runtime):
+    from app.agents.director.harness_runtime import BackendTurn
+    from app.agents.director.chat import handle_chat
+    from app.agents.director.service import DirectorService
+    from test_director_material_review import Provider
+    project, shot, _, files = material_shot
+    enable(monkeypatch, project)
+    monkeypatch.setattr(settings, "director_agent_runtime", runtime)
+    orch = Orchestrator()
+    provider = Provider(orch)
+    svc = DirectorService(plan_provider=provider, orchestrator=orch)
+    source_key = f"asset:props:{shot.refs[0].asset_id}:selected"
+    state = TaskContextState(project_id=project.id, request=TaskRequest(objective="Rewrite this prompt only."), retrieved_versions={})
+    operations = [("read_task_context", {"source_key": source_key}),
+        ("write_prompt", {"shot_id": shot.id}),
+        ("read_task_context", {"source_key": source_key}),
+        ("write_prompt", {"shot_id": shot.id})]
+    def replace_reference():
+        Image.new("RGB", (400, 400), "blue").save(files[0], compress_level=0)
+    def assert_gap(result):
+        assert result.get("code") == "CONTEXT_REQUIRED", result
+        assert result["concludes_turn"] is False
+        assert result["missing"][0]["source_key"] == source_key
+        assert provider.text == [] and provider.visual == []
+        assert not list(settings.projects_dir.rglob("prompt_retry.json"))
+        assert load_shot(project.id, shot.id) == shot
+    with task_context_scope(state):
+        if runtime == "harness":
+            turn = BackendTurn(project.id, "Consider this prompt", svc, None)
+            await turn.dispatch("context", {})
+            for i, (name, args) in enumerate(operations):
+                if i == 1:
+                    replace_reference()
+                result = await turn.dispatch("tool", {"name": name, "arguments": args, "call_id": str(i)})
+                if i == 1:
+                    assert_gap(result)
+                    assert turn.terminal_failure is None
+                else:
+                    assert result["ok"], result
+        else:
+            calls = 0
+            async def infer(system, user, **kwargs):
+                nonlocal calls
+                index = calls
+                calls += 1
+                if index == 1:
+                    replace_reference()
+                if index == 2:
+                    assert_gap(json.loads(kwargs["messages"][-1]["content"]))
+                if index == len(operations):
+                    return {"content": "Prompt saved.", "tool_calls": []}
+                name, args = operations[index]
+                return {"content": "", "tool_calls": [{"id": str(index), "name": name, "arguments": args}]}
+            result = await handle_chat(project_id=project.id, message="Please consider the current prompt.", svc=svc, chat_fn=infer)
+            assert calls == 5 and result.failure_code == ""
+            assert f"write_prompt:{shot.id}" in result.actions
+        assert state.writer_receipts[shot.id]["status"] == "saved"
+        before = (len(provider.text), len(provider.visual))
+        await svc.write_prompts_after_layout(shot.id)
+        assert (len(provider.text), len(provider.visual)) == before
+
+
 def test_retry_view_switch_keeps_exact_authorization(context_case):
     from app.agents.director.task_context_runtime import present_task_tools
     project, target, _ = context_case

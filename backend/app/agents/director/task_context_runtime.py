@@ -9,7 +9,7 @@ from ...core.projects.store import load_project
 from .context_metrics import context_mode, metrics_scope, observe_request
 from .task_context_models import TaskContextState, TaskRequest
 from .task_context_builder import build_task_packet
-from .task_context_snapshot import capture_task_snapshot
+from .task_context_snapshot import capture_task_snapshot, ContextChanged
 
 _task_state = ContextVar("director_task_context", default=None)
 
@@ -130,7 +130,9 @@ def build_writer_packet(project, shot_id, revision_request=""):
     if state:
         for key, version in state.retrieved_versions.items():
             if not key.startswith("catalog:") and (key not in snapshot.sources or snapshot.sources[key].version != version):
-                raise ContextChanged(key)
+                current = snapshot.sources.get(key)
+                raise ContextChanged(key, expected_version=version,
+                                     actual_version=current.version if current else None)
     target = snapshot.shots.get(shot_id, {})
     # Reserve existing template duplication; no outer chat history is sent to a writer.
     overhead = prompts.PROMPT_SECTIONS_USER_TEMPLATE + json.dumps(target, ensure_ascii=False) * 2
@@ -183,14 +185,31 @@ def prepare_writer_packet(project, shot_id, revision_request=""):
             pass  # Never enforce pilot completeness or mutate writer receipts in shadow.
         return None
     state = current_task_context(project.id)
-    packet = build_writer_packet(project, shot_id, revision_request)
-    if state:
-        state.source_keys = list(packet.source_versions)
     receipt = state.writer_receipts.get(shot_id, {}) if state else {}
-    if receipt.get("status") == "context_required" and not _resolved_context_gap(state, receipt["packet"], packet):
-        raise ContextRequired(receipt["packet"])
     if receipt.get("status") == "started":
         raise ValueError("Writer already attempted in this turn; inspect its outcome before another request")
+    try:
+        packet = build_writer_packet(project, shot_id, revision_request)
+    except ContextChanged as exc:
+        from .task_context_models import TaskPacket
+        if exc.expected_version is None or state is None:
+            raise
+        # No candidate or review has started. Preserve the stale read identity so
+        # only an explicit refresh of this source can unlock the rejected preflight.
+        gap = TaskPacket(project_id=project.id, task=TaskRequest(kind="shot_prompt",
+            target_shot_id=shot_id, objective=state.request.objective), authority={}, facts={},
+            source_versions=dict(state.retrieved_versions), complete=False,
+            missing=[{"code": "CONTEXT_SOURCE_CHANGED", "source_key": exc.source_key,
+                "expected_version": exc.expected_version, "current_version": exc.actual_version,
+                "read": {"source_key": exc.source_key, "offset": 0},
+                "action": "Refresh this source from its first page before retrying the prompt."}],
+            available_context=[{"source_key": exc.source_key}])
+        state.writer_receipts[shot_id] = {"status": "context_required", "packet": gap}
+        raise ContextRequired(gap) from exc
+    if state:
+        state.source_keys = list(packet.source_versions)
+    if receipt.get("status") == "context_required" and not _resolved_context_gap(state, receipt["packet"], packet):
+        raise ContextRequired(receipt["packet"])
     if not packet.complete:
         if state:
             state.writer_receipts[shot_id] = {"status": "context_required", "packet": packet}

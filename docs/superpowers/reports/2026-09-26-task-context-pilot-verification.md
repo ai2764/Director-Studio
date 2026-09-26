@@ -9,9 +9,8 @@ database migration, managed-run state redesign, service restart or live film edi
 
 Branch: `feature/mv-mode`. Implementation base: `06190fc`.
 Commits: `1faf1ad` metrics; `d46d02e` snapshot/builder; `ef7d7f3` read-only lookup;
-`676d23e` runtimes; `ee40655` writers. The trajectory/report commit is the commit
-introducing this report (resolve with `git log --follow`); final review additions,
-if any, follow it. Default remains `off`, project allowlist `[]`.
+`676d23e` runtimes; `ee40655` writers; `c6ab049` trajectories/report. Final review
+additions, if any, follow it. Default remains `off`, project allowlist `[]`.
 
 Real-model comparison: **NOT RUN**. No sample project/cost range was authorized for
 this pilot. Passing fixture tests does not establish fewer semantic errors, better
@@ -30,7 +29,9 @@ All fixtures isolate project/Library/Job storage; model inference is scripted.
 | Task 5 named writer regression | 111 passed, exit 0 |
 | Task 5 full `python -m pytest -q` | 1601 passed, 13 skipped, exit 0 |
 | Pilot-specific suite | 74 passed, exit 0 |
-| Final full backend suite | Pending final run |
+| Full backend suite at `c6ab049` | 1613 passed, 13 skipped, exit 0 (372.40s) |
+| Review fix, Legacy/Harness stale-read trajectories | 2 failed → 2 passed (22.07s) |
+| Full backend suite after review fix | 1615 passed, 13 skipped, exit 0 (365.42s) |
 | `npm test` | 33 files, 258 tests passed, exit 0 |
 | `npm run build` | TypeScript/Vite build passed, exit 0 |
 | `git diff --check` | Passed, exit 0 |
@@ -41,6 +42,10 @@ missing legacy context setup, compressed solid image rejected by the existing
 2-KB placeholder rule, and a pure-builder size threshold incorrectly applied to
 the runtime's authority schemas. Corrected tests compare growth from 2 to 502 shots
 and use valid non-placeholder image files. No product rule was changed for them.
+An overlapping full run had already collected the old image fixture and ended
+with `test_cached_wardrobe_does_not_replace_current_reference` failing (1612
+passed, 13 skipped); the fresh full run above includes the corrected fixture and
+passes. Final pilot-suite repetition: 74 passed (101.54s).
 
 Reproduce pilot suite:
 
@@ -65,6 +70,7 @@ python -m pytest -q
 | Foreign Job linked from local Shot | Project-scoped lookup rejects the foreign Job |
 | Missing ref → repeated write → restore → read → write | No model/candidate before evidence; restore alone insufficient; 1 successful generation after 1 source read; saved replay adds no call |
 | Scoped retry → context-capacity gap | Original retry receipt stays pending; no replacement generation-failure receipt |
+| Read → UI replaces ref → write gap → refresh → write (both runtimes) | Nonterminal preflight; no candidate/retry-failure receipt before refresh; one generation after refresh; saved replay adds no call |
 
 Required fields tested: full script ending and global directing requirements;
 target authored beat/camera/dialogue; source-bound speaker IDs/languages; existing
@@ -107,6 +113,12 @@ guides are counted and image counts are 0/1/0, and prohibit raw content logging.
 2. Keep writer preflight a conservative character estimate with template and guide
    reserves. Visual-review prose is not known before inspection. Risk if wrong:
    over/under-reservation; live capacity validation remains required.
+3. Accept the review's live-quality/capacity/latency exclusion because no live
+   evaluation was authorized: retain default off and make no production-quality
+   claim. Risk if wrong: rollout before evaluation could expose unmeasured errors.
+4. Accept the review's crash-atomic persistence/operation-identity exclusion because
+   it belongs to P1B+; retain existing save semantics without claiming transaction
+   guarantees. Risk if wrong: existing crash/race windows remain possible.
 
 Current snapshots repeatedly read all project sources and decode selected images
 for consistency. No I/O/latency improvement is claimed. Full-history compaction,
@@ -125,4 +137,26 @@ return subsequent turns to legacy context; no data migration must be reversed.
 
 ## Final independent review
 
-Pending fresh-context review after final verification and task commit.
+Fresh read-only reviewer inspected `06190fc..c6ab049`. No Critical findings; one
+Important finding and one Minor. Its pre-fix verdict was **With fixes**.
+
+Important fixed: a stale queried source detected before any writer candidate had
+been misclassified as terminal generation failure. The preflight now carries an
+explicit `CONTEXT_SOURCE_CHANGED` gap inside `CONTEXT_REQUIRED`, with old/current
+versions and a first-page refresh handle. Only refresh can unlock one attempt;
+an already-started writer cannot be downgraded into a retryable preflight. Changes
+discovered during generation still fail the existing save guard. Both runtime
+trajectories reproduced the failure before the fix and passed afterward.
+
+Deferred minor: `context_metrics.request_shape` counts string message content and
+tool schemas, but not assistant native tool-call arguments. Its digest also omits
+roles/tool calls. This may under-report request growth in multi-tool trajectories.
+The final-envelope table above has no tool-call arguments and remains accurate for
+that fixture. Do not interpret these metrics as an exhaustive transport-size or
+token measurement. Address argument accounting in a later focused metrics change.
+
+Reviewer explicitly declined live semantic/capacity/latency outcomes and
+crash-atomic/durable-operation redesign; engineering decisions 3–4 record the
+disposition and residual risks. One TDD fix pass, no second reviewer pass. Final
+suite evidence above is the executor's verification of the fix, not a new reviewer
+approval or a live-model quality claim.

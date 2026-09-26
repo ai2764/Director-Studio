@@ -234,6 +234,8 @@ Return the mode to `off` to use the existing context path on subsequent turns.
 The `director_studio.context_metrics` logger emits character counts, image counts,
 source keys and an input digest, not script bodies, image bytes or exact token
 usage. Full system instructions, history and tool schemas still cost context;
+native assistant tool-call arguments are not yet counted in those metrics (known
+deferred limitation); the digest is not a full transport-envelope identity.
 existing template duplication is intentionally retained. Capacity is a heuristic,
 not a tokenizer guarantee. Snapshot validation currently reads the project's
 sources repeatedly; smaller packets do not prove lower latency or I/O.
