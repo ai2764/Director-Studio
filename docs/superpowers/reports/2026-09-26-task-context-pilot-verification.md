@@ -9,8 +9,8 @@ database migration, managed-run state redesign, service restart or live film edi
 
 Branch: `feature/mv-mode`. Implementation base: `06190fc`.
 Commits: `1faf1ad` metrics; `d46d02e` snapshot/builder; `ef7d7f3` read-only lookup;
-`676d23e` runtimes; `ee40655` writers; `c6ab049` trajectories/report. Final review
-additions, if any, follow it. Default remains `off`, project allowlist `[]`.
+`676d23e` runtimes; `ee40655` writers; `c6ab049` trajectories/report;
+`9223308` final review fixes. Default remains `off`, project allowlist `[]`.
 
 Real-model comparison: **NOT RUN**. No sample project/cost range was authorized for
 this pilot. Passing fixture tests does not establish fewer semantic errors, better

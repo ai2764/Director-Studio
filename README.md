@@ -2,11 +2,16 @@
 
 Local-first pre-production workspace for planning shots, managing reusable visual and voice assets, writing MiniMax H3 Ref2AV prompts, and generating media through ComfyUI.
 
-Director Studio runs the planning Agent through one configured Ollama, LM Studio, or OpenAI-compatible provider. Image and local video workflows run in ComfyUI through ComfyUI MCP; H3 video can alternatively be submitted to the official MiniMax API.
+Director Studio runs the planning Agent through one configured Ollama, LM Studio, llama-swap, or OpenAI-compatible provider. Image and local video workflows run in ComfyUI through ComfyUI MCP; H3 video can alternatively be submitted to the official MiniMax API.
 
 Core features include a typed asset library, actor and set workflows, conversational shot planning, editable Picture and Audio references, optional Layout studies, six-section H3 prompts, local/cloud video submission, durable jobs, and exclusive local-LLM/ComfyUI VRAM coordination.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and extension points.
+
+Current runtime and recovery behavior is documented in [Harness](docs/HARNESS.md)
+and [context recovery](docs/HARNESS_CONTEXT_RECOVERY.md). Dated audits, specs, plans
+and reports record their own historical scope; proposed work is not automatically
+implemented. The architecture page separates current behavior from the refactor target.
 
 The [slim Harness runtime](docs/HARNESS.md) is the default Director agent loop,
 using the same Python-owned providers and tools. Windows portable includes its
@@ -24,7 +29,7 @@ provider reports it and shows context usage in the Director UI.
 | Backend | FastAPI · pluggable pipelines · ComfyUI MCP · provider-neutral Director LLM |
 | Frontend | Vite + React · feature folders |
 | Execution | ComfyUI through MCP (actor / scene / prop / Layout / local H3) · MiniMax H3 official API |
-| Planning LLM | Ollama · LM Studio · OpenAI-compatible Chat Completions |
+| Planning LLM | Ollama · LM Studio · llama-swap · OpenAI-compatible Chat Completions |
 
 ## Platform support
 
@@ -72,7 +77,7 @@ server and ComfyUI remain external services.
   ollama pull <model-name>
   ```
 
-  LM Studio and other OpenAI-compatible servers are configured below instead. Director reads the active provider's model catalog; choose the model in the Director dropdown.
+  LM Studio, llama-swap and other OpenAI-compatible servers are configured below instead. Director reads the active provider's model catalog; choose the model in the Director dropdown.
 
 - [ComfyUI Desktop for Windows](https://docs.comfy.org/installation/desktop/windows), running at `http://127.0.0.1:8188`.
 
@@ -103,6 +108,7 @@ or uncommented `.env` MCP command skips automatic setup and uses that override.
 |----------|-------------------|---------------|-----------------------|
 | Ollama | `ollama` | Ollama API | Unloads before local ComfyUI jobs |
 | LM Studio | `lm-studio` | OpenAI-compatible `/v1/models` | Uses LM Studio's native unload endpoint |
+| llama-swap | `llama-swap` | Proxy model catalog | Unloads proxy models before local ComfyUI jobs; failed release stops GPU handoff |
 | OpenAI, llama.cpp, or another compatible service | `openai-compatible` | OpenAI-compatible `/v1/models` | No unload request is assumed |
 
 Choose one of these configurations. Ollama is the default:
@@ -121,6 +127,16 @@ For LM Studio, enable its local API server first. The model itself is selected f
 DS_LLM_PROVIDER=lm-studio
 DS_LLM_BASE_URL=http://127.0.0.1:1234/v1
 ```
+
+For a dedicated local llama-swap proxy (start the proxy separately):
+
+```dotenv
+DS_LLM_PROVIDER=llama-swap
+DS_LLM_BASE_URL=http://127.0.0.1:11435/v1
+```
+
+Use the dedicated `llama-swap` provider when Director should coordinate its local
+GPU lifecycle; selecting generic `openai-compatible` does not enable that behavior.
 
 For the OpenAI API:
 
@@ -149,11 +165,11 @@ DS_H3_MINIMAX_API_KEY=your-secret-key
 DS_H3_PROVIDER=minimax
 ```
 
-Director Studio coordinates local generation with Ollama or LM Studio through its built-in exclusive GPU lock. VRAM policy, queue timeout, and LLM residency use internal defaults and require no user configuration.
+Director Studio coordinates local generation with Ollama, LM Studio or llama-swap through its built-in exclusive GPU lock. VRAM policy, queue timeout, and LLM residency use internal defaults and require no user configuration.
 
 Do not publish `.env`; it may contain provider credentials. Projects and generated application state are stored in the adjacent `data` folder. Back up that folder before replacing or upgrading the package.
 
-Keep unauthenticated Ollama, LM Studio, llama.cpp, and ComfyUI endpoints bound to `127.0.0.1`. To open Director Studio itself to the LAN, set `DS_HOST=0.0.0.0`, allow the selected `DS_PORT` through the host firewall, and use only a trusted private network. This does not add authentication to Director Studio or to the upstream model servers.
+Keep unauthenticated Ollama, LM Studio, llama-swap, llama.cpp, and ComfyUI endpoints bound to `127.0.0.1`. To open Director Studio itself to the LAN, set `DS_HOST=0.0.0.0`, allow the selected `DS_PORT` through the host firewall, and use only a trusted private network. This does not add authentication to Director Studio or to the upstream model servers.
 
 ### 3. Start
 
@@ -521,7 +537,7 @@ Source development runs two Director Studio processes: the FastAPI backend on po
 - [Python 3.11 or newer](https://www.python.org/downloads/) with `venv` and `pip`.
 - [Node.js 22](https://nodejs.org/en/download/archive/v22) and npm. Node 22 is the version exercised by CI.
 - [FFmpeg and FFprobe](https://ffmpeg.org/download.html) available on `PATH`.
-- One running Director LLM provider: Ollama, LM Studio, or an OpenAI-compatible endpoint.
+- One running Director LLM provider: Ollama, LM Studio, llama-swap, or an OpenAI-compatible endpoint.
 - A running ComfyUI instance for image generation and local H3 video. ComfyUI is not required when only testing Director chat against a remote LLM.
 
 Clone the repository, or skip this step if the source tree is already present:
@@ -676,14 +692,14 @@ npm run build
 | Flow | What happens |
 |------|----------------|
 | **Director** | Paste script → plan shots (selected LLM provider) → optionally generate a **Layout reference** (Comfy) → write the H3 prompt |
-| **Production** | Approve full shot package (refs + six-section prompt) → Gate 2 → submit pure **H3 Ref2AV** |
+| **Production** | Review refs + six-section prompt → validate current inputs → submit **H3 Ref2AV** locally or through the official API; no mandatory separate approval gate |
 
-Rules locked for v1:
+Current production contract:
 
-- Video mode is **pure H3 Reference-to-AV** only (`MiniMaxH3ReferenceToVideo`). No I2V first/last frame sockets.
+- Director production uses **H3 Reference-to-AV**. Layout and continuity stills are Picture references, not I2V first/last frame sockets. Execution uses the selected local workflow or official API.
 - A Layout is an optional composition Picture reference, not an I2V `first_frame` and not a guaranteed opening frame.
 - Picture references use their actual saved order. A shot becomes ready for H3 when its production prompt is complete; a Layout is not required.
-- **VRAM exclusive:** The local Ollama or LM Studio model unloads before Comfy Layout, asset, and local H3 jobs; Agent context reloads from disk when the LLM must think again.
+- **VRAM exclusive:** The local Ollama, LM Studio or llama-swap model is released before Comfy Layout, asset, and local H3 jobs. Durable history and project state are separate from GPU residency.
 
 API: `/api/projects/*` · pipelines: `GET /api/pipelines` · health: `GET /api/health`
 
@@ -726,8 +742,8 @@ API: `/api/actors/*` · `GET /api/pipelines`
 | `DS_COMFY_MCP_COMFY_BIN` | `comfy` | comfy-cli executable used by the MCP server |
 | `DS_HOST` | `127.0.0.1` | API bind address; use `0.0.0.0` only for an explicitly trusted LAN |
 | `DS_PORT` | `8790` | API port |
-| `DS_LLM_PROVIDER` | `ollama` | Active Director provider: `ollama`, `lm-studio`, or `openai-compatible` |
-| `DS_LLM_BASE_URL` | provider default | `/v1` base URL for LM Studio or an OpenAI-compatible server |
+| `DS_LLM_PROVIDER` | `ollama` | Active Director provider: `ollama`, `lm-studio`, `llama-swap`, or `openai-compatible` |
+| `DS_LLM_BASE_URL` | provider default | `/v1` base URL for LM Studio, llama-swap or an OpenAI-compatible server |
 | `DS_LLM_API_KEY` | empty | Optional credential for the active OpenAI-compatible endpoint |
 | `DS_LLM_TIMEOUT_SEC` | `600` | LLM request timeout in seconds |
 | `DS_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local Ollama for Director |

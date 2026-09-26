@@ -1,8 +1,12 @@
 # Slim Harness runtime
 
+Current implementation notes, checked 2026-09-26. For system boundaries see
+[architecture](ARCHITECTURE.md); for durable history and summary behavior see
+[context recovery](HARNESS_CONTEXT_RECOVERY.md).
+
 This runtime replaces the Director's conversational loop with
 the pinned DeepSeek Harness agent loop and stock context compaction. It does
-**not** select a DeepSeek model. The same configured Ollama, LM Studio, or
+**not** select a DeepSeek model. The same configured Ollama, LM Studio, llama-swap, or
 OpenAI-compatible model still runs through Python's provider/VRAM boundary.
 This branch launches Harness by default. Windows x64 portable bundles Harness;
 Linux portable integration remains separate.
@@ -97,10 +101,13 @@ unlimited retries; existing replay, state, transport and timeout guards remain.
 
 - Python owns projects, shot IDs, assets, workflows/MCP, provider routing,
   generation jobs, file writes, model lifecycle/VRAM, and durable chat history.
-  Every model call gets current Python context and authoritative tool schemas.
-- Harness holds only an ephemeral turn: model/tool sequencing, stock compaction,
-  and at most two retries of a transient inference failure. Summarization calls
-  use the same Python inference boundary and cannot execute tools.
+  Business inference gets current Python context and authoritative tool schemas;
+  compaction uses a separate, minimal envelope without business tools.
+- Harness creates an ephemeral runtime handle per request but resumes a stable
+  native JSONL session, including tool history and compaction checkpoints. It owns
+  model/tool sequencing, stock compaction and at most two retries of a transient
+  inference failure. Summarization calls use the same Python inference boundary
+  and cannot execute business tools.
 - Tools execute sequentially in Python through existing handlers. Python
   validates arguments, current tool availability, and the project snapshot.
   Stale calls need fresh inference. Duplicate executed mutation fingerprints
@@ -116,30 +123,39 @@ unlimited retries; existing replay, state, transport and timeout guards remain.
   in Python; inspect the project before explicitly asking for another attempt.
   Already submitted generation jobs retain their existing job lifecycle:
   cancelling chat does not roll back or automatically cancel those jobs.
-- There is no durable Node checkpoint, receipt database, resume daemon, judge
-  model, or automatic cross-turn mutation deduplication. Compacted history is
-  ephemeral and rebuilt from Python history on the next turn. Chat reservation
-  is process-local, intended for the existing single-backend deployment; the
-  snapshot check is not a cross-process database transaction.
+- Native history and compaction checkpoints persist across requests and process
+  restarts. Python UI history is imported only when initializing the native
+  session. This is not a business-operation receipt database, autonomous resume
+  daemon, judge model, or automatic cross-turn mutation deduplication. Chat
+  reservation is process-local, intended for the existing single-backend
+  deployment; snapshot checks are not cross-process database transactions.
 
-Transport is bounded to 8 MiB request bodies, 10,000 history rows and eight
-active turns. These are explicit safety limits, not silent history truncation.
-Very large histories can still hit a transport limit; persistent compacted
-history is deliberately deferred.
+Transport is bounded to 8 MiB request bodies, 10,000 imported history rows and
+eight active turns. These are explicit safety limits, not silent truncation.
+Initial imports can still exceed them; resumed native sessions do not resend
+the full Python UI transcript.
 
-New turns seed the known host route and initial project/tool envelope before
-the first pressure check, so stock compaction can summarize seeded history
-before the first business inference. The normal loop replaces that seed with
-its effective request header. Failed, truncated, or non-shrinking automatic
-summaries stop further inference with `COMPACTION_FAILED`; they do not silently
-continue on the original oversized history. Already completed writes remain.
+`POST /api/projects/{project_id}/chat/compact` invokes native manual compaction
+under the same admission guard as chat. It does not add a user message, execute
+tools or retry the prior action. Successful responses await native session flush.
+Session storage defaults to `.run/harness-sessions` for source development and
+`data/harness-sessions` in Windows portable. Do not share one root between
+concurrently running sidecars.
 
-This still uses the stock heuristic (80% context pressure, approximately four
-characters per token), not exact provider tokenization or a universal input/
-output budget guarantee. A very large current message, image inputs, extra
-Python skill context, or a summary input that itself exceeds the window can
-still require a narrower request. Original Python chat history remains intact;
-only this disposable turn's replay surface is compacted.
+Current instructions and focused project state are supplied through a complete
+system section. Summary requests omit Director business tools, skill and project
+payload. Native compaction has a bounded two-attempt policy; a failed summary is
+reported rather than silently continuing on oversized input. Successful
+checkpoints may continue above the soft pressure threshold if they fit the
+reserved input budget. Completed business writes are not replayed by recovery.
+
+The budget reserves the configured output allowance and an estimated 2,048 tokens
+per locally hydrated image. The native text meter is heuristic, not exact provider
+tokenization or a universal input/output guarantee. Provider usage is forwarded
+after inference, but a large fixed current request can still require narrowing.
+The original native log and Python UI transcript are retained; compaction changes
+the persisted replay surface. Both backend and sidecar must support
+`native-sessions-v1` and `context-envelope-v2`; incompatible sidecars are rejected.
 
 ## Verification and useful A/B test
 
@@ -236,7 +252,7 @@ source keys and an input digest, not script bodies, image bytes or exact token
 usage. Full system instructions, history and tool schemas still cost context;
 native assistant tool-call arguments are not yet counted in those metrics (known
 deferred limitation); the digest is not a full transport-envelope identity.
-existing template duplication is intentionally retained. Capacity is a heuristic,
+Existing template duplication is intentionally retained. Capacity is a heuristic,
 not a tokenizer guarantee. Snapshot validation currently reads the project's
 sources repeatedly; smaller packets do not prove lower latency or I/O.
 
