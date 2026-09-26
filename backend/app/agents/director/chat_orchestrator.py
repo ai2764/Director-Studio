@@ -481,7 +481,8 @@ def sanitize_tools_for_pipeline(
     from ...core.managed_runs.context import managed_turn_scope
     scope = managed_turn_scope.get()
     if scope is not None and scope.project_id == project.id:
-        managed_tools = {"get_status", "inspect_asset", "write_prompt", "start_h3_video"}
+        managed_tools = {"get_status", "inspect_asset", "write_prompt", "start_h3_video",
+                         "set_task_context", "read_task_context"}
         allowed_tools = []
         for item in tools:
             name = _tool_name(item) if isinstance(item, dict) else ""
@@ -512,7 +513,7 @@ def sanitize_tools_for_pipeline(
     names = [_tool_name(t) for t in tools if isinstance(t, dict)]
     # Read-only tools must never implicitly replace a board (including before
     # or after an append on a stale board).
-    if names and set(names) <= {"get_status", "status", "inspect_asset"}:
+    if names and set(names) <= {"get_status", "status", "inspect_asset", "set_task_context", "read_task_context"}:
         return tools, notes
     if names and set(names) <= {"start_h3_video", "get_status", "inspect_asset"}:
         return tools, notes
@@ -1032,6 +1033,11 @@ async def _execute_intent(
     return "", actions, touched
 
 
+from .task_context_runtime import (scoped_task_turn, current_task_context, present_task_tools,
+    render_task_context, task_authority, available_packet_chars, context_mode)
+
+
+@scoped_task_turn
 async def orchestrate_chat(
     *,
     project_id: str,
@@ -1260,6 +1266,9 @@ async def orchestrate_chat(
             managed_tools = {"get_status", "inspect_asset", "write_prompt", "start_h3_video"}
             schemas = [schema for schema in schemas
                        if schema["function"]["name"] in managed_tools]
+        state = current_task_context(current_project.id)
+        if state is not None and context_mode(current_project) == "pilot" and not pending_uploads:
+            schemas = present_task_tools(schemas, state)
         return schemas
 
     context_blob = (
@@ -1283,6 +1292,26 @@ async def orchestrate_chat(
         include_visual_qc=bool(vision_b64),
         current_message=message,
     )
+
+    original_suffix = user_prompt[len(f"PROJECT_STATE:\n{context_blob}"):]
+
+    def refresh_task_prompt(conversation=None):
+        if current_task_context(project_id) is None:
+            return user_prompt
+        from .skill_loader import with_director_skill
+        budget_messages = ([{**item, "content": original_suffix} if i == 0 else item
+                            for i, item in enumerate(conversation)] if conversation else
+                           [{"role": "user", "content": original_suffix}])
+        state_text = render_task_context(project, objective=message,
+            authority=task_authority(project, offered_tool_schemas), legacy_state=context_blob,
+            max_chars=available_packet_chars(system=with_director_skill(DIRECTOR_CHAT_SYSTEM, guides=chat_guides),
+                messages=budget_messages, tools=offered_tool_schemas, image_count=len(vision_b64)))
+        refreshed = f"PROJECT_STATE:\n{state_text}{original_suffix}"
+        if conversation:
+            conversation[0] = {**conversation[0], "content": refreshed}
+        return refreshed
+
+    user_prompt = refresh_task_prompt()
 
     try:
         if vision_b64:
@@ -1388,6 +1417,7 @@ async def orchestrate_chat(
                             project,
                             allow_save_storyboard=not storyboard_budget.exhausted,
                         )
+                        user_prompt = refresh_task_prompt(conversation)
                         raw = await chat_fn(
                             DIRECTOR_CHAT_SYSTEM,
                             user_prompt,
@@ -1568,6 +1598,7 @@ async def orchestrate_chat(
                 project,
                 allow_save_storyboard=not storyboard_budget.exhausted,
             )
+            user_prompt = refresh_task_prompt(conversation)
             raw = await chat_fn(
                 DIRECTOR_CHAT_SYSTEM,
                 user_prompt,

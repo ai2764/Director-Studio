@@ -150,6 +150,9 @@ async def execute_tools(
         await runtime.emit(on_progress, "status", f"Executing: {name}…")
 
         try:
+            from .tool_handlers.context import handle_context_tool
+            if handle_context_tool(name=name, args=args, project_id=project_id, result_payloads=result_payloads):
+                continue
             if name in {"queue_ref_frame", "ref_frame", "revise_ref_frame", "queue_gpt_ref_frame"}:
                 if not explicit_layout_generation_intent(user_feedback):
                     raise ValueError(

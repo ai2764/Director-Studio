@@ -24,6 +24,9 @@ from .intent import actor_design_intent, explicit_gpt_image_intent
 from .planner import AppendShotSubmission, ShotRevisionSubmission
 from .tool_schema import director_chat_guides, director_tool_schemas, IMAGE_TOOLS
 from .skill_loader import with_director_skill
+from .task_context_runtime import (scoped_task_turn, current_task_context, present_task_tools,
+    render_task_context, task_authority, available_packet_chars, context_mode)
+from .tool_schema import TASK_CONTEXT_TOOL_NAMES
 
 
 # Vision bytes stay in Python, outside the native text meter. Reserve a labelled
@@ -69,6 +72,8 @@ class BackendTurn:
         self.local_generation_receipt: str | None = None
         self.offered_context: dict | None = None
         self.offered_version: str | None = None
+        self.context_capacity = None
+        self.context_history = self.seed_history
 
     def snapshot(self):
         project = load_project(self.project_id)
@@ -140,6 +145,15 @@ class BackendTurn:
         system = with_director_skill(system, guides=director_chat_guides(
             project, include_visual_qc=bool(self.images), current_message=self.message,
         ))
+        task_state = current_task_context(project.id)
+        if task_state is not None and context_mode(project) != "off":
+            authority = task_authority(project, tools)
+            if context_mode(project) == "pilot" and not pending and not self.terminal_failure:
+                tools = present_task_tools(tools, task_state)
+            state = render_task_context(project, objective=self.message, authority=authority, legacy_state=state,
+                max_chars=available_packet_chars(system=system,
+                    messages=[*self.context_history, {"role": "user", "content": self.message}], tools=tools,
+                    image_count=len(self.images), context_capacity=self.context_capacity))
         self.offered_context = {"system": system, "state": state, "tools": tools}
         self.offered_version = version
         return self.offered_context
@@ -195,6 +209,7 @@ class BackendTurn:
             messages.append(clean)
         if not messages:
             raise ValueError("Harness conversation is empty")
+        self.context_history = messages
         tool_names = {call["id"]: call["function"]["name"] for m in messages for call in m.get("tool_calls", [])}
         for m in messages:
             if m["role"] == "tool" and m.get("tool_call_id") in tool_names:
@@ -321,7 +336,7 @@ class BackendTurn:
                 return {"ok": True, "already_started": True,
                         "shot_id": args["shot_id"], "job_id": run.current_job_id,
                         "notes": [f"H3 Job {run.current_job_id} is already running for this Shot."]}
-        if name not in {"get_status", "inspect_asset"} and (
+        if name not in {"get_status", "inspect_asset", *TASK_CONTEXT_TOOL_NAMES} and (
             (version, raw_fingerprint) in self.calls
             or (version, fingerprint) in self.calls
         ):
@@ -424,12 +439,14 @@ class BackendTurn:
                           images=images, thinking=result.get("thinking", ""), steps=self.notes)
 
 
+@scoped_task_turn
 async def handle_harness_chat(*, project_id, message, svc, chat_fn=None, history=None,
                               on_progress=None, user_images_b64=None, user_image_captions=None,
                               context_capacity=None, managed_session_id=None):
     context_capacity = context_capacity or settings.director_num_ctx
     turn = BackendTurn(project_id, message, svc, chat_fn, images=user_images_b64,
                        captions=user_image_captions, on_progress=on_progress, history=history)
+    turn.context_capacity = context_capacity
     # Reuse Python's existing visual preparation; sidecar receives no file paths/bytes.
     if not turn.images:
         from .vision import collect_vision_attachments, wants_vision, layout_reference_ids_from_message
