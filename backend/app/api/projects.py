@@ -674,6 +674,7 @@ async def _make_chat_fn(
         **_kwargs,
     ) -> str | dict:
         guides = tuple(_kwargs.get("guides") or ())
+        from ..agents.director.context_metrics import observe_request
         if not _kwargs.get("prepared_system"):
             system = with_director_skill(system, guides=guides)
         max_output_tokens = _kwargs.get("max_output_tokens")
@@ -757,6 +758,9 @@ async def _make_chat_fn(
                 ):
                     messages.insert(0, {"role": "system", "content": system})
                 try:
+                    observe_request("chat.native", messages,
+                        tools=[] if forced_tool_schema is not None else tools,
+                        image_count=sum(len(m.get("images") or []) for m in messages))
                     result = await usage_reporter.call(
                         client, plan_model,
                         purpose=_kwargs.get("inference_purpose", "turn"),
@@ -794,6 +798,7 @@ async def _make_chat_fn(
                         "Do not claim the action succeeded; the application will validate "
                         "and execute it."
                     )
+                    observe_request("chat.fallback", [{"role": "user", "content": fallback_prompt}])
                     return await client.generate(plan_model, fallback_prompt)
                 if on_progress:
                     if result.get("thinking"):
@@ -807,6 +812,9 @@ async def _make_chat_fn(
                 return result
 
             # Prefer streaming so UI can show tokens live
+            observe_request("chat.generate", ([{"role": "system", "content": system},
+                {"role": "user", "content": user}] if use_images else
+                [{"role": "user", "content": prompt}]), image_count=len(use_images))
             if on_progress and hasattr(client, "generate_stream"):
                 parts: list[str] = []
                 think_buf: list[str] = []

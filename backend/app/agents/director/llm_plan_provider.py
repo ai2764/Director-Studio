@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from ...config import settings
 from ...core.llm import LLMProvider, get_llm_provider
 from .skill_loader import with_director_skill
+from .context_metrics import observe_request
 
 PROMPT_CALL_TIMEOUT_SEC = 180.0
 
@@ -36,6 +37,7 @@ class DirectorLLMPlanProvider:
         guides: Iterable[str] = (),
     ) -> str:
         prompt = with_director_skill(f"{system}\n\n{user}", guides=guides)
+        observe_request("writer.generate", [{"role": "user", "content": prompt}])
         return await self.client.generate(self.model, prompt)
 
     async def complete_with_images(
@@ -47,6 +49,7 @@ class DirectorLLMPlanProvider:
         guides: Iterable[str] = (),
     ) -> str:
         prompt = with_director_skill(f"{system}\n\n{user}", guides=guides)
+        observe_request("writer.vision", [{"role": "user", "content": prompt}], image_count=len(images))
         return await self.client.chat(
             self.model,
             prompt,
@@ -58,6 +61,7 @@ class DirectorLLMPlanProvider:
                                guides: Iterable[str] = (), schema: dict | None = None) -> str:
         """Short prompt audits and candidate drafts have explicit output budgets."""
         prompt = with_director_skill(f"{system}\n\n{user}", guides=guides)
+        observe_request("writer.bounded", [{"role": "user", "content": prompt}])
         deadline = min(PROMPT_CALL_TIMEOUT_SEC, settings.llm_timeout_sec)
         try:
             async with asyncio.timeout(deadline):
