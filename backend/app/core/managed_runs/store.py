@@ -58,7 +58,10 @@ def _authored_shot_payload(shots, *, legacy: bool) -> list[dict]:
             "voice_refs": [ref.model_dump(mode="json") for ref in shot.voice_refs],
         }
         if not legacy:
+            if shot.dialogue_lines is not None:
+                item["dialogue_lines"] = [line.model_dump(mode="json") for line in shot.dialogue_lines]
             item.update({
+                "scene_id": shot.scene_id,
                 "music_segment": (
                     shot.music_segment.model_dump(mode="json")
                     if shot.music_segment else None
@@ -69,7 +72,7 @@ def _authored_shot_payload(shots, *, legacy: bool) -> list[dict]:
     return authored
 
 
-def _project_fingerprint(project_id: str, *, legacy: bool) -> str:
+def _project_fingerprint(project_id: str, *, legacy: bool, version: int = 2) -> str:
     project = load_project(project_id)
     if project is None:
         raise ValueError("Project not found")
@@ -77,7 +80,16 @@ def _project_fingerprint(project_id: str, *, legacy: bool) -> str:
     if [shot.id for shot in shots] != project.shot_ids:
         raise ValueError("Project Shot list is incomplete")
     authored = _authored_shot_payload(shots, legacy=legacy)
+    if version == 1:
+        for item in authored:
+            item.pop("scene_id", None)
+            item.pop("dialogue_lines", None)
     fingerprint_items = [project.script_text, project.shot_ids, authored]
+    if not legacy and version >= 2:
+        from ...agents.director.brief import directing_requests
+        requests = directing_requests(project)
+        if requests:
+            fingerprint_items.append(requests)
     if not legacy:
         fingerprint_items.insert(
             1,
@@ -131,6 +143,25 @@ def _decode_run(project_id: str, content: str) -> ManagedRun:
     payload = json.loads(content)
     run = ManagedRun.model_validate(payload)
     if "pending_shot_ids" in payload:
+        if payload.get("fingerprint_version", 1) < 2:
+            with _project_lock(project_id):
+                updates = {"fingerprint_version": 2}
+                try:
+                    previous = _project_fingerprint(project_id, legacy=False, version=1)
+                    # Fields absent from the old contract cannot authorize new attribution.
+                    from ...agents.director.brief import directing_requests
+                    project = load_project(project_id)
+                    compatible = (not directing_requests(project)
+                        and all(shot.dialogue_lines is None for shot in list_shots(project_id)))
+                    if compatible:
+                        current = _fingerprint(project_id)
+                        if run.plan_fingerprint == previous:
+                            updates["plan_fingerprint"] = current
+                        if run.current_fingerprint == previous:
+                            updates["current_fingerprint"] = current
+                except ValueError:
+                    pass
+                return _save_run(run.model_copy(update=updates))
         return run
 
     plan_ids = [step.shot_id for step in run.steps]
@@ -154,7 +185,8 @@ def _decode_run(project_id: str, content: str) -> ManagedRun:
                 updates["current_fingerprint"] = current_fingerprint
     except ValueError:
         pass
-    return run.model_copy(update=updates)
+    with _project_lock(project_id):
+        return _save_run(run.model_copy(update=updates))
 
 
 def load_run(project_id: str, run_id: str) -> ManagedRun | None:
@@ -333,6 +365,7 @@ def abandon_tail_handoff(
     reason: str,
     *,
     expected_event_id: str | None = None,
+    expected_fingerprint: str | None = None,
 ) -> ManagedRun:
     """Drop an incompatible planned tail while keeping the current Shot runnable."""
     with _project_lock(project_id):
@@ -350,6 +383,25 @@ def abandon_tail_handoff(
             )
         ):
             raise ValueError("Managed run changed while abandoning tail handoff")
+        if expected_fingerprint and _fingerprint(project_id) != expected_fingerprint:
+            raise ValueError("Shot brief or references changed before tail recovery")
+        from ..projects.store import load_shot, save_shot
+        from ..projects.layouts import sync_selected_layout_refs
+        target = load_shot(project_id, shot_id)
+        layout_id = run.prepared_tail_layout_ids.get(shot_id)
+        selected = [layout for layout in target.layout_refs
+                    if layout.selected_for_h3 and layout.origin
+                    and layout.origin.kind == "clip_tail_frame"] if target else []
+        if (not selected or any(layout.id != layout_id or layout.feedback_source != "managed_run"
+                                for layout in selected)):
+            raise ValueError("Tail selection changed or is not an automatic managed handoff")
+        target = sync_selected_layout_refs(target.model_copy(update={
+            "layout_refs": [layout.model_copy(update={"selected_for_h3": False})
+                            if layout.id == layout_id else layout for layout in target.layout_refs],
+            "layout_asset_id": None if target.layout_asset_id == selected[0].asset_id else target.layout_asset_id,
+        }))
+        save_shot(target.model_copy(update={"meta": {**target.meta,
+            "prompt_picture_signature": "", "prompt_layout_signature": "", "material_review_pending": True}}))
         steps = [
             item.model_copy(update={"tail_from_shot_id": None, "tail_reason": ""})
             if item.shot_id == shot_id else item
@@ -357,11 +409,19 @@ def abandon_tail_handoff(
         ]
         prepared = dict(run.prepared_tail_layout_ids)
         prepared.pop(shot_id, None)
+        sources = dict(run.tail_source_job_ids)
+        sources.pop(shot_id, None)
         return _save_run(run.model_copy(update={
             "steps": steps,
             "prepared_tail_layout_ids": prepared,
+            "tail_source_job_ids": sources,
+            "recovery_history": [*run.recovery_history, {
+                "action": "drop_optional_tail", "shot_id": shot_id,
+                "source_shot_id": step.tail_from_shot_id, "layout_id": layout_id,
+                "event_id": expected_event_id, "reason": reason,
+            }],
             "prompt_retry_count": 1,
-            "prompt_retry_error": reason[:1000],
+            "prompt_retry_error": "The incompatible automatic tail was removed. Write this Shot independently. " + reason[:1000],
             "current_fingerprint": _fingerprint(project_id),
         }))
 

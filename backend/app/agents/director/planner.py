@@ -17,6 +17,7 @@ from pydantic import (
 )
 
 from ...core.projects.models import RefRole, ShotMusicSegment
+from ...core.projects.dialogue import DialogueLine
 
 
 @runtime_checkable
@@ -117,6 +118,7 @@ class ShotDraft(BaseModel):
     )
     duration_s: float = 8.0
     dialogue: list[str] = Field(default_factory=list)
+    dialogue_lines: list[DialogueLine] | None = None
     music_segment: ShotMusicSegment | None = Field(
         default=None,
         description=(
@@ -233,6 +235,7 @@ class ShotRevisionSubmission(BaseModel):
     composition: str | None = None
     duration_s: float | None = None
     dialogue: list[str] | None = None
+    dialogue_lines: list[DialogueLine] | None = None
     music_segment: ShotMusicSegment | None = None
 
     @field_validator(

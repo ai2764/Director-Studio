@@ -256,6 +256,8 @@ def test_submit_stages_voice_reference_in_audio_order(
             "meta": {"prompt_voice_signature": projects_api._voice_signature([voice_ref])},
         }
     )
+    from test_director_dialogue_attribution import certify_test_shot
+    shot = certify_test_shot(project, shot, "Mia")
     save_shot(shot)
     project.shot_ids = [shot.id]
     save_project(project)
@@ -306,6 +308,8 @@ def test_submit_rejects_native_audio_instead_of_using_private_lock(
             "meta": {"prompt_voice_signature": projects_api._voice_signature([voice_ref])},
         }
     )
+    from test_director_dialogue_attribution import certify_test_shot
+    shot = certify_test_shot(project, shot, "Mia")
     save_shot(shot)
     project.shot_ids = [shot.id]
     save_project(project)

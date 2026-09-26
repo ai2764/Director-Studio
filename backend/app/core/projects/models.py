@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .dialogue import DialogueLine, validate_dialogue_projection
+
 
 class ShotStatus(str, Enum):
     draft = "draft"
@@ -169,6 +171,7 @@ class Shot(BaseModel):
     music_segment: ShotMusicSegment | None = None
     prompt_sections: PromptSections = Field(default_factory=PromptSections)
     dialogue: list[str] = Field(default_factory=list)
+    dialogue_lines: list[DialogueLine] | None = None
     layout_asset_id: str | None = None
     layout_review_status: str | None = None  # pending_review | approved | rejected
     ref_frame_job_id: str | None = None
@@ -202,6 +205,12 @@ class Shot(BaseModel):
             )
         ]
         return values
+
+    @model_validator(mode="after")
+    def _validate_dialogue_lines(self) -> "Shot":
+        if self.dialogue_lines is not None:
+            validate_dialogue_projection(self.dialogue, self.dialogue_lines)
+        return self
 
     @model_validator(mode="after")
     def _validate_voice_refs(self) -> "Shot":

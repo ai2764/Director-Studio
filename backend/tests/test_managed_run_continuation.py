@@ -506,7 +506,13 @@ async def test_tail_prompt_failure_hands_selected_frame_and_error_to_agent(monke
 
 
 @pytest.mark.asyncio
-async def test_rejected_tail_continuity_falls_back_to_independent_shot(monkeypatch) -> None:
+@pytest.mark.parametrize("failure_kind, interruption, initial_failure", [
+    ("tail_incompatible", "", False), ("contract", "", False),
+    ("candidate", "", False), ("unknown", "", False),
+    ("tail_incompatible", "edit", False), ("tail_incompatible", "stop", False),
+    ("tail_incompatible", "", True),
+])
+async def test_rejected_tail_continuity_falls_back_to_independent_shot(monkeypatch, failure_kind, interruption, initial_failure) -> None:
     from app.agents.director.chat_orchestrator import ChatResult
     from app.core.managed_runs import continuation
     from app.core.managed_runs.store import _save_run
@@ -541,20 +547,41 @@ async def test_rejected_tail_continuity_falls_back_to_independent_shot(monkeypat
         return {"layout_ref_id": layout.id, "layout_asset_id": layout.asset_id}
 
     class FailingService:
+        calls = 0
+
         async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
-            raise ValueError("Prompt continuity review: tail and target are incompatible")
+            self.calls += 1
+            error = ValueError("Prompt continuity review: review failed")
+            error.failure_kind = failure_kind if initial_failure or self.calls > 1 else "candidate"
+            raise error
 
     attempts = []
 
     async def fake_agent(current, svc):
         step = current_step(current)
         attempts.append((current.prompt_retry_count, step.tail_from_shot_id))
-        if len(attempts) == 1:
-            return ChatResult(
-                reply="Prompt failed",
-                failure_code="PROMPT_GENERATION_FAILED",
-                failure_message="Prompt continuity review: tail and target are incompatible",
-            )
+        if step.tail_from_shot_id:
+            from app.agents.director.harness_runtime import BackendTurn
+            from app.core.managed_runs.context import ManagedTurnScope, managed_turn_scope
+            token = managed_turn_scope.set(ManagedTurnScope(
+                project_id=current.project_id, run_id=current.run_id,
+                event_id=current.pending_event_id, shot_id="sht_2"))
+            try:
+                turn = BackendTurn(current.project_id, "Write Shot 2's prompt", svc, None)
+                await turn.dispatch("context", {})
+                payload = await turn.dispatch("tool", {
+                    "name": "write_prompt", "arguments": {"shot_id": "sht_2"}, "call_id": "write-1",
+                })
+                assert payload.get("failure_kind") == failure_kind, payload
+                result = turn.finish({"reply": "Prompt failed", "thinking": ""})
+                if interruption == "edit":
+                    edited = load_shot(current.project_id, "sht_2")
+                    save_shot(edited.model_copy(update={"camera_motion": "New user camera request"}))
+                elif interruption == "stop":
+                    request_stop(current.project_id, current.run_id)
+                return result
+            finally:
+                managed_turn_scope.reset(token)
         bind_job(current.project_id, current.run_id, "sht_2", "job_without_tail")
         return ChatResult(reply="Job started")
 
@@ -566,13 +593,22 @@ async def test_rejected_tail_continuity_falls_back_to_independent_shot(monkeypat
 
     saved = load_run(run.project_id, run.run_id)
     target = load_shot(run.project_id, "sht_2")
-    assert attempts == [(1, "sht_1"), (1, None)]
+    if failure_kind != "tail_incompatible" or interruption:
+        assert attempts == [(1, "sht_1")]
+        assert saved.state == ("stopping" if interruption == "stop" else "paused")
+        assert saved.steps[1].tail_from_shot_id == "sht_1"
+        assert target.layout_refs[0].selected_for_h3 is True
+        assert saved.recovery_history == []
+        return
+    assert attempts == ([(1, None)] if initial_failure else [(1, "sht_1"), (1, None)])
     assert saved.state == "active"
     assert saved.current_job_id == "job_without_tail"
     assert saved.steps[1].tail_from_shot_id is None
     assert "sht_2" not in saved.prepared_tail_layout_ids
     assert target.layout_refs[0].selected_for_h3 is False
     assert target.layout_asset_id is None
+    assert saved.recovery_history[-1]["action"] == "drop_optional_tail"
+    assert saved.recovery_history[-1]["source_shot_id"] == "sht_1"
 
 
 @pytest.mark.asyncio

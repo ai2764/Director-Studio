@@ -62,6 +62,7 @@ class BackendTurn:
         self.successful_prompt_shot_ids: set[str] = set()
         self.storyboard_failed = False
         self.terminal_failure: str | None = None
+        self.prompt_failure_kind = "unknown"
         self.expected_state: str | None = None
         self.local_generation_receipt: str | None = None
         self.offered_context: dict | None = None
@@ -364,6 +365,7 @@ class BackendTurn:
         if name == "save_storyboard":
             self.storyboard_failed = not result["ok"]
         if name == "write_prompt" and not result["ok"]:
+            self.prompt_failure_kind = result.get("failure_kind", "unknown")
             failure = str(result.get("error") or "Prompt generation failed.")
             self.terminal_failure = (
                 "Prompt generation did not complete after bounded internal repair. "
@@ -415,6 +417,7 @@ class BackendTurn:
         return ChatResult(reply=reply, project=project, shots=shots, actions=self.actions,
                           failure_code="PROMPT_GENERATION_FAILED" if self.terminal_failure else "",
                           failure_message=self.terminal_failure or "",
+                          failure_kind=self.prompt_failure_kind,
                           images=images, thinking=result.get("thinking", ""), steps=self.notes)
 
 

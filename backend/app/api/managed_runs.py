@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ValidationError
@@ -79,11 +80,17 @@ async def plan_managed_run(project_id: str) -> ManagedRunView:
     if not shots:
         raise HTTPException(409, "Plan Shots before starting managed video")
 
+    from ..agents.director.brief import duration_issues, directing_requests
+    issues = duration_issues(project, shots)
+    if issues:
+        raise HTTPException(422, "; ".join(issues))
+    input_fingerprint = _fingerprint(project_id)
+
     from .projects import _make_chat_fn
 
     chat_fn = await _make_chat_fn(on_progress=None)
     brief = "\n".join(
-        f"{index}. {shot.id} — {shot.title}: {shot.script_beat}; "
+        f"{index}. {shot.id} — {shot.title} (scene={shot.scene_id}): {shot.script_beat}; "
         f"duration={shot.duration_s}s; framing={shot.shot_type}; "
         f"angle={shot.camera_angle}; camera_motion={shot.camera_motion}; "
         f"composition={shot.composition}; dialogue={shot.dialogue}; "
@@ -97,15 +104,48 @@ async def plan_managed_run(project_id: str) -> ManagedRunView:
         "handoff, target_shot_id is the later Shot that inherits the final frame from "
         "the earlier source_shot_id. Give a concrete reason based on action, camera, "
         "and composition. "
+        "H3 Pictures condition the whole clip; they are not exact first-frame inputs. "
+        "A narrative connection, cause-and-effect, shared actors, or private/public contrast "
+        "does not require a visual handoff. Use a cut for a location/time change unless the "
+        "authored shot explicitly describes a feasible continuous movement between them. "
+        "These are tentative continuity choices; actual generated tails will be reviewed before use. "
+        "First compare the saved Shots against the screenplay and directing requests. Report "
+        "observed violations of explicit camera ownership/style, roles, required beats or forbidden "
+        "dialogue in storyboard_issues. Each issue must include requirement_quote copied verbatim "
+        "from the screenplay/directing requests, shot_id, field, shot_quote copied verbatim from "
+        "that saved field, and reason. Do not claim dialogue exists when dialogue is empty. "
+        "Newer explicit requests override older ones; do not invent preferences. "
+        "The saved storyboard is the current authored edit, not a verbatim transcription of "
+        "the screenplay. Additional close-ups, inserts, returns to a location and repeated beats "
+        "are allowed unless an explicit user requirement forbids them. Do not report redundancy, "
+        "a Shot missing from the original screenplay, or a scene ID being reused as a blocking "
+        "violation. A concern without a directly conflicting explicit requirement must not block this run. "
         "Do not change Shot content."
     )
     response = await chat_fn(
-        system, f"Current Shot briefs:\n{brief}",
+        system, f"Screenplay:\n{project.script_text}\nDirecting requests (oldest first):\n"
+        + json.dumps(directing_requests(project), ensure_ascii=False)
+        + f"\nCurrent Shot briefs:\n{brief}",
         format=RunPlan.model_json_schema(),
     )
+    if _fingerprint(project_id) != input_fingerprint:
+        raise HTTPException(409, "Shot brief or references changed during planning; plan again")
     try:
         content = response.get("content") if isinstance(response, dict) else response
         plan = RunPlan.model_validate(json.loads(content) if isinstance(content, str) else content)
+        grounded_issues = []
+        sources = [project.script_text, *directing_requests(project)]
+        for issue in plan.storyboard_issues:
+            shot = next((item for item in shots if item.id == issue.shot_id), None)
+            field = getattr(shot, issue.field, "") if shot else ""
+            field_text = "\n".join(field) if isinstance(field, list) else str(field)
+            if (any(issue.requirement_quote in source for source in sources)
+                    and issue.shot_quote in field_text):
+                grounded_issues.append(issue.reason)
+            else:
+                logging.getLogger(__name__).warning("Ignored ungrounded planning claim: %s", issue.model_dump())
+        if grounded_issues:
+            raise ValueError("Storyboard does not meet the directing brief: " + "; ".join(grounded_issues))
         return _run_view(create_draft(project_id, _build_run_steps(shots, plan)))
     except (ValueError, TypeError, ValidationError) as exc:
         raise HTTPException(422, f"Managed run plan was invalid: {exc}") from exc

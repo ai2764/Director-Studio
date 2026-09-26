@@ -350,7 +350,7 @@ def _shot_from_draft(
     status = ShotStatus.blocked if blocked else ShotStatus.ref_frame_pending
     if not blocked:
         status = ShotStatus.ref_frame_pending
-    return Shot(
+    shot = Shot(
         id=new_shot_id(),
         project_id=project_id,
         scene_id=draft.scene_id,
@@ -369,6 +369,11 @@ def _shot_from_draft(
         blocked_reasons=blocked,
         prompt_sections=PromptSections(),
     )
+    if draft.dialogue_lines is not None:
+        from ...core.projects.dialogue import apply_dialogue_update
+        shot = apply_dialogue_update(shot, {"dialogue": list(draft.dialogue),
+                                          "dialogue_lines": draft.dialogue_lines})
+    return shot
 
 
 def _validate_storyboard_bindings(

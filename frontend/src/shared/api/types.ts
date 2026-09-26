@@ -150,6 +150,14 @@ export interface Shot {
   voice_refs: ShotVoiceRef[];
   prompt_sections: PromptSections;
   dialogue: string[];
+  dialogue_lines?: {
+    line_id: string;
+    speaker_id: string;
+    speaker_name: string;
+    text: string;
+    language: string;
+    source: { kind: "script" | "shot_revision"; source_hash: string; scene_id: string; quote: string; occurrence: number };
+  }[] | null;
   layout_asset_id: string | null;
   layout_review_status: LayoutReviewStatus | string | null;
   ref_frame_job_id: string | null;

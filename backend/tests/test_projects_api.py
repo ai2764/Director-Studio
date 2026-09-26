@@ -2197,7 +2197,8 @@ async def test_make_chat_fn_forces_single_actor_design_tool_through_structured_o
     assert captured[0]["format"]["properties"]["tool"]["const"] == "queue_actor_design"
 
 
-def test_approve_shot_and_submit_h3(client, api_env, monkeypatch):
+@pytest.mark.parametrize("edit_during_start", [False, True])
+def test_approve_shot_and_submit_h3(client, api_env, monkeypatch, edit_during_start):
     _seed_layout(api_env["library"])
     _seed_actor(api_env["library"])
     project = create_project("P", "script")
@@ -2232,6 +2233,8 @@ def test_approve_shot_and_submit_h3(client, api_env, monkeypatch):
         layout_review_status="approved",
     )
     shot = shot.model_copy(update={"meta": _fresh_layout_prompt_meta(shot)})
+    from test_director_dialogue_attribution import certify_test_shot
+    shot = certify_test_shot(project, shot, "Actor")
     save_shot(shot)
     project.shot_ids = [shot.id]
     save_project(project)
@@ -2244,11 +2247,18 @@ def test_approve_shot_and_submit_h3(client, api_env, monkeypatch):
 
     async def capture_start(job, *, images=None):
         started.append({"job": job, "images": images})
+        if edit_during_start:
+            current = load_shot(project.id, shot.id)
+            save_shot(current.model_copy(update={"title": "New user title"}))
         return job
 
     import app.api.projects as projects_api
 
     monkeypatch.setattr(projects_api, "start_pipeline_job", capture_start)
+    cancelled = []
+    async def capture_cancel(job_id):
+        cancelled.append(job_id)
+    monkeypatch.setattr("app.core.jobs.cancel_job", capture_cancel)
 
     monkeypatch.setattr(projects_api.settings, "h3_minimax_api_key", None)
     missing_key = client.post(
@@ -2265,6 +2275,11 @@ def test_approve_shot_and_submit_h3(client, api_env, monkeypatch):
         f"/api/shots/{shot.id}/submit",
         json={"h3_provider": "minimax", "width": 1280, "height": 704},
     )
+    if edit_during_start:
+        assert r2.status_code == 409, r2.text
+        assert cancelled == [started[0]["job"].id]
+        assert load_shot(project.id, shot.id).title == "New user title"
+        return
     assert r2.status_code == 200, r2.text
     body = r2.json()
     assert body["status"] == ShotStatus.queued.value
@@ -2965,6 +2980,27 @@ async def test_legacy_deselect_removes_the_current_layout_from_h3(
     assert body["meta"]["prompt_layout_asset_ids"] == []
     assert body["meta"]["prompt_layout_asset_id"] == ""
     assert list(started[0]["images"]) == ["ref_0", "ref_1", "ref_2"]
+
+
+def test_patch_shot_roundtrip_preserves_then_invalidates_attribution(client, api_env):
+    from test_director_dialogue_attribution import certify_test_shot, writer_sections
+    project = create_project("Roundtrip", "Visitor: Hello.")
+    shot = Shot(id="sht_dialogue_roundtrip", project_id=project.id, scene_id="s1",
+        title="Greeting", script_beat="Greeting", duration_s=6, dialogue=["Hello."],
+        prompt_sections=PromptSections(**writer_sections()))
+    shot = certify_test_shot(project, shot)
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    url = f"/api/shots/{shot.id}"
+    response = client.patch(url, json={"dialogue": shot.dialogue,
+        "dialogue_lines": [x.model_dump() for x in shot.dialogue_lines]})
+    assert response.status_code == 200, response.text
+    assert response.json()["dialogue_lines"] == [x.model_dump() for x in shot.dialogue_lines]
+    assert response.json()["meta"]["prompt_dialogue_contract"] == shot.meta["prompt_dialogue_contract"]
+    changed = client.patch(url, json={"dialogue": ["Goodbye."]})
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["dialogue_lines"] is None
+    assert "prompt_dialogue_contract" not in changed.json()["meta"]
 
 
 def test_patch_shot_prompt(client, api_env):

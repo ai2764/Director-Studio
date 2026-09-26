@@ -494,13 +494,7 @@ describe("ProductionPage prompt refresh", () => {
     };
     vi.mocked(getProject).mockResolvedValue(detail(withReference));
     replaceShotMaterialsMock.mockResolvedValueOnce(updated);
-    getManagedRunMock
-      .mockResolvedValueOnce(savedRun)
-      .mockResolvedValueOnce({
-        ...savedRun,
-        is_stale: true,
-        stale_reason: "Shot brief, order, dialogue, references, or audio changed",
-      });
+    getManagedRunMock.mockResolvedValue(savedRun);
     render(<ProductionPage active mobile />);
 
     fireEvent.click(await screen.findByRole("button", { name: /Managed run/ }));
@@ -509,11 +503,16 @@ describe("ProductionPage prompt refresh", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Edit materials" }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove Picture 1 · act_mia" }));
+    getManagedRunMock.mockResolvedValue({
+      ...savedRun, is_stale: true,
+      stale_reason: "Shot brief, order, dialogue, references, or audio changed",
+    });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     fireEvent.click(await screen.findByRole("button", { name: /Managed run/ }));
     expect(await screen.findByRole("button", { name: "Plan managed run" })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Resume selected" })).toBeNull());
     expect(screen.queryByText("Shot brief, order, dialogue, references, or audio changed")).toBeNull();
   });
 
@@ -788,6 +787,10 @@ describe("ProductionPage prompt refresh", () => {
 
   it("saves a manual Voice selection with contiguous Audio order", async () => {
     const current = shot(generatedPrompt);
+    current.dialogue = ["Hello."];
+    current.dialogue_lines = [{ line_id: "l1", speaker_id: "person-1", speaker_name: "Mia",
+      text: "Hello.", language: "English", source: { kind: "shot_revision",
+        source_hash: "revision-1", scene_id: current.scene_id, quote: "Mia: Hello.", occurrence: 0 } }];
     const mia = {
       id: "voi_mia",
       kind: "voices",

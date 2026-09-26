@@ -11,6 +11,7 @@ from ..media.tail_frame import extract_clip_tail_frame
 from ..jobs import cancel_job
 from ..jobs.store import list_jobs, load_job
 from ..schemas import JobStatus
+from ..h3.errors import prompt_failure_kind
 from ..projects.layouts import LayoutReviewStatus, sync_selected_layout_refs
 from ..projects.store import list_projects, load_shot, save_shot
 from ..projects.transitions import review_layout_reference, select_layout_reference
@@ -138,17 +139,8 @@ async def prepare_planned_tail(run: ManagedRun, svc: Any) -> None:
     target = load_shot(run.project_id, step.shot_id)
     if target is None:
         raise ValueError("Planned target Shot no longer exists")
-    prepared_layout_id = run.prepared_tail_layout_ids.get(step.shot_id)
-    prepared = next(
-        (layout for layout in target.layout_refs if layout.id == prepared_layout_id),
-        None,
-    )
-    if (
-        prepared is not None
-        and prepared.origin is not None
-        and prepared.origin.source_job_id == source_job_id
-    ):
-        return
+    # Reuse the extracted file after restart, but still review its current
+    # compatibility: an old prepared marker does not certify today's brief.
     prior = next((layout for layout in target.layout_refs if layout.origin
                   and layout.origin.source_job_id == source_job_id), None)
     if prior is None:
@@ -202,6 +194,13 @@ async def prepare_planned_tail(run: ManagedRun, svc: Any) -> None:
             layout_id,
             expected_event_id=run.pending_event_id,
         )
+        if prompt_failure_kind(exc) == "tail_incompatible":
+            abandon_tail_handoff(
+                run.project_id, run.run_id, step.shot_id, str(exc),
+                expected_event_id=run.pending_event_id,
+                expected_fingerprint=selected_fingerprint,
+            )
+            return
         record_prompt_retry(
             run.project_id,
             run.run_id,
@@ -329,22 +328,22 @@ async def continue_run(project_id: str, run_id: str) -> None:
                     expected_event_id=turn_event_id,
                 )
                 continue
-            failure_message = getattr(result, "failure_message", "") or result.reply
+            failure_message = getattr(result, "failure_message", "") or getattr(result, "reply", "")
             failed_step = current_step(latest)
             if (
                 getattr(result, "failure_code", "") == "PROMPT_GENERATION_FAILED"
                 and latest.prompt_retry_count >= 1
                 and failed_step is not None
                 and failed_step.tail_from_shot_id
-                and failure_message.startswith("Prompt continuity review:")
+                and getattr(result, "failure_kind", "unknown") == "tail_incompatible"
             ):
-                _clear_unplanned_managed_tails(latest, failed_step)
                 latest = abandon_tail_handoff(
                     project_id,
                     run_id,
                     failed_step.shot_id,
-                    "The planned continuity tail was rejected and removed. Write this Shot independently without a tail frame.",
+                    failure_message,
                     expected_event_id=turn_event_id,
+                    expected_fingerprint=latest.current_fingerprint,
                 )
                 continue
             pause_run(

@@ -30,7 +30,19 @@ class TailHandoffDecision(BaseModel):
     )
 
 
+class StoryboardConflict(BaseModel):
+    requirement_quote: str = Field(min_length=1, description="Exact nonempty quote from the screenplay or directing requests.")
+    shot_id: str
+    field: Literal["script_beat", "dialogue", "camera_motion", "camera_angle", "composition", "shot_type"]
+    shot_quote: str = Field(min_length=1, description="Exact nonempty quote from this saved Shot field; never invent content.")
+    reason: str = Field(min_length=1)
+
+
 class RunPlan(BaseModel):
+    storyboard_issues: list[StoryboardConflict] = Field(default_factory=list, description=(
+        "Concrete contradictions between saved Shots and explicit screenplay/directing requirements. "
+        "Cite the requirement and conflicting Shot; no speculative style preferences."
+    ))
     tail_handoffs: list[TailHandoffDecision] = Field(
         default_factory=list,
         description=(
@@ -46,6 +58,7 @@ class ManagedRun(BaseModel):
     steps: list[RunStep]
     plan_fingerprint: str
     current_fingerprint: str = ""
+    fingerprint_version: int = 2
     state: RunState = "draft"
     resolution_preset: str | None = None
     current_index: int = 0
@@ -61,6 +74,7 @@ class ManagedRun(BaseModel):
     paused_reason: str = ""
     prompt_retry_count: int = 0
     prompt_retry_error: str = ""
+    recovery_history: list[dict] = Field(default_factory=list)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 

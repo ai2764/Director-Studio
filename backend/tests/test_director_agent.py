@@ -98,7 +98,11 @@ class FakePlanProvider:
         self.calls.append(PlanCall(system, user, tuple(guides)))
         if not self._responses:
             raise RuntimeError("FakePlanProvider exhausted")
-        return self._responses.pop(0)
+        result = self._responses.pop(0)
+        if "Director internal response contract" in system:
+            return json.dumps({"prompt_sections": json.loads(result), "dialogue_uses": [
+                {"line_ids": ["l1"], "speaker_id": "char_1", "block_indexes": [0]}]})
+        return result
 
 
 class RecordingOrchestrator:
@@ -538,6 +542,10 @@ async def test_plan_and_h3_writer_request_different_guides(director_dirs, enable
 
     await svc.plan_project(project.id)
     shot = list_shots(project.id)[0]
+    from app.core.projects.dialogue import apply_dialogue_update
+    from test_director_dialogue_attribution import line_payload
+    shot = apply_dialogue_update(shot, {"dialogue_lines": [line_payload(text="Hello there.")]})
+    save_shot(shot)
     enable_reference_review(provider)
     await svc.write_prompts_after_layout(shot.id)
 
@@ -2296,6 +2304,9 @@ async def test_write_prompts_after_layout(director_dirs, enable_reference_review
         ],
         dialogue=["Hello."],
     )
+    from app.core.projects.dialogue import apply_dialogue_update
+    from test_director_dialogue_attribution import line_payload
+    shot = apply_dialogue_update(shot, {"dialogue_lines": [line_payload()]})
     save_shot(shot)
     project.shot_ids = [shot.id]
     save_project(project)

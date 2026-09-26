@@ -25,6 +25,8 @@ def project_context_blob(
     from .tool_handlers.project import _load_storyboard_replacement
 
     inv = _inventory(project.id)
+    from .brief import directing_requests, duration_issues
+    requirements_issues = duration_issues(project, shots) if shots else []
     script = project.script_text or ""
     script_hash = _script_hash(script)
     agent_ctx = load_agent_context(project.id)
@@ -73,6 +75,8 @@ def project_context_blob(
         next_step = "write_or_rewrite_prompt"
     else:
         next_step = "ready_for_h3"
+    if requirements_issues:
+        next_step = "revise_storyboard_requirements"
 
     def layout_refs_context(
         shot: Shot,
@@ -225,6 +229,8 @@ def project_context_blob(
             ),
             "blocked": shot.blocked_reasons,
             "script_beat": (shot.script_beat or "")[:1200],
+            "dialogue": list(shot.dialogue),
+            "dialogue_lines": [line.model_dump(mode="json") for line in shot.dialogue_lines] if shot.dialogue_lines is not None else None,
             "shot_type": shot.shot_type,
             "camera_angle": shot.camera_angle,
             "camera_motion": shot.camera_motion,
@@ -256,6 +262,9 @@ def project_context_blob(
             ),
         },
         "script_chars": len(script),
+        "directing_requests": directing_requests(project),
+        "storyboard_requirement_issues": requirements_issues,
+        "storyboard_total_duration_s": sum(shot.duration_s for shot in shots),
         "script_hash": script_hash,
         "last_shot_id": shots[-1].id if shots else None,
         "script_hash_at_last_plan": planned_hash or None,

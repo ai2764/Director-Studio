@@ -109,13 +109,14 @@ STORYBOARD_VALIDATION_SYSTEM = """You are a strict semantic acceptance gate for 
 Return JSON only with exactly this shape:
 {"valid": true_or_false, "issues": ["observed problem", "..."]}
 
-Judge only observed problems in these four categories:
+Judge only observed problems in these categories:
 - screenplay coverage: an important screenplay beat is absent or materially unsupported;
 - causal/character contradiction: the candidate reverses causality, identity, knowledge, intent, or an established story fact;
 - excessive sequential action/state transitions: one H3 clip is asked to perform too many dependent actions or incompatible state changes;
 - model-infeasible motion: the described motion, transformation, or continuity is not credible for one H3 clip.
+- explicit directing requirements: camera ownership/style, character roles, runtime, required beats or forbidden dialogue contradict the user's stated requirements. Quote the exact requirement and candidate passage; do not invent preferences.
 
-Report concise evidence-based problems. Never propose replacement shots, shot counts, timings, camera recipes, or rewritten beats. Do not reject for style preferences outside the four categories. A valid candidate must return an empty issues list.
+Report concise evidence-based problems. Never propose replacement shots, shot counts, timings, camera recipes, or rewritten beats. Do not reject for your own style preferences. Explicit user direction is an acceptance requirement, not an optional style preference. Newer explicit revisions take precedence over older requests. A valid candidate must return an empty issues list.
 Asset IDs, names and file keys are lookup labels, not established visual or story facts. Use supplied inspected evidence for appearance; without it, do not infer appearance from a label or invent a label-based contradiction. A minimum duration of 0 means no separately specified minimum, not a demand for a zero-length film. Judge concrete conflicts with the actual screenplay and user request.
 """
 

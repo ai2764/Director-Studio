@@ -207,7 +207,12 @@ class Provider:
 
     async def complete(self, system, user, **kwargs):
         self.requests.append(user)
-        return next(self.results).model_dump_json()
+        import json
+        result = next(self.results)
+        if "Director internal response contract" in system:
+            return json.dumps({"prompt_sections": result.model_dump(), "dialogue_uses": [
+                {"line_ids": ["l1"], "speaker_id": "char_1", "block_indexes": [0]}]})
+        return result.model_dump_json()
 
 
 @pytest.fixture
@@ -218,6 +223,9 @@ def saved_shot(tmp_path, monkeypatch):
     shot = Shot(id="sht_greeting", project_id=project.id, scene_id="sc01", title="Greeting",
                 script_beat="A watchmaker greets a visitor.", duration_s=6,
                 dialogue=["Hello."], prompt_sections=prompt())
+    from app.core.projects.dialogue import apply_dialogue_update
+    from test_director_dialogue_attribution import line_payload
+    shot = apply_dialogue_update(shot, {"dialogue_lines": [line_payload()]})
     save_shot(shot)
     save_project(project.model_copy(update={"shot_ids": [shot.id]}))
     return shot
@@ -245,9 +253,8 @@ async def test_plain_write_normalizes_unambiguous_english_dialogue_tag_before_sa
         orchestrator=Orchestrator(),
     ).write_prompts_after_layout(saved_shot.id)
 
-    assert updated.prompt_sections.detailed_description == (
-        '[Shot 1] The watchmaker says <d>[English] Hello.</d>'
-    )
+    assert '<d>[English] Hello.</d>' in updated.prompt_sections.detailed_description
+    assert '<d>English' not in updated.prompt_sections.detailed_description
     assert load_shot(saved_shot.project_id, saved_shot.id) == updated
     assert len(provider.requests) == 1
 

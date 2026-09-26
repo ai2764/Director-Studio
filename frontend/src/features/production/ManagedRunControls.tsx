@@ -65,6 +65,8 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const lastProgress = useRef("");
+  const requestVersion = useRef(0);
+  const shotRevision = JSON.stringify(shots);
   const onChanged = useRef(onProjectChanged);
   onChanged.current = onProjectChanged;
   const onStateChanged = useRef(onStateChange);
@@ -97,46 +99,57 @@ export function ManagedRunControls({ projectId, shots, provider, presets, onProj
   }, [run?.run_id, run?.state]);
 
   useEffect(() => {
-    let cancelled = false;
     setRun(null);
     setResolution("");
     setSelected(new Set());
+    setError("");
+  }, [projectId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const version = ++requestVersion.current;
     getManagedRun(projectId).then((next) => {
-      if (!cancelled) {
+      if (!cancelled && version === requestVersion.current) {
         const displayRun = displayableRun(next);
         setRun(displayRun);
+        setError("");
         if (displayRun?.resolution_preset) setResolution(displayRun.resolution_preset);
       }
     }).catch((cause) => {
-      if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+      if (!cancelled && version === requestVersion.current) setError(cause instanceof Error ? cause.message : String(cause));
     });
     return () => { cancelled = true; };
-  }, [projectId]);
+  }, [projectId, shotRevision, open]);
 
   useEffect(() => {
     if (run?.state !== "active" && run?.state !== "stopping") return;
     let cancelled = false;
     const timer = window.setInterval(() => {
+      const version = ++requestVersion.current;
       getManagedRun(projectId).then((next) => {
-        if (cancelled || !next) return;
+        if (cancelled || version !== requestVersion.current) return;
         setRun(displayableRun(next));
+        setError("");
+        if (!next) return;
         const progress = `${next.run_id}:${next.state}:${next.current_index}:${next.current_job_id}`;
         if (progress !== lastProgress.current) {
           lastProgress.current = progress;
           onChanged.current();
         }
       }).catch((cause) => {
-        if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+        if (!cancelled && version === requestVersion.current) setError(cause instanceof Error ? cause.message : String(cause));
       });
     }, 2500);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [projectId, run?.state]);
 
   async function perform(action: () => Promise<ManagedRun>) {
+    ++requestVersion.current;
     setBusy(true);
     setError("");
     try {
       const next = await action();
+      ++requestVersion.current;
       const displayRun = displayableRun(next);
       setRun(displayRun);
       if (displayRun?.resolution_preset) setResolution(displayRun.resolution_preset);

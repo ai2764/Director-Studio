@@ -896,6 +896,7 @@ def test_save_storyboard_tool_exposes_the_complete_typed_shot_draft_shape():
         "dialogue",
         "music_segment",
         "asset_matches",
+        "dialogue_lines",
         "voice_matches",
     }
     assert "shot_id" not in shot_schema["required"]
@@ -971,6 +972,7 @@ def test_revise_shot_tool_only_accepts_partial_authored_fields():
         "duration_s",
         "dialogue",
         "music_segment",
+        "dialogue_lines",
     }
     assert "refs" not in parameters["properties"]
     assert "layout_refs" not in parameters["properties"]
@@ -1030,6 +1032,8 @@ async def test_native_revise_shot_returns_only_persisted_target(
     assert payloads[0]["shot"]["id"] == shot.id
     assert payloads[0]["shot"]["script_beat"] == "Mia faces camera."
     assert payloads[0]["shot"]["duration_s"] == 5.0
+    assert payloads[0]["duration_budget"]["total_s"] == shot_count * 5.0
+    assert payloads[0]["duration_budget"]["deficit_s"] == 0
     assert load_shot(project.id, shot.id).script_beat == "Mia faces camera."
     persisted = list_shots(project.id)
     assert {s.id: s.model_dump(mode="json") for s in persisted if s.id != shot.id} == before

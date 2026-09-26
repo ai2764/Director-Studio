@@ -690,7 +690,9 @@ async def handle_layout_tool(
             logger.exception("write_prompt tool failed")
             notes.append(f"Prompt writing failed: {e}")
             if result_payloads is not None:
-                result_payloads.append({"ok": False, "shot_id": shot.id, "error": str(e)})
+                from ....core.h3.errors import prompt_failure_kind
+                result_payloads.append({"ok": False, "shot_id": shot.id, "error": str(e),
+                                        "failure_kind": prompt_failure_kind(e)})
 
     elif name == "reject_layout" or name == "reject":
         shot = resolve_shot(

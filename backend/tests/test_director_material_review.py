@@ -78,7 +78,8 @@ class Provider:
                                "blocking_question": "Which wardrobe should be retained?" if self.fault == "conflict" else None})
         if self.mutate:
             self.mutate("prompt", len(self.text))
-        return json.dumps(sections(self.count))
+        return json.dumps({"prompt_sections": sections(self.count), "dialogue_uses": [
+            {"line_ids": ["l1"], "speaker_id": "char_1", "block_indexes": [0]}]})
 
 
 class ObservationProvider:
@@ -331,6 +332,17 @@ def material_shot(tmp_path, monkeypatch):
                 script_beat="The watchmaker examines the gear.", duration_s=6, dialogue=["Hello."],
                 refs=refs, prompt_sections=PromptSections(**sections()),
                 meta={"material_review_pending": True, "material_changes": {"reordered": [1]}})
+    from app.core.projects.dialogue import apply_dialogue_update
+    from app.core.h3.dialogue_binding import DialoguePromptDraft, annotate_speakers
+    from app.agents.director.dialogue_preflight import prompt_dialogue_record
+    from test_director_dialogue_attribution import line_payload
+    payload = {**line_payload(), "speaker_name": "watchmaker"}
+    shot = apply_dialogue_update(shot, {"dialogue_lines": [payload]})
+    draft = DialoguePromptDraft(prompt_sections=shot.prompt_sections, dialogue_uses=[
+        {"line_ids": ["l1"], "speaker_id": "char_1", "block_indexes": [0]}])
+    shot = shot.model_copy(update={"prompt_sections": annotate_speakers(draft, shot.dialogue_lines)})
+    record = prompt_dialogue_record(project, shot, shot.dialogue_lines, draft)
+    shot = shot.model_copy(update={"meta": {**shot.meta, "prompt_dialogue_contract": record}})
     neighbor = shot.model_copy(update={"id": "sht_neighbor", "title": "Untouched"}, deep=True)
     save_shot(shot)
     save_shot(neighbor)
@@ -530,6 +542,20 @@ async def test_ref_change_during_review_or_prompt_never_overwrites_user_edit(mat
 
 
 @pytest.mark.asyncio
+async def test_confirmed_choices_changed_during_review_rejects_stale_prompt(material_shot):
+    from app.agents.director.service import _script_hash
+    project, shot, _, _ = material_shot
+    def mutate(phase, count):
+        if phase == "prompt":
+            save_project(project.model_copy(update={"asset_coverage_review": AssetCoverageReview(
+                script_hash=_script_hash(project.script_text), status="reviewed", notes="Use the new exterior scene.")}))
+    orch = Orchestrator()
+    with pytest.raises(ValueError, match="changed"):
+        await DirectorService(plan_provider=Provider(orch, mutate=mutate), orchestrator=orch).write_prompts_after_layout(shot.id)
+    assert load_shot(project.id, shot.id) == shot
+
+
+@pytest.mark.asyncio
 async def test_same_asset_file_replacement_invalidates_review(material_shot):
     project, shot, _, files = material_shot
     orch = Orchestrator()
@@ -604,6 +630,44 @@ async def test_failed_prompt_preserves_both_raw_drafts_and_validation_errors(mat
          "error": "prompt section 'summary' missing or empty"},
     ]
     assert load_shot(project.id, shot.id) == shot
+
+
+@pytest.mark.asyncio
+async def test_retry_repairs_saved_candidate_without_losing_other_sections(material_shot):
+    project, shot, _, _ = material_shot
+    orch = Orchestrator()
+    provider = Provider(orch)
+    original_complete = provider.complete
+    broken = sections()
+    broken["detailed_description"] = "0-6 seconds: Waves without speaking."
+    uses = [{"line_ids": ["l1"], "speaker_id": "char_1", "block_indexes": [0]}]
+    drafts = [json.dumps({"prompt_sections": broken, "dialogue_uses": uses}),
+              json.dumps({"prompt_sections": {"detailed_description": "0-6 seconds: Still silent."}, "dialogue_uses": uses})]
+
+    async def fail(system, user, *, guides=()):
+        if "reference review decision" in system.lower():
+            return await original_complete(system, user, guides=guides)
+        return drafts.pop(0)
+
+    provider.complete = fail
+    with pytest.raises(ValueError, match="dialogue"):
+        await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
+
+    seen = []
+    async def repair(system, user, *, guides=()):
+        if "reference review decision" in system.lower():
+            return await original_complete(system, user, guides=guides)
+        seen.append(user)
+        assert "Still silent" in user
+        return json.dumps({"prompt_sections": {"detailed_description": sections()["detailed_description"]}, "dialogue_uses": uses})
+
+    provider.complete = repair
+    updated = await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
+    assert len(seen) == 1
+    assert updated.prompt_sections.subject_definitions == broken["subject_definitions"]
+    assert "the watchmaker examines the gear" in updated.prompt_sections.detailed_description
+    assert updated.prompt_sections.detailed_description.endswith("<d>[English] Hello.</d>")
+    assert load_shot(project.id, shot.id) == updated
 
 
 @pytest.mark.asyncio

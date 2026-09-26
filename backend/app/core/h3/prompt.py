@@ -6,6 +6,7 @@ import re
 from collections.abc import Iterable
 
 from app.core.projects.models import PromptSections
+from .errors import PromptFailureError
 
 SECTION_KEYS: list[str] = [
     "subject_definitions",
@@ -26,6 +27,7 @@ def validate_required_picture_bindings(
     submitted_picture_indices: Iterable[int] | None = None,
     binding_label: str = "required Picture",
 ) -> None:
+    errors = []
     found_indices = [
         int(value)
         for value in re.findall(r"<Picture\s+(\d+)>", text, re.IGNORECASE)
@@ -35,13 +37,15 @@ def validate_required_picture_bindings(
         unexpected = sorted(set(found_indices) - submitted)
         if unexpected:
             tags = ", ".join(f"<Picture {index}>" for index in unexpected)
-            raise ValueError(
+            errors.append(
                 f"prompt references unsubmitted Picture tags: {tags}"
             )
     for index in dict.fromkeys(int(value) for value in required_indices):
         tag = f"<Picture {index}>"
         if index not in found_indices:
-            raise ValueError(f"missing {binding_label} binding: {tag}")
+            errors.append(f"missing {binding_label} binding: {tag}")
+    if errors:
+        raise PromptFailureError("contract", "; ".join(errors))
 
 
 def compose_h3_prompt(sections: PromptSections) -> str:
@@ -193,6 +197,7 @@ def validate_h3_prompt(
 
     # Non-empty section bodies (text between this header and the next, or EOF)
     bodies: dict[str, str] = {}
+    errors: list[str] = []
     for i, (key, pos) in enumerate(positions):
         header = f"{key}:"
         start = pos + len(header)
@@ -202,24 +207,31 @@ def validate_h3_prompt(
             end = len(prompt)
         body = prompt[start:end].strip()
         if not body:
-            raise ValueError(f"section {key!r} is empty")
+            errors.append(f"section {key!r} is empty")
         bodies[key] = body
 
-    _validate_dialogue(bodies, dialogue)
+    try:
+        _validate_dialogue(bodies, dialogue)
+    except ValueError as exc:
+        errors.append(str(exc))
 
     found_audio_indexes = [int(value) for value in re.findall(r"<Audio\s+(\d+)>", prompt)]
     expected_audio_indexes = list(range(1, audio_count + 1))
     for index in expected_audio_indexes:
         count = found_audio_indexes.count(index)
         if count < 1:
-            raise ValueError(f"prompt must reference submitted <Audio {index}>")
+            errors.append(f"prompt must reference submitted <Audio {index}>")
     unexpected = sorted(set(found_audio_indexes) - set(expected_audio_indexes))
     if unexpected:
         tags = ", ".join(f"<Audio {index}>" for index in unexpected)
-        raise ValueError(f"prompt references unsubmitted Audio tags: {tags}")
+        errors.append(f"prompt references unsubmitted Audio tags: {tags}")
 
-    validate_required_picture_bindings(
-        prompt,
-        required_picture_indices,
-        submitted_picture_indices=submitted_picture_indices,
-    )
+    try:
+        validate_required_picture_bindings(
+            prompt, required_picture_indices,
+            submitted_picture_indices=submitted_picture_indices,
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+    if errors:
+        raise PromptFailureError("contract", "; ".join(errors))

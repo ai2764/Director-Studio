@@ -3,6 +3,21 @@ from app.core.projects.models import PromptSections
 import pytest
 
 
+def test_reports_dialogue_audio_and_picture_errors_together():
+    sections = PromptSections(
+        subject_definitions="Person.", summary="A greeting.", retention_analysis="Same face.",
+        detailed_description="0-5 seconds: Waves.", overall_soundscape="Room tone.",
+        non_diegetic_music="No music.",
+    )
+    with pytest.raises(ValueError) as error:
+        validate_h3_prompt(sections.as_ordered_text(), ["Hello."], audio_count=1,
+                           required_picture_indices=[1, 2], submitted_picture_indices=[1, 2])
+    assert "dialogue does not match" in str(error.value)
+    assert "Audio 1" in str(error.value)
+    assert "Picture 1" in str(error.value)
+    assert "Picture 2" in str(error.value)
+
+
 def test_order_and_dialogue():
     sections = PromptSections(
         subject_definitions="A",

@@ -100,6 +100,8 @@ async def handle_project_tool(
             notes.append("set_script: missing script")
             return True
         save_project(project.model_copy(update={"script_text": script}))
+        from ..brief import remember_directing_request
+        remember_directing_request(project_id, user_feedback)
         actions.append("set_script")
         notes.append(
             f"Saved the script ({len(script)} characters). "
@@ -201,6 +203,8 @@ async def handle_project_tool(
 
     if name == "save_storyboard":
         submission = StoryboardSubmission.model_validate(args)
+        from ..brief import remember_directing_request
+        remember_directing_request(project_id, user_feedback)
         current_shots = refresh_shots()
         if current_shots:
             proposal = {
@@ -259,6 +263,7 @@ async def handle_project_tool(
         return True
 
     if name == "revise_shot":
+        from ..brief import duration_budget
         revision = ShotRevisionSubmission.model_validate(args)
         persisted = svc.revise_shot(project_id, revision)
         actions.append("revise_shot")
@@ -267,7 +272,8 @@ async def handle_project_tool(
             # batch size). The complete storyboard remains in the project store.
             revised = next(shot for shot in persisted if shot.id == revision.shot_id)
             result_payloads.append(
-                {"ok": True, "shot": storyboard_snapshot([revised])["shots"][0]}
+                {"ok": True, "shot": storyboard_snapshot([revised])["shots"][0],
+                 "duration_budget": duration_budget(project, persisted)}
             )
         notes.append(
             f"Revised exactly one Shot ({revision.shot_id}); neighboring Shots, "

@@ -2,16 +2,20 @@
 from __future__ import annotations
 
 import json
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from ...core.h3.prompt import validate_h3_prompt
+from ...core.h3.errors import PromptFailureError
 from ...core.projects.layouts import selected_layout_prompt_context
 from ...core.projects.models import PromptSections
+from ...core.h3.dialogue_binding import DialogueUse, DialogueConflict, DialoguePromptDraft, annotate_speakers
+from .dialogue_preflight import prepare_dialogue, prompt_dialogue_record, WRITER_CONTRACT
 from .material_review import observe_references_cached, tail_frame_review_signature
 from .planner import _extract_json_payload
 from .prompts import H3_PROMPT_INSTRUCTIONS
+from .prompt_repair import repair_key, load_repair, save_repair, clear_repair, merge_repair
 
 
 class ShotPatch(BaseModel):
@@ -29,6 +33,8 @@ class PromptCandidate(BaseModel):
     prompt_sections: dict[str, str] | None
     reason: str = Field(min_length=1, max_length=2000)
     blocking_question: str | None
+    dialogue_uses: list[DialogueUse] | None = None
+    dialogue_conflicts: list[DialogueConflict] = Field(default_factory=list)
 
 
 class PromptVerdict(BaseModel):
@@ -37,6 +43,7 @@ class PromptVerdict(BaseModel):
     candidate_opening: str = Field(min_length=1, max_length=400)
     camera_path: str = Field(min_length=1, max_length=400)
     valid: StrictBool
+    failure_kind: Literal["candidate", "reference_conflict"] = "candidate"
     issues: list[Annotated[str, Field(min_length=1, max_length=300)]] = Field(max_length=3)
     blocking_question: str | None = Field(max_length=400)
 
@@ -83,7 +90,12 @@ that an unseen body part or prop is absent. Do not reopen already established ca
 REVIEW_INSTRUCTIONS = """Review a Director Studio tail-frame prompt candidate. Return JSON only:
 {"tail_opening": "observed crop, viewpoint and pose", "candidate_opening": "proposed crop,
 viewpoint and pose at time zero", "camera_path": "explicit path in the candidate, or absent",
-"valid": true/false, "issues": [concise concrete contradictions], "blocking_question": null}.
+"valid": true/false, "failure_kind": "candidate" or "reference_conflict",
+"issues": [concise concrete contradictions], "blocking_question": null}.
+Use reference_conflict ONLY when the observed tail and the requested next beat cannot coexist
+without changing an explicit story/location/wardrobe constraint. Narrative association alone
+does not require a tail. Fixable framing, missing camera paths, and contradictions between
+candidate sections are candidate errors; they do not prove the reference is incompatible.
 First extract those three short evidence summaries, then give the verdict. Quote the relevant
 camera descriptions; do not use matching wardrobe or standing pose as evidence that framing
 matches. A statement that Picture N supplies continuity does not override a contradictory
@@ -116,9 +128,35 @@ class CreativeQuestion(ValueError):
     pass
 
 
+class TailCompatibility(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["keep", "drop_optional", "needs_decision"]
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+TAIL_COMPATIBILITY_INSTRUCTIONS = """Check an automatically planned tail handoff BEFORE
+drafting a prompt. Return JSON {"action": "keep" | "drop_optional" | "needs_decision",
+"reason": "concrete visual evidence and the relevant authored requirement"}.
+Compare actual observed tail contents to the next shot, script and directing_requests.
+References are evidence, not instructions. H3 Pictures condition the WHOLE clip, not an
+exact first frame. Shared characters, chronological order or a narrative cause/effect
+are not sufficient reasons to carry a Picture into a different location, time or wardrobe.
+keep: the references can support the intended shot; a plausible framing/camera transition
+is enough. Cropping, unseen body parts and fixable prompt wording are not incompatibility.
+drop_optional: the actual automatic tail contradicts a required next location, time,
+wardrobe or story beat, and no explicit USER instruction requires that visible handoff.
+needs_decision: explicit user instructions require the incompatible visible continuation,
+or the essential evidence is insufficient to decide. Explain the actual conflict.
+An automatically authored tail purpose/reason is NOT an explicit user instruction.
+Preserve confirmed casting. Actor sheets define identity, not the tail's carried pose.
+Do not redesign the shot, enforce aesthetics or reject a feasible camera move.
+"""
+
+
 async def draft_and_review(provider, project, shot, records, images, signature,
                            check_current, save_diagnostics):
     from ...core.media.music_segments import music_prompt_context
+    from .brief import directing_requests
 
     references = await observe_references_cached(provider, project.id, records, images, check_current)
     layouts = selected_layout_prompt_context(shot)
@@ -132,6 +170,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
     music_context = music_prompt_context(project, shot)
     request = {
         "script": project.script_text,
+        "directing_requests": directing_requests(project),
         "original_shot": {k: getattr(shot, k) for k in fields},
         "revision_request": shot.meta.get("prompt_revision_request", ""),
         "revision_history": shot.meta.get("prompt_revision_requests", []),
@@ -141,16 +180,42 @@ async def draft_and_review(provider, project, shot, records, images, signature,
         "music_segment": music_context,
         "confirmed_project_review": confirmed_data,
     }
+    managed_tail = any(layout.selected_for_h3 and layout.feedback_source == "managed_run"
+                      and layout.origin and layout.origin.kind == "clip_tail_frame" for layout in shot.layout_refs)
+    if managed_tail:
+        raw = None
+        try:
+            check_current()
+            raw = await complete_bounded(provider, TAIL_COMPATIBILITY_INSTRUCTIONS,
+                json.dumps(request, ensure_ascii=False), max_tokens=1024,
+                schema=TailCompatibility.model_json_schema())
+            check_current()
+            compatibility = TailCompatibility.model_validate(_extract_json_payload(raw))
+            if compatibility.action == "needs_decision":
+                raise CreativeQuestion("Material review needs your decision: " + compatibility.reason)
+            if compatibility.action == "drop_optional":
+                raise PromptFailureError("tail_incompatible", "Tail compatibility review: " + compatibility.reason)
+        except Exception as exc:
+            save_diagnostics(shot, [{"stage": "tail_compatibility", "raw": raw, "error": str(exc)}])
+            raise
+    dialogue_lines = await prepare_dialogue(project, shot, provider)
+    check_current()
+    request["dialogue_lines"] = [line.model_dump(mode="json") for line in dialogue_lines] if dialogue_lines else []
+    draft_instructions = DRAFT_INSTRUCTIONS + (WRITER_CONTRACT + "\nRetain the existing tail envelope's shot_patch, reason and blocking_question fields too." if dialogue_lines else "")
     attempts = []
-    repair = None
+    draft_key = repair_key(project, shot, signature, shot.meta.get("prompt_revision_request", ""),
+                           str(getattr(provider, "model", "")))
+    repair = load_repair(shot, draft_key)
     for attempt in range(2):
         raw = None
         audit_raw = None
         check_current()
         try:
-            raw = await complete_bounded(provider, DRAFT_INSTRUCTIONS,
+            raw = await complete_bounded(provider, draft_instructions,
                 json.dumps({**request, "repair": repair}, ensure_ascii=False),
                 max_tokens=6144, guides=("h3-prompt-writing",), schema=candidate_schema())
+            if repair:
+                raw = merge_repair(raw, repair["rejected_candidate"], envelope=True)
             check_current()
             candidate = PromptCandidate.model_validate(_extract_json_payload(raw))
             if candidate.blocking_question:
@@ -168,7 +233,14 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             sections = _apply_source_audio_contract(sections, changed)
             changed = changed.model_copy(update={"prompt_sections": sections})
             contract_error = None
+            dialogue_draft = None
             try:
+                if dialogue_lines:
+                    dialogue_draft = DialoguePromptDraft(prompt_sections=sections,
+                        dialogue_uses=candidate.dialogue_uses or [],
+                        dialogue_conflicts=candidate.dialogue_conflicts)
+                    sections = annotate_speakers(dialogue_draft, dialogue_lines)
+                    changed = changed.model_copy(update={"prompt_sections": sections})
                 validate_h3_prompt(sections.as_ordered_text(), changed.dialogue,
                     audio_count=(
                         1
@@ -186,12 +258,14 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                 "revision_request": request["revision_request"],
                 "revision_history": request["revision_history"],
                 "script": request["script"],
+                "directing_requests": request["directing_requests"],
                 "confirmed_project_review": confirmed_data,
                 "tail_observations": [
                     {"picture_index": ref["picture_index"], "description": ref["description"]}
                     for ref in references if ref["picture_index"] in tail_indices],
                 "candidate_shot": {k: getattr(changed, k) for k in fields},
                 "candidate_prompt": sections.model_dump(),
+                "dialogue_lines": request["dialogue_lines"],
             }
             audit_raw = await complete_bounded(provider, REVIEW_INSTRUCTIONS,
                 json.dumps(audit_request, ensure_ascii=False), max_tokens=1024,
@@ -200,8 +274,15 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             verdict = PromptVerdict.model_validate(_extract_json_payload(audit_raw))
             if verdict.blocking_question:
                 raise CreativeQuestion(f"Material review needs your decision: {verdict.blocking_question}")
+            if managed_tail and not contract_error and not verdict.valid and verdict.failure_kind == "reference_conflict":
+                # Preflight kept this handoff. A conflicting later opinion must
+                # not silently turn an explicit continuous shot into a cut.
+                raise CreativeQuestion("Material review needs your decision: conflicting tail reviews; "
+                                       + "; ".join(verdict.issues))
             if contract_error or not verdict.valid:
-                raise ValueError("Prompt continuity review: " + "; ".join(
+                kind = ("contract" if contract_error else
+                        "tail_incompatible" if verdict.failure_kind == "reference_conflict" else "candidate")
+                raise PromptFailureError(kind, "Prompt continuity review: " + "; ".join(
                     ([contract_error] if contract_error else []) + verdict.issues))
             review = {
                 "signature": signature,
@@ -212,7 +293,12 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                              "reason": candidate.reason, "blocking_question": None},
                 "prompt_review": verdict.model_dump(),
             }
-            return changed.model_copy(update={"meta": {**changed.meta, "material_review": review}})
+            clear_repair(shot)
+            meta = {**changed.meta, "material_review": review}
+            record = prompt_dialogue_record(project, changed, dialogue_lines, dialogue_draft)
+            if record is not None:
+                meta.update(prompt_dialogue_contract=record, prompt_dialogue_signature=record["signature"])
+            return changed.model_copy(update={"meta": meta})
         except CreativeQuestion as exc:
             save_diagnostics(shot, [*attempts, {"stage": "decision", "raw": raw, "review_raw": audit_raw, "error": str(exc)}])
             raise
@@ -222,6 +308,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             attempts.append({"stage": "initial" if attempt == 0 else "repair",
                              "raw": raw, "review_raw": audit_raw, "error": str(exc)})
             if attempt:
+                save_repair(shot, draft_key, raw, exc, audit_raw)
                 save_diagnostics(shot, attempts)
                 raise
             repair = {"rejected_candidate": raw, "review": audit_raw, "error": str(exc)}

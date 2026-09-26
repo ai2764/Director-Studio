@@ -30,6 +30,7 @@ from ..agents.director.llm_plan_provider import DirectorLLMPlanProvider
 from ..agents.director.planner import role_to_library_kind
 from ..agents.director.skill_loader import with_director_skill
 from ..config import settings
+from ..core.projects.dialogue import DialogueLine
 from ..core.h3 import (
     compose_h3_prompt,
     frames_for_audio_seconds,
@@ -241,6 +242,7 @@ class ApproveLayoutBody(BaseModel):
 
 
 class ShotPatchBody(BaseModel):
+    dialogue_lines: list[DialogueLine] | None = None
     refs: list[ShotRef] | None = None
     voice_refs: list[ShotVoiceRef] | None = None
     prompt_sections: PromptSections | None = None
@@ -1640,7 +1642,7 @@ async def patch_shot_endpoint(shot_id: str, body: ShotPatchBody) -> Shot:
     updates: dict[str, Any] = {}
     data = body.model_dump(exclude_unset=True)
     for key, val in data.items():
-        if val is not None or key in {"source_audio_path", "music_segment"}:
+        if val is not None or key in {"source_audio_path", "music_segment", "dialogue_lines"}:
             updates[key] = val
     if "prompt_sections" in updates and isinstance(updates["prompt_sections"], dict):
         updates["prompt_sections"] = PromptSections.model_validate(
@@ -1660,9 +1662,11 @@ async def patch_shot_endpoint(shot_id: str, body: ShotPatchBody) -> Shot:
         ]
     if not updates:
         return shot
-    payload = shot.model_dump(mode="python")
-    payload.update(updates)
-    shot = Shot.model_validate(payload)
+    from ..core.projects.dialogue import apply_dialogue_update
+    try:
+        shot = apply_dialogue_update(shot, updates)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
     if shot.music_segment is not None and project.mode != ProjectMode.mv:
         raise HTTPException(
             400,
@@ -1994,8 +1998,10 @@ async def submit_shot_endpoint(
     voice_contract_present = bool(shot.voice_refs) or (
         "prompt_voice_signature" in (shot.meta or {})
     )
+    from ..agents.director.dialogue_preflight import dialogue_contract_current, require_current_dialogue_contract
     if (
-        (picture_contract_present and prompt_picture_signature != current_picture_signature)
+        not dialogue_contract_current(project, shot)
+        or (picture_contract_present and prompt_picture_signature != current_picture_signature)
         or (
             layout_contract_present
             and prompt_layout_signature != current_layout_signature
@@ -2026,6 +2032,7 @@ async def submit_shot_endpoint(
             ) from e
 
     try:
+        require_current_dialogue_contract(project, shot)
         assert_h3_submittable(shot)
     except ValueError as e:
         raise _http_value_error(e) from e
@@ -2126,6 +2133,15 @@ async def submit_shot_endpoint(
         and h3_provider == "local"
         else {}
     )
+    # No await between this freshness check and snapshot creation.
+    latest_project = load_project(shot.project_id)
+    latest_shot = load_shot(shot.project_id, shot.id)
+    if latest_project is None or latest_shot != shot or latest_project.script_text != project.script_text:
+        raise HTTPException(409, "Shot or script changed before submission; refresh before submitting")
+    try:
+        require_current_dialogue_contract(latest_project, latest_shot)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
     job = create_job(
         pipeline_id="h3_ref2va",
         asset_kind="productions",
@@ -2135,6 +2151,7 @@ async def submit_shot_endpoint(
             "h3_provider": h3_provider,
             "prompt": prompt_text,
             "dialogue": list(shot.dialogue),
+            "dialogue_contract": shot.meta.get("prompt_dialogue_contract"),
             "frames": frames,
             "duration_s": effective_duration_s,
             "image_keys": image_keys,
@@ -2170,6 +2187,14 @@ async def submit_shot_endpoint(
     except ValueError as e:
         raise _http_value_error(e) from e
 
-    shot = shot.model_copy(update={"h3_job_id": job.id})
-    save_shot(shot)
+    submitted = shot.model_copy(update={"h3_job_id": job.id})
+    # A user edit during reservation belongs to the user, not the older response.
+    current = load_shot(shot.project_id, shot.id)
+    if current != latest_shot:
+        from ..core.jobs import cancel_job
+        await cancel_job(job.id)
+        raise HTTPException(409, "Shot changed during submission; the stale local job was cancelled. "
+                            "Check its provider status before retrying if remote submission began.")
+    save_shot(submitted)
+    shot = submitted
     return shot

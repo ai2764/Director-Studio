@@ -60,6 +60,72 @@ class Provider:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["keep", "drop_optional", "needs_decision"])
+async def test_managed_tail_checks_actual_evidence_before_drafting(tail_handoff_shot, action):
+    from app.agents.director.brief import remember_directing_request
+    from app.agents.director.tail_prompt_review import CreativeQuestion
+    from app.core.h3.errors import PromptFailureError
+
+    project, shot = tail_handoff_shot
+    shot = shot.model_copy(update={"layout_refs": [
+        layout.model_copy(update={"feedback_source": "managed_run"}) for layout in shot.layout_refs]})
+    save_shot(shot)
+    remember_directing_request(project.id, "Use handheld VCR photography throughout.")
+    provider = Provider([{"action": action, "reason": "Actual tail is a studio; next beat requires a daylight pier."},
+                         candidate(), verdict()])
+    svc = DirectorService(plan_provider=provider, orchestrator=Orchestrator())
+    if action == "keep":
+        await svc.write_prompts_after_layout(shot.id)
+        assert len(provider.text) == 3
+    else:
+        with pytest.raises(CreativeQuestion if action == "needs_decision" else PromptFailureError) as error:
+            await svc.write_prompts_after_layout(shot.id)
+        if action == "drop_optional":
+            assert error.value.failure_kind == "tail_incompatible"
+        assert len(provider.text) == 1  # No rejected draft/repair loop for an incompatible source.
+        stored = load_shot(project.id, shot.id)
+        assert stored.prompt_sections == shot.prompt_sections
+        assert stored.layout_refs == shot.layout_refs
+    preflight = json.loads(provider.text[0][1])
+    assert preflight["directing_requests"] == ["Use handheld VCR photography throughout."]
+    assert preflight["references"][0]["description"].startswith("Eye-level waist-up")
+    assert "original_shot" in preflight
+    assert len(provider.visual) == 1
+
+
+@pytest.mark.asyncio
+async def test_conflicting_reviews_cannot_silently_drop_required_continuity(tail_handoff_shot):
+    from app.agents.director.brief import remember_directing_request
+    from app.agents.director.tail_prompt_review import CreativeQuestion
+    project, shot = tail_handoff_shot
+    shot = shot.model_copy(update={"layout_refs": [
+        layout.model_copy(update={"feedback_source": "managed_run"}) for layout in shot.layout_refs]})
+    save_shot(shot)
+    remember_directing_request(project.id, "Visibly continue the previous shot without a hard cut.")
+    conflict = {**verdict(False), "failure_kind": "reference_conflict"}
+    provider = Provider([{"action": "keep", "reason": "The carried camera view can continue."},
+                         candidate(), conflict, candidate(), conflict])
+    with pytest.raises(CreativeQuestion, match="decision"):
+        await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+    assert len(provider.text) == 3
+    assert load_shot(project.id, shot.id).layout_refs == shot.layout_refs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_contract_error", [True, False])
+async def test_failure_kind_survives_tail_review(tail_handoff_shot, has_contract_error):
+    _, shot = tail_handoff_shot
+    rejected = candidate()
+    if has_contract_error:
+        rejected["prompt_sections"]["subject_definitions"] = "No Picture binding."
+    review = {**verdict(False), "failure_kind": "reference_conflict"}
+    provider = Provider([rejected, review, rejected, review])
+    with pytest.raises(ValueError) as error:
+        await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+    assert getattr(error.value, "failure_kind", None) == ("contract" if has_contract_error else "tail_incompatible")
+
+
+@pytest.mark.asyncio
 async def test_request_and_candidate_reach_reviewer_before_atomic_save(tail_handoff_shot):
     project, shot = tail_handoff_shot
     shot = shot.model_copy(update={"camera_motion": "locked-off low angle", "h3_job_id": "old", "status": ShotStatus.succeeded})
@@ -112,9 +178,12 @@ async def test_one_repair_receives_both_binding_and_continuity_errors(tail_hando
 @pytest.mark.asyncio
 async def test_tail_prompt_normalizes_unambiguous_english_dialogue_tag(tail_handoff_shot):
     project, shot = tail_handoff_shot
-    shot = shot.model_copy(update={"dialogue": ["Sure."]})
+    from app.core.projects.dialogue import apply_dialogue_update
+    from test_director_dialogue_attribution import line_payload
+    shot = apply_dialogue_update(shot, {"dialogue_lines": [line_payload(text="Sure.")]})
     save_shot(shot)
     malformed = candidate()
+    malformed["dialogue_uses"] = [{"line_ids": ["l1"], "speaker_id": "char_1", "block_indexes": [0]}]
     malformed["prompt_sections"]["detailed_description"] = (
         "0-2 seconds: The dancer says <d>English Sure.</d> as the camera lowers. "
         "2-6 seconds: She completes the floor move."
@@ -129,6 +198,25 @@ async def test_tail_prompt_normalizes_unambiguous_english_dialogue_tag(tail_hand
     assert "<d>[English] Sure.</d>" in updated.prompt_sections.detailed_description
     assert load_shot(project.id, shot.id) == updated
     assert len(provider.text) == 2
+
+
+@pytest.mark.asyncio
+async def test_tail_writer_repairs_attribution_without_editing_dialogue(tail_handoff_shot):
+    from app.core.projects.dialogue import apply_dialogue_update
+    from test_director_dialogue_attribution import line_payload
+    project, shot = tail_handoff_shot
+    shot = apply_dialogue_update(shot, {"dialogue_lines": [line_payload(text="Sure.")]})
+    save_shot(shot)
+    good = candidate()
+    good["prompt_sections"]["detailed_description"] += " She says <d>[English] Sure.</d>"
+    good["dialogue_uses"] = [{"line_ids": ["l1"], "speaker_id": "char_1", "block_indexes": [0]}]
+    bad = {**good, "dialogue_uses": [{"line_ids": ["l1"], "speaker_id": "other", "block_indexes": [0]}]}
+    provider = Provider([bad, verdict(), good, verdict()])
+    updated = await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+    assert updated.dialogue_lines == shot.dialogue_lines
+    assert "char_1" in updated.prompt_sections.detailed_description
+    assert "dialogue_speaker_mismatch" in provider.text[2][1]
+    assert updated.meta["prompt_dialogue_contract"]["lines"][0]["speaker_id"] == "char_1"
 
 
 @pytest.mark.asyncio
@@ -171,6 +259,7 @@ async def test_exhausted_review_retains_draft_and_reuses_observations_after_rest
     await DirectorService(plan_provider=retried, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
     assert not retried.visual
     assert "Keep continuity" in retried.text[0][1]
+    assert json.loads(retried.text[0][1])["repair"]["rejected_candidate"]
 
 
 @pytest.mark.asyncio
@@ -211,17 +300,23 @@ async def test_transport_timeout_stops_without_repair_and_keeps_diagnostics(tail
 
 
 @pytest.mark.asyncio
-async def test_user_edit_during_audit_is_not_overwritten(tail_handoff_shot):
+@pytest.mark.parametrize("change", ["shot", "directing_request"])
+async def test_user_edit_during_audit_is_not_overwritten(tail_handoff_shot, change):
+    from app.agents.director.brief import remember_directing_request
     project, shot = tail_handoff_shot
     provider = Provider([candidate(), verdict()])
     def edit(count):
         if count == 2:
-            current = load_shot(project.id, shot.id)
-            save_shot(current.model_copy(update={"camera_motion": "User chose a static medium shot"}))
+            if change == "directing_request":
+                remember_directing_request(project.id, "User chose a static medium shot")
+            else:
+                current = load_shot(project.id, shot.id)
+                save_shot(current.model_copy(update={"camera_motion": "User chose a static medium shot"}))
     provider.on_call = edit
     with pytest.raises(ValueError, match="changed"):
         await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
-    assert load_shot(project.id, shot.id).camera_motion == "User chose a static medium shot"
+    assert load_shot(project.id, shot.id).camera_motion == (
+        shot.camera_motion if change == "directing_request" else "User chose a static medium shot")
 
 
 @pytest.mark.asyncio

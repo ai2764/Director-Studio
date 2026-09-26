@@ -43,6 +43,56 @@ def _two_shot_project():
     return project, first, second
 
 
+def test_plan_rejects_inputs_changed_during_inference(monkeypatch):
+    project, first, _ = _two_shot_project()
+    async def make(**kwargs):
+        async def infer(*args, **kwargs):
+            save_shot(first.model_copy(update={"script_beat": "New authored action"}))
+            return {"content": '{"tail_handoffs":[]}'}
+        return infer
+    monkeypatch.setattr(projects_api, "_make_chat_fn", make)
+    with TestClient(create_app()) as client:
+        result = client.post(f"/api/projects/{project.id}/managed-run/plan")
+    assert result.status_code == 409
+
+
+def test_plan_rejects_storyboard_that_misses_authored_runtime(monkeypatch):
+    project, _, _ = _two_shot_project()
+    save_project(load_project(project.id).model_copy(update={"script_text": "Create a 2–3 minute film."}))
+    async def make(**kwargs):
+        async def infer(*args, **kwargs):
+            return {"content": '{"tail_handoffs":[]}'}
+        return infer
+    monkeypatch.setattr(projects_api, "_make_chat_fn", make)
+    with TestClient(create_app()) as client:
+        result = client.post(f"/api/projects/{project.id}/managed-run/plan")
+    assert result.status_code == 422
+    assert "120s" in result.json()["detail"]
+
+
+@pytest.mark.parametrize("grounded", [True, False])
+def test_plan_reports_only_grounded_directing_conflicts(monkeypatch, grounded):
+    from app.agents.director.brief import remember_directing_request
+    project, _, second = _two_shot_project()
+    requirement = "Tao must operate the handheld camera."
+    remember_directing_request(project.id, requirement)
+    save_shot(second.model_copy(update={"camera_motion": "Locked external camera."}))
+    async def make(**kwargs):
+        async def infer(*args, **kwargs):
+            return {"content": json.dumps({"tail_handoffs": [], "storyboard_issues": [
+                {"requirement_quote": requirement, "shot_id": second.id, "field": "camera_motion",
+                 "shot_quote": "Locked external camera." if grounded else "Invented dialogue not in this shot.",
+                 "reason": "The handheld camera requirement conflicts with a locked external camera."}
+            ]})}
+        return infer
+    monkeypatch.setattr(projects_api, "_make_chat_fn", make)
+    with TestClient(create_app()) as client:
+        result = client.post(f"/api/projects/{project.id}/managed-run/plan")
+    assert result.status_code == (422 if grounded else 200)
+    if grounded:
+        assert "handheld camera" in result.json()["detail"]
+
+
 def test_plan_route_saves_agent_tail_handoff_as_draft(monkeypatch) -> None:
     project, first, second = _two_shot_project()
     observed = {}

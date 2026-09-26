@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from ...config import settings
+from ...core.h3.errors import PromptFailureKind
 from ...core.jobs import create_job, load_job, start_pipeline_job
 from ...core.jobs.runner import await_pipeline_job
 from ...core.projects.layouts import (
@@ -155,6 +156,7 @@ class ChatResult:
     reply: str
     failure_code: str = ""
     failure_message: str = ""
+    failure_kind: PromptFailureKind = "unknown"
     actions: list[str] = field(default_factory=list)
     project: Project | None = None
     shots: list[Shot] = field(default_factory=list)
@@ -270,6 +272,10 @@ def _status_summary(project: Project, shots: list[Shot]) -> str:
         )
         if s.blocked_reasons:
             lines.append(f"   ⚠ {'; '.join(s.blocked_reasons)}")
+    from .brief import duration_budget, duration_issues
+    budget = duration_budget(project, shots)
+    lines.append(f"Runtime: {budget['total_s']:g}s; requested minimum: {budget['required_minimum_s']:g}s; remaining deficit: {budget['deficit_s']:g}s.")
+    lines.extend(duration_issues(project, shots))
     return "\n".join(lines)
 
 
@@ -430,24 +436,8 @@ def _filter_tools_to_offered_schemas(
 
 
 def _requested_minimum_duration_s(message: str) -> float:
-    """Extract an explicitly requested minimum duration from the current message."""
-    text = message or ""
-    number = r"(\d+(?:\.\d+)?)"
-    unit = r"(seconds?|secs?|s|minutes?|mins?|min)"
-    patterns = (
-        rf"(?:at\s+least|minimum(?:\s+duration)?(?:\s+of)?|no\s+less\s+than)\s+{number}\s*{unit}\b",
-        rf"{number}\s*{unit}\s*(?:minimum|at\s+minimum)\b",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if not match:
-            continue
-        value = float(match.group(1))
-        unit_value = match.group(2).lower()
-        if unit_value.startswith("m"):
-            value *= 60.0
-        return max(value, 0.0)
-    return 0.0
+    from .brief import requested_minimum_duration_s
+    return requested_minimum_duration_s(message)
 
 
 def _native_reply(value: dict[str, Any]) -> tuple[str, str, list[dict[str, Any]]]:
@@ -1067,6 +1057,7 @@ async def orchestrate_chat(
     storyboard_save_attempted = False
     storyboard_save_blocked = False
     prompt_failure_message = ""
+    prompt_failure_kind = "unknown"
 
     async def progress(type_: str, text: str) -> None:
         """Local helper — also forwards to external on_progress as event dict."""
@@ -1131,6 +1122,7 @@ async def orchestrate_chat(
             reply=r,
             failure_code="PROMPT_GENERATION_FAILED" if prompt_failure_message else "",
             failure_message=prompt_failure_message,
+            failure_kind=prompt_failure_kind,
             actions=acts,
             project=p,
             shots=sh,
@@ -1508,6 +1500,7 @@ async def orchestrate_chat(
                 for structured_result in structured_results:
                     tool_payload.update(structured_result)
                 if tool["name"] == "write_prompt":
+                    prompt_failure_kind = tool_payload.get("failure_kind", "unknown")
                     prompt_failure_message = (
                         str(tool_payload.get("error") or "Prompt generation failed")
                         if tool_payload.get("ok") is False else ""
