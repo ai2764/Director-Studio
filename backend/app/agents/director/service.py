@@ -409,7 +409,8 @@ class DirectorService:
         self.orchestrator = orchestrator if orchestrator is not None else get_orchestrator()
         self._asset_observations: dict[tuple[str, str, str], dict] = {}
 
-    def append_shot(self, project_id: str, submission: AppendShotSubmission | dict) -> Shot:
+    def append_shot(self, project_id: str, submission: AppendShotSubmission | dict,
+                    *, dialogue_authoring: dict | None = None) -> Shot:
         """Append one new record; never save or replace an existing Shot."""
         validated = AppendShotSubmission.model_validate(submission)
         project = load_project(project_id)
@@ -430,6 +431,10 @@ class DirectorService:
         _validate_storyboard_bindings([validated.shot], inventory=inventory, index=index)
         shot = _shot_from_draft(project_id, validated.shot, inventory=inventory, index=index,
                                 script_text=project.script_text or "")
+        if dialogue_authoring is not None:
+            from ...core.projects.dialogue import revision_digest
+            shot.meta["dialogue_authoring"] = {**dialogue_authoring,
+                "revision_hash": revision_digest(shot.scene_id, shot.dialogue_lines or [])}
         _validate_materialized_storyboard_bindings([shot], inventory=inventory, index=index)
         if shot.id in project.shot_ids or load_shot(project_id, shot.id) is not None:
             raise ValueError("New Shot ID already exists; refusing to overwrite it.")
@@ -453,11 +458,17 @@ class DirectorService:
         self,
         project_id: str,
         revision: ShotRevisionSubmission,
+        *,
+        dialogue_authoring: dict | None = None,
+        expected_shot_hash: str | None = None,
+        expected_script_hash: str | None = None,
     ) -> list[Shot]:
         """Revise authored fields on one Shot without rebuilding the storyboard."""
         project = load_project(project_id)
         if project is None:
             raise ValueError(f"project not found: {project_id}")
+        if expected_script_hash is not None and _script_hash(project.script_text) != expected_script_hash:
+            raise ValueError("The script changed during dialogue attribution; reload before revising")
         try:
             validated = (
                 revision
@@ -470,6 +481,10 @@ class DirectorService:
         shot = load_shot(project_id, validated.shot_id)
         if shot is None or validated.shot_id not in project.shot_ids:
             raise ValueError(f"shot not found in project: {validated.shot_id}")
+        if expected_shot_hash is not None:
+            from ...core.projects.dialogue import digest
+            if digest(shot.model_dump(mode="json")) != expected_shot_hash:
+                raise ValueError("Shot changed during dialogue attribution; reload before revising")
 
         authored_updates = validated.model_dump(
             exclude={"shot_id"},
@@ -521,7 +536,27 @@ class DirectorService:
                 "status": ShotStatus.needs_review,
                 "meta": meta,
             })
-        save_shot(revised)
+        if dialogue_authoring is not None:
+            from ...core.projects.dialogue import revision_digest
+            revised.meta["dialogue_authoring"] = {**dialogue_authoring,
+                "revision_hash": revision_digest(revised.scene_id, revised.dialogue_lines or [])}
+        if expected_shot_hash is not None or expected_script_hash is not None:
+            from ...core.projects.dialogue import digest
+            from ...core.projects.store import save_shot_if_current
+            def check_authored_source():
+                latest_project = load_project(project_id)
+                latest_shot = load_shot(project_id, validated.shot_id)
+                if (latest_project is None or latest_shot is None
+                        or validated.shot_id not in latest_project.shot_ids
+                        or (expected_shot_hash is not None
+                            and digest(latest_shot.model_dump(mode="json")) != expected_shot_hash)):
+                    raise ValueError("Shot changed during dialogue attribution; reload before revising")
+                if (expected_script_hash is not None
+                        and _script_hash(latest_project.script_text) != expected_script_hash):
+                    raise ValueError("The script changed during dialogue attribution; reload before revising")
+            save_shot_if_current(revised, check_current=check_authored_source)
+        else:
+            save_shot(revised)
 
         persisted = list_shots(project_id)
         save_agent_context(

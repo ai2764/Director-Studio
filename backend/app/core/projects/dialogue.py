@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,11 +14,14 @@ from ..prompt_errors import PromptFailureError
 
 class DialogueSource(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["script", "shot_revision"]
+    kind: Literal["script", "shot_revision", "user_message"]
     source_hash: str = Field(min_length=1)
     scene_id: str
     quote: str = Field(min_length=1)
     occurrence: int = Field(default=0, ge=0)
+    # Keep legacy script/revision serialization (and its signatures) unchanged.
+    source_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    shot_hash: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class DialogueLine(BaseModel):
@@ -118,6 +122,17 @@ def revision_digest(scene_id: str, lines: list[DialogueLine]) -> str:
     return digest([scene_id, [line.model_dump(exclude={"source"}) for line in lines]])
 
 
+def dialogue_evidence_version(shot) -> str:
+    """Bind recovered evidence to the unchanged legacy beat, not just its words."""
+    return digest([shot.scene_id, shot.script_beat, shot.dialogue])
+
+
+def dialogue_beat_text(text: str) -> str:
+    """Compare authored beats across quote/formatting changes, never keywords."""
+    return "".join(c for c in unicodedata.normalize("NFKC", text).casefold()
+                   if not c.isspace() and not unicodedata.category(c).startswith("P"))
+
+
 def apply_dialogue_update(shot, updates: dict):
     """Apply an authored mutation; derived grounding never calls this function."""
     from .models import Shot
@@ -183,6 +198,11 @@ def apply_dialogue_update(shot, updates: dict):
     payload = {**shot.model_dump(mode="python"), **updates}
     changed = Shot.model_validate(payload)
     if (changed.dialogue != shot.dialogue or changed.dialogue_lines != shot.dialogue_lines
+            or changed.scene_id != shot.scene_id):
+        meta = dict(changed.meta)
+        meta.pop("dialogue_authoring", None)
+        changed = changed.model_copy(update={"meta": meta})
+    if (changed.dialogue != shot.dialogue or changed.dialogue_lines != shot.dialogue_lines
             or changed.scene_id != shot.scene_id or changed.prompt_sections != shot.prompt_sections):
         meta = dict(changed.meta)
         for key in ("prompt_dialogue_signature", "prompt_dialogue_contract", "dialogue_grounding"):
@@ -194,10 +214,10 @@ def apply_dialogue_update(shot, updates: dict):
 def verify_dialogue_sources(project, shot, lines: list[DialogueLine]) -> None:
     from ..h3.prompt import _dialogue_text
     validate_dialogue_projection(shot.dialogue, lines)
-    script_hash = hashlib.sha256(project.script_text.encode()).hexdigest()
     authored_hash = revision_digest(shot.scene_id, lines)
     issues = []
-    previous_script_end = -1
+    previous_source_end = {}
+    messages = None
     for line in lines:
         source = line.source
         def reject(code, expected, actual, action):
@@ -217,14 +237,28 @@ def verify_dialogue_sources(project, shot, lines: list[DialogueLine]) -> None:
                        f"submitted revision {source.source_hash}; matches saved lines: {lines == shot.dialogue_lines}",
                        "Reload the current explicitly authored dialogue revision; do not create approval by grounding.")
             continue
-        if source.source_hash != script_hash:
-            reject("dialogue_source_stale", script_hash, source.source_hash,
+        source_text = project.script_text
+        source_key = (source.kind, source.source_id)
+        if source.kind == "user_message":
+            if messages is None:
+                from .chat_history import load_chat_history
+                messages = {m.id: m for m in load_chat_history(project.id) if m.role == "user"}
+            message = messages.get(source.source_id)
+            if (message is None or source.shot_hash != dialogue_evidence_version(shot)
+                    or dialogue_beat_text(message.content) != dialogue_beat_text(shot.script_beat)):
+                reject("dialogue_source_stale", "existing user message bound to the current shot beat",
+                       source.source_id, "Recover evidence again; do not rewrite authored dialogue.")
+                continue
+            source_text = message.content
+        source_hash = hashlib.sha256(source_text.encode()).hexdigest()
+        if source.source_hash != source_hash:
+            reject("dialogue_source_stale", source_hash, source.source_hash,
                    "Resolve the quote again from the current script version; do not merely replace its hash.")
             continue
-        quotes = list(re.finditer(re.escape(source.quote), project.script_text))
+        quotes = list(re.finditer(re.escape(source.quote), source_text))
         if not quotes:
-            reject("dialogue_source_quote_mismatch", "verbatim excerpt in the current script", source.quote,
-                   "Copy an exact script excerpt including this line and its speaker cue.")
+            reject("dialogue_source_quote_mismatch", "verbatim excerpt in the selected source", source.quote,
+                   "Copy an exact source excerpt including this line and its speaker cue.")
             continue
         if source.occurrence >= len(quotes):
             reject("dialogue_source_occurrence_mismatch", f"occurrence 0 through {len(quotes) - 1}", source.occurrence,
@@ -235,16 +269,20 @@ def verify_dialogue_sources(project, shot, lines: list[DialogueLine]) -> None:
             reject("dialogue_source_text_mismatch", f"one occurrence of {line.text!r}", source.quote,
                    "Choose an exact source excerpt containing this dialogue once; preserve the shot's spoken words.")
             continue
-        if line.speaker_name not in source.quote:
+        # A name mentioned *in* speech identifies neither its speaker nor a cue.
+        # Cues may precede or follow dialogue; don't impose a screenplay syntax.
+        cue = source.quote[:words[0].start()] + " " + source.quote[words[0].end():]
+        if line.speaker_name.casefold() not in cue.casefold():
             reject("dialogue_source_speaker_mismatch", f"speaker cue for {line.speaker_name!r}", source.quote,
                    "Resolve the speaker from the source cue; request explicit attribution if ambiguous.")
             continue
         quote_start = quotes[source.occurrence].start()
         start, end = quote_start + words[0].start(), quote_start + words[0].end()
-        if start < previous_script_end:
-            reject("dialogue_source_occurrence_mismatch", f"source offset at or after {previous_script_end}", start,
+        previous_end = previous_source_end.get(source_key, -1)
+        if start < previous_end:
+            reject("dialogue_source_occurrence_mismatch", f"source offset at or after {previous_end}", start,
                    "Resolve distinct source occurrences in shot dialogue order; do not reuse an earlier occurrence.")
-        previous_script_end = max(previous_script_end, end)
+        previous_source_end[source_key] = max(previous_end, end)
     if issues:
         raise DialogueContractError(issues)
 

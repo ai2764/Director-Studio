@@ -145,7 +145,13 @@ async def handle_project_tool(
         return True
 
     if name == "append_shot":
-        shot = svc.append_shot(project_id, AppendShotSubmission.model_validate(args))
+        from ..dialogue_authoring import prepare_authored_dialogue
+        submission = AppendShotSubmission.model_validate(args)
+        authored, evidence = await prepare_authored_dialogue(project, submission.shot.model_dump(),
+            current=None, provider=svc.plan_provider, user_message=user_feedback,
+            user_message_id=user_message_id)
+        submission = AppendShotSubmission.model_validate({**submission.model_dump(), "shot": authored})
+        shot = svc.append_shot(project_id, submission, **({"dialogue_authoring": evidence} if evidence else {}))
         actions.append("append_shot")
         if result_payloads is not None:
             result_payloads.append(
@@ -318,7 +324,19 @@ async def handle_project_tool(
     if name == "revise_shot":
         from ..brief import duration_budget
         revision = ShotRevisionSubmission.model_validate(args)
-        persisted = svc.revise_shot(project_id, revision)
+        from ..dialogue_authoring import prepare_authored_dialogue
+        from ....core.projects.store import load_shot
+        from ....core.projects.dialogue import digest
+        current = load_shot(project_id, revision.shot_id)
+        if current is None:
+            raise ValueError(f"shot not found in project: {revision.shot_id}")
+        authored, evidence = await prepare_authored_dialogue(project, revision.model_dump(exclude_unset=True),
+            current=current, provider=svc.plan_provider, user_message=user_feedback,
+            user_message_id=user_message_id)
+        revision = ShotRevisionSubmission.model_validate(authored)
+        persisted = svc.revise_shot(project_id, revision, **({"dialogue_authoring": evidence,
+            "expected_shot_hash": digest(current.model_dump(mode="json")),
+            "expected_script_hash": _script_hash(project.script_text)} if evidence else {}))
         actions.append("revise_shot")
         if result_payloads is not None:
             # Report the saved target, not a full board per edit (quadratic in

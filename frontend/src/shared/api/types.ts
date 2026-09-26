@@ -156,7 +156,7 @@ export interface Shot {
     speaker_name: string;
     text: string;
     language: string;
-    source: { kind: "script" | "shot_revision"; source_hash: string; scene_id: string; quote: string; occurrence: number };
+    source: { kind: "script" | "shot_revision" | "user_message"; source_hash: string; scene_id: string; quote: string; occurrence: number; source_id?: string | null; shot_hash?: string | null };
   }[] | null;
   layout_asset_id: string | null;
   layout_review_status: LayoutReviewStatus | string | null;

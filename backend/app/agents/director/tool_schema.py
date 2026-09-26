@@ -361,7 +361,10 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "Append exactly one new Shot at the end. Submit only the new shot's "
                 "authored fields, not existing Shots or production state. Python assigns "
                 "its ID and preserves every existing Shot, ref, prompt, Layout and video link. "
-                "Copy PROJECT_STATE.script_hash and last_shot_id for stale/replay checks."
+                "Copy PROJECT_STATE.script_hash and last_shot_id for stale/replay checks. "
+                "Provide attributed dialogue_lines with stable narrative speaker IDs when known. "
+                "Otherwise include exact words and speaker cues in script_beat; attribution is "
+                "resolved before saving, using the current user request or authored beat, not a stale script."
             ),
             "parameters": AppendShotSubmission.model_json_schema(),
         },
@@ -375,7 +378,10 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "existing Shot. Preserves neighboring Shots, Picture and voice refs, "
                 "Layouts, and historical jobs while invalidating that Shot's stale "
                 "prompt and active H3 link. For a language-only dialogue change, use "
-                "dialogue_language_updates with saved line_id and language; do not retype words."
+                "dialogue_language_updates with saved line_id and language; do not retype words. "
+                "For missing legacy attribution, resubmit unchanged dialogue with its speaker-cued "
+                "script_beat or explicit dialogue_lines from source evidence before writing a prompt. "
+                "Never change spoken words merely to match an older script."
             ),
             "parameters": ShotRevisionSubmission.model_json_schema(),
         },
