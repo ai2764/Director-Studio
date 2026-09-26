@@ -197,18 +197,22 @@ def apply_dialogue_update(shot, updates: dict):
         updates["dialogue_lines"] = None
     payload = {**shot.model_dump(mode="python"), **updates}
     changed = Shot.model_validate(payload)
-    if (changed.dialogue != shot.dialogue or changed.dialogue_lines != shot.dialogue_lines
-            or changed.scene_id != shot.scene_id):
-        meta = dict(changed.meta)
+    dialogue_changed = (changed.dialogue != shot.dialogue or changed.dialogue_lines != shot.dialogue_lines
+                        or changed.scene_id != shot.scene_id)
+    meta = dict(changed.meta)
+    if dialogue_changed:
         meta.pop("dialogue_authoring", None)
-        changed = changed.model_copy(update={"meta": meta})
-    if (changed.dialogue != shot.dialogue or changed.dialogue_lines != shot.dialogue_lines
-            or changed.scene_id != shot.scene_id or changed.prompt_sections != shot.prompt_sections):
-        meta = dict(changed.meta)
-        for key in ("prompt_dialogue_signature", "prompt_dialogue_contract", "dialogue_grounding"):
+        meta.pop("dialogue_grounding", None)
+    elif "dialogue_grounding" not in meta:
+        # Migrate older prompt-owned evidence before clearing the creative draft.
+        # Consumers still verify its source; a cache is never authored approval.
+        record = shot.meta.get("prompt_dialogue_contract") or {}
+        if record.get("lines"):
+            meta["dialogue_grounding"] = {"script_beat": shot.script_beat, "lines": record["lines"]}
+    if dialogue_changed or changed.prompt_sections != shot.prompt_sections:
+        for key in ("prompt_dialogue_signature", "prompt_dialogue_contract"):
             meta.pop(key, None)
-        changed = changed.model_copy(update={"meta": meta})
-    return changed
+    return changed.model_copy(update={"meta": meta})
 
 
 def verify_dialogue_sources(project, shot, lines: list[DialogueLine]) -> None:
@@ -244,8 +248,7 @@ def verify_dialogue_sources(project, shot, lines: list[DialogueLine]) -> None:
                 from .chat_history import load_chat_history
                 messages = {m.id: m for m in load_chat_history(project.id) if m.role == "user"}
             message = messages.get(source.source_id)
-            if (message is None or source.shot_hash != dialogue_evidence_version(shot)
-                    or dialogue_beat_text(message.content) != dialogue_beat_text(shot.script_beat)):
+            if message is None or source.shot_hash != dialogue_evidence_version(shot):
                 reject("dialogue_source_stale", "existing user message bound to the current shot beat",
                        source.source_id, "Recover evidence again; do not rewrite authored dialogue.")
                 continue

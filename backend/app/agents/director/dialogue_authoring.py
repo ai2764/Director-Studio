@@ -19,7 +19,8 @@ def known_speakers(project) -> list[dict]:
             lines = shot.dialogue_lines
             if lines is None:
                 lines = [DialogueLine.model_validate(v) for v in
-                         (shot.meta.get("prompt_dialogue_contract") or {}).get("lines", [])]
+                         (shot.meta.get("dialogue_grounding") or
+                          shot.meta.get("prompt_dialogue_contract") or {}).get("lines", [])]
             verify_dialogue_sources(project, shot, lines)
         except (ValueError, TypeError):
             continue

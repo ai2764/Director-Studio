@@ -219,7 +219,8 @@ def project_context_blob(
         if dialogue_lines is None:
             from ...core.projects.dialogue import DialogueLine, verify_dialogue_sources
             try:
-                cached = (shot.meta.get("prompt_dialogue_contract") or {}).get("lines", [])
+                cached = (shot.meta.get("dialogue_grounding") or
+                          shot.meta.get("prompt_dialogue_contract") or {}).get("lines", [])
                 lines = [DialogueLine.model_validate(item) for item in cached]
                 if lines:
                     verify_dialogue_sources(project, shot, lines)

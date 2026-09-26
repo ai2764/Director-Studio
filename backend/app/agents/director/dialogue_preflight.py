@@ -5,11 +5,11 @@ import json
 
 from ...core.projects.models import ProjectMode, PromptSections
 from ...core.projects.dialogue import (DialogueLine, DialogueContractError, DialogueIssue,
-    dialogue_contract_signature, verify_dialogue_sources, digest)
+    dialogue_contract_signature, dialogue_evidence_version, verify_dialogue_sources, digest)
 from ...core.h3.dialogue_binding import (DialoguePromptDraft,
     validate_dialogue_uses, speech_blocks)
 from .brief import directing_requests
-from .dialogue_grounding import ground_dialogue
+from .dialogue_grounding import ground_dialogue, review_dialogue_attribution
 from .planner import _extract_json_payload, parse_prompt_sections_json
 
 
@@ -42,14 +42,30 @@ async def prepare_dialogue(project, shot, provider):
         return None
     if shot.dialogue_lines is not None:
         return await ground_dialogue(project, shot, provider)
-    record = shot.meta.get("prompt_dialogue_contract") or {}
+    record = shot.meta.get("dialogue_grounding") or shot.meta.get("prompt_dialogue_contract") or {}
     if record.get("lines"):
         try:
             lines = [DialogueLine.model_validate(x) for x in record["lines"]]
-            verify_dialogue_sources(project, shot, lines)
-            return lines
+            source_beat = record.get("script_beat", shot.script_beat)
+            verify_dialogue_sources(project, shot.model_copy(update={"script_beat": source_beat}), lines)
         except ValueError:
             pass
+        else:
+            if source_beat != shot.script_beat:
+                from ...core.projects.chat_history import load_chat_history
+                source_ids = {line.source.source_id for line in lines if line.source.kind == "user_message"}
+                sources = [m.content for m in load_chat_history(project.id)
+                           if m.role == "user" and m.id in source_ids]
+                if any(line.source.kind == "script" for line in lines):
+                    sources.append(project.script_text)
+                # Re-check meaning after a beat edit, but never re-extract or
+                # silently change established speaker IDs as a prompt repair.
+                await review_dialogue_attribution(provider, sources, shot, lines)
+                lines = [line.model_copy(update={"source": line.source.model_copy(update={
+                    "shot_hash": dialogue_evidence_version(shot)})})
+                    if line.source.kind == "user_message" else line for line in lines]
+            verify_dialogue_sources(project, shot, lines)
+            return lines
     return await ground_dialogue(project, shot, provider)
 
 

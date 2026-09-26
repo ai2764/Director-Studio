@@ -153,11 +153,19 @@ async def test_unrelated_historical_words_are_not_a_shot_source(material_shot):
     project, shot, _ = legacy_shot(material_shot)
     shot = shot.model_copy(update={"dialogue": ["Yes."], "script_beat": "Kira answers the host: Yes."})
     append_chat_message(project.id, role="user", content="Mia: Yes.")
-    class NoGuess:
-        async def complete(self, *args, **kwargs):
-            raise AssertionError("Unlinked history must not reach inference")
+    class RejectUnrelatedSource:
+        async def complete(self, system, user, **kwargs):
+            return json.dumps({"dialogue_lines": [dict(line_id="yes", speaker_id="mia", speaker_name="Mia",
+                text="Yes.", source=dict(kind="script", scene_id=shot.scene_id,
+                    source_hash=hashlib.sha256(b"Mia: Yes.").hexdigest(), quote="Mia: Yes.", occurrence=0))]})
+        async def complete_bounded(self, system, user, **kwargs):
+            evidence = json.loads(user)
+            assert evidence["source"] == "Mia: Yes."
+            assert evidence["shot_beat"] == "Kira answers the host: Yes."
+            return json.dumps({"valid": False, "issues": [{"code": "dialogue_source_unresolved",
+                "action": "Matching words from another person's conversation are not source evidence."}]})
     with pytest.raises(ValueError, match="dialogue_source_unresolved"):
-        await ground_dialogue(project, shot, NoGuess())
+        await ground_dialogue(project, shot, RejectUnrelatedSource())
 
 
 @pytest.mark.asyncio

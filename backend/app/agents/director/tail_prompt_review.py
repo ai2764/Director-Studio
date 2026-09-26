@@ -226,6 +226,16 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                 raise CreativeQuestion(f"Material review needs your decision: {candidate.blocking_question}")
             patch = candidate.shot_patch.model_dump(exclude_none=True)
             changed = shot.model_copy(update=patch)
+            candidate_lines = dialogue_lines
+            if dialogue_lines and changed.script_beat != shot.script_beat:
+                # The tail writer may revise camera coverage after preflight.
+                # Review that candidate against the already verified evidence,
+                # then bind it to the candidate beat before saving its contract.
+                changed = changed.model_copy(update={"meta": {**changed.meta,
+                    "dialogue_grounding": {"script_beat": shot.script_beat,
+                        "lines": [line.model_dump(mode="json") for line in dialogue_lines]}}})
+                candidate_lines = await prepare_dialogue(project, changed, provider)
+                check_current()
             from .service import (
                 _apply_source_audio_contract,
                 _normalize_unambiguous_dialogue_language_tag,
@@ -245,7 +255,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                     dialogue_draft = DialoguePromptDraft(prompt_sections=sections,
                         dialogue_uses=candidate.dialogue_uses or [],
                         dialogue_conflicts=candidate.dialogue_conflicts)
-                    dialogue_draft = compile_dialogue_draft(dialogue_draft, dialogue_lines)
+                    dialogue_draft = compile_dialogue_draft(dialogue_draft, candidate_lines)
                     sections = dialogue_draft.prompt_sections
                     changed = changed.model_copy(update={"prompt_sections": sections})
                 validate_h3_prompt(sections.as_ordered_text(), changed.dialogue,
@@ -307,9 +317,10 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             }
             clear_repair(shot)
             meta = {**changed.meta, "material_review": review}
-            record = prompt_dialogue_record(project, changed, dialogue_lines, dialogue_draft)
+            record = prompt_dialogue_record(project, changed, candidate_lines, dialogue_draft)
             if record is not None:
                 meta.update(prompt_dialogue_contract=record, prompt_dialogue_signature=record["signature"])
+                meta["dialogue_grounding"] = {"script_beat": changed.script_beat, "lines": record["lines"]}
             return changed.model_copy(update={"meta": meta})
         except CreativeQuestion as exc:
             save_diagnostics(shot, [*attempts, {"stage": "decision", "raw": raw, "review_raw": audit_raw, "error": str(exc)}])

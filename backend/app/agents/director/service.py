@@ -494,7 +494,8 @@ class DirectorService:
             from ...core.projects.dialogue import DialogueLine, verify_dialogue_sources
             lines = shot.dialogue_lines
             if lines is None:
-                cached = (shot.meta.get("prompt_dialogue_contract") or {}).get("lines", [])
+                cached = (shot.meta.get("dialogue_grounding") or
+                          shot.meta.get("prompt_dialogue_contract") or {}).get("lines", [])
                 lines = [DialogueLine.model_validate(item) for item in cached]
             if not lines:
                 raise ValueError("Language-only edit needs current attributed dialogue; resolve source lines first")
@@ -2436,6 +2437,7 @@ class DirectorService:
         if dialogue_record is not None:
             meta["prompt_dialogue_contract"] = dialogue_record
             meta["prompt_dialogue_signature"] = dialogue_record["signature"]
+            meta["dialogue_grounding"] = {"script_beat": shot.script_beat, "lines": dialogue_record["lines"]}
         meta["prompt_layout_asset_id"] = (
             layout_asset_ids[0] if layout_asset_ids else ""
         )

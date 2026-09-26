@@ -7,7 +7,7 @@ import json
 from pydantic import BaseModel, ConfigDict, Field
 
 from ...core.projects.dialogue import (DialogueContractError, DialogueIssue, DialogueLine,
-    dialogue_beat_text, dialogue_evidence_version, missing_dialogue_source_issue, verify_dialogue_sources)
+    dialogue_evidence_version, missing_dialogue_source_issue, verify_dialogue_sources)
 from .planner import _extract_json_payload
 from .brief import directing_requests
 
@@ -46,7 +46,29 @@ every line. Distinguish addressing/mentioning a person from that person speaking
 new screenplay style or demand an explicit name on every sentence. This is source verification,
 not creative direction. If attribution contradicts the source or is genuinely ambiguous, return
 valid:false and issues with code:dialogue_speaker_unresolved, line_id, evidence and action.
+The source must support this shot's conversation, not just contain coincidentally matching words.
+Camera coverage, framing and acting may differ from the source; do not require identical prose.
+On a revised beat, preserve established attribution unless it contradicts an explicit speaker
+change. Report such a change for an authored dialogue revision, never silently reassign a line.
 """
+
+
+async def review_dialogue_attribution(provider, source, shot, lines):
+    """Validate semantic source linkage independently of camera/wording equality."""
+    audit_input = json.dumps({"source": source, "shot_beat": shot.script_beat,
+        "lines": [line.model_dump(mode="json") for line in lines]}, ensure_ascii=False)
+    bounded = getattr(provider, "complete_bounded", None)
+    raw = (await bounded(ATTRIBUTION_REVIEW, audit_input, max_tokens=2048,
+                         schema=AttributionReview.model_json_schema())
+           if bounded else await provider.complete(ATTRIBUTION_REVIEW, audit_input))
+    try:
+        audit = AttributionReview.model_validate(_extract_json_payload(raw))
+    except ValueError as exc:
+        raise DialogueContractError([DialogueIssue(code="dialogue_attribution_review_invalid",
+            actual=str(exc), action="Return the structured source-attribution review.")]) from exc
+    if not audit.valid or audit.issues:
+        raise DialogueContractError(audit.issues or [DialogueIssue(
+            code="dialogue_speaker_unresolved", action="Resolve the speaker from source context.")])
 
 
 def _contains_dialogue(source: str, dialogue: list[str]) -> bool:
@@ -66,8 +88,7 @@ async def ground_dialogue(project, shot, provider, *, known_speakers=None,
     if not authoring_request and not _contains_dialogue(project.script_text, shot.dialogue):
         from ...core.projects.chat_history import load_chat_history
         candidates = {m.content: m for m in load_chat_history(project.id)
-                      if m.role == "user" and _contains_dialogue(m.content, shot.dialogue)
-                      and dialogue_beat_text(m.content) == dialogue_beat_text(shot.script_beat)}
+                      if m.role == "user" and _contains_dialogue(m.content, shot.dialogue)}
         if len(candidates) == 1:
             message = next(iter(candidates.values()))
             # Reuse source extraction, but never promote its result to an authored
@@ -134,20 +155,7 @@ async def ground_dialogue(project, shot, provider, *, known_speakers=None,
             try:
                 verify_dialogue_sources(project, shot, lines)
                 if contextual_source:
-                    audit_input = json.dumps({"source": project.script_text, "shot_beat": shot.script_beat,
-                        "lines": [line.model_dump(mode="json") for line in lines]}, ensure_ascii=False)
-                    bounded = getattr(provider, "complete_bounded", None)
-                    audit_raw = (await bounded(ATTRIBUTION_REVIEW, audit_input, max_tokens=2048,
-                                              schema=AttributionReview.model_json_schema())
-                                 if bounded else await provider.complete(ATTRIBUTION_REVIEW, audit_input))
-                    try:
-                        audit = AttributionReview.model_validate(_extract_json_payload(audit_raw))
-                    except ValueError as exc:
-                        raise DialogueContractError([DialogueIssue(code="dialogue_attribution_review_invalid",
-                            actual=str(exc), action="Return the structured source-attribution review.")]) from exc
-                    if not audit.valid or audit.issues:
-                        raise DialogueContractError(audit.issues or [DialogueIssue(
-                            code="dialogue_speaker_unresolved", action="Resolve the speaker from source context.")])
+                    await review_dialogue_attribution(provider, project.script_text, shot, lines)
             except DialogueContractError as exc:
                 error = exc
             else:
