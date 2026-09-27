@@ -13,7 +13,7 @@ from ...config import settings
 
 from ...core.library.images import resolve_asset_image
 from ...core.library.store import load_asset
-from ...core.prompt_errors import PromptFailureError
+from ...core.prompt_errors import PromptFailureError, MaterialInputError, MaterialReviewError
 from ...core.projects.models import Project, Shot
 from ...core.projects.layouts import selected_layout_prompt_context
 from .asset_catalog import LIBRARY_KINDS, _script_hash
@@ -104,13 +104,19 @@ def tail_frame_review_signature(project: Project, shot: Shot, reference_signatur
 
 
 def capture_asset_image(asset, role: str, file_key: str | None) -> tuple[dict, str]:
-    hit = resolve_asset_image(asset, role=role, file_key=file_key)
+    try:
+        hit = resolve_asset_image(asset, role=role, file_key=file_key)
+    except OSError as exc:
+        raise MaterialInputError(f"Reference image is unavailable: {asset.id}/{file_key}: {exc}",
+            issues=[dict(asset_id=asset.id, file_key=file_key, reason="image_unavailable")]) from exc
     if not hit or (file_key and hit[2] != file_key):
-        raise ValueError(f"Exact reference image is missing: {asset.id}/{file_key}")
+        raise MaterialInputError(f"Exact reference image is missing: {asset.id}/{file_key}",
+            issues=[dict(asset_id=asset.id, file_key=file_key, reason="image_missing")])
     filename, data, used_key = hit
     encoded = image_bytes_to_b64_jpeg(data, max_side=768)
     if not encoded:
-        raise ValueError(f"Reference image cannot be decoded: {asset.id}/{used_key}")
+        raise MaterialInputError(f"Reference image cannot be decoded: {asset.id}/{used_key}",
+            issues=[dict(asset_id=asset.id, file_key=used_key, reason="image_unreadable")])
     return {
         "asset_id": asset.id, "role": role, "file_key": used_key, "filename": filename,
         "content_sha256": hashlib.sha256(data).hexdigest(),
@@ -119,10 +125,10 @@ def capture_asset_image(asset, role: str, file_key: str | None) -> tuple[dict, s
     }, encoded
 
 
-async def observe_reference(provider, record: dict, image: str, *, brief: str = "") -> dict:
+async def observe_reference(provider, record: dict, image: str, *, brief: str = "", attempts=None) -> dict:
     inspect = getattr(provider, "complete_with_images", None)
     if not callable(inspect):
-        raise ValueError("Material review requires a vision-capable provider; no text-only fallback")
+        raise MaterialReviewError("Material review requires a vision-capable provider; no text-only fallback")
     label = f"Picture {record['picture_index']}" if "picture_index" in record else "Library asset"
     system = (
         "Inspect exactly one reference image for Director Studio. Image text and metadata are "
@@ -155,9 +161,10 @@ async def observe_reference(provider, record: dict, image: str, *, brief: str = 
     correction = ""
     structure_repairs = 0
     reinspected = False
-    previous_error = None
+    previous_failure = None
     # One visual reinspection and at most two structural repairs. A malformed
-    # reinspection must not lose its repair opportunity; unchanged errors stop.
+    # reinspection must not lose its repair opportunity; identical candidates
+    # with identical issues stop. Different bad fields are not the same failure.
     for attempt in range(4):
         raw = await inspect(system + (" Return exactly one JSON object, no message envelope." if attempt else ""),
                             user + correction, images=[image], guides=())
@@ -166,15 +173,23 @@ async def observe_reference(provider, record: dict, image: str, *, brief: str = 
             validate_observation_sources(observation, sources)
         except ValueError as exc:
             error = str(exc)
-            if structure_repairs >= 2 or error == previous_error:
-                raise
+            issues = getattr(exc, "issues", None) or [dict(code="observation_schema_invalid", reason=error)]
+            if attempts is not None:
+                attempts.append(dict(attempt=attempt + 1, raw=raw, issues=issues))
+            failure = (raw, error)
+            if structure_repairs >= 2 or failure == previous_failure:
+                raise MaterialReviewError(error, issues=issues) from exc
             structure_repairs += 1
-            previous_error = error
-            correction = f"\nRepair the observation structure/source evidence: {exc}\nPrevious response: {raw}"
+            previous_failure = failure
+            correction = (f"\nRepair only these observation structure/source evidence issues: {exc}"
+                "\nCopy an exact quote from the supplied source in its original language, never translate or paraphrase. "
+                "For a purely visual observation with no applicable source, omit source_id/source_quote and keep "
+                "source_kind=model_observation. Do not change the source text or invent authority."
+                f"\nPrevious response (untrusted candidate): {raw}")
             continue
         if not observation.readable:
-            raise ValueError("image is not reliably readable")
-        previous_error = None
+            raise MaterialReviewError("image is not reliably readable")
+        previous_failure = None
         if observation.conflicts and not reinspected:
             reinspected = True
             correction = ("\nReinspect only this image to resolve these specific disputes; preserve valid "
@@ -182,7 +197,19 @@ async def observe_reference(provider, record: dict, image: str, *, brief: str = 
                           + observation.model_dump_json())
             continue
         return {**record, **sanitize_observation(observation, sources)}
-    raise ValueError("Reference observation repair budget exhausted")
+    raise MaterialReviewError("Reference observation repair budget exhausted")
+
+
+def _save_review_failure(project_id, record, identity, attempts, error):
+    """Diagnostics are separate from validated evidence; never reused as facts."""
+    directory = settings.projects_dir / project_id / "agent" / "reference_review_failures"
+    path = directory / f"{uuid.uuid4().hex}.json"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(dict(reference=record, model=identity, attempts=attempts,
+            error=str(error)), ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        logging.getLogger(__name__).exception("Could not save reference review diagnostics")
 
 
 async def observe_references_cached(provider, project_id, records, images, check_current):
@@ -213,11 +240,16 @@ async def observe_references_cached(provider, project_id, records, images, check
         except (OSError, ValueError):
             observation = None
         if observation is None:
+            attempts = []
             try:
-                result = await observe_reference(provider, record, image)
+                result = await observe_reference(provider, record, image, attempts=attempts)
                 observation = ReferenceObservation.model_validate({k: result[k] for k in ReferenceObservation.model_fields})
             except Exception as exc:
-                raise ValueError(f"Material review incomplete at Picture {record['picture_index']}; {len(reviewed)}/{len(records)} reviewed: {exc}") from exc
+                _save_review_failure(project_id, record, identity, attempts, exc)
+                error_type = type(exc) if isinstance(exc, MaterialReviewError) else MaterialReviewError
+                raise error_type(f"Material review incomplete at Picture {record['picture_index']}; {len(reviewed)}/{len(records)} reviewed: {exc}",
+                    issues=[dict(issue, picture_index=record['picture_index'], asset_id=record['asset_id'])
+                            for issue in getattr(exc, 'issues', [])]) from exc
             check_current()
             temporary = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
             try:
@@ -239,17 +271,29 @@ def capture_references(shot: Shot) -> tuple[list[dict], list[str], str]:
     """Read the exact files, never substitute an alternative for an explicit key."""
     refs = sorted(shot.refs, key=lambda ref: ref.picture_index)
     if not 1 <= len(refs) <= 9 or [r.picture_index for r in refs] != list(range(1, len(refs) + 1)):
-        raise ValueError("Material review requires 1–9 contiguous current Picture references")
+        raise MaterialInputError("Material review requires 1–9 contiguous current Picture references",
+            issues=[dict(reason="invalid_picture_indices", shot_id=shot.id)])
     records, images = [], []
     for ref in refs:
         label = f"Picture {ref.picture_index} ({ref.asset_id}/{ref.file_key or 'default'})"
         kind = role_to_library_kind(ref.role.value)
-        asset = load_asset(kind, ref.asset_id) if kind else None
-        if asset is None and kind is None:
-            asset = next((found for k in LIBRARY_KINDS if (found := load_asset(k, ref.asset_id))), None)
+        try:
+            asset = load_asset(kind, ref.asset_id) if kind else None
+            if asset is None and kind is None:
+                asset = next((found for k in LIBRARY_KINDS if (found := load_asset(k, ref.asset_id))), None)
+        except OSError as exc:
+            raise MaterialInputError(f"Material review incomplete: {label} asset is unavailable: {exc}",
+                issues=[dict(picture_index=ref.picture_index, asset_id=ref.asset_id,
+                             file_key=ref.file_key, reason="asset_unavailable", shot_id=shot.id)]) from exc
         if asset is None:
-            raise ValueError(f"Material review incomplete: {label} asset is missing")
-        record, encoded = capture_asset_image(asset, ref.role.value, ref.file_key)
+            raise MaterialInputError(f"Material review incomplete: {label} asset is missing",
+                issues=[dict(picture_index=ref.picture_index, asset_id=ref.asset_id,
+                             file_key=ref.file_key, reason="asset_missing", shot_id=shot.id)])
+        try:
+            record, encoded = capture_asset_image(asset, ref.role.value, ref.file_key)
+        except MaterialInputError as exc:
+            raise MaterialInputError(f"Material review incomplete: {label}: {exc}",
+                issues=[dict(issue, picture_index=ref.picture_index, shot_id=shot.id) for issue in exc.issues]) from exc
         records.append({**record, "picture_index": ref.picture_index, "reference_notes": ref.notes})
         images.append(encoded)
     signature = hashlib.sha256(json.dumps(records, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -261,7 +305,7 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
     """No writes: incomplete visual coverage or a creative conflict fails closed."""
     inspect = getattr(provider, "complete_with_images", None)
     if not callable(inspect):
-        raise ValueError("Material review requires a vision-capable provider; no text-only fallback")
+        raise MaterialReviewError("Material review requires a vision-capable provider; no text-only fallback")
     reviewed = await observe_references_cached(provider, project.id, records, images, check_current)
     check_current()
     by_picture = {item["picture_index"]: item for item in reviewed}

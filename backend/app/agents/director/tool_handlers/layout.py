@@ -9,6 +9,7 @@ from typing import Any, Callable
 from ....config import settings
 from ..task_context_builder import ContextRequired
 from ..dialogue_metadata import DialogueMetadataError, DialogueClarificationRequired
+from ....core.prompt_errors import MaterialReviewError, MaterialInputError
 from ....core.library.store import load_asset
 from ....core.projects.layouts import (
     GptLayoutBrief,
@@ -688,6 +689,20 @@ async def handle_layout_tool(
                                         "reviewed_picture_indices": [r["picture_index"] for r in review.get("references", [])],
                                         "review_reason": decision.get("reason", "")})
             touched.add(s2.id)
+        except MaterialReviewError as e:
+            instruction = (
+                "Restore the missing material or explicitly relink the affected reference, then review it again. "
+                "No substitute image was selected."
+                if isinstance(e, MaterialInputError) else
+                "Reference inspection did not produce valid evidence; review the materials again. "
+                "This is not a creative prompt failure and does not imply that the selected asset should be replaced."
+            )
+            reply = f"{e}. {instruction}"
+            notes.append(reply)
+            if result_payloads is not None:
+                result_payloads.append({"ok": False, "code": e.code, "shot_id": shot.id,
+                    "failure_kind": "contract", "retryable": False, "concludes_turn": True,
+                    "issues": e.issues, "error": str(e), "reply": reply})
         except DialogueMetadataError as e:
             reply = e.question if isinstance(e, DialogueClarificationRequired) else str(e)
             notes.append(reply)

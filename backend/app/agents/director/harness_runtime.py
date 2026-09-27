@@ -144,6 +144,8 @@ class BackendTurn:
                 system += " Classify every uploaded image before unrelated changes."
         if self.terminal_failure and self.terminal_failure_code == "DIALOGUE_CLARIFICATION_REQUIRED":
             system += "\nDialogue metadata needs the user's clarification before prompt writing. Ask the confirmed question; do not guess or change the source."
+        elif self.terminal_failure and self.terminal_failure_code in {"MATERIAL_INPUT_INVALID", "MATERIAL_REVIEW_INVALID"}:
+            system += "\nReference preflight failed before prompt writing. Explain the exact affected binding or evidence issue and required next step. Do not claim a prompt retry can repair missing inputs, or silently substitute assets. The user can still edit or relink references in a subsequent turn."
         elif self.terminal_failure:
             system += (
                 "\nA derived prompt operation already failed after its bounded internal "
@@ -398,7 +400,8 @@ class BackendTurn:
         if name == "write_prompt" and not result["ok"] and result.get("code") != "CONTEXT_REQUIRED":
             self.prompt_failure_kind = result.get("failure_kind", "unknown")
             failure = str(result.get("error") or "Prompt generation failed.")
-            if result.get("code") in {"DIALOGUE_CLARIFICATION_REQUIRED", "DIALOGUE_METADATA_INVALID"}:
+            if result.get("code") in {"DIALOGUE_CLARIFICATION_REQUIRED", "DIALOGUE_METADATA_INVALID",
+                                       "MATERIAL_INPUT_INVALID", "MATERIAL_REVIEW_INVALID"}:
                 self.terminal_failure_code = result["code"]
                 self.terminal_failure = str(result.get("reply") or failure)
             else:

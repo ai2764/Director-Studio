@@ -571,11 +571,15 @@ def _chat_result_to_response(result) -> ChatResponse:
 
 async def _run_scoped_prompt_retry(project_id, request, svc, on_progress=None):
     from ..agents.director.chat_orchestrator import ChatResult
-    from ..core.prompt_errors import PromptFailureError
+    from ..core.prompt_errors import PromptFailureError, MaterialReviewError
     if on_progress:
         await on_progress({"type": "status", "text": f"Repairing prompt for {request.shot_id}"})
     try:
         shot = await run_prompt_retry(project_id, request, svc)
+    except MaterialReviewError as exc:
+        return ChatResult(reply=f"Reference preflight did not complete: {exc}. Review the affected materials before writing the prompt again; no replacement was selected.",
+                          actions=[], project=load_project(project_id), shots=list_shots(project_id),
+                          failure_code=exc.code, failure_kind=exc.failure_kind, failure_message=str(exc))
     except PromptFailureError as exc:
         return ChatResult(reply=f"Prompt repair did not complete: {exc}", actions=[],
                           project=load_project(project_id), shots=list_shots(project_id),

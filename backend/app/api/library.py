@@ -235,41 +235,43 @@ async def get_library_asset(kind: str, asset_id: str) -> LibraryAsset:
     return asset
 
 
-def _invalidate_shots_using_asset(asset: LibraryAsset) -> None:
-    projects = [
-        project
-        for project in list_projects()
-        if asset.project_id is None or project.id == asset.project_id
-    ]
+def _invalidate_shots_using_asset(asset: LibraryAsset, *, deleted: bool = False) -> list[dict]:
+    from ..core.managed_runs.store import _project_lock
+    affected = []
     change = {
         "kind": asset.kind,
         "asset_id": asset.id,
         "name": asset.name,
         "notes": asset.notes,
     }
-    for project in projects:
-        for shot in list_shots(project.id):
-            picture_match = any(ref.asset_id == asset.id for ref in shot.refs)
-            layout_match = any(ref.asset_id == asset.id for ref in shot.layout_refs)
-            voice_match = any(ref.asset_id == asset.id for ref in shot.voice_refs)
-            if not (picture_match or layout_match or voice_match):
-                continue
-            meta = dict(shot.meta or {})
-            if picture_match or layout_match:
-                meta["prompt_picture_signature"] = ""
-                meta["prompt_layout_signature"] = ""
-            if voice_match:
-                meta["prompt_voice_signature"] = ""
-            changes = dict(meta.get("material_changes") or {})
-            metadata_updates = [
-                item
-                for item in list(changes.get("metadata_updated") or [])
-                if item.get("asset_id") != asset.id
-            ]
-            changes["metadata_updated"] = [*metadata_updates, change]
-            meta["material_changes"] = changes
-            meta["material_review_pending"] = True
-            save_shot(shot.model_copy(update={"meta": meta}))
+    # Asset ownership is not its dependency graph: other projects can retain refs.
+    for project in list_projects():
+        with _project_lock(project.id):
+            for shot in list_shots(project.id):
+                picture_match = any(ref.asset_id == asset.id for ref in shot.refs)
+                layout_match = any(ref.asset_id == asset.id for ref in shot.layout_refs)
+                voice_match = any(ref.asset_id == asset.id for ref in shot.voice_refs)
+                if not (picture_match or layout_match or voice_match):
+                    continue
+                meta = dict(shot.meta or {})
+                if picture_match or layout_match:
+                    meta["prompt_picture_signature"] = ""
+                    meta["prompt_layout_signature"] = ""
+                if voice_match:
+                    meta["prompt_voice_signature"] = ""
+                changes = dict(meta.get("material_changes") or {})
+                change_key = "deleted_assets" if deleted else "metadata_updated"
+                metadata_updates = [
+                    item
+                    for item in list(changes.get(change_key) or [])
+                    if item.get("asset_id") != asset.id
+                ]
+                changes[change_key] = [*metadata_updates, change]
+                meta["material_changes"] = changes
+                meta["material_review_pending"] = True
+                save_shot(shot.model_copy(update={"meta": meta}))
+                affected.append(dict(project_id=project.id, shot_id=shot.id))
+    return affected
 
 
 @router.patch("/library/{kind}/{asset_id}", response_model=LibraryAsset)
@@ -307,8 +309,10 @@ async def delete_library_asset(kind: str, asset_id: str) -> dict:
     """Delete a library asset and all of its files (same-group outputs)."""
     if kind not in KINDS:
         raise HTTPException(400, f"unknown kind: {kind}")
-    if load_asset(kind, asset_id) is None:
+    asset = load_asset(kind, asset_id)
+    if asset is None:
         raise HTTPException(404, "not found")
+    affected_shots = _invalidate_shots_using_asset(asset, deleted=True)
     detached_from_shots = _detach_layout_asset(asset_id) if kind == "layouts" else 0
     try:
         delete_asset(kind, asset_id)
@@ -319,4 +323,5 @@ async def delete_library_asset(kind: str, asset_id: str) -> dict:
         "kind": kind,
         "id": asset_id,
         "detached_from_shots": detached_from_shots,
+        "affected_shots": affected_shots,
     }

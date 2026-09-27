@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ...core.projects.dialogue import digest
 from ...core.projects.store import load_project, load_shot, project_dir
 from ...core.managed_runs.store import _project_lock
-from ...core.prompt_errors import PromptFailureError
+from ...core.prompt_errors import PromptFailureError, MaterialReviewError
 
 
 class PromptRetryRequest(BaseModel):
@@ -95,7 +95,7 @@ def record_prompt_failure(shot, revision_request, error):
     receipt = PromptRetryRequest(retry_id=f"prtry_{uuid.uuid4().hex}", shot_id=shot.id,
                                  source_version=source_version(project, current)).model_dump()
     with _project_lock(project.id):
-        _save(project.id, {**receipt, "state": "blocked" if isinstance(error, (PromptRepairNoProgress, DialogueMetadataError)) else "pending", "revision_request": revision_request,
+        _save(project.id, {**receipt, "state": "blocked" if isinstance(error, (PromptRepairNoProgress, DialogueMetadataError, MaterialReviewError)) else "pending", "revision_request": revision_request,
                            "error": str(error)})
     return receipt
 

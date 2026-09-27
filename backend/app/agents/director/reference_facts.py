@@ -39,18 +39,32 @@ class ObservationConflict(BaseModel):
     reason: str = Field(min_length=1, max_length=800)
 
 
+class ObservationSourceError(ValueError):
+    def __init__(self, issues):
+        self.issues = issues
+        super().__init__(json.dumps(issues, ensure_ascii=False))
+
+
 def validate_observation_sources(observation, sources):
     by_id = {source["id"]: source for source in sources}
-    for fact in observation.facts:
+    issues = []
+    for index, fact in enumerate(observation.facts):
         if fact.source_id:
             source = by_id.get(fact.source_id)
             if not source or not fact.source_quote or fact.source_quote not in source["text"]:
-                raise ValueError("reference_fact_source_invalid: source quote must exist in the supplied source")
+                issues.append(dict(code="reference_fact_source_invalid", path=f"facts[{index}].source_quote",
+                    attribute=fact.attribute, source_id=fact.source_id, source_quote=fact.source_quote,
+                    reason="source quote must exist verbatim in the supplied source" if source else "unknown source_id",
+                    available_source_ids=list(by_id)))
         elif fact.source_quote or fact.source_kind != "model_observation":
-            raise ValueError("reference_fact_source_invalid: model observations cannot claim user authority")
-    for conflict in observation.conflicts:
+            issues.append(dict(code="reference_fact_source_invalid", path=f"facts[{index}].source_id",
+                attribute=fact.attribute, reason="model observations cannot claim user authority without a valid source citation"))
+    for index, conflict in enumerate(observation.conflicts):
         if conflict.quote not in observation.description:
-            raise ValueError("reference_conflict_quote_invalid: cite exact disputed description text")
+            issues.append(dict(code="reference_conflict_quote_invalid", path=f"conflicts[{index}].quote",
+                attribute=conflict.attribute, quote=conflict.quote, reason="cite exact disputed description text"))
+    if issues:
+        raise ObservationSourceError(issues)
 
 
 def sanitize_observation(observation, sources):

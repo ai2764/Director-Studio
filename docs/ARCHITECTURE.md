@@ -54,9 +54,24 @@ candidate → validate/repair → save against current state → submit a job.
   in replacement proposals before confirmation. Semantic classification remains
   the model's responsibility; there is no action-count or keyword rule.
 - Each image observation permits one content reinspection and at most two
-  structural/source repairs, with four total inference calls maximum. Repeated
-  unchanged validation errors stop early. Invalid citations and asserted unseen
-  facts still fail closed; cached successful Pictures survive a later failure.
+  structural/source repairs, with four total inference calls maximum. An identical
+  candidate with identical issues stops early; different invalid citations do not
+  collapse into one generic no-progress error. Source errors identify every failed
+  field, attribute, source ID and quote. Exact original-language source validation
+  remains mandatory. Failed attempts are diagnostic-only records under
+  `agent/reference_review_failures/`, never accepted facts or observation cache.
+  Cached successful Pictures survive a later failure.
+- Missing assets, exact files, unreadable image bytes and invalid Picture packs
+  produce `MATERIAL_INPUT_INVALID`; failed visual evidence review produces
+  `MATERIAL_REVIEW_INVALID`. Both are upstream preflight failures, not creative
+  prompt repair requests. Chat preserves that distinction and managed runs pause
+  without spending a prompt retry or abandoning a continuity handoff. A new user
+  turn can still edit/relink materials; the backend never chooses a replacement.
+- Library deletion marks every dependent project's shots material-review-pending
+  and records `material_changes.deleted_assets`. Ordinary ref IDs and authored
+  prompts are retained to preserve the intended binding; successful re-review
+  clears the derived marker. Existing Layout deletion still detaches its special
+  Layout/Picture bindings. The delete response lists affected project/shot IDs.
 
 - Layouts are **optional** composition references, not mandatory opening frames.
   A generated Layout candidate is not active merely because `layout_asset_id`
