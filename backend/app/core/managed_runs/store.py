@@ -438,7 +438,7 @@ def abandon_tail_handoff(
         }))
 
 
-def create_draft(project_id: str, steps: list[RunStep]) -> ManagedRun:
+def create_draft(project_id: str, steps: list[RunStep], *, recovery_history: list[dict] | None = None) -> ManagedRun:
     with _project_lock(project_id):
         _validate_steps(project_id, steps)
         run = ManagedRun(
@@ -446,6 +446,7 @@ def create_draft(project_id: str, steps: list[RunStep]) -> ManagedRun:
             steps=steps, plan_fingerprint=_fingerprint(project_id),
             current_fingerprint=_fingerprint(project_id),
             selected_shot_ids=[step.shot_id for step in steps],
+            recovery_history=recovery_history or [],
         )
         return _save_run(run)
 

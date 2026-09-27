@@ -1,6 +1,6 @@
 # Director Studio architecture
 
-Current implementation snapshot: **2026-09-26**, after `90bf34a`.
+Current implementation snapshot: **2026-09-26**, including managed planning recovery.
 This describes shipped code on this branch, not the full proposed agent refactor.
 For setup use the [README](../README.md); for runtime configuration use
 [Harness](HARNESS.md). Dated audits, plans and test reports are historical evidence,
@@ -62,6 +62,13 @@ candidate → validate/repair → save against current state → submit a job.
   guarded commit. It does not grant permission to silently change story,
   references, dialogue or duration. A same-event refinement receipt permits
   binding the resulting job without treating an unrelated edit as approved.
+- Planning conflicts get at most one camera/continuity repair proposal and one
+  separate review. False claims can be retracted without rewriting shots. Only
+  implicated shots' four camera fields may change; saved revision requests and
+  script-current confirmed decisions are included as evidence. Accepted changes
+  invalidate old prompts/video bindings and are recorded in the draft's recovery
+  history. Live generation or a concurrent edit prevents publication. Explicit
+  unresolved requirements still stop the run; there is no keyword-based camera rule.
 
 Implementation: [dialogue preflight](../backend/app/agents/director/dialogue_preflight.py),
 [prompt repair](../backend/app/agents/director/prompt_repair.py),
@@ -160,6 +167,11 @@ Atomic file replacement is not a cross-file database transaction. In particular,
 managed prompt commit writes the shot and run separately, attempts rollback on
 run-write failure, and fails closed on a mismatched state after interruption.
 Its narrow refinement receipt is not a universal durable operation ledger.
+Planning repair uses the same process-local lock for camera writes and draft
+publication, rolling back completed shot writes if draft saving fails. Director
+context writes share this lock and use atomic replacement. Superseded H3 terminal
+events cannot restore obsolete video bindings; this does not add cross-process
+locking or multi-file crash atomicity.
 
 ## Source map and operational entry points
 

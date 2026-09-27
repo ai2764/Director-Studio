@@ -11,7 +11,6 @@ from pydantic import BaseModel, ValidationError
 from ..core.managed_runs.models import ManagedRun, ManagedRunView, RunPlan, RunStep
 from ..core.managed_runs.store import (
     _fingerprint,
-    create_draft,
     finish_stop,
     list_runs,
     load_run,
@@ -86,6 +85,16 @@ async def plan_managed_run(project_id: str) -> ManagedRunView:
         raise HTTPException(422, "; ".join(issues))
     input_fingerprint = _fingerprint(project_id)
 
+    def check_current():
+        # Fingerprints omit derived state; a planning repair must not clobber it.
+        current_project = load_project(project_id)
+        current_shots = list_shots(project_id)
+        if (current_project != project or current_shots != shots
+                or _fingerprint(project_id) != input_fingerprint):
+            raise HTTPException(409, "Shot brief or references changed during planning; plan again")
+
+    check_current()
+
     from .projects import _make_chat_fn
 
     chat_fn = await _make_chat_fn(on_progress=None)
@@ -120,6 +129,10 @@ async def plan_managed_run(project_id: str) -> ManagedRunView:
         "are allowed unless an explicit user requirement forbids them. Do not report redundancy, "
         "a Shot missing from the original screenplay, or a scene ID being reused as a blocking "
         "violation. A concern without a directly conflicting explicit requirement must not block this run. "
+        "Camera fields describe a temporal shot, not necessarily a fixed opening: a framing label "
+        "may be a destination of the described movement. Distinguish real incompatible instructions "
+        "from feasible changes in framing. An authored editorial cut is not a request to bridge "
+        "the previous final frame with a continuous camera move. "
         "Do not change Shot content."
     )
     response = await chat_fn(
@@ -128,8 +141,7 @@ async def plan_managed_run(project_id: str) -> ManagedRunView:
         + f"\nCurrent Shot briefs:\n{brief}",
         format=RunPlan.model_json_schema(),
     )
-    if _fingerprint(project_id) != input_fingerprint:
-        raise HTTPException(409, "Shot brief or references changed during planning; plan again")
+    check_current()
     try:
         content = response.get("content") if isinstance(response, dict) else response
         plan = RunPlan.model_validate(json.loads(content) if isinstance(content, str) else content)
@@ -141,12 +153,23 @@ async def plan_managed_run(project_id: str) -> ManagedRunView:
             field_text = "\n".join(field) if isinstance(field, list) else str(field)
             if (any(issue.requirement_quote in source for source in sources)
                     and issue.shot_quote in field_text):
-                grounded_issues.append(issue.reason)
+                grounded_issues.append(issue)
             else:
                 logging.getLogger(__name__).warning("Ignored ungrounded planning claim: %s", issue.model_dump())
+        candidates, receipt = shots, None
         if grounded_issues:
-            raise ValueError("Storyboard does not meet the directing brief: " + "; ".join(grounded_issues))
-        return _run_view(create_draft(project_id, _build_run_steps(shots, plan)))
+            from ..agents.director.managed_planning import recover_plan
+            try:
+                plan, candidates, receipt = await recover_plan(
+                    chat_fn, project, shots, plan, grounded_issues,
+                    directing_requests(project), check_current)
+            except (ValueError, TypeError) as exc:
+                raise ValueError("Storyboard does not meet the directing brief: "
+                    + "; ".join(issue.reason for issue in grounded_issues)
+                    + f"; bounded planning repair did not resolve it: {exc}") from exc
+        from ..core.managed_runs.planning_commit import publish_plan
+        return _run_view(publish_plan(project_id, shots, candidates,
+            _build_run_steps(shots, plan), receipt, check_current))
     except (ValueError, TypeError, ValidationError) as exc:
         raise HTTPException(422, f"Managed run plan was invalid: {exc}") from exc
 

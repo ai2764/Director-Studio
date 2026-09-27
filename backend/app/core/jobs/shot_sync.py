@@ -292,6 +292,19 @@ def _sync_h3_ref2va(job: JobRecord) -> None:
         )
         return
 
+    from ..managed_runs.store import _project_lock
+    with _project_lock(shot.project_id):
+        # Re-read after admission: a planning correction may have invalidated this
+        # job while the callback waited. Do not publish a stale Shot snapshot.
+        current = load_shot(shot.project_id, shot.id)
+        if current is not None:
+            _sync_current_h3_shot(job, current)
+
+
+def _sync_current_h3_shot(job: JobRecord, shot: Shot) -> None:
+    if job.id in (shot.meta.get("superseded_h3_job_ids") or []):
+        logger.info("skip superseded h3 job %s for shot %s", job.id, shot.id)
+        return
     if shot.h3_job_id and shot.h3_job_id != job.id:
         logger.info(
             "skip h3 sync for job %s: shot %s bound to %s",

@@ -122,6 +122,224 @@ def test_plan_route_saves_agent_tail_handoff_as_draft(monkeypatch) -> None:
     assert observed["format"]["type"] == "object"
 
 
+def _planning_conflict_case(monkeypatch, *, patch=None, verdict=True, mutate_at=None):
+    """Fake only inference; exercise real API, domain storage and draft publication."""
+    from app.core.projects.store import load_shot
+    project, first, second = _two_shot_project()
+    save_project(load_project(project.id).model_copy(update={"script_text": "Cut to her reaction."}))
+    second = second.model_copy(update={
+        "shot_type": "close-up", "camera_motion": "slow push-in",
+        "composition": "Begin full-body and push towards her face.",
+    })
+    save_shot(second)
+    issue = {"requirement_quote": "Cut to her reaction.", "shot_id": second.id,
+             "field": "composition", "shot_quote": second.composition,
+             "reason": "Automatic continuity changed the authored edit."}
+    calls = []
+
+    async def make(**kwargs):
+        async def infer(system, user, **kwargs):
+            calls.append((system, user))
+            if len(calls) == mutate_at:
+                save_shot(load_shot(project.id, second.id).model_copy(update={"feedback": "Concurrent edit"}))
+            if len(calls) == 1:
+                return {"content": json.dumps({"tail_handoffs": [], "storyboard_issues": [issue]})}
+            if len(calls) == 2:
+                return {"content": json.dumps({
+                    "plan": {"tail_handoffs": [], "storyboard_issues": []},
+                    "camera_refinements": [] if patch == {} else [{
+                        "shot_id": second.id,
+                        "changes": patch if patch is not None else {
+                            "camera_motion": "subtle push-in",
+                            "composition": "Open on her face and gently move closer.",
+                        },
+                        "reason": "Preserve the reaction edit without an automatic wide opening.",
+                    }],
+                    "reason": "Reconsider the optional continuity choice, preserving the beat.",
+                })}
+            assert len(calls) == 3, "Planning recovery must be bounded"
+            return {"content": json.dumps({"valid": verdict,
+                "issues": [] if verdict else ["An explicit user camera requirement would be lost."]})}
+        return infer
+    monkeypatch.setattr(projects_api, "_make_chat_fn", make)
+    return project, first, second, calls
+
+
+def test_plan_recovers_reviewed_camera_conflict_and_invalidates_old_prompt(monkeypatch):
+    from app.core.projects.store import load_shot
+    from app.core.projects.models import PromptSections
+    project, first, second, calls = _planning_conflict_case(monkeypatch)
+    save_shot(second.model_copy(update={"h3_job_id": "job_old",
+        "prompt_sections": PromptSections(summary="Old camera direction")}))
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/plan")
+    assert response.status_code == 200, response.text
+    saved = load_shot(project.id, second.id)
+    assert saved.composition == "Open on her face and gently move closer."
+    assert saved.shot_type == "close-up"
+    assert saved.script_beat == second.script_beat
+    assert saved.dialogue == second.dialogue
+    assert saved.refs == second.refs
+    assert saved.duration_s == second.duration_s
+    assert saved.h3_job_id is None and saved.prompt_sections.summary == ""
+    assert "job_old" in saved.meta["superseded_h3_job_ids"]
+    assert response.json()["steps"][1]["tail_from_shot_id"] is None
+    assert response.json()["is_stale"] is False
+    assert response.json()["recovery_history"][0]["kind"] == "planning_refinement"
+    assert load_shot(project.id, first.id).composition == first.composition
+    assert len(calls) == 3
+    review_input = json.loads(calls[2][1])
+    assert review_input["original_shots"][1]["composition"] == second.composition
+    assert review_input["candidate_shots"][1]["composition"] == saved.composition
+
+
+def test_plan_can_retract_false_conflict_without_rewriting_camera(monkeypatch):
+    from app.core.projects.store import shots_dir
+    project, _, second, calls = _planning_conflict_case(monkeypatch, patch={})
+    path = shots_dir(project.id) / f"{second.id}.json"
+    before = path.read_bytes()
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/plan")
+    assert response.status_code == 200, response.text
+    assert path.read_bytes() == before
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("patch,verdict", [
+    ({"dialogue": ["Invented speech"]}, True),
+    ({"composition": "Different view"}, False),
+    ({"composition": None}, True),
+])
+def test_plan_recovery_rejects_unreviewed_or_unauthorized_changes(monkeypatch, patch, verdict):
+    from app.core.projects.store import load_shot
+    from app.core.managed_runs.store import list_runs
+    project, _, second, _ = _planning_conflict_case(monkeypatch, patch=patch, verdict=verdict)
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/plan")
+    assert response.status_code == 422
+    assert load_shot(project.id, second.id) == second
+    assert list_runs(project.id) == []
+
+
+@pytest.mark.parametrize("mutate_at", [2, 3])
+def test_plan_recovery_rejects_concurrent_edits_including_nonfingerprinted_fields(monkeypatch, mutate_at):
+    from app.core.projects.store import load_shot
+    project, _, second, _ = _planning_conflict_case(monkeypatch, mutate_at=mutate_at)
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/plan")
+    assert response.status_code == 409, response.text
+    saved = load_shot(project.id, second.id)
+    assert saved.feedback == "Concurrent edit"
+    assert saved.composition == second.composition
+
+
+@pytest.mark.parametrize("state", ["active", "stopping"])
+def test_plan_recovery_does_not_rewrite_a_live_managed_run(monkeypatch, state):
+    from app.core.projects.store import load_shot
+    project, first, second, _ = _planning_conflict_case(monkeypatch)
+    run = create_draft(project.id, [RunStep(shot_id=first.id), RunStep(shot_id=second.id)])
+    with TestClient(create_app()) as client:
+        _save_run(run.model_copy(update={"state": state}))
+        response = client.post(f"/api/projects/{project.id}/managed-run/plan")
+    assert response.status_code == 422
+    assert load_shot(project.id, second.id) == second
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_plan_recovery_preserves_shot_with_live_generation(monkeypatch, status):
+    from app.core.projects.store import load_shot
+    from app.core.projects.models import ShotStatus
+    project, _, second, _ = _planning_conflict_case(monkeypatch)
+    busy = second.model_copy(update={"status": ShotStatus(status)})
+    save_shot(busy)
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/plan")
+    assert response.status_code == 422
+    assert load_shot(project.id, second.id) == busy
+
+
+def test_plan_recovery_rolls_back_camera_when_draft_write_fails(monkeypatch):
+    from app.core.managed_runs import store
+    from app.core.projects.store import shots_dir
+    project, _, second, _ = _planning_conflict_case(monkeypatch)
+    path = shots_dir(project.id) / f"{second.id}.json"
+    before = path.read_bytes()
+    def fail(_run):
+        raise OSError("Fixture disk failure")
+    monkeypatch.setattr(store, "_save_run", fail)
+    with TestClient(create_app(), raise_server_exceptions=False) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/plan")
+    assert response.status_code == 500
+    assert path.read_bytes() == before
+    assert store.list_runs(project.id) == []
+
+
+@pytest.mark.parametrize("job_status", ["queued", "uploading", "running"])
+def test_plan_recovery_checks_actual_job_even_when_shot_status_is_stale(monkeypatch, job_status):
+    from app.core.jobs.store import create_job, save_job
+    from app.core.schemas import JobStatus
+    from app.core.projects.store import load_shot
+    project, _, second, _ = _planning_conflict_case(monkeypatch)
+    with TestClient(create_app()) as client:
+        job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="Active",
+                         project_id=project.id, params={"shot_id": second.id})
+        save_job(job.model_copy(update={"status": JobStatus(job_status)}))
+        original = second.model_copy(update={"h3_job_id": job.id})
+        save_shot(original)
+        response = client.post(f"/api/projects/{project.id}/managed-run/plan")
+    assert response.status_code == 422
+    assert load_shot(project.id, second.id) == original
+
+
+def test_recovery_includes_saved_revision_constraints_in_both_model_requests(monkeypatch):
+    project, _, second, calls = _planning_conflict_case(monkeypatch, verdict=False)
+    save_shot(second.model_copy(update={"meta": {
+        "prompt_revision_request": "Keep a wider opening before moving closer.",
+        "prompt_revision_requests": ["Keep a wider opening before moving closer."],
+    }}))
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/plan")
+    assert response.status_code == 422
+    for _, user in calls[1:]:
+        assert json.loads(user)["original_shots"][1]["revision_request"] == "Keep a wider opening before moving closer."
+
+
+def test_old_terminal_event_cannot_reattach_superseded_video_after_planning_repair(monkeypatch):
+    from app.core.jobs.store import create_job, save_job
+    from app.core.jobs.shot_sync import on_pipeline_job_terminal
+    from app.core.schemas import JobStatus
+    from app.core.projects.store import load_shot
+    project, _, second, _ = _planning_conflict_case(monkeypatch)
+    job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="Old clip",
+        project_id=project.id, params={"project_id": project.id, "shot_id": second.id})
+    job = job.model_copy(update={"status": JobStatus.succeeded})
+    save_job(job)
+    save_shot(second.model_copy(update={"h3_job_id": job.id}))
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/plan")
+    assert response.status_code == 200, response.text
+    repaired = load_shot(project.id, second.id)
+    on_pipeline_job_terminal(job)
+    assert load_shot(project.id, second.id) == repaired
+
+
+@pytest.mark.parametrize("current", [True, False])
+def test_recovery_supplies_only_script_current_confirmed_decisions(monkeypatch, current):
+    from app.agents.director.asset_catalog import _script_hash
+    from app.core.projects.models import AssetCoverageReview
+    project, _, _, calls = _planning_conflict_case(monkeypatch, verdict=False)
+    latest = load_project(project.id)
+    save_project(latest.model_copy(update={"asset_coverage_review": AssetCoverageReview(
+        script_hash=_script_hash(latest.script_text) if current else "old-script",
+        status="reviewed", notes="Keep the agreed camera ownership.")}))
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/projects/{project.id}/managed-run/plan")
+    assert response.status_code == 422
+    for _, user in calls[1:]:
+        evidence = json.loads(user)["confirmed_project_review"]
+        assert evidence == ({"notes": "Keep the agreed camera ownership.", "recommendations": []} if current else None)
+
+
 def test_plan_route_builds_complete_project_order_from_sparse_handoff_decisions(monkeypatch) -> None:
     """The model chooses continuity; it must not have to copy the Shot roster."""
     project, first, second = _two_shot_project()
