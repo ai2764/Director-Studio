@@ -177,6 +177,7 @@ class _StoryboardSubmissionBudget:
 
     limit: int = _MAX_STORYBOARD_SUBMISSIONS
     submissions: int = 0
+    repairing: bool = False
 
     @property
     def exhausted(self) -> bool:
@@ -1069,6 +1070,7 @@ async def orchestrate_chat(
     storyboard_save_attempted = False
     storyboard_save_blocked = False
     prompt_failure_message = ""
+    prompt_failure_code = "PROMPT_GENERATION_FAILED"
     prompt_failure_kind = "unknown"
 
     async def progress(type_: str, text: str) -> None:
@@ -1132,7 +1134,7 @@ async def orchestrate_chat(
             all_think = (all_think + "\n" + thinking).strip() if all_think else thinking
         return ChatResult(
             reply=r,
-            failure_code="PROMPT_GENERATION_FAILED" if prompt_failure_message else "",
+            failure_code=prompt_failure_code if prompt_failure_message else "",
             failure_message=prompt_failure_message,
             failure_kind=prompt_failure_kind,
             actions=acts,
@@ -1260,6 +1262,8 @@ async def orchestrate_chat(
             allow_save_storyboard=allow_save_storyboard,
             include_chat_image_import=pending_uploads,
         )
+        if storyboard_budget.repairing:
+            schemas = [schema for schema in schemas if schema["function"]["name"] != "set_script"]
         from ...core.managed_runs.context import managed_turn_scope
         scope = managed_turn_scope.get()
         if scope is not None and scope.project_id == current_project.id:
@@ -1540,8 +1544,9 @@ async def orchestrate_chat(
                     tool_payload.update(structured_result)
                 if tool["name"] == "write_prompt":
                     prompt_failure_kind = tool_payload.get("failure_kind", "unknown")
+                    prompt_failure_code = tool_payload.get("code") or "PROMPT_GENERATION_FAILED"
                     prompt_failure_message = (
-                        str(tool_payload.get("error") or "Prompt generation failed")
+                        str(tool_payload.get("reply") or tool_payload.get("error") or "Prompt generation failed")
                         if tool_payload.get("ok") is False and tool_payload.get("code") != "CONTEXT_REQUIRED" else ""
                     )
                     if prompt_failure_message:

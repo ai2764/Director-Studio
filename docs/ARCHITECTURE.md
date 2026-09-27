@@ -42,6 +42,22 @@ state/mutation unification remains planned, not completed.
 A typical path is: read current shot/materials → review evidence → generate a
 candidate → validate/repair → save against current state → submit a job.
 
+- Storyboard recovery cannot call `set_script` after a failed submission in the
+  same chat turn. This is a temporary tool boundary, not `Project.script_locked`:
+  a fresh user turn restores ordinary authoring, and direct user edits remain
+  available. It prevents rewriting the acceptance source to evade a rejection;
+  it is not a general natural-language authorization classifier.
+- Storyboard review separates blocking requirement/causality conflicts (`issues`)
+  from advisory generation uncertainty (`warnings`). Difficulty, action density
+  and uncertain motion fidelity do not by themselves invalidate a candidate.
+  Warnings are retained with the saved review and tool result, and are included
+  in replacement proposals before confirmation. Semantic classification remains
+  the model's responsibility; there is no action-count or keyword rule.
+- Each image observation permits one content reinspection and at most two
+  structural/source repairs, with four total inference calls maximum. Repeated
+  unchanged validation errors stop early. Invalid citations and asserted unseen
+  facts still fail closed; cached successful Pictures survive a later failure.
+
 - Layouts are **optional** composition references, not mandatory opening frames.
   A generated Layout candidate is not active merely because `layout_asset_id`
   exists: active H3 inputs are the shot's bound references.
@@ -52,8 +68,16 @@ candidate → validate/repair → save against current state → submit a job.
   See [submission checks](../backend/app/core/projects/transitions.py).
 - The six sections are `subject_definitions`, `summary`, `retention_analysis`,
   `detailed_description`, `overall_soundscape`, and `non_diegetic_music`.
-- Dialogue source/attribution and Picture evidence are validated alongside the
-  prompt contract. New writer output uses dialogue placeholders; compilation
+- Dialogue source/attribution and missing language metadata are prepared before
+  creative prompt generation. Source-backed inference fills only missing language
+  labels, retaining the original attribution and exact words. Derived overlays
+  keep their original unresolved lines, cited evidence, ordered prior requests,
+  and a signature covering all metadata inputs; they are not authored revisions.
+  Ambiguity returns a concrete clarification question. Metadata errors never
+  enter prompt-only repair, including managed tail preparation. Later user edits
+  invalidate derived evidence without locking the shot or imposing language rules.
+- Picture evidence and speech bindings are validated alongside the prompt
+  contract. New writer output uses dialogue placeholders; compilation
   supplies canonical dialogue. Legacy candidates remain readable. When all six
   sections can be read, repair can receive combined dialogue and Picture issues,
   rather than fixing only the first visible defect.

@@ -208,7 +208,8 @@ def apply_dialogue_update(shot, updates: dict):
         # Consumers still verify its source; a cache is never authored approval.
         record = shot.meta.get("prompt_dialogue_contract") or {}
         if record.get("lines"):
-            meta["dialogue_grounding"] = {"script_beat": shot.script_beat, "lines": record["lines"]}
+            meta["dialogue_grounding"] = {"script_beat": shot.script_beat, "lines": record["lines"],
+                **({"metadata": record["metadata"]} if record.get("metadata") else {})}
     if dialogue_changed or changed.prompt_sections != shot.prompt_sections:
         for key in ("prompt_dialogue_signature", "prompt_dialogue_contract"):
             meta.pop(key, None)

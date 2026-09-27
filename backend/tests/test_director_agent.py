@@ -1264,7 +1264,7 @@ async def test_save_storyboard_semantic_rejection_receives_complete_grounding_an
             {
                 "valid": False,
                 "issues": [
-                    "Shot 1 contains excessive sequential state transitions for one H3 clip."
+                    "Shot 1 changes the required sealed-recorder reveal."
                 ],
             }
         )
@@ -1278,7 +1278,7 @@ async def test_save_storyboard_semantic_rejection_receives_complete_grounding_an
         ("scenes", scene.id): load_asset("scenes", scene.id).project_id,
     }
 
-    with pytest.raises(ValueError, match="excessive sequential state transitions"):
+    with pytest.raises(ValueError, match="required sealed-recorder reveal"):
         await svc.save_storyboard(
             project.id,
             [candidate],
@@ -1298,11 +1298,6 @@ async def test_save_storyboard_semantic_rejection_receives_complete_grounding_an
         ensure_ascii=False,
         indent=2,
     ) in call.user
-    assert "never propose replacement shots" in call.system.lower()
-    assert "screenplay coverage" in call.system.lower()
-    assert "causal/character contradiction" in call.system.lower()
-    assert "excessive sequential action/state transitions" in call.system.lower()
-    assert "model-infeasible motion" in call.system.lower()
     assert [shot.model_dump() for shot in list_shots(project.id)] == [old.model_dump()]
     persisted = load_project(project.id)
     assert persisted is not None

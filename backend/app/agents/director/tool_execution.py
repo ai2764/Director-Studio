@@ -127,6 +127,20 @@ async def execute_tools(
             notes.append("Project not found")
             break
 
+        # A failed storyboard enters bounded recovery. Repair the candidate,
+        # never rewrite its source to make acceptance easier.
+        # The shared turn budget also covers separate Harness tool dispatches.
+        if name == "set_script" and budget.repairing:
+            error = (
+                "The screenplay is read-only during this turn's storyboard recovery. "
+                "Repair the candidate against the existing user requirements; do not "
+                "delete required beats to pass validation. If the story itself needs "
+                "to change, explain the trade-off and request a new authoring decision."
+            )
+            notes.append(error)
+            result_payloads.append({"ok": False, "code": "STORYBOARD_SOURCE_READ_ONLY", "error": error})
+            continue
+
         if storyboard_save_failed and name in IMAGE_TOOLS:
             error = (
                 "Storyboard save failed. Layout and prompt work is blocked until "
@@ -286,6 +300,7 @@ async def execute_tools(
                 notes[-1] = f"{name} failed: {failure['error']}"
             if name in STORYBOARD_TOOLS:
                 storyboard_save_failed = True
+                budget.repairing = True
             if result_payloads is not None:
                 result_payloads.append(failure)
 

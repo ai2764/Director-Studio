@@ -10,8 +10,11 @@ Reject only for an observed problem in one of these categories:
 
 - screenplay coverage: an important screenplay beat is absent or materially unsupported;
 - causal or character contradictions: causality, identity, knowledge, intent, or an established story fact is reversed or contradicted;
-- excessive sequential action or state transitions: one H3 clip contains too many dependent actions or incompatible state changes;
-- model-infeasible motion: the motion, transformation, or continuity is not credible for one H3 clip.
+- incompatible state requirements: mutually exclusive states are demanded at the same time, not merely sequential actions;
 - explicit directing requirements: the candidate contradicts user-specified camera ownership/style, character roles, runtime, required beats or forbidden dialogue. Cite both the actual requirement and the conflicting candidate passage.
 
-Do not reject for your own style preferences. Explicit user direction is a requirement; newer explicit revisions take precedence over older requests. A valid candidate has no issues. A saved shot count alone is not evidence that the film meets the brief.
+## Keep generation risks advisory
+
+Return `warnings` separately from blocking `issues`. Action density, entrances and exits, occlusion, moving cameras, and uncertain model fidelity are non-blocking generation risks. Assess timing against the actual clip duration; there is no fixed action-count limit or one-action-per-clip rule. A capability objection needs a documented limit, not a model's guess about what H3 usually handles well. Do not simplify the requested story to avoid a risk.
+
+Do not reject for your own style preferences. Explicit user direction is a requirement; newer explicit revisions supersede only the parts they change. A duration update does not remove an entrance beat, and an agent's rewritten screenplay is not evidence of user authorization. A valid candidate has no issues but may have warnings. A saved shot count alone is not evidence that the film meets the brief.

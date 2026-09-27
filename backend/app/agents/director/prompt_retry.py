@@ -87,6 +87,7 @@ def _save(project_id, record):
 
 def record_prompt_failure(shot, revision_request, error):
     from .prompt_repair import PromptRepairNoProgress
+    from .dialogue_metadata import DialogueMetadataError
     project = load_project(shot.project_id)
     current = load_shot(shot.project_id, shot.id)
     if project is None or current is None:
@@ -94,7 +95,7 @@ def record_prompt_failure(shot, revision_request, error):
     receipt = PromptRetryRequest(retry_id=f"prtry_{uuid.uuid4().hex}", shot_id=shot.id,
                                  source_version=source_version(project, current)).model_dump()
     with _project_lock(project.id):
-        _save(project.id, {**receipt, "state": "blocked" if isinstance(error, PromptRepairNoProgress) else "pending", "revision_request": revision_request,
+        _save(project.id, {**receipt, "state": "blocked" if isinstance(error, (PromptRepairNoProgress, DialogueMetadataError)) else "pending", "revision_request": revision_request,
                            "error": str(error)})
     return receipt
 

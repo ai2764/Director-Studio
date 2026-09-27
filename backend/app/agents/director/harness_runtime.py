@@ -67,6 +67,7 @@ class BackendTurn:
         self.successful_prompt_shot_ids: set[str] = set()
         self.storyboard_failed = False
         self.terminal_failure: str | None = None
+        self.terminal_failure_code = "PROMPT_GENERATION_FAILED"
         self.prompt_failure_kind = "unknown"
         self.expected_state: str | None = None
         self.local_generation_receipt: str | None = None
@@ -98,6 +99,8 @@ class BackendTurn:
             allow_save_storyboard=not self.budget.exhausted,
             include_chat_image_import=pending,
         )
+        if self.budget.repairing:
+            tools = [tool for tool in tools if tool["function"]["name"] != "set_script"]
         from ...core.managed_runs.context import managed_turn_scope
         managed_scope = managed_turn_scope.get()
         if managed_scope is not None and managed_scope.project_id == self.project_id:
@@ -129,11 +132,19 @@ class BackendTurn:
                  if explicit_gpt_image_intent(self.message) and not actor_design_intent(self.message)
                  else project_context_blob(project, shots, message=self.message, focused=True))
         system = DIRECTOR_CHAT_SYSTEM
+        if self.budget.repairing:
+            system += (
+                "\nThe screenplay is read-only during this turn's storyboard recovery. "
+                "A failed candidate does not authorize changing the story or dropping "
+                "required beats. Repair the candidate, or explain the unresolved choice."
+            )
         if self.images:
             system += "\nInspect the images attached by the backend."
             if self.uploads:
                 system += " Classify every uploaded image before unrelated changes."
-        if self.terminal_failure:
+        if self.terminal_failure and self.terminal_failure_code == "DIALOGUE_CLARIFICATION_REQUIRED":
+            system += "\nDialogue metadata needs the user's clarification before prompt writing. Ask the confirmed question; do not guess or change the source."
+        elif self.terminal_failure:
             system += (
                 "\nA derived prompt operation already failed after its bounded internal "
                 "repair attempts. Explain the confirmed failure and the unchanged project "
@@ -387,11 +398,15 @@ class BackendTurn:
         if name == "write_prompt" and not result["ok"] and result.get("code") != "CONTEXT_REQUIRED":
             self.prompt_failure_kind = result.get("failure_kind", "unknown")
             failure = str(result.get("error") or "Prompt generation failed.")
-            self.terminal_failure = (
-                "Prompt generation did not complete after bounded internal repair. "
-                f"The saved storyboard was not changed to work around it. {failure}"
-            )
-            result.update(retryable=False, code="PROMPT_GENERATION_FAILED")
+            if result.get("code") in {"DIALOGUE_CLARIFICATION_REQUIRED", "DIALOGUE_METADATA_INVALID"}:
+                self.terminal_failure_code = result["code"]
+                self.terminal_failure = str(result.get("reply") or failure)
+            else:
+                self.terminal_failure = (
+                    "Prompt generation did not complete after bounded internal repair. "
+                    f"The saved storyboard was not changed to work around it. {failure}"
+                )
+            result.update(retryable=False, code=self.terminal_failure_code)
         elif name == "write_prompt" and result["ok"]:
             saved_shot_id = result.get("shot_id") or args.get("shot_id")
             if isinstance(saved_shot_id, str) and saved_shot_id:
@@ -435,7 +450,7 @@ class BackendTurn:
             reply = "No storyboard save was confirmed in this turn."
         images = self.result_images + _layout_images(shots, only_shot_ids=self.touched) if self.touched else self.result_images
         return ChatResult(reply=reply, project=project, shots=shots, actions=self.actions,
-                          failure_code="PROMPT_GENERATION_FAILED" if self.terminal_failure else "",
+                          failure_code=self.terminal_failure_code if self.terminal_failure else "",
                           failure_message=self.terminal_failure or "",
                           failure_kind=self.prompt_failure_kind,
                           images=images, thinking=result.get("thinking", ""), steps=self.notes)

@@ -44,21 +44,11 @@ def test_unknown_stage_guide_fails_clearly():
         stage_guides.load_stage_guides(("bogus",))
 
 
-def test_storyboard_validation_stage_guide_loads_with_semantic_contract():
-    guide = stage_guides.load_stage_guides(("storyboard-validation",))
+@pytest.mark.parametrize("guide_id", ["script-planning", "storyboard-validation"])
+def test_requested_stage_guide_loads_as_a_non_empty_block(guide_id):
+    guide = stage_guides.load_stage_guides((guide_id,))
 
-    assert '<DIRECTOR_STAGE_GUIDE id="storyboard-validation">' in guide
-    assert "screenplay coverage" in guide
-    assert "causal or character contradictions" in guide
-    assert "excessive sequential action or state transitions" in guide
-    assert "model-infeasible motion" in guide
-    assert "Do not propose replacement shots" in guide
-
-
-def test_script_planning_stage_guide_loads_as_a_non_empty_block():
-    guide = stage_guides.load_stage_guides(("script-planning",))
-
-    assert guide.startswith('<DIRECTOR_STAGE_GUIDE id="script-planning">\n')
+    assert guide.startswith(f'<DIRECTOR_STAGE_GUIDE id="{guide_id}">\n')
     assert guide.endswith("\n</DIRECTOR_STAGE_GUIDE>")
     assert len(guide.splitlines()) > 3
 

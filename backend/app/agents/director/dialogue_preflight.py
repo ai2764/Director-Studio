@@ -97,7 +97,29 @@ def collect_prompt_contract_errors(raw: str, *, required_picture_indices=(),
     raise error from original
 
 
-async def prepare_dialogue(project, shot, provider):
+async def prepare_dialogue(project, shot, provider, *, revision_request=""):
+    from .dialogue_metadata import (complete_dialogue_metadata, verify_prepared_dialogue,
+        DialogueMetadataError, DialogueClarificationRequired, PreparedDialogue)
+    if project.mode != ProjectMode.director:
+        return None
+    if not revision_request and shot.dialogue and dialogue_contract_current(project, shot):
+        record = shot.meta["prompt_dialogue_contract"]
+        lines = [DialogueLine.model_validate(x) for x in record["lines"]]
+        return PreparedDialogue(lines, record["metadata"]) if record.get("metadata") else lines
+    try:
+        lines = await _prepare_attribution(project, shot, provider)
+    except DialogueContractError as exc:
+        unresolved = {"dialogue_source_missing", "dialogue_source_unresolved", "dialogue_speaker_unresolved"}
+        error_type = (DialogueClarificationRequired if exc.issues and
+                      all(issue.code in unresolved for issue in exc.issues) else DialogueMetadataError)
+        raise error_type(exc.issues) from exc
+    lines = await complete_dialogue_metadata(project, shot, lines, provider, revision_request=revision_request)
+    if lines:
+        verify_prepared_dialogue(project, shot, lines)
+    return lines
+
+
+async def _prepare_attribution(project, shot, provider):
     if project.mode != ProjectMode.director:
         return None
     if shot.dialogue_lines is not None:
@@ -105,7 +127,8 @@ async def prepare_dialogue(project, shot, provider):
     record = shot.meta.get("dialogue_grounding") or shot.meta.get("prompt_dialogue_contract") or {}
     if record.get("lines"):
         try:
-            lines = [DialogueLine.model_validate(x) for x in record["lines"]]
+            source_lines = (record.get("metadata") or {}).get("source_lines", record["lines"])
+            lines = [DialogueLine.model_validate(x) for x in source_lines]
             source_beat = record.get("script_beat", shot.script_beat)
             verify_dialogue_sources(project, shot.model_copy(update={"script_beat": source_beat}), lines)
         except ValueError:
@@ -151,12 +174,16 @@ def prompt_dialogue_record(project, shot, lines, draft):
         return None
     uses = [use.model_dump(mode="json", exclude_none=True) for use in draft.dialogue_uses] if draft else []
     source = dialogue_contract_signature(project, shot, lines, directing_requests(project))
-    signature = digest([source, shot.prompt_sections.model_dump(mode="json"), uses])
+    metadata = getattr(lines, "metadata", None)
+    signature = digest([source, shot.prompt_sections.model_dump(mode="json"), uses] +
+                       ([metadata] if metadata else []))
     return {"lines": [x.model_dump(mode="json") for x in lines], "uses": uses, "signature": signature,
+            **({"metadata": metadata} if metadata else {}),
             "conflicts": [x.model_dump(mode="json") for x in draft.dialogue_conflicts] if draft else []}
 
 
 def dialogue_contract_current(project, shot) -> bool:
+    from .dialogue_metadata import verify_prepared_dialogue, PreparedDialogue, metadata_input_signature
     if project.mode != ProjectMode.director:
         return True
     if not shot.dialogue:
@@ -164,7 +191,13 @@ def dialogue_contract_current(project, shot) -> bool:
     record = shot.meta.get("prompt_dialogue_contract") or {}
     try:
         lines = [DialogueLine.model_validate(x) for x in record.get("lines", [])]
-        verify_dialogue_sources(project, shot, lines)
+        metadata = record.get("metadata")
+        if metadata:
+            if metadata["input_signature"] != metadata_input_signature(
+                    project, shot, metadata["source_lines"], metadata["revision_request"], metadata.get("previous_requests", [])):
+                return False
+            lines = PreparedDialogue(lines, metadata)
+        verify_prepared_dialogue(project, shot, lines)
         draft = DialoguePromptDraft(prompt_sections=shot.prompt_sections,
                                     dialogue_uses=record.get("uses", []),
                                     dialogue_conflicts=record.get("conflicts", []))

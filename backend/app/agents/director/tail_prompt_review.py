@@ -12,6 +12,7 @@ from ...core.projects.layouts import selected_layout_prompt_context
 from ...core.projects.models import PromptSections
 from ...core.h3.dialogue_binding import DialogueUse, DialogueConflict, DialoguePromptDraft, compile_dialogue_draft
 from .dialogue_preflight import prepare_dialogue, prompt_dialogue_record, WRITER_CONTRACT, collect_prompt_contract_errors
+from .dialogue_metadata import DialogueMetadataError
 from .reference_facts import reference_context_signature, reference_intent_signature, REFERENCE_WRITER_CONTRACT
 from .material_review import observe_references_cached, tail_frame_review_signature
 from .planner import _extract_json_payload
@@ -220,7 +221,8 @@ async def draft_and_review(provider, project, shot, records, images, signature,
         except Exception as exc:
             save_diagnostics(shot, [{"stage": "tail_compatibility", "raw": raw, "error": str(exc)}])
             raise
-    dialogue_lines = await prepare_dialogue(project, shot, provider)
+    dialogue_lines = await prepare_dialogue(project, shot, provider,
+                                            revision_request=request["revision_request"])
     check_current()
     request["dialogue_lines"] = [line.model_dump(mode="json") for line in dialogue_lines] if dialogue_lines else []
     if task_packet is not None:
@@ -269,8 +271,10 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                 # then bind it to the candidate beat before saving its contract.
                 changed = changed.model_copy(update={"meta": {**changed.meta,
                     "dialogue_grounding": {"script_beat": shot.script_beat,
-                        "lines": [line.model_dump(mode="json") for line in dialogue_lines]}}})
-                candidate_lines = await prepare_dialogue(project, changed, provider)
+                        "lines": [line.model_dump(mode="json") for line in dialogue_lines],
+                        **({"metadata": dialogue_lines.metadata} if getattr(dialogue_lines, "metadata", None) else {})}}})
+                candidate_lines = await prepare_dialogue(project, changed, provider,
+                                                        revision_request=request["revision_request"])
                 check_current()
             from .service import (
                 _apply_source_audio_contract,
@@ -362,8 +366,11 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             record = prompt_dialogue_record(project, changed, candidate_lines, dialogue_draft)
             if record is not None:
                 meta.update(prompt_dialogue_contract=record, prompt_dialogue_signature=record["signature"])
-                meta["dialogue_grounding"] = {"script_beat": changed.script_beat, "lines": record["lines"]}
+                meta["dialogue_grounding"] = {"script_beat": changed.script_beat, "lines": record["lines"],
+                    **({"metadata": record["metadata"]} if record.get("metadata") else {})}
             return changed.model_copy(update={"meta": meta})
+        except DialogueMetadataError:
+            raise  # A source problem cannot be repaired by rewriting this candidate.
         except CreativeQuestion as exc:
             save_diagnostics(shot, [*attempts, {"stage": "decision", "raw": raw, "review_raw": audit_raw, "error": str(exc)}])
             raise

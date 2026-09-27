@@ -16,6 +16,7 @@ from ..projects.layouts import LayoutReviewStatus, sync_selected_layout_refs
 from ..projects.store import list_projects, load_shot, save_shot
 from ..projects.transitions import review_layout_reference, select_layout_reference
 from ...agents.director.tail_prompt_review import CreativeQuestion
+from ...agents.director.dialogue_metadata import DialogueMetadataError
 from .models import ManagedRun, RunStep
 from .context import ManagedTurnScope, managed_turn_scope
 from .selection import latest_successful_video_job_id
@@ -180,7 +181,7 @@ async def prepare_planned_tail(run: ManagedRun, svc: Any) -> None:
     selected_fingerprint = _fingerprint(run.project_id)
     try:
         await svc.write_prompts_after_layout(step.shot_id)
-    except CreativeQuestion:
+    except (CreativeQuestion, DialogueMetadataError):
         raise
     except Exception as exc:
         if _fingerprint(run.project_id) != selected_fingerprint:

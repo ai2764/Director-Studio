@@ -153,25 +153,36 @@ async def observe_reference(provider, record: dict, image: str, *, brief: str = 
     user = f"{label}\nCurrent brief: {brief}\nReference: " + json.dumps(record, ensure_ascii=False)
     sources = record.get("sources", [])
     correction = ""
-    for attempt in range(2):
+    structure_repairs = 0
+    reinspected = False
+    previous_error = None
+    # One visual reinspection and at most two structural repairs. A malformed
+    # reinspection must not lose its repair opportunity; unchanged errors stop.
+    for attempt in range(4):
         raw = await inspect(system + (" Return exactly one JSON object, no message envelope." if attempt else ""),
                             user + correction, images=[image], guides=())
         try:
             observation = _parse_reference_observation(raw)
             validate_observation_sources(observation, sources)
         except ValueError as exc:
-            if attempt:
+            error = str(exc)
+            if structure_repairs >= 2 or error == previous_error:
                 raise
+            structure_repairs += 1
+            previous_error = error
             correction = f"\nRepair the observation structure/source evidence: {exc}\nPrevious response: {raw}"
             continue
         if not observation.readable:
             raise ValueError("image is not reliably readable")
-        if observation.conflicts and not attempt:
+        previous_error = None
+        if observation.conflicts and not reinspected:
+            reinspected = True
             correction = ("\nReinspect only this image to resolve these specific disputes; preserve valid "
                           "observations. Do not infer hidden details. Return a corrected full observation.\n"
                           + observation.model_dump_json())
             continue
         return {**record, **sanitize_observation(observation, sources)}
+    raise ValueError("Reference observation repair budget exhausted")
 
 
 async def observe_references_cached(provider, project_id, records, images, check_current):

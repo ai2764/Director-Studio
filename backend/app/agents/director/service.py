@@ -806,6 +806,7 @@ class DirectorService:
         user_feedback: str = "",
         requested_minimum_duration_s: float = 0.0,
         _preview_only: bool = False,
+        _review_result: dict[str, Any] | None = None,
     ) -> list[Shot]:
         """Validate and persist an ordered Agent-authored storyboard transactionally."""
         project = load_project(project_id)
@@ -986,15 +987,23 @@ class DirectorService:
                     or list_shots(project_id) != existing_shots):
                 raise ValueError("Project or storyboard changed during candidate validation; refresh before saving")
             if _preview_only:
+                if _review_result is not None:
+                    _review_result.update(warnings=validation.warnings)
                 return shots
             replace_project_shots(project_id, shots)
             _claim_storyboard_assets(project_id, shots, index=index)
             remember_directing_request(project_id, user_feedback)
         persisted = list_shots(project_id)
         refreshed = load_project(project_id) or project
+        context = _build_context(refreshed, persisted, phase="planned")
+        context.extra["storyboard_review"] = {
+            "script_hash": _script_hash(refreshed.script_text),
+            "shot_ids": [shot.id for shot in persisted],
+            "warnings": validation.warnings,
+        }
         save_agent_context(
             project_id,
-            _build_context(refreshed, persisted, phase="planned"),
+            context,
         )
         return persisted
 
@@ -2320,7 +2329,8 @@ class DirectorService:
             from .dialogue_preflight import (prepare_dialogue, parse_dialogue_draft,
                 WRITER_CONTRACT, prompt_dialogue_record, dialogue_contract_current)
             from ...core.h3.dialogue_binding import compile_dialogue_draft
-            dialogue_lines = await prepare_dialogue(project, shot, self.plan_provider)
+            dialogue_lines = await prepare_dialogue(project, shot, self.plan_provider,
+                                                    revision_request=revision_request)
             check_current()
             if task_packet is not None:
                 canonical = writer_task_context(task_packet,
@@ -2468,7 +2478,8 @@ class DirectorService:
         if dialogue_record is not None:
             meta["prompt_dialogue_contract"] = dialogue_record
             meta["prompt_dialogue_signature"] = dialogue_record["signature"]
-            meta["dialogue_grounding"] = {"script_beat": shot.script_beat, "lines": dialogue_record["lines"]}
+            meta["dialogue_grounding"] = {"script_beat": shot.script_beat, "lines": dialogue_record["lines"],
+                **({"metadata": dialogue_record["metadata"]} if dialogue_record.get("metadata") else {})}
         meta["prompt_layout_asset_id"] = (
             layout_asset_ids[0] if layout_asset_ids else ""
         )

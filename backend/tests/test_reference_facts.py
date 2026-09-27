@@ -42,6 +42,55 @@ def conflict_observation():
 
 
 @pytest.mark.asyncio
+async def test_structure_error_during_reinspection_has_its_own_repair_budget():
+    malformed = observation("Only the upper body is visible.")
+    malformed["facts"] = [dict(attribute="lower garment", value="trousers",
+        visibility="uncertain", evidence="The lower body is outside the image.")]
+    clean = observation("Only the upper body is visible.")
+    clean["facts"] = [dict(attribute="lower garment", value=None,
+        visibility="uncertain", evidence="The lower body is outside the image.")]
+    provider = Vision(conflict_observation(), malformed, clean)
+    result = await observe_reference(provider, {}, "image")
+    assert result["facts"][0]["value"] is None
+    assert result["description"] == "Only the upper body is visible."
+    assert len(provider.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_distinct_source_errors_can_be_repaired_locally():
+    wrong_source = observation()
+    wrong_source["facts"] = [dict(attribute="wardrobe", value="beige",
+        visibility="observed", evidence="Visible fabric", source_id="missing", source_quote="invented")]
+    wrong_conflict = observation()
+    wrong_conflict["conflicts"] = [dict(attribute="wardrobe", quote="not present", reason="Mismatch")]
+    provider = Vision(wrong_source, wrong_conflict, observation())
+    result = await observe_reference(provider, {"sources": []}, "image")
+    assert result["description"] == "A beige blazer and pencil skirt."
+    assert result["conflicts"] == []
+    assert len(provider.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_mixed_reinspection_and_schema_repairs_remain_bounded():
+    wrong_source = observation()
+    wrong_source["facts"] = [dict(attribute="wardrobe", value="beige",
+        visibility="observed", evidence="Visible fabric", source_id="missing", source_quote="invented")]
+    wrong_conflict = observation()
+    wrong_conflict["conflicts"] = [dict(attribute="wardrobe", quote="not present", reason="Mismatch")]
+    provider = Vision(wrong_source, conflict_observation(), wrong_conflict, observation())
+    result = await observe_reference(provider, {"sources": []}, "image")
+    assert result["description"] == "A beige blazer and pencil skirt."
+    assert len(provider.calls) == 4
+
+    # A further invalid response exhausts the budget instead of asking the user
+    # to unknowingly pay for an unbounded retry loop.
+    provider = Vision(wrong_source, conflict_observation(), wrong_conflict, wrong_source)
+    with pytest.raises(ValueError, match="source"):
+        await observe_reference(provider, {"sources": []}, "image")
+    assert len(provider.calls) == 4
+
+
+@pytest.mark.asyncio
 async def test_targeted_conflict_reinspection_replaces_bad_description():
     clean = observation()
     clean["facts"] = [dict(attribute="lower garment", value="pencil skirt", visibility="observed", evidence="A continuous fabric silhouette extends to the knees.")]

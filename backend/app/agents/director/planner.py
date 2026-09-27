@@ -370,8 +370,9 @@ class StoryboardValidation(BaseModel):
 
     valid: StrictBool
     issues: list[str]
+    warnings: list[str] = Field(default_factory=list)
 
-    @field_validator("issues")
+    @field_validator("issues", "warnings")
     @classmethod
     def _normalize_issues(cls, values: list[str]) -> list[str]:
         normalized = [str(value or "").strip() for value in values]

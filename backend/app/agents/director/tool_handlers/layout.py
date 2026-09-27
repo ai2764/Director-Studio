@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from ....config import settings
 from ..task_context_builder import ContextRequired
+from ..dialogue_metadata import DialogueMetadataError, DialogueClarificationRequired
 from ....core.library.store import load_asset
 from ....core.projects.layouts import (
     GptLayoutBrief,
@@ -687,6 +688,14 @@ async def handle_layout_tool(
                                         "reviewed_picture_indices": [r["picture_index"] for r in review.get("references", [])],
                                         "review_reason": decision.get("reason", "")})
             touched.add(s2.id)
+        except DialogueMetadataError as e:
+            reply = e.question if isinstance(e, DialogueClarificationRequired) else str(e)
+            notes.append(reply)
+            if result_payloads is not None:
+                result_payloads.append({"ok": False, "code": e.code, "shot_id": shot.id,
+                    "failure_kind": "contract", "retryable": False, "concludes_turn": True,
+                    "issues": [issue.model_dump(mode="json") for issue in e.issues],
+                    "error": str(e), "reply": reply})
         except ContextRequired as e:
             if result_payloads is not None:
                 result_payloads.append({"ok": False, "code": e.code, "shot_id": shot.id,

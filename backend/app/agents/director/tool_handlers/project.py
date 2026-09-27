@@ -226,12 +226,17 @@ async def handle_project_tool(
         pending["result"] = storyboard_snapshot(persisted)
         _save_storyboard_replacement(project_id, pending)
         actions.append("save_storyboard")
+        from ..context_io import load_agent_context
+        context = load_agent_context(project_id)
+        review = (context.extra if context else {}).get("storyboard_review", {})
+        warnings = review.get("warnings", []) if review.get("shot_ids") == [shot.id for shot in persisted] else []
         if result_payloads is not None:
-            result_payloads.append({"storyboard": storyboard_snapshot(persisted)})
+            result_payloads.append({"storyboard": storyboard_snapshot(persisted), "warnings": warnings})
         notes.append(
             f"Saved the confirmed complete storyboard replacement: {len(persisted)} "
             f"shot{'s' if len(persisted) != 1 else ''}."
         )
+        notes.extend(f"Non-blocking generation risk: {warning}" for warning in warnings)
         return True
 
     if name == "save_storyboard":
@@ -239,9 +244,11 @@ async def handle_project_tool(
         from ..brief import remember_directing_request
         current_shots = refresh_shots()
         if current_shots:
+            preview_review: dict[str, Any] = {}
             preview = await svc.preview_storyboard(project_id, submission.shots,
                 submission.expected_script_hash, user_feedback=user_feedback,
-                requested_minimum_duration_s=requested_minimum_duration_s)
+                requested_minimum_duration_s=requested_minimum_duration_s,
+                _review_result=preview_review)
             by_id = {shot.id: shot for shot in preview}
             removed_dialogue = [{"shot_id": shot.id, "lines": shot.dialogue}
                 for shot in current_shots if shot.dialogue and
@@ -269,6 +276,7 @@ async def handle_project_tool(
                     and previous["submission"] == proposal["submission"]
                     and previous["storyboard_state_hash"] == proposal["storyboard_state_hash"]):
                     proposal = previous
+                proposal["warnings"] = preview_review.get("warnings", [])
                 _save_storyboard_replacement(project_id, proposal)
             remember_directing_request(project_id, user_feedback)
             warning = _STORYBOARD_REPLACEMENT_WARNING.format(
@@ -276,6 +284,8 @@ async def handle_project_tool(
             )
             if removed_dialogue:
                 warning += "\n将删除或替换的原对白：" + json.dumps(removed_dialogue, ensure_ascii=False)
+            if proposal["warnings"]:
+                warning += "\n生成风险提示（不阻止保存）：\n" + "\n".join(proposal["warnings"])
             actions.append(f"propose_storyboard_replacement:{proposal['id']}")
             if result_payloads is not None:
                 result_payloads.append(
@@ -284,6 +294,7 @@ async def handle_project_tool(
                         "confirmation_required": True,
                         "proposal_id": proposal["id"],
                         "changes": changes,
+                        "warnings": proposal["warnings"],
                         "concludes_turn": True,
                         "reply": warning,
                     }
@@ -298,12 +309,17 @@ async def handle_project_tool(
             requested_minimum_duration_s=requested_minimum_duration_s,
         )
         actions.append("save_storyboard")
+        from ..context_io import load_agent_context
+        context = load_agent_context(project_id)
+        review = (context.extra if context else {}).get("storyboard_review", {})
+        warnings = review.get("warnings", []) if review.get("shot_ids") == [shot.id for shot in persisted] else []
         if result_payloads is not None:
-            result_payloads.append({"storyboard": storyboard_snapshot(persisted)})
+            result_payloads.append({"storyboard": storyboard_snapshot(persisted), "warnings": warnings})
         notes.append(
             f"Saved the complete ordered storyboard: {len(persisted)} "
             f"shot{'s' if len(persisted) != 1 else ''}."
         )
+        notes.extend(f"Non-blocking generation risk: {warning}" for warning in warnings)
         return True
 
     if name == "patch_shot_refs":
