@@ -77,13 +77,22 @@ def test_plan_reports_only_grounded_directing_conflicts(monkeypatch, grounded):
     requirement = "Tao must operate the handheld camera."
     remember_directing_request(project.id, requirement)
     save_shot(second.model_copy(update={"camera_motion": "Locked external camera."}))
+    issue = {"requirement_quote": requirement, "shot_id": second.id, "field": "camera_motion",
+             "shot_quote": "Locked external camera." if grounded else "Invented dialogue not in this shot.",
+             "reason": "The handheld camera requirement conflicts with a locked external camera."}
     async def make(**kwargs):
+        calls = 0
         async def infer(*args, **kwargs):
-            return {"content": json.dumps({"tail_handoffs": [], "storyboard_issues": [
-                {"requirement_quote": requirement, "shot_id": second.id, "field": "camera_motion",
-                 "shot_quote": "Locked external camera." if grounded else "Invented dialogue not in this shot.",
-                 "reason": "The handheld camera requirement conflicts with a locked external camera."}
-            ]})}
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                result = {"tail_handoffs": [], "storyboard_issues": [issue]}
+            elif calls == 2:
+                result = {"plan": {"tail_handoffs": [], "storyboard_issues": [issue]},
+                          "camera_refinements": [], "reason": "The explicit camera requirement remains unresolved."}
+            else:
+                result = {"valid": False, "issues": [issue]}
+            return {"content": json.dumps(result)}
         return infer
     monkeypatch.setattr(projects_api, "_make_chat_fn", make)
     with TestClient(create_app()) as client:
@@ -158,8 +167,10 @@ def _planning_conflict_case(monkeypatch, *, patch=None, verdict=True, mutate_at=
                     "reason": "Reconsider the optional continuity choice, preserving the beat.",
                 })}
             assert len(calls) == 3, "Planning recovery must be bounded"
+            candidate = json.loads(user)["candidate_shots"][1]
             return {"content": json.dumps({"valid": verdict,
-                "issues": [] if verdict else ["An explicit user camera requirement would be lost."]})}
+                "issues": [] if verdict else [{**issue, "shot_quote": candidate["composition"],
+                    "reason": "An explicit user camera requirement would be lost."}]})}
         return infer
     monkeypatch.setattr(projects_api, "_make_chat_fn", make)
     return project, first, second, calls

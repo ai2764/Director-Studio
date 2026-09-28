@@ -108,6 +108,14 @@ candidate → validate/repair → save against current state → submit a job.
   invalidate old prompts/video bindings and are recorded in the draft's recovery
   history. Live generation or a concurrent edit prevents publication. Explicit
   unresolved requirements still stop the run; there is no keyword-based camera rule.
+- Planning claims share source/field quote validation at initial, repair and final
+  review boundaries. Discarded claims are removed from every downstream plan copy;
+  residual repair claims cannot bypass independent review. The final reviewer cites
+  the candidate fields, and only its verified conflicts reach the user. Invalid
+  review evidence is a system validation failure, not a request for a user decision.
+  Requirement scope and cinematic meaning remain LLM judgments: whole-film roles
+  do not imply every-shot visibility or dialogue, and camera operation, off-screen
+  speech and on-screen participation are considered separately.
 
 Implementation: [dialogue preflight](../backend/app/agents/director/dialogue_preflight.py),
 [prompt repair](../backend/app/agents/director/prompt_repair.py),

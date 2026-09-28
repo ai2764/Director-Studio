@@ -6,7 +6,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
-from ...core.managed_runs.models import RunPlan
+from ...core.managed_runs.models import RunPlan, StoryboardConflict
+from .planning_claims import CLAIM_REVIEW_RULES, grounded_conflicts
 
 
 CameraField = Literal["shot_type", "camera_angle", "camera_motion", "composition"]
@@ -35,7 +36,7 @@ class PlanningRepair(BaseModel):
 class PlanningReview(BaseModel):
     model_config = ConfigDict(extra="forbid")
     valid: StrictBool
-    issues: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(max_length=10)
+    issues: list[StoryboardConflict] = Field(max_length=10)
 
     @model_validator(mode="after")
     def consistent(self):
@@ -63,9 +64,13 @@ Only shot_type, camera_angle, camera_motion and composition may change. Do not f
 framing, movement or aesthetic. Return the full candidate plan, with only visually necessary
 tail_handoffs. A genuine unresolved explicit requirement stays in plan.storyboard_issues;
 never erase it merely to pass validation. No tools, generation or business writes occur here.
-"""
+""" + CLAIM_REVIEW_RULES
 
 REVIEW_INSTRUCTIONS = """Independently review a managed planning repair. Return {valid, issues}.
+Each issue must use requirement_quote, shot_id, field, shot_quote and reason, matching
+the supplied schema. Cite an exact requirement from the script, directing requests,
+applicable saved revision/feedback, authored beat or confirmed project decisions, and
+an exact conflicting passage from the CANDIDATE shot field. No free-text issue strings.
 Compare original_shots, candidate_shots, original_claims, candidate_plan, script and
 directing_requests. The proposal's explanation is not proof. Verify every original claim:
 it must be resolved by the candidate or be a defensible false positive. Verify every changed
@@ -77,9 +82,11 @@ opening are not inherently contradictory. Do not invent fixed-framing or aesthet
 Check saved revision requests/history and applicable confirmed_project_review too. Automatic
 provenance is not user authority; ambiguous authority must not waive a user constraint.
 Reject if a real conflict remains, a camera change
-violates an explicit constraint, or essential evidence is missing. Do not waive conflicts
-just because the proposal says they are repaired. No additional changes may be proposed here.
-"""
+violates an explicit constraint. Review residual candidate_plan.storyboard_issues as
+hypotheses too: accept with valid=true and issues=[] if they are false positives.
+Reject only with your independently confirmed, source-grounded conflicts. Do not waive
+conflicts just because the proposal says they are repaired. No additional changes may be proposed here.
+""" + CLAIM_REVIEW_RULES
 
 
 def shot_evidence(shot):
@@ -106,6 +113,9 @@ async def recover_plan(chat_fn, project, shots, plan, claims, requests, check_cu
         confirmed_data = {"notes": confirmed.notes, "recommendations": [
             item.model_dump(mode="json") for item in confirmed.recommendations
             if item.resolution != "pending"]}
+    # No discarded claim may re-enter via a second copy of the old plan.
+    claims, _ = grounded_conflicts(project, shots, claims, requests)
+    plan = plan.model_copy(update={"storyboard_issues": claims})
     evidence = {"script": project.script_text, "directing_requests": requests,
                 "confirmed_project_review": confirmed_data,
                 "original_shots": [shot_evidence(shot) for shot in shots],
@@ -115,9 +125,6 @@ async def recover_plan(chat_fn, project, shots, plan, claims, requests, check_cu
                         format=PlanningRepair.model_json_schema())
     check_current()
     repair = parse_response(raw, PlanningRepair)
-    if repair.plan.storyboard_issues:
-        raise ValueError("Planning needs your decision: " + "; ".join(
-            issue.reason for issue in repair.plan.storyboard_issues))
     allowed = {claim.shot_id for claim in claims}
     patches = {}
     for refinement in repair.camera_refinements:
@@ -125,6 +132,8 @@ async def recover_plan(chat_fn, project, shots, plan, claims, requests, check_cu
             raise ValueError("Planning repair targets an unrelated or duplicate Shot")
         patches[refinement.shot_id] = refinement.changes
     candidates = [shot.model_copy(update=patches.get(shot.id, {})) for shot in shots]
+    residual, _ = grounded_conflicts(project, candidates, repair.plan.storyboard_issues, requests)
+    repair.plan = repair.plan.model_copy(update={"storyboard_issues": residual})
     review_input = {**evidence, "candidate_shots": [shot_evidence(shot) for shot in candidates],
                     "candidate_plan": repair.plan.model_dump(mode="json"),
                     "proposal": repair.model_dump(mode="json")}
@@ -133,11 +142,16 @@ async def recover_plan(chat_fn, project, shots, plan, claims, requests, check_cu
     check_current()
     review = parse_response(raw, PlanningReview)
     if not review.valid:
-        raise ValueError("Planning needs your decision: " + "; ".join(review.issues))
+        confirmed_issues, unsupported = grounded_conflicts(project, candidates, review.issues, requests)
+        if unsupported:
+            raise ValueError("Planning review evidence was invalid; its blocking claims could not be verified against the current sources and candidate fields")
+        raise ValueError("Planning needs your decision: " + "; ".join(issue.reason for issue in confirmed_issues))
+    # Only the independent review can adjudicate remaining, quote-valid claims.
+    accepted_plan = repair.plan.model_copy(update={"storyboard_issues": []})
     receipt = {"kind": "planning_refinement", "claims": evidence["original_claims"],
                "proposal": repair.model_dump(mode="json"), "review": review.model_dump(mode="json"),
                "changes": [{"shot_id": shot.id, "fields": {
                    key: {"before": getattr(shot, key), "after": value}
                    for key, value in patches.get(shot.id, {}).items() if getattr(shot, key) != value}}
                    for shot in shots if patches.get(shot.id)]}
-    return repair.plan, candidates, receipt
+    return accepted_plan, candidates, receipt

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ValidationError
@@ -80,6 +79,7 @@ async def plan_managed_run(project_id: str) -> ManagedRunView:
         raise HTTPException(409, "Plan Shots before starting managed video")
 
     from ..agents.director.brief import duration_issues, directing_requests
+    from ..agents.director.planning_claims import CLAIM_REVIEW_RULES, grounded_conflicts
     issues = duration_issues(project, shots)
     if issues:
         raise HTTPException(422, "; ".join(issues))
@@ -134,7 +134,7 @@ async def plan_managed_run(project_id: str) -> ManagedRunView:
         "from feasible changes in framing. An authored editorial cut is not a request to bridge "
         "the previous final frame with a continuous camera move. "
         "Do not change Shot content."
-    )
+    ) + CLAIM_REVIEW_RULES
     response = await chat_fn(
         system, f"Screenplay:\n{project.script_text}\nDirecting requests (oldest first):\n"
         + json.dumps(directing_requests(project), ensure_ascii=False)
@@ -145,28 +145,14 @@ async def plan_managed_run(project_id: str) -> ManagedRunView:
     try:
         content = response.get("content") if isinstance(response, dict) else response
         plan = RunPlan.model_validate(json.loads(content) if isinstance(content, str) else content)
-        grounded_issues = []
-        sources = [project.script_text, *directing_requests(project)]
-        for issue in plan.storyboard_issues:
-            shot = next((item for item in shots if item.id == issue.shot_id), None)
-            field = getattr(shot, issue.field, "") if shot else ""
-            field_text = "\n".join(field) if isinstance(field, list) else str(field)
-            if (any(issue.requirement_quote in source for source in sources)
-                    and issue.shot_quote in field_text):
-                grounded_issues.append(issue)
-            else:
-                logging.getLogger(__name__).warning("Ignored ungrounded planning claim: %s", issue.model_dump())
+        grounded_issues, _ = grounded_conflicts(project, shots, plan.storyboard_issues, directing_requests(project))
+        plan = plan.model_copy(update={"storyboard_issues": grounded_issues})
         candidates, receipt = shots, None
         if grounded_issues:
             from ..agents.director.managed_planning import recover_plan
-            try:
-                plan, candidates, receipt = await recover_plan(
-                    chat_fn, project, shots, plan, grounded_issues,
-                    directing_requests(project), check_current)
-            except (ValueError, TypeError) as exc:
-                raise ValueError("Storyboard does not meet the directing brief: "
-                    + "; ".join(issue.reason for issue in grounded_issues)
-                    + f"; bounded planning repair did not resolve it: {exc}") from exc
+            plan, candidates, receipt = await recover_plan(
+                chat_fn, project, shots, plan, grounded_issues,
+                directing_requests(project), check_current)
         from ..core.managed_runs.planning_commit import publish_plan
         return _run_view(publish_plan(project_id, shots, candidates,
             _build_run_steps(shots, plan), receipt, check_current))
