@@ -575,7 +575,7 @@ async def _run_scoped_prompt_retry(project_id, request, svc, on_progress=None):
     if on_progress:
         await on_progress({"type": "status", "text": f"Repairing prompt for {request.shot_id}"})
     try:
-        shot = await run_prompt_retry(project_id, request, svc)
+        shot = await run_prompt_retry(project_id, request, svc, on_progress=on_progress)
     except MaterialReviewError as exc:
         return ChatResult(reply=f"Reference preflight did not complete: {exc}. Review the affected materials before writing the prompt again; no replacement was selected.",
                           actions=[], project=load_project(project_id), shots=list_shots(project_id),

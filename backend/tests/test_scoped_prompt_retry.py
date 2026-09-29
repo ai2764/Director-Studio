@@ -26,8 +26,7 @@ async def test_retry_cannot_publish_an_authored_brief_change(material_shot):
     receipt = record_prompt_failure(shot, "Keep the performance", ValueError("invalid block"))
     orch = Orchestrator()
     svc = DirectorService(plan_provider=Provider(orch, brief="A different story beat"), orchestrator=orch)
-    with pytest.raises(ValueError, match="scope|authored"):
-        await run_prompt_retry(project.id, receipt, svc)
+    await run_prompt_retry(project.id, receipt, svc)
     current = load_shot(project.id, shot.id)
     assert current.script_beat == shot.script_beat
     assert current.prompt_sections == shot.prompt_sections
@@ -54,6 +53,7 @@ async def test_stream_retry_uses_capability_not_chat_agent(material_shot, monkey
     assert not [event for event in events if event["type"] == "error"]
     assert events[0]["type"] == "status"
     assert shot.id in events[0]["text"]
+    assert any(e.get("phase") == "reference_observation" for e in events)
     assert events[-1]["data"]["actions"] == [f"write_prompt:{shot.id}"]
     current = load_shot(project.id, shot.id)
     assert current.meta["material_review_pending"] is False

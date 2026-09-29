@@ -98,20 +98,20 @@ def render_task_context(project, *, objective, authority, legacy_state, max_char
 
 def scoped_prompt_writer(function):
     @wraps(function)
-    async def wrapped(self, shot_id, *, revision_request=""):
+    async def wrapped(self, shot_id, *, revision_request="", on_progress=None):
         from .service import _find_shot
         from ...core.projects.models import Shot
         shot = _find_shot(shot_id)
         project = load_project(shot.project_id) if shot else None
         if not task_context_enabled(project):
-            return await function(self, shot_id, revision_request=revision_request)
+            return await function(self, shot_id, revision_request=revision_request, on_progress=on_progress)
         state = current_task_context(project.id) or TaskContextState(project_id=project.id,
             request=TaskRequest(kind="shot_prompt", target_shot_id=shot_id, objective=revision_request), retrieved_versions={})
         with task_context_scope(state), metrics_scope(project.id):
             receipt = state.writer_receipts.get(shot_id, {}) if context_mode(project) == "pilot" else {}
             if receipt.get("status") == "saved":
                 return Shot.model_validate(receipt["shot"])
-            saved = await function(self, shot_id, revision_request=revision_request)
+            saved = await function(self, shot_id, revision_request=revision_request, on_progress=on_progress)
             if context_mode(project) == "pilot":
                 state.writer_receipts[shot_id] = {"status": "saved", "shot": saved.model_dump(mode="json")}
             return saved

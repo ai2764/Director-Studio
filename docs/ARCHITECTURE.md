@@ -1,6 +1,6 @@
 # Director Studio architecture
 
-Current implementation snapshot: **2026-09-26**, including managed planning recovery.
+Current implementation snapshot: **2026-09-27**, including execution-only managed planning.
 This describes shipped code on this branch, not the full proposed agent refactor.
 For setup use the [README](../README.md); for runtime configuration use
 [Harness](HARNESS.md). Dated audits, plans and test reports are historical evidence,
@@ -96,26 +96,33 @@ candidate → validate/repair → save against current state → submit a job.
   supplies canonical dialogue. Legacy candidates remain readable. When all six
   sections can be read, repair can receive combined dialogue and Picture issues,
   rather than fixing only the first visible defect.
+- Normal prompt material review checks reference suitability for the saved shot;
+  it is not a second storyboard approval or a shot-authoring transaction. The
+  reviewer and writer receive the same shot-local authoring request (verified
+  against its user-message source), historical directing requests and current
+  prompt request. The saved shot remains the execution target; the screenplay
+  supplies background, not an automatic rollback of an appended/revised shot.
+  Unsolicited replacement briefs have no write authority. Genuine reference
+  conflicts and stale-input checks still block publication. Reference inspection,
+  suitability inference and normal prompt writing/repair report phase starts and
+  completion/failure durations through the existing chat progress stream.
 - Managed tail-prompt refinement may update independently reviewed camera fields
   (`shot_type`, `camera_angle`, `camera_motion`, `composition`) through a
   guarded commit. It does not grant permission to silently change story,
   references, dialogue or duration. A same-event refinement receipt permits
   binding the resulting job without treating an unrelated edit as approved.
-- Planning conflicts get at most one camera/continuity repair proposal and one
-  separate review. False claims can be retracted without rewriting shots. Only
-  implicated shots' four camera fields may change; saved revision requests and
-  script-current confirmed decisions are included as evidence. Accepted changes
-  invalidate old prompts/video bindings and are recorded in the draft's recovery
-  history. Live generation or a concurrent edit prevents publication. Explicit
-  unresolved requirements still stop the run; there is no keyword-based camera rule.
-- Planning claims share source/field quote validation at initial, repair and final
-  review boundaries. Discarded claims are removed from every downstream plan copy;
-  residual repair claims cannot bypass independent review. The final reviewer cites
-  the candidate fields, and only its verified conflicts reach the user. Invalid
-  review evidence is a system validation failure, not a request for a user decision.
-  Requirement scope and cinematic meaning remain LLM judgments: whole-film roles
-  do not imply every-shot visibility or dialogue, and camera operation, off-screen
-  speech and on-screen participation are considered separately.
+- Managed planning accepts the saved storyboard as the current authored edit.
+  One inference chooses optional tail handoffs; it does not reapprove story,
+  character coverage, dialogue or total film runtime, and cannot rewrite shots.
+  Unsolicited creative judgments/patches in the response have no authority.
+  Local H3 per-shot duration limits, known IDs, unique targets, earlier-source
+  ordering and a current input snapshot remain mandatory. The backend builds the
+  complete ordered shot list and publishes only a draft, under the project lock.
+  Script and directing requests inform continuity choices, not a second creative
+  acceptance gate. Actual generated tails are still reviewed before use, and
+  existing prompt/submission checks and storyboard-authoring validation remain.
+  Historical planning-refinement receipts remain readable; new planning no longer
+  produces them. This does not add a new approval step or a general audit workflow.
 
 Implementation: [dialogue preflight](../backend/app/agents/director/dialogue_preflight.py),
 [prompt repair](../backend/app/agents/director/prompt_repair.py),
@@ -214,8 +221,8 @@ Atomic file replacement is not a cross-file database transaction. In particular,
 managed prompt commit writes the shot and run separately, attempts rollback on
 run-write failure, and fails closed on a mismatched state after interruption.
 Its narrow refinement receipt is not a universal durable operation ledger.
-Planning repair uses the same process-local lock for camera writes and draft
-publication, rolling back completed shot writes if draft saving fails. Director
+Managed planning checks its input snapshot and publishes the draft under the same
+process-local project lock, without writing shots or the project. Director
 context writes share this lock and use atomic replacement. Superseded H3 terminal
 events cannot restore obsolete video bindings; this does not add cross-process
 locking or multi-file crash atomicity.

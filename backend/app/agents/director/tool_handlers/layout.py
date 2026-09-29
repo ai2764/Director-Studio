@@ -668,7 +668,8 @@ async def handle_layout_tool(
             on_progress, "status", f"Reviewing current references and preparing the H3 prompt for {shot.title}…"
         )
         try:
-            s2 = await svc.write_prompts_after_layout(shot.id, revision_request=user_feedback)
+            s2 = await svc.write_prompts_after_layout(shot.id, revision_request=user_feedback,
+                                                     **({"on_progress": on_progress} if on_progress else {}))
             prompt_written_shot_ids.add(s2.id)
             actions.append(f"write_prompt:{shot.id}")
             review = (s2.meta or {}).get("material_review") or {}

@@ -55,6 +55,39 @@ def directing_requests(project) -> list[str]:
     return [source["text"] for source in directing_request_sources(project)]
 
 
+SHOT_EXECUTION_INTENT = """
+The saved shot is the execution target, not a proposal for storyboard approval.
+The project script is background context; an appended or revised shot need not replay its
+characters, location or action. Do not demand a rollback to the script just because they differ.
+intent.authoring_request is the verified user request associated with this shot's authoring,
+not an instruction to undo later saved edits. intent.directing_requests are ordered historical
+requirements: apply only those relevant to this shot, respecting later replacements and scope.
+intent.current_request is this prompt-writing request, not blanket permission to edit the story.
+Preserve the current saved brief, dialogue and duration. Use references according to their
+assigned contribution: identity/design evidence need not share the desired rendering style or
+depict the intended action. Ground actual visible facts honestly. Ask only if an essential
+current requirement and a specific reference cannot be reconciled without a user choice.
+"""
+
+
+def shot_execution_intent(project, shot, current_request: str = "") -> dict:
+    """Recover a shot-local authoring source without turning arbitrary chat into approval."""
+    from ...core.projects.chat_history import load_chat_history
+    # Existing authoring transactions already retain host-owned message identity here.
+    # It is provenance, not a substitute for the current authored shot fields.
+    evidence = (shot.meta or {}).get("dialogue_authoring") or {}
+    authoring_request = None
+    if isinstance(evidence, dict) and evidence.get("user_message_id"):
+        message = next((m for m in load_chat_history(project.id)
+                        if m.role == "user" and m.id == evidence["user_message_id"]
+                        and m.content == evidence.get("user_message")), None)
+        if message is not None:
+            authoring_request = {"source_message_id": message.id, "text": message.content}
+    return {"authoring_request": authoring_request,
+            "directing_requests": directing_request_sources(project),
+            "current_request": current_request}
+
+
 def remember_directing_request(project_id: str, message: str) -> None:
     if not message.strip():
         return

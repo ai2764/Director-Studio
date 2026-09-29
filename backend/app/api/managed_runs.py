@@ -10,6 +10,8 @@ from pydantic import BaseModel, ValidationError
 from ..core.managed_runs.models import ManagedRun, ManagedRunView, RunPlan, RunStep
 from ..core.managed_runs.store import (
     _fingerprint,
+    _project_lock,
+    create_draft,
     finish_stop,
     list_runs,
     load_run,
@@ -78,15 +80,17 @@ async def plan_managed_run(project_id: str) -> ManagedRunView:
     if not shots:
         raise HTTPException(409, "Plan Shots before starting managed video")
 
-    from ..agents.director.brief import duration_issues, directing_requests
-    from ..agents.director.planning_claims import CLAIM_REVIEW_RULES, grounded_conflicts
-    issues = duration_issues(project, shots)
-    if issues:
-        raise HTTPException(422, "; ".join(issues))
+    from ..agents.director.brief import validate_shot_duration, directing_requests
+    # Execution capability, not a second acceptance gate for the authored film.
+    for shot in shots:
+        try:
+            validate_shot_duration(shot.duration_s)
+        except ValueError as exc:
+            raise HTTPException(422, f"Shot {shot.id}: {exc}") from exc
     input_fingerprint = _fingerprint(project_id)
 
     def check_current():
-        # Fingerprints omit derived state; a planning repair must not clobber it.
+        # Reject a stale snapshot before publishing its execution dependencies.
         current_project = load_project(project_id)
         current_shots = list_shots(project_id)
         if (current_project != project or current_shots != shots
@@ -118,23 +122,17 @@ async def plan_managed_run(project_id: str) -> ManagedRunView:
         "does not require a visual handoff. Use a cut for a location/time change unless the "
         "authored shot explicitly describes a feasible continuous movement between them. "
         "These are tentative continuity choices; actual generated tails will be reviewed before use. "
-        "First compare the saved Shots against the screenplay and directing requests. Report "
-        "observed violations of explicit camera ownership/style, roles, required beats or forbidden "
-        "dialogue in storyboard_issues. Each issue must include requirement_quote copied verbatim "
-        "from the screenplay/directing requests, shot_id, field, shot_quote copied verbatim from "
-        "that saved field, and reason. Do not claim dialogue exists when dialogue is empty. "
-        "Newer explicit requests override older ones; do not invent preferences. "
-        "The saved storyboard is the current authored edit, not a verbatim transcription of "
-        "the screenplay. Additional close-ups, inserts, returns to a location and repeated beats "
-        "are allowed unless an explicit user requirement forbids them. Do not report redundancy, "
-        "a Shot missing from the original screenplay, or a scene ID being reused as a blocking "
-        "violation. A concern without a directly conflicting explicit requirement must not block this run. "
+        "The saved Shots are the current authored edit. Your only decision is which optional "
+        "tail handoffs support that edit. Use the screenplay and directing requests to understand "
+        "continuity intent, not to reapprove the storyboard. Do not audit character coverage, "
+        "dialogue, story completeness or total runtime, and do not propose Shot revisions. "
+        "If an optional handoff would require changing a saved Shot, omit that handoff. "
         "Camera fields describe a temporal shot, not necessarily a fixed opening: a framing label "
         "may be a destination of the described movement. Distinguish real incompatible instructions "
         "from feasible changes in framing. An authored editorial cut is not a request to bridge "
         "the previous final frame with a continuous camera move. "
         "Do not change Shot content."
-    ) + CLAIM_REVIEW_RULES
+    )
     response = await chat_fn(
         system, f"Screenplay:\n{project.script_text}\nDirecting requests (oldest first):\n"
         + json.dumps(directing_requests(project), ensure_ascii=False)
@@ -145,17 +143,10 @@ async def plan_managed_run(project_id: str) -> ManagedRunView:
     try:
         content = response.get("content") if isinstance(response, dict) else response
         plan = RunPlan.model_validate(json.loads(content) if isinstance(content, str) else content)
-        grounded_issues, _ = grounded_conflicts(project, shots, plan.storyboard_issues, directing_requests(project))
-        plan = plan.model_copy(update={"storyboard_issues": grounded_issues})
-        candidates, receipt = shots, None
-        if grounded_issues:
-            from ..agents.director.managed_planning import recover_plan
-            plan, candidates, receipt = await recover_plan(
-                chat_fn, project, shots, plan, grounded_issues,
-                directing_requests(project), check_current)
-        from ..core.managed_runs.planning_commit import publish_plan
-        return _run_view(publish_plan(project_id, shots, candidates,
-            _build_run_steps(shots, plan), receipt, check_current))
+        steps = _build_run_steps(shots, plan)
+        with _project_lock(project_id):
+            check_current()
+            return _run_view(create_draft(project_id, steps))
     except (ValueError, TypeError, ValidationError) as exc:
         raise HTTPException(422, f"Managed run plan was invalid: {exc}") from exc
 

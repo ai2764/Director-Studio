@@ -3666,7 +3666,7 @@ async def test_accept_ref_frame_returns_authoritative_picture_order_without_llm_
     )
 
     class _Service:
-        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="") -> Shot:
+        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="", on_progress=None) -> Shot:
             current = load_shot(project.id, shot_id)
             assert current is not None
             save_shot(current)
@@ -3859,7 +3859,7 @@ async def test_native_write_prompt_tool_is_executed_and_result_returns_to_model(
     )
 
     class _Service:
-        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="") -> Shot:
+        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="", on_progress=None) -> Shot:
             current = load_shot(project.id, shot_id)
             assert current is not None
             updated = current.model_copy(
@@ -3946,7 +3946,7 @@ async def test_legacy_failed_write_prompt_reports_recoverable_failure(tmp_projec
     class FailingService:
         attempts = 0
 
-        async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
+        async def write_prompts_after_layout(self, shot_id, *, revision_request="", on_progress=None):
             self.attempts += 1
             raise ValueError("dialogue validation failed")
 

@@ -592,7 +592,7 @@ async def _approve_layout_with_prompt(
         return s2, note + " (prompt not written)"
     await _emit(on_progress, "status", f"Approval complete · Writing the six-section H3 prompt for {s2.title}…")
     try:
-        s2 = await svc.write_prompts_after_layout(s2.id)
+        s2 = await svc.write_prompts_after_layout(s2.id, **({"on_progress": on_progress} if on_progress else {}))
         note += "; six-section prompt written"
         await _emit(on_progress, "status", f"Prompt complete: {s2.title}")
     except Exception as e:
@@ -994,7 +994,8 @@ async def _execute_intent(
             return f"Shot not found: {sid}", actions, touched
         await _emit(on_progress, "status", f"Writing the six-section H3 prompt for {s.title}…")
         try:
-            s2 = await svc.write_prompts_after_layout(s.id, revision_request=message)
+            s2 = await svc.write_prompts_after_layout(s.id, revision_request=message,
+                                                     **({"on_progress": on_progress} if on_progress else {}))
             touched.add(s2.id)
             return f"The six-section H3 prompt for **{s2.title}** is ready. You can generate the video in Production.", actions, touched
         except Exception as e:

@@ -2093,10 +2093,11 @@ class DirectorService:
         return candidate
 
     @scoped_prompt_writer
-    async def write_prompts_after_layout(self, shot_id: str, *, revision_request: str = "") -> Shot:
+    async def write_prompts_after_layout(self, shot_id: str, *, revision_request: str = "", on_progress=None) -> Shot:
         from .prompt_retry import record_prompt_failure, complete_prompt_retry
         try:
-            saved = await self._write_prompts_after_layout_impl(shot_id, revision_request=revision_request)
+            saved = await self._write_prompts_after_layout_impl(shot_id, revision_request=revision_request,
+                                                              on_progress=on_progress)
         except ContextRequired:
             raise  # No candidate was executed; this is an evidence preflight receipt.
         except Exception as exc:
@@ -2113,7 +2114,7 @@ class DirectorService:
             logger.exception("Could not finalize prompt retry for %s", shot_id)
         return saved
 
-    async def _write_prompts_after_layout_impl(self, shot_id: str, *, revision_request: str = "") -> Shot:
+    async def _write_prompts_after_layout_impl(self, shot_id: str, *, revision_request: str = "", on_progress=None) -> Shot:
         """Wake LLM, reload context from disk, fill PromptSections for the shot."""
         shot = _find_shot(shot_id)
         if shot is None:
@@ -2131,11 +2132,12 @@ class DirectorService:
             return await self._write_tail_prompt(shot, project, original_shot, revision_request, task_packet)
 
         from .material_review import capture_references, review_references, tail_frame_review_signature
-        from .brief import directing_requests
+        from .brief import directing_requests, shot_execution_intent, SHOT_EXECUTION_INTENT
+        from .progress import report_phase
 
         directing_snapshot = directing_requests(project)
         review = (shot.meta or {}).get("material_review")
-        from .reference_facts import (reference_review_current, reference_intent_signature,
+        from .reference_facts import (reference_review_current,
             certify_reference_prompt, REFERENCE_WRITER_CONTRACT)
         review_signature = None
         decision = None
@@ -2183,13 +2185,9 @@ class DirectorService:
                     await self.orchestrator.ensure_llm_ready()
                     review = await review_references(
                         self.plan_provider, project, shot, records, images, review_signature, check_current,
+                        revision_request=revision_request, on_progress=on_progress,
                     )
                 decision = review["decision"]
-                if decision["brief"] is not None:
-                    shot = shot.model_copy(update={"script_beat": decision["brief"]})
-                    review["intent_signature"] = reference_intent_signature(shot)
-                    if handoff_signature:
-                        review["handoff_signature"] = tail_frame_review_signature(project, shot, review_signature)
             shot = shot.model_copy(update={"meta": {**shot.meta, "material_review": review}})
 
         ctx = load_agent_context(shot.project_id) if task_packet is None else None
@@ -2336,8 +2334,6 @@ class DirectorService:
                 canonical = writer_task_context(task_packet,
                     dialogue_lines=[line.model_dump(mode="json") for line in dialogue_lines] if dialogue_lines else [],
                     reference_evidence=(review or {}).get("references", []))
-                if shot.script_beat != task_packet.facts["target"]["script_beat"]:
-                    canonical["derived_candidate_not_persisted"] = {"script_beat": shot.script_beat}
                 context_json = json.dumps(canonical, ensure_ascii=False)
             user = prompt_text.PROMPT_SECTIONS_USER_TEMPLATE.format(
                 title=shot.title,
@@ -2364,11 +2360,11 @@ class DirectorService:
                 feedback=(shot.feedback or "") + (f"\nCurrent user revision request: {revision_request}" if revision_request else ""),
                 context_json=context_json,
             )
-            user += "\nCurrent directing requirements:\n" + json.dumps(directing_requests(project), ensure_ascii=False)
+            user += "\nShot execution intent:\n" + json.dumps(shot_execution_intent(project, shot, revision_request), ensure_ascii=False)
             if dialogue_lines:
                 user += "\nSource dialogue lines:\n" + json.dumps([line.model_dump(mode="json") for line in dialogue_lines], ensure_ascii=False)
                 user += "\nExisting prompt, if present: preserve valid creative choices while repairing attribution or applying the current requested revision:\n" + shot.prompt_sections.model_dump_json()
-            writer_instructions = prompt_text.H3_PROMPT_INSTRUCTIONS + REFERENCE_WRITER_CONTRACT + (WRITER_CONTRACT if dialogue_lines else "")
+            writer_instructions = prompt_text.H3_PROMPT_INSTRUCTIONS + SHOT_EXECUTION_INTENT + REFERENCE_WRITER_CONTRACT + (WRITER_CONTRACT if dialogue_lines else "")
             from .prompt_retry import prompt_only_retry_active, PROMPT_ONLY_INSTRUCTIONS
             if prompt_only_retry_active():
                 writer_instructions += PROMPT_ONLY_INSTRUCTIONS
@@ -2392,11 +2388,14 @@ class DirectorService:
             previous_repair = load_repair(shot, draft_key) if not preserve_prompt else None
             preserved_raw = json.dumps({"prompt_sections": shot.prompt_sections.model_dump(),
                 "dialogue_uses": shot.meta.get("prompt_dialogue_contract", {}).get("uses", [])}) if dialogue_lines else shot.prompt_sections.model_dump_json()
-            raw = preserved_raw if preserve_prompt else await self.plan_provider.complete(
-                writer_instructions,
-                repair_request(user, previous_repair) if previous_repair else user,
-                guides=("h3-prompt-writing",),
-            )
+            raw = preserved_raw
+            if not preserve_prompt:
+                async with report_phase(on_progress, "prompt_writing", f"Writing H3 prompt for {shot.title}"):
+                    raw = await self.plan_provider.complete(
+                        writer_instructions,
+                        repair_request(user, previous_repair) if previous_repair else user,
+                        guides=("h3-prompt-writing",),
+                    )
             if previous_repair:
                 raw = merge_repair(raw, previous_repair["rejected_candidate"])
             required_layout_indices = [
@@ -2447,11 +2446,12 @@ class DirectorService:
                     "issues": [issue.model_dump(mode="json") for issue in getattr(first_err, "issues", [])]})
                 raw2 = None
                 try:
-                    raw2 = await self.plan_provider.complete(
-                        writer_instructions,
-                        repair,
-                        guides=("h3-prompt-writing",),
-                    )
+                    async with report_phase(on_progress, "prompt_repair", f"Repairing H3 prompt for {shot.title}"):
+                        raw2 = await self.plan_provider.complete(
+                            writer_instructions,
+                            repair,
+                            guides=("h3-prompt-writing",),
+                        )
                     raw2 = merge_repair(raw2, raw)
                     prompt_sections = parse_and_validate(raw2)
                 except Exception as second_err:
@@ -2489,12 +2489,6 @@ class DirectorService:
         meta["prompt_music_signature"] = music_prompt_signature(project, shot)
         meta["material_review_pending"] = False
         meta.pop("material_changes", None)
-        if shot.script_beat != original_shot["script_beat"]:
-            if shot.h3_job_id:
-                meta["superseded_h3_job_ids"] = list(dict.fromkeys([
-                    *(meta.get("superseded_h3_job_ids") or []), shot.h3_job_id,
-                ]))
-            shot = shot.model_copy(update={"h3_job_id": None, "status": ShotStatus.needs_review})
         shot = shot.model_copy(
             update={
                 "prompt_sections": prompt_sections,

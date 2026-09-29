@@ -136,7 +136,7 @@ def complete_prompt_retry(shot):
             _save(shot.project_id, record)
 
 
-async def run_prompt_retry(project_id, request, svc):
+async def run_prompt_retry(project_id, request, svc, *, on_progress=None):
     request = PromptRetryRequest.model_validate(request)
     with _project_lock(project_id):
         record = _load(project_id)
@@ -159,7 +159,8 @@ async def run_prompt_retry(project_id, request, svc):
     token = _scope.set({"shot_id": shot.id, "project_id": project_id,
                        "source_version": request.source_version, "authored": authored_payload(shot)})
     try:
-        return await svc.write_prompts_after_layout(shot.id, revision_request=record["revision_request"])
+        return await svc.write_prompts_after_layout(shot.id, revision_request=record["revision_request"],
+                                                    **({"on_progress": on_progress} if on_progress else {}))
     except BaseException as exc:
         with _project_lock(project_id):
             latest = _load(project_id)

@@ -19,6 +19,8 @@ from ...core.projects.layouts import selected_layout_prompt_context
 from .asset_catalog import LIBRARY_KINDS, _script_hash
 from .planner import _extract_json_payload, role_to_library_kind
 from .vision import image_bytes_to_b64_jpeg
+from .brief import shot_execution_intent, SHOT_EXECUTION_INTENT
+from .progress import report_phase
 from .reference_facts import (VisualFact, ObservationConflict, validate_observation_sources,
     sanitize_observation, REFERENCE_POLICY_VERSION, sourced_records,
     reference_context_signature, reference_intent_signature, persist_reference_facts,
@@ -44,8 +46,8 @@ class ReferenceObservation(BaseModel):
 
 class MaterialDecision(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    # Creative brief in the existing UI is Shot.script_beat, not a new document.
-    brief: str | None = Field(max_length=6000)
+    # Legacy response compatibility only; material review cannot author shot fields.
+    brief: str | None = Field(default=None, max_length=6000)
     rewrite_prompt: StrictBool
     reason: str = Field(min_length=1, max_length=1600)
     blocking_question: str | None = Field(max_length=1000)
@@ -212,7 +214,7 @@ def _save_review_failure(project_id, record, identity, attempts, error):
         logging.getLogger(__name__).exception("Could not save reference review diagnostics")
 
 
-async def observe_references_cached(provider, project_id, records, images, check_current):
+async def observe_references_cached(provider, project_id, records, images, check_current, *, on_progress=None):
     """Persist shot-independent visual facts even when subsequent prompt writing fails."""
     from ...core.projects.store import load_project
     project = load_project(project_id)
@@ -242,7 +244,9 @@ async def observe_references_cached(provider, project_id, records, images, check
         if observation is None:
             attempts = []
             try:
-                result = await observe_reference(provider, record, image, attempts=attempts)
+                async with report_phase(on_progress, "reference_observation",
+                                        f"Inspecting Picture {record['picture_index']}/{len(records)}"):
+                    result = await observe_reference(provider, record, image, attempts=attempts)
                 observation = ReferenceObservation.model_validate({k: result[k] for k in ReferenceObservation.model_fields})
             except Exception as exc:
                 _save_review_failure(project_id, record, identity, attempts, exc)
@@ -301,12 +305,14 @@ def capture_references(shot: Shot) -> tuple[list[dict], list[str], str]:
 
 
 async def review_references(provider, project: Project, shot: Shot, records: list[dict],
-                            images: list[str], signature: str, check_current: Callable[[], None]) -> dict:
+                            images: list[str], signature: str, check_current: Callable[[], None],
+                            *, revision_request: str = "", on_progress=None) -> dict:
     """No writes: incomplete visual coverage or a creative conflict fails closed."""
     inspect = getattr(provider, "complete_with_images", None)
     if not callable(inspect):
         raise MaterialReviewError("Material review requires a vision-capable provider; no text-only fallback")
-    reviewed = await observe_references_cached(provider, project.id, records, images, check_current)
+    reviewed = await observe_references_cached(provider, project.id, records, images, check_current,
+                                               on_progress=on_progress)
     check_current()
     by_picture = {item["picture_index"]: item for item in reviewed}
     tail_frames = [
@@ -328,16 +334,16 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
         }
     system = (
         "Make a reference review decision for exactly one shot after ALL its current Pictures were "
-        "visually inspected. Return only JSON with required fields brief (replacement Creative brief "
-        "or null to keep it), rewrite_prompt (boolean), reason (concise), blocking_question (one "
+        "visually inspected. This is reference suitability review, not story approval or authoring. "
+        "Return only JSON with fields brief (always null; this review cannot rewrite the shot), "
+        "rewrite_prompt (boolean), reason (concise), blocking_question (one "
         "question or null), tail_frame_handoff (text or null). If tail_frames is nonempty, "
         "write a concrete tail_frame_handoff grounded in its visible_observation: name the "
         "visible ending pose, framing and geography, then how action and camera/edit can reach "
         "this Shot's intended opening and movement. A wardrobe-only or generic 'continue' note "
         "is insufficient. If no credible handoff exists without changing user intent, ask in "
-        "blocking_question. Use null when there is no tail frame. Prefer retaining the original "
-        "brief and valid prompt; change only what "
-        "the current reference set requires. Preserve the script's narrative intent, approved identity, "
+        "blocking_question. Use null when there is no tail frame. Retain the saved brief and "
+        "prefer retaining a valid prompt. Preserve the current shot's narrative intent, approved identity, "
         "exact dialogue, duration and other shots. Do not change the story merely to fit an image. "
         "If references conflict with those constraints or with each other and need a user choice, "
         "set blocking_question instead of inventing a resolution. All Pictures condition the whole "
@@ -349,7 +355,7 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
         "only about a conflict that remains in those requirements, not an already resolved label mismatch. "
         "confirmed_project_review contains durable choices recorded for the current script. Treat those "
         "choices as authoritative and do not reopen them unless a newly changed Picture creates a new, "
-        "concrete conflict." + REFERENCE_WRITER_CONTRACT
+        "concrete conflict." + SHOT_EXECUTION_INTENT + REFERENCE_WRITER_CONTRACT
     )
     from .prompt_retry import prompt_only_retry_active, PROMPT_ONLY_INSTRUCTIONS
     if prompt_only_retry_active():
@@ -362,9 +368,12 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
             "prompt_sections": shot.prompt_sections.model_dump(),
             "material_changes": (shot.meta or {}).get("material_changes", {}),
             }, "references": reviewed, "tail_frames": tail_frames,
-                "confirmed_project_review": confirmed_project_review}
+                "confirmed_project_review": confirmed_project_review,
+                "intent": shot_execution_intent(project, shot, revision_request)}
     for attempt in range(2):
-        raw = await provider.complete(system, json.dumps(request, ensure_ascii=False), guides=())
+        async with report_phase(on_progress, "material_review",
+                                f"Checking reference suitability for {shot.title} (attempt {attempt + 1}/2)"):
+            raw = await provider.complete(system, json.dumps(request, ensure_ascii=False), guides=())
         check_current()
         try:
             decision = MaterialDecision.model_validate(_extract_json_payload(raw))
@@ -383,6 +392,8 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
         raise ValueError(f"Material review needs your decision: {decision.blocking_question}")
     if tail_frames and not decision.tail_frame_handoff:
         raise ValueError("Material review missing tail-frame handoff for selected clip tail")
+    # Ignore unsolicited authoring proposals instead of granting this reviewer write authority.
+    decision.brief = None
     return {
         "signature": signature,
         "facts_signature": reference_context_signature(project, records),

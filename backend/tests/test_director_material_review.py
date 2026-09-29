@@ -351,7 +351,7 @@ def material_shot(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_all_nine_refs_reviewed_before_brief_and_prompt_save(material_shot):
+async def test_material_review_cannot_rewrite_authored_brief(material_shot):
     project, shot, neighbor, files = material_shot
     orch = Orchestrator()
     provider = Provider(orch, brief="The watchmaker examines the brass gear on the table.")
@@ -362,14 +362,91 @@ async def test_all_nine_refs_reviewed_before_brief_and_prompt_save(material_shot
         with Image.open(io.BytesIO(base64.b64decode(encoded))) as thumbnail:
             assert max(thumbnail.size) <= 768
     assert all(f"Observed detail {i}" in provider.text[0][1] for i in range(1, 10))
-    assert "brass gear" in provider.text[-1][1]
-    assert updated.script_beat.endswith("brass gear on the table.")
+    assert "brass gear" not in provider.text[-1][1]
+    assert updated.script_beat == shot.script_beat
+    assert updated.meta["material_review"]["decision"]["brief"] is None
     assert updated.meta["material_review_pending"] is False
     assert len(updated.meta["material_review"]["references"]) == 9
     assert updated.refs == shot.refs and updated.dialogue == shot.dialogue
     assert load_shot(project.id, neighbor.id) == neighbor
     assert load_shot(project.id, shot.id) == updated
     assert not orch.active
+
+
+@pytest.mark.asyncio
+async def test_review_and_writer_receive_shot_authoring_source_and_current_request(material_shot):
+    from app.core.projects.chat_history import append_chat_message
+    project, shot, _, _ = material_shot
+    message = append_chat_message(project.id, role="user", content="Add a shot of the creature jumping around the lounge.")
+    shot = shot.model_copy(update={"script_beat": "The creature jumps around the lounge.",
+        "meta": {**shot.meta, "dialogue_authoring": {"user_message_id": message.id,
+            "user_message": message.content}}})
+    save_shot(shot)
+    orch = Orchestrator()
+    provider = Provider(orch)
+    await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(
+        shot.id, revision_request="Keep the creature's identity; write its prompt.")
+    request = json.loads(provider.text[0][1])
+    assert request["intent"]["authoring_request"] == {
+        "source_message_id": message.id, "text": message.content}
+    assert request["intent"]["current_request"] == "Keep the creature's identity; write its prompt."
+    assert request["shot"]["brief"] == "The creature jumps around the lounge."
+    assert message.content in provider.text[-1][1]
+
+
+@pytest.mark.asyncio
+async def test_review_does_not_promote_unverified_authoring_metadata(material_shot):
+    project, shot, _, _ = material_shot
+    shot.meta["dialogue_authoring"] = {"user_message_id": "missing", "user_message": "Invented approval"}
+    save_shot(shot)
+    orch = Orchestrator()
+    provider = Provider(orch)
+    await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
+    request = json.loads(provider.text[0][1])
+    assert request["intent"]["authoring_request"] is None
+    assert "Invented approval" not in provider.text[0][1]
+
+
+@pytest.mark.asyncio
+async def test_prompt_progress_is_visible_before_inference_and_reports_elapsed(material_shot):
+    _, shot, _, _ = material_shot
+    events = []
+    async def progress(event):
+        events.append(event)
+    orch = Orchestrator()
+    provider = Provider(orch)
+    original = provider.complete_with_images
+    async def inspect(*args, **kwargs):
+        assert events[-1]["phase"] == "reference_observation"
+        assert events[-1]["state"] == "started"
+        return await original(*args, **kwargs)
+    provider.complete_with_images = inspect
+    await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(
+        shot.id, on_progress=progress)
+    completed = [e for e in events if e.get("state") == "completed"]
+    assert [e["phase"] for e in completed] == ["reference_observation"] * 9 + ["material_review", "prompt_writing"]
+    assert all(e["elapsed_s"] >= 0 and "s" in e["text"] for e in completed)
+
+
+@pytest.mark.asyncio
+async def test_harness_forwards_material_phase_events_to_chat(material_shot):
+    from app.agents.director.harness_runtime import BackendTurn
+    from app.agents.director.context_io import save_agent_context
+    from app.agents.director.service import _script_hash
+    from app.core.projects.models import AgentContext
+    project, shot, _, _ = material_shot
+    save_agent_context(project.id, AgentContext(project_id=project.id, script_hash=_script_hash(project.script_text)))
+    events = []
+    async def progress(event):
+        events.append(event)
+    orch = Orchestrator()
+    turn = BackendTurn(project.id, "Write the prompt", DirectorService(plan_provider=Provider(orch),
+        orchestrator=orch), None, on_progress=progress)
+    await turn.dispatch("context", {})
+    result = await turn.dispatch("tool", {"call_id": "write", "name": "write_prompt", "arguments": {"shot_id": shot.id}})
+    assert result["ok"], result
+    assert any(e.get("phase") == "reference_observation" for e in events)
+    assert any(e.get("phase") == "prompt_writing" and e["state"] == "completed" for e in events)
 
 
 @pytest.mark.asyncio
@@ -709,7 +786,7 @@ async def test_missing_binding_forces_rewrite_even_when_model_says_keep(material
 
 
 @pytest.mark.asyncio
-async def test_changed_brief_archives_previous_completed_video(material_shot):
+async def test_material_review_cannot_retire_video_by_proposing_a_different_brief(material_shot):
     from app.core.projects.models import ShotStatus
     _, shot, _, _ = material_shot
     shot = shot.model_copy(update={"status": ShotStatus.succeeded, "h3_job_id": "old_completed"})
@@ -717,9 +794,9 @@ async def test_changed_brief_archives_previous_completed_video(material_shot):
     orch = Orchestrator()
     provider = Provider(orch, brief="The watchmaker examines the brass gear.")
     updated = await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
-    assert updated.status == ShotStatus.needs_review
-    assert updated.h3_job_id is None
-    assert "old_completed" in updated.meta["superseded_h3_job_ids"]
+    assert updated.script_beat == shot.script_beat
+    assert updated.status == ShotStatus.succeeded
+    assert updated.h3_job_id == "old_completed"
 
 
 @pytest.mark.asyncio

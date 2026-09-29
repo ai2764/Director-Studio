@@ -30,19 +30,9 @@ class TailHandoffDecision(BaseModel):
     )
 
 
-class StoryboardConflict(BaseModel):
-    requirement_quote: str = Field(min_length=1, description="Exact nonempty quote from the screenplay or directing requests.")
-    shot_id: str
-    field: Literal["script_beat", "dialogue", "camera_motion", "camera_angle", "composition", "shot_type"]
-    shot_quote: str = Field(min_length=1, description="Exact nonempty quote from this saved Shot field; never invent content.")
-    reason: str = Field(min_length=1)
-
-
 class RunPlan(BaseModel):
-    storyboard_issues: list[StoryboardConflict] = Field(default_factory=list, description=(
-        "Concrete contradictions between saved Shots and explicit screenplay/directing requirements. "
-        "Cite the requirement and conflicting Shot; no speculative style preferences."
-    ))
+    """Inference chooses dependencies only; unsolicited authoring fields are ignored."""
+
     tail_handoffs: list[TailHandoffDecision] = Field(
         default_factory=list,
         description=(
