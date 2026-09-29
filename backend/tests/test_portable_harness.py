@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from app import portable_harness
 from app.portable_harness import (
     HarnessStartupError,
     PortableHarnessSettings,
@@ -11,6 +12,14 @@ from app.portable_harness import (
     read_portable_harness_settings,
     start_managed_harness,
 )
+
+
+@pytest.mark.parametrize(
+    "system,expected",
+    [("Windows", "node.exe"), ("Linux", "node"), ("Darwin", "node")],
+)
+def test_bundled_node_name_matches_target_platform(system: str, expected: str) -> None:
+    assert portable_harness.node_executable_name(system) == expected
 
 
 EXPECTED_HEALTH = {

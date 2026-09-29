@@ -16,6 +16,7 @@ $distRoot = Join-Path $repoRoot "dist"
 $packageName = "Director-Studio-Windows-x64"
 $packageRoot = Join-Path $distRoot $packageName
 $zipPath = Join-Path $distRoot "$packageName.zip"
+$checksumPath = "$zipPath.sha256"
 
 function Remove-GeneratedDirectory([string]$Path) {
     $resolvedParent = [System.IO.Path]::GetFullPath((Split-Path $Path -Parent))
@@ -63,11 +64,14 @@ try {
         tests/test_llm_provider.py `
         tests/test_packaged_runtime_paths.py `
         tests/test_portable_runtime_paths.py `
+        tests/test_portable_contents_verifier.py `
+        tests/test_stage_portable_harness.py `
         tests/test_stage_windows_harness.py `
         tests/test_stage_windows_comfy.py `
         tests/test_portable_comfy.py `
         tests/test_verify_bundled_harness.py `
         tests/test_verify_bundled_comfy.py `
+        tests/test_windows_ci.py `
         -q
     if ($LASTEXITCODE -ne 0) { throw "backend packaging tests failed" }
     py -m PyInstaller --version
@@ -93,6 +97,9 @@ if (Test-Path -LiteralPath $zipPath) {
         throw "Refusing to remove an archive outside the repository: $zipPath"
     }
     Remove-Item -LiteralPath $resolvedZip -Force
+}
+if (Test-Path -LiteralPath $checksumPath) {
+    Remove-Item -LiteralPath $checksumPath -Force
 }
 New-Item -ItemType Directory -Path $pyinstallerRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $pyinstallerDist -Force | Out-Null
@@ -124,9 +131,10 @@ Copy-Item -LiteralPath (Join-Path $backendRoot ".env.example") -Destination (Joi
 Copy-Item -LiteralPath (Join-Path $repoRoot "packaging/windows-portable-readme.md") -Destination (Join-Path $packageRoot "README.md")
 
 $stageArguments = @(
-    (Join-Path $PSScriptRoot "stage_windows_harness.py"),
+    (Join-Path $PSScriptRoot "stage_portable_harness.py"),
     "--repo-root", $repoRoot,
-    "--destination", $packageRoot
+    "--destination", $packageRoot,
+    "--target", "windows-x64"
 )
 if ($NodeArchive) {
     $stageArguments += @("--node-archive", $NodeArchive)
@@ -208,10 +216,13 @@ if ($LASTEXITCODE -ne 0) { throw "packaged H3 profile isolation test failed" }
 
 $hash = Get-FileHash -LiteralPath $zipPath -Algorithm SHA256
 $size = (Get-Item -LiteralPath $zipPath).Length
+$checksumLine = "$($hash.Hash.ToLowerInvariant())  $([System.IO.Path]::GetFileName($zipPath))"
+Set-Content -LiteralPath $checksumPath -Value $checksumLine -Encoding utf8
 
 [ordered]@{
     package_root = $packageRoot
     zip = $zipPath
+    checksum = $checksumPath
     sha256 = $hash.Hash
     bytes = $size
 } | ConvertTo-Json

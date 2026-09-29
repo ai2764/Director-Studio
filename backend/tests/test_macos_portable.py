@@ -49,10 +49,7 @@ def test_package_only_contains_shippable_files_and_preserves_permissions(builder
             if name != "DirectorStudio":
                 assert b"\r\n" not in contents.extractfile(member).read()
         assert not any("/data" in name or "/.env.example" in name for name in names)
-    expected_env = (ROOT / "backend" / ".env.example").read_bytes().replace(
-        b"DS_DIRECTOR_AGENT_RUNTIME=harness",
-        b"DS_DIRECTOR_AGENT_RUNTIME=legacy",
-    )
+    expected_env = (ROOT / "backend" / ".env.example").read_bytes()
     assert (package / ".env").read_bytes() == expected_env
 
 
@@ -64,3 +61,17 @@ def test_staging_never_overwrites_existing_user_package(builder, tmp_path):
     with pytest.raises(FileExistsError):
         builder.stage_package(ROOT, tmp_path / "unused", package)
     assert user_data.is_dir()
+
+
+def test_archive_preserves_private_node_as_executable(builder, tmp_path):
+    package = tmp_path / "Director-Studio-macOS-arm64"
+    node = package / "runtime" / "node" / "node"
+    node.parent.mkdir(parents=True)
+    node.write_bytes(b"Mach-O node fixture")
+    archive = tmp_path / f"{package.name}.tar.gz"
+
+    builder.create_archive(package, archive)
+
+    with tarfile.open(archive) as contents:
+        member = contents.getmember(f"{package.name}/runtime/node/node")
+        assert member.mode & 0o111 == 0o111

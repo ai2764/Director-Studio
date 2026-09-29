@@ -12,7 +12,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "stage_windows_harness.py"
-CONFIG = REPO_ROOT / "packaging" / "windows-harness-runtime.json"
+CONFIG = REPO_ROOT / "packaging" / "portable-harness-runtimes.json"
 
 spec = importlib.util.spec_from_file_location("stage_windows_harness", SCRIPT)
 assert spec is not None and spec.loader is not None
@@ -174,6 +174,7 @@ def test_manifest_is_deterministic_and_contains_lock_digest(tmp_path: Path) -> N
         },
         "node": {
             "archive_sha256": config.sha256,
+            "executable": "runtime/node/node.exe",
             "version": "22.23.2",
         },
         "python": {

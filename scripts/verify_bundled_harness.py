@@ -5,6 +5,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import platform
 import secrets
 import subprocess
 import tempfile
@@ -200,10 +201,11 @@ def run_bundled_harness(
     port: int,
     timeout: float = 20.0,
 ) -> str:
-    node = package_root / "runtime" / "node" / "node.exe"
+    node_name = "node.exe" if platform.system() == "Windows" else "node"
+    node = package_root / "runtime" / "node" / node_name
     entry = package_root / "harness" / "dist" / "server.js"
     if not node.is_file():
-        raise HarnessVerificationError(f"private node.exe is missing: {node}")
+        raise HarnessVerificationError(f"private {node_name} is missing: {node}")
     if not entry.is_file():
         raise HarnessVerificationError(f"Harness server.js is missing: {entry}")
     token = secrets.token_hex(32)

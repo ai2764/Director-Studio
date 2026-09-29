@@ -126,7 +126,7 @@ def test_copied_linux_wrappers_are_required_and_executable(tmp_path: Path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert "DS_DIRECTOR_AGENT_RUNTIME=legacy" in (package_root / ".env").read_text(
+    assert "DS_DIRECTOR_AGENT_RUNTIME=harness" in (package_root / ".env").read_text(
         encoding="utf-8"
     )
 

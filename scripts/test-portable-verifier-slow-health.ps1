@@ -122,7 +122,11 @@ try {
         entrypoint="harness/dist/server.js"
         format=1
         harness=[ordered]@{package_lock_sha256=$lockHash; version="0.1.0"}
-        node=[ordered]@{archive_sha256="1177b4137ba5adaa56354ae40f1080c7450e8ae09cecb47da459d1c52ac99f97"; version="22.23.2"}
+        node=[ordered]@{
+            archive_sha256="1177b4137ba5adaa56354ae40f1080c7450e8ae09cecb47da459d1c52ac99f97"
+            executable="runtime/node/node.exe"
+            version="22.23.2"
+        }
         python=[ordered]@{archive_sha256="90b4e5b9898b72d744650524bff92377c367f44bd5fbd09e3148656c080ad907"; version="3.13.14"}
         comfy_bootstrap=[ordered]@{
             packages=[ordered]@{"comfy-cli"="1.20.0"; "comfy-mcp"="0.10.0"}

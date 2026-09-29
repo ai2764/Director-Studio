@@ -32,39 +32,40 @@ def _package_fixture(tmp_path: Path, flavor):
         path = package / name
         path.parent.mkdir(parents=True, exist_ok=True)
         if name == "portable-manifest.json":
+            runtime = verifier._HARNESS_RUNTIME_CONFIGS[flavor.harness_target]
+            manifest = {
+                "entrypoint": "harness/dist/server.js",
+                "format": 1,
+                "harness": {
+                    "package_lock_sha256": hashlib.sha256(
+                        (REPO_ROOT / "harness" / "package-lock.json").read_bytes()
+                    ).hexdigest(),
+                    "version": "0.1.0",
+                },
+                "node": {
+                    "archive_sha256": runtime["sha256"],
+                    "executable": f"runtime/node/{runtime['node_name']}",
+                    "version": "22.23.2",
+                },
+                "platform": runtime["platform"],
+            }
+            if flavor.bundled_comfy:
+                manifest.update({
+                    "python": {
+                        "archive_sha256": "90b4e5b9898b72d744650524bff92377c367f44bd5fbd09e3148656c080ad907",
+                        "version": "3.13.14",
+                    },
+                    "comfy_bootstrap": {
+                        "pip_version": "25.1.1",
+                        "pip_wheel_sha256": "2913a38a2abf4ea6b64ab507bd9e967f3b53dc1ede74b01b0931e1ce548751af",
+                        "requirements_lock_sha256": hashlib.sha256(
+                            (REPO_ROOT / "packaging" / "windows-comfy-requirements.lock").read_bytes()
+                        ).hexdigest(),
+                        "packages": {"comfy-cli": "1.20.0", "comfy-mcp": "0.10.0"},
+                    },
+                })
             path.write_text(
-                json.dumps(
-                    {
-                        "entrypoint": "harness/dist/server.js",
-                        "format": 1,
-                        "harness": {
-                            "package_lock_sha256": hashlib.sha256(
-                                (REPO_ROOT / "harness" / "package-lock.json").read_bytes()
-                            ).hexdigest(),
-                            "version": "0.1.0",
-                        },
-                        "node": {
-                            "archive_sha256": "1177b4137ba5adaa56354ae40f1080c7450e8ae09cecb47da459d1c52ac99f97",
-                            "version": "22.23.2",
-                        },
-                        "python": {
-                            "archive_sha256": "90b4e5b9898b72d744650524bff92377c367f44bd5fbd09e3148656c080ad907",
-                            "version": "3.13.14",
-                        },
-                        "comfy_bootstrap": {
-                            "pip_version": "25.1.1",
-                            "pip_wheel_sha256": "2913a38a2abf4ea6b64ab507bd9e967f3b53dc1ede74b01b0931e1ce548751af",
-                            "requirements_lock_sha256": hashlib.sha256(
-                                (REPO_ROOT / "packaging" / "windows-comfy-requirements.lock").read_bytes()
-                            ).hexdigest(),
-                            "packages": {
-                                "comfy-cli": "1.20.0",
-                                "comfy-mcp": "0.10.0",
-                            },
-                        },
-                        "platform": "win-x64",
-                    }
-                ),
+                json.dumps(manifest),
                 encoding="utf-8",
             )
         elif name == "harness/package.json":
@@ -100,6 +101,7 @@ def _write_archive(
     zip_special_mode: int | None = None,
     required_directory: str | None = None,
     required_directory_without_slash: bool = False,
+    non_executable: str | None = None,
 ) -> Path:
     members = [
         (name, (package / name).read_bytes())
@@ -150,6 +152,14 @@ def _write_archive(
                 member.type = tarfile.DIRTYPE
                 archive.addfile(member)
                 continue
+            expected_executables = {
+                flavor.executable,
+                *flavor.wrappers,
+                f"runtime/node/{verifier._HARNESS_RUNTIME_CONFIGS[str(flavor.harness_target)]['node_name']}",
+            }
+            member.mode = 0o644 if name == non_executable else (
+                0o755 if name in expected_executables else 0o644
+            )
             member.size = len(contents)
             archive.addfile(member, io.BytesIO(contents))
         if tar_symlink:
@@ -210,13 +220,27 @@ def test_clean_package_requires_platform_files(tmp_path: Path, platform: str):
     verifier.verify_package_tree(package, flavor)
 
 
-def test_windows_package_requires_bundled_harness_runtime():
+@pytest.mark.parametrize(
+    "platform,node",
+    [
+        ("windows", "runtime/node/node.exe"),
+        ("linux", "runtime/node/node"),
+        ("macos-arm64", "runtime/node/node"),
+        ("macos-x86_64", "runtime/node/node"),
+    ],
+)
+def test_every_package_requires_bundled_harness_runtime(platform: str, node: str):
+    flavor = verifier.FLAVORS[platform]
+
+    assert node in verifier.required_package_files(flavor)
+    assert "harness/dist/server.js" in verifier.required_package_files(flavor)
+    assert "portable-manifest.json" in verifier.required_package_files(flavor)
+
+
+def test_windows_package_requires_bundled_comfy_runtime():
     windows = verifier.FLAVORS["windows"]
 
     assert windows.name == "Director-Studio-Windows-x64"
-    assert "runtime/node/node.exe" in verifier.required_package_files(windows)
-    assert "harness/dist/server.js" in verifier.required_package_files(windows)
-    assert "portable-manifest.json" in verifier.required_package_files(windows)
     assert "runtime/python/python.exe" in verifier.required_package_files(windows)
     assert "runtime/python/comfy.exe" in verifier.required_package_files(windows)
     assert "runtime/python/Lib/site-packages/pip/__init__.py" in verifier.required_package_files(windows)
@@ -229,9 +253,6 @@ def test_windows_package_requires_bundled_harness_runtime():
     assert "Install-Tools.cmd" not in verifier.required_package_files(windows)
     assert "Install-Tools.py" not in verifier.required_package_files(windows)
     assert "portable-tools-requirements.txt" not in verifier.required_package_files(windows)
-    assert "runtime/node/node.exe" not in verifier.required_package_files(
-        verifier.FLAVORS["linux"]
-    )
     assert "runtime/python/python.exe" not in verifier.required_package_files(
         verifier.FLAVORS["linux"]
     )
@@ -345,14 +366,14 @@ def test_windows_package_rejects_wrong_runtime_manifest(tmp_path: Path):
         verifier.verify_package_tree(package, flavor)
 
 
-def test_linux_package_rejects_harness_runtime_content(tmp_path: Path):
+def test_linux_package_rejects_windows_comfy_runtime_content(tmp_path: Path):
     flavor = verifier.FLAVORS["linux"]
     package = _package_fixture(tmp_path, flavor)
-    entry = package / "harness" / "dist" / "server.js"
+    entry = package / "runtime" / "python" / "python.exe"
     entry.parent.mkdir(parents=True)
-    entry.write_text("fixture", encoding="utf-8")
+    entry.write_bytes(b"fixture")
 
-    with pytest.raises(ValueError, match="Harness runtime"):
+    with pytest.raises(ValueError, match="Comfy runtime"):
         verifier.verify_package_tree(package, flavor)
 
 
@@ -560,6 +581,20 @@ def test_tar_archive_rejects_device(tmp_path: Path):
     )
 
     with pytest.raises(ValueError, match="devices"):
+        verifier.verify_archive(archive, package, flavor)
+
+
+def test_tar_archive_requires_private_node_to_be_executable(tmp_path: Path):
+    flavor = verifier.FLAVORS["linux"]
+    package = _package_fixture(tmp_path, flavor)
+    archive = _write_archive(
+        tmp_path / "portable.tar.gz",
+        package,
+        flavor,
+        non_executable="runtime/node/node",
+    )
+
+    with pytest.raises(ValueError, match="runtime/node/node.*executable"):
         verifier.verify_archive(archive, package, flavor)
 
 

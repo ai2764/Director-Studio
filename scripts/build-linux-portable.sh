@@ -13,6 +13,7 @@ package_root="$dist_root/$package_name"
 archive="$dist_root/$package_name.tar.gz"
 checksum="$archive.sha256"
 verification_port="${DS_LINUX_VERIFICATION_PORT:-18791}"
+harness_verification_port="${DS_LINUX_HARNESS_VERIFICATION_PORT:-18793}"
 
 required_package_files=(
     "DirectorStudio"
@@ -109,8 +110,6 @@ copy_package_files() {
     cp -- "$repo_root/portable-tools-requirements.txt" "$destination/portable-tools-requirements.txt"
     cp -- "$backend_root/.env.example" "$destination/.env"
     grep -q '^DS_DIRECTOR_AGENT_RUNTIME=harness$' "$destination/.env" || die "portable .env is missing the Harness runtime setting"
-    sed 's/^DS_DIRECTOR_AGENT_RUNTIME=harness$/DS_DIRECTOR_AGENT_RUNTIME=legacy/' "$destination/.env" > "$destination/.env.tmp"
-    mv "$destination/.env.tmp" "$destination/.env"
     cp -- "$repo_root/README.md" "$destination/README.md"
     chmod 0755 "$destination/DirectorStudio" "$destination/launch.sh" "$destination/install-tools.sh"
     chmod 0644 "$destination/Install-Tools.py" "$destination/portable-tools-requirements.txt" "$destination/.env" "$destination/README.md"
@@ -155,6 +154,13 @@ main() {
     fi
 
     copy_package_files "$built_executable" "$package_root"
+    run_checked "Harness runtime staging" python "$repo_root/scripts/stage_portable_harness.py" \
+        --repo-root "$repo_root" \
+        --destination "$package_root" \
+        --target linux-x86_64
+    run_checked "bundled Harness verification" python "$repo_root/scripts/verify_bundled_harness.py" \
+        --package-root "$package_root" \
+        --port "$harness_verification_port"
     run_checked "Linux runtime verification" python "$repo_root/scripts/verify_linux_portable.py" \
         --package-root "$package_root" \
         --port "$verification_port" \
