@@ -38,7 +38,7 @@ def _write_fake_archive_viewer(tmp_path: Path, listing: str) -> dict[str, str]:
     bin_dir.mkdir()
     listing_path = tmp_path / "archive-listing.txt"
     listing_path.write_text(listing, encoding="utf-8")
-    (bin_dir / "py.cmd").write_text(
+    (bin_dir / "python.cmd").write_text(
         '@echo off\r\ntype "%FAKE_ARCHIVE_LISTING%"\r\n',
         encoding="utf-8",
     )
