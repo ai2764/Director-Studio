@@ -125,7 +125,7 @@ def _install_profile(store: H3ProfileStore, profile_id: str, *, saver_id: str) -
     )
 
 
-def test_builtin_profile_matches_current_official_fill() -> None:
+def test_builtin_profile_matches_temporary_turbo8_fill() -> None:
     profile = H3ProfileStore().resolve_active()
 
     actual = fill_profile_graph(profile, _job_params())
@@ -133,9 +133,9 @@ def test_builtin_profile_matches_current_official_fill() -> None:
         actual, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
 
-    # Captured from the pre-profile official graph filler for these exact inputs.
+    # Captured from the temporary Turbo 8 graph filler for these exact inputs.
     assert hashlib.sha256(canonical).hexdigest() == (
-        "303ad90caec676d355f01d2fb6418386a42ef6165408addf66b22e83ac0ac134"
+        "15a7be902203dfab2970ebd69e35a264ad2091d875a8e207b4ce61a58c39d376"
     )
 
 

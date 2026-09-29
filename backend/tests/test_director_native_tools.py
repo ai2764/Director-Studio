@@ -104,6 +104,38 @@ def test_actor_design_tool_defaults_to_local_and_requires_identity_description()
     assert parameters["properties"]["provider"]["enum"] == ["gpt", "local"]
 
 
+@pytest.mark.asyncio
+async def test_visible_layout_tool_cannot_generate_from_a_discussion_only(
+    tmp_projects_dir,
+):
+    project = create_project("Layout discussion", "A door opens.")
+    shot = Shot(
+        id="sht_layout_discussion",
+        project_id=project.id,
+        scene_id="scene_1",
+        title="Door",
+        script_beat="A door opens.",
+        duration_s=5,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+
+    class Service:
+        async def queue_reference_frame(self, *args, **kwargs):
+            raise AssertionError("Layout generation was not authorized")
+
+    notes, touched = await _run_tools(
+        project_id=project.id,
+        tools=[{"name": "queue_ref_frame", "args": {"shot_id": shot.id}}],
+        svc=Service(),
+        actions=[],
+        user_feedback="Explain whether another Layout would help; do not generate yet.",
+    )
+
+    assert touched == set()
+    assert "requires an explicit request" in notes[0]
+
+
 def test_actor_design_does_not_inject_storyboarding_for_an_unplanned_script(
     tmp_projects_dir,
 ):
@@ -120,7 +152,7 @@ def test_actor_design_does_not_inject_storyboarding_for_an_unplanned_script(
 
 
 @pytest.mark.asyncio
-async def test_actor_design_tool_ignores_unrequested_gpt_and_queues_local_job(
+async def test_actor_design_requires_later_text_confirmation_and_uses_saved_proposal(
     tmp_projects_dir, monkeypatch
 ):
     import app.agents.director.chat as chat_module
@@ -186,11 +218,55 @@ async def test_actor_design_tool_ignores_unrequested_gpt_and_queues_local_job(
     )
 
     assert touched == set()
+    assert created == []
+    assert attached == []
+    assert actions[0].startswith("propose_actor_design:")
+    proposal_id = actions[0].split(":", 1)[1]
+    assert "No generation job was started" in notes[0]
+    context = json.loads(_project_context_blob(load_project(project.id), [], focused=True))
+    assert context["pending_actor_design"]["proposal_id"] == proposal_id
+    assert context["pending_actor_design"]["provider"] == "local"
+
+    rejected_actions = []
+    rejected_notes, _ = await _run_tools(
+        project_id=project.id,
+        tools=[{"name": "confirm_actor_design", "args": {"proposal_id": proposal_id}}],
+        svc=object(),
+        actions=rejected_actions,
+        user_feedback="确认，但改成红衣服",
+    )
+    assert rejected_actions == []
+    assert "requires an unqualified confirmation" in rejected_notes[0]
+    assert created == []
+
+    confirmed_actions = []
+    confirmed_notes, _ = await _run_tools(
+        project_id=project.id,
+        tools=[{"name": "confirm_actor_design", "args": {"proposal_id": proposal_id}}],
+        svc=object(),
+        actions=confirmed_actions,
+        user_feedback="确认",
+        images=attached,
+    )
     assert created[0]["pipeline_id"] == "actor"
     assert created[0]["params"]["provider"] == "local"
-    assert actions == ["actor_design:job_local_actor"]
+    assert confirmed_actions == ["actor_design:job_local_actor"]
     assert attached[0].url.endswith("/jobs/job_local_actor/outputs/master.png")
-    assert "job_local_actor" in notes[0]
+    assert "job_local_actor" in confirmed_notes[0]
+
+    replay_actions = []
+    replay_notes, _ = await _run_tools(
+        project_id=project.id,
+        tools=[{"name": "confirm_actor_design", "args": {"proposal_id": proposal_id}}],
+        svc=object(),
+        actions=replay_actions,
+        user_feedback="确认",
+    )
+    assert replay_actions == []
+    assert "already confirmed" in replay_notes[0]
+    assert len(created) == 1
+    context_after = json.loads(_project_context_blob(load_project(project.id), [], focused=True))
+    assert context_after["pending_actor_design"] is None
 
 
 @pytest.mark.asyncio
@@ -490,7 +566,7 @@ async def test_native_dict_executes_offered_tool_printed_as_fenced_json(
 
 
 @pytest.mark.asyncio
-async def test_gpt_tool_execution_does_not_reparse_user_language(
+async def test_gpt_tool_execution_requires_explicit_generation_request(
     tmp_projects_dir, monkeypatch
 ):
     from app.config import settings
@@ -547,7 +623,7 @@ async def test_gpt_tool_execution_does_not_reparse_user_language(
         svc=Service(),
         actions=[],
         result_payloads=payloads,
-        user_feedback="GPTでこの参考フレームを生成して",
+        user_feedback="Use GPT to generate a Layout reference frame for this shot.",
     )
 
     assert touched == set()
@@ -818,7 +894,9 @@ def test_save_storyboard_tool_exposes_the_complete_typed_shot_draft_shape():
         "composition",
         "duration_s",
         "dialogue",
+        "music_segment",
         "asset_matches",
+        "dialogue_lines",
         "voice_matches",
     }
     assert "shot_id" not in shot_schema["required"]
@@ -836,6 +914,7 @@ def test_save_storyboard_tool_exposes_the_complete_typed_shot_draft_shape():
     assert "movement" in shot_schema["properties"]["camera_motion"]["description"]
     assert "screen positions" in shot_schema["properties"]["composition"]["description"]
     assert set(parameters["$defs"]["AssetMatchDraft"]["properties"]) == {
+        "notes",
         "role",
         "asset_id",
         "file_key",
@@ -865,6 +944,7 @@ def test_patch_shot_refs_tool_only_accepts_exact_reference_updates():
     assert patch_schema["required"] == ["shot_id", "refs"]
     assert patch_schema["additionalProperties"] is False
     assert set(parameters["$defs"]["OrderedAssetMatchDraft"]["properties"]) == {
+        "notes",
         "role",
         "asset_id",
         "file_key",
@@ -893,6 +973,9 @@ def test_revise_shot_tool_only_accepts_partial_authored_fields():
         "composition",
         "duration_s",
         "dialogue",
+        "music_segment",
+        "dialogue_lines",
+        "dialogue_language_updates",
     }
     assert "refs" not in parameters["properties"]
     assert "layout_refs" not in parameters["properties"]
@@ -952,6 +1035,8 @@ async def test_native_revise_shot_returns_only_persisted_target(
     assert payloads[0]["shot"]["id"] == shot.id
     assert payloads[0]["shot"]["script_beat"] == "Mia faces camera."
     assert payloads[0]["shot"]["duration_s"] == 5.0
+    assert payloads[0]["duration_budget"]["total_s"] == shot_count * 5.0
+    assert payloads[0]["duration_budget"]["deficit_s"] == 0
     assert load_shot(project.id, shot.id).script_beat == "Mia faces camera."
     persisted = list_shots(project.id)
     assert {s.id: s.model_dump(mode="json") for s in persisted if s.id != shot.id} == before
@@ -959,6 +1044,53 @@ async def test_native_revise_shot_returns_only_persisted_target(
     # Adding neighboring shots must not amplify a single-shot tool response.
     assert len(json.dumps(payloads)) < 1000
     assert "one shot" in notes[0].lower()
+
+
+def test_revise_shot_persists_music_segment_only_for_mv_project(
+    tmp_projects_dir,
+):
+    from app.agents.director.service import DirectorService
+
+    segment = {
+        "core_start_s": 4.54,
+        "core_end_s": 13.08,
+        "submit_start_s": 4.04,
+        "submit_end_s": 13.83,
+    }
+    mv_project = create_project("MV", "song", mode="mv")
+    mv_shot = Shot(
+        id="sht_mv_segment",
+        project_id=mv_project.id,
+        scene_id="sc01",
+        title="Sing",
+        script_beat="Mia sings",
+        duration_s=9.79,
+    )
+    save_shot(mv_shot)
+    save_project(mv_project.model_copy(update={"shot_ids": [mv_shot.id]}))
+    svc = DirectorService(plan_provider=None)
+
+    revised = svc.revise_shot(
+        mv_project.id,
+        {"shot_id": mv_shot.id, "music_segment": segment},
+    )[0]
+
+    assert revised.music_segment.model_dump() == segment
+
+    director_project = create_project("Director", "scene")
+    director_shot = mv_shot.model_copy(update={
+        "id": "sht_director_segment",
+        "project_id": director_project.id,
+        "music_segment": None,
+    })
+    save_shot(director_shot)
+    save_project(director_project.model_copy(update={"shot_ids": [director_shot.id]}))
+
+    with pytest.raises(ValueError, match="Music Video"):
+        svc.revise_shot(
+            director_project.id,
+            {"shot_id": director_shot.id, "music_segment": segment},
+        )
 
 
 @pytest.mark.asyncio
@@ -1739,6 +1871,10 @@ async def test_native_save_storyboard_real_service_returns_the_stored_snapshot(
             "voice_refs": [
                 ref.model_dump(mode="json") for ref in shot.voice_refs
             ],
+            "music_segment": (
+                shot.music_segment.model_dump(mode="json")
+                if shot.music_segment else None
+            ),
         }
         for shot in stored
     ]
@@ -1748,16 +1884,6 @@ async def test_native_save_storyboard_rejects_stale_hash_as_a_tool_failure(
     tmp_projects_dir,
 ):
     project = create_project("Stale native save", "INT. ROOM - NIGHT\nApproved beat.")
-    old = Shot(
-        id="sht_native_stale_old",
-        project_id=project.id,
-        scene_id="sc01",
-        title="Existing plan",
-        script_beat="The existing shot remains untouched.",
-        duration_s=5.0,
-    )
-    save_shot(old)
-    save_project(project.model_copy(update={"shot_ids": [old.id]}))
     captured_followup: dict = {}
 
     class _Service:
@@ -1823,11 +1949,11 @@ async def test_native_save_storyboard_rejects_stale_hash_as_a_tool_failure(
         "Storyboard was not saved; existing project shots remain unchanged."
     )
     assert load_project(project.id).script_text == project.script_text
-    assert load_shot(project.id, old.id).model_dump() == old.model_dump()
+    assert list_shots(project.id) == []
 
 
 @pytest.mark.asyncio
-async def test_failed_storyboard_save_blocks_later_layout_work_in_same_batch(
+async def test_storyboard_replacement_warning_concludes_batch_before_layout(
     tmp_projects_dir,
 ):
     project = create_project("Blocked downstream layout", "INT. ROOM - DAY\nMia waits.")
@@ -1847,13 +1973,17 @@ async def test_failed_storyboard_save_blocks_later_layout_work_in_same_batch(
         layout_calls = 0
 
         async def save_storyboard(self, *args, **kwargs):
-            raise ValueError("candidate rejected")
+            raise AssertionError("replacement must not save before confirmation")
+
+        async def preview_storyboard(self, *args, **kwargs):
+            return [old]
 
         async def queue_reference_frame(self, *args, **kwargs):
             self.layout_calls += 1
             raise AssertionError("layout work must not run after a failed save")
 
     svc = _Service()
+    payloads = []
     notes, _ = await _run_tools(
         project_id=project.id,
         tools=[
@@ -1884,10 +2014,14 @@ async def test_failed_storyboard_save_blocks_later_layout_work_in_same_batch(
         ],
         svc=svc,
         actions=[],
+        result_payloads=payloads,
+        user_feedback="Replace the storyboard and generate its Layout.",
     )
 
     assert svc.layout_calls == 0
-    assert any("queue_ref_frame blocked" in note for note in notes)
+    assert payloads[-1]["confirmation_required"] is True
+    assert payloads[-1]["concludes_turn"] is True
+    assert "确认清除并重写全部 shots" in notes[-1]
 
 
 @pytest.mark.asyncio
@@ -1929,17 +2063,8 @@ async def test_native_semantic_rejection_returns_to_same_agent_for_a_repaired_sa
         "Semantic repair",
         "INT. ARCHIVE - NIGHT\nMara finds a recorder, hears her own warning, and backs away.",
     )
-    old = Shot(
-        id="sht_semantic_repair_old",
-        project_id=project.id,
-        scene_id="sc00",
-        title="Old storyboard",
-        script_beat="The old plan survives until a repair passes.",
-        duration_s=12.0,
-    )
-    save_shot(old)
     save_project(
-        project.model_copy(update={"script_locked": True, "shot_ids": [old.id]})
+        project.model_copy(update={"script_locked": True})
     )
 
     class _ValidationProvider:
@@ -2035,9 +2160,7 @@ async def test_native_semantic_rejection_returns_to_same_agent_for_a_repaired_sa
             assert tool_payload["issues"] == [
                 "Shot 1 contradicts the screenplay by having Mara destroy the recorder."
             ]
-            assert [shot.model_dump() for shot in list_shots(project.id)] == [
-                old.model_dump()
-            ]
+            assert list_shots(project.id) == []
             return {
                 "content": "",
                 "thinking": "I will repair my own candidate.",
@@ -2292,28 +2415,8 @@ async def test_native_malformed_semantic_verdict_is_a_transactional_tool_failure
     )
     screenplay = "INT. ARCHIVE - NIGHT\nMara listens to the intact recorder."
     project = create_project("Malformed semantic verdict", screenplay)
-    old = Shot(
-        id="sht_malformed_verdict_old",
-        project_id=project.id,
-        scene_id="sc00",
-        title="Existing grounded plan",
-        script_beat="Mara watches the intact recorder from across the archive.",
-        duration_s=8.0,
-        refs=[
-            ShotRef(
-                role=RefRole.actor,
-                asset_id=actor.id,
-                file_key="master",
-                picture_index=1,
-                notes="existing-ref",
-            )
-        ],
-    )
-    save_shot(old)
     save_project(
-        project.model_copy(
-            update={"script_locked": True, "shot_ids": [old.id]}
-        )
+        project.model_copy(update={"script_locked": True})
     )
 
     class _MalformedProvider:
@@ -2395,12 +2498,12 @@ async def test_native_malformed_semantic_verdict_is_a_transactional_tool_failure
     assert captured_payload["ok"] is False
     assert "invalid structured verdict" in captured_payload["error"]
     assert result.actions == ["llm"]
-    assert [shot.model_dump() for shot in list_shots(project.id)] == [old.model_dump()]
+    assert list_shots(project.id) == []
     persisted = load_project(project.id)
     assert persisted is not None
     assert persisted.script_text == screenplay
     assert persisted.script_locked is True
-    assert persisted.shot_ids == [old.id]
+    assert persisted.shot_ids == []
     assert load_asset("actors", actor.id).project_id is None
     assert load_asset("scenes", scene.id).project_id is None
 
@@ -2413,16 +2516,6 @@ async def test_native_storyboard_submission_budget_blocks_a_fourth_save(
         "Bounded repairs",
         "INT. ROOM - NIGHT\nMara listens to the intact recorder.",
     )
-    old = Shot(
-        id="sht_bounded_old",
-        project_id=project.id,
-        scene_id="sc00",
-        title="Existing bounded plan",
-        script_beat="This plan survives all rejected submissions.",
-        duration_s=60.0,
-    )
-    save_shot(old)
-    save_project(project.model_copy(update={"shot_ids": [old.id]}))
 
     class _Service:
         def __init__(self):
@@ -2517,11 +2610,11 @@ async def test_native_storyboard_submission_budget_blocks_a_fourth_save(
     assert "unresolved issues" in result.reply.lower()
     assert "new user turn" in result.reply.lower()
     assert "nothing was persisted" in result.reply.lower()
-    assert [shot.model_dump() for shot in list_shots(project.id)] == [old.model_dump()]
+    assert list_shots(project.id) == []
     persisted = load_project(project.id)
     assert persisted is not None
     assert persisted.script_text == project.script_text
-    assert persisted.shot_ids == [old.id]
+    assert persisted.shot_ids == []
 
 
 @pytest.mark.asyncio
@@ -2689,24 +2782,15 @@ async def test_storyboard_submission_budget_resets_on_a_new_user_turn(
         "Fresh turn budget",
         "INT. ROOM - NIGHT\nThe approved recorder remains intact.",
     )
-    old = Shot(
-        id="sht_fresh_turn_old",
-        project_id=project.id,
-        scene_id="sc00",
-        title="Existing fresh-turn plan",
-        script_beat="Preserve this plan while candidates are discussed.",
-        duration_s=12.0,
-    )
-    save_shot(old)
     save_project(
-        project.model_copy(update={"script_locked": True, "shot_ids": [old.id]})
+        project.model_copy(update={"script_locked": True})
     )
     save_agent_context(
         project.id,
         AgentContext(
             project_id=project.id,
             script_hash=_script_hash(project.script_text),
-            shot_summaries=[{"id": old.id}],
+            shot_summaries=[],
         ),
     )
 
@@ -2763,12 +2847,12 @@ async def test_storyboard_submission_budget_resets_on_a_new_user_turn(
     assert svc.calls == 4
     assert "unresolved candidate 4" in second.reply.lower()
     assert "blocked" not in second.reply.lower()
-    assert [shot.model_dump() for shot in list_shots(project.id)] == [old.model_dump()]
+    assert list_shots(project.id) == []
     persisted = load_project(project.id)
     assert persisted is not None
     assert persisted.script_text == project.script_text
     assert persisted.script_locked is True
-    assert persisted.shot_ids == [old.id]
+    assert persisted.shot_ids == []
 
 
 @pytest.mark.asyncio
@@ -2823,19 +2907,8 @@ async def test_textual_storyboard_batch_uses_the_same_three_submission_budget(
         "Textual storyboard budget",
         "INT. ROOM - NIGHT\nThe approved recorder remains intact.",
     )
-    old = Shot(
-        id="sht_textual_budget_old",
-        project_id=project.id,
-        scene_id="sc00",
-        title="Existing textual plan",
-        script_beat="Keep the approved recorder intact.",
-        duration_s=12.0,
-    )
-    save_shot(old)
     save_project(
-        project.model_copy(
-            update={"script_locked": True, "shot_ids": [old.id]}
-        )
+        project.model_copy(update={"script_locked": True})
     )
 
     class _Service:
@@ -2880,12 +2953,12 @@ async def test_textual_storyboard_batch_uses_the_same_three_submission_budget(
     assert "blocked" in result.reply.lower()
     assert "three" in result.reply.lower() or "3" in result.reply
     assert result.actions == ["llm"]
-    assert [shot.model_dump() for shot in list_shots(project.id)] == [old.model_dump()]
+    assert list_shots(project.id) == []
     persisted = load_project(project.id)
     assert persisted is not None
     assert persisted.script_text == project.script_text
     assert persisted.script_locked is True
-    assert persisted.shot_ids == [old.id]
+    assert persisted.shot_ids == []
 
 
 @pytest.mark.asyncio
@@ -3292,6 +3365,7 @@ async def test_queue_ref_frame_tool_queues_explicit_layout_brief_and_reports_ide
         ],
         svc=svc,
         actions=[],
+        user_feedback="Generate a Layout for this shot.",
     )
 
     assert svc.brief is not None
@@ -3390,7 +3464,7 @@ async def test_agent_can_append_a_two_person_layout_to_the_same_shot(
         svc=svc,
         actions=[],
         user_feedback=(
-            "Keep this in the same shot and add another Layout for the later "
+            "Keep this in the same shot and generate another Layout for the later "
             "two-person composition."
         ),
     )
@@ -3466,7 +3540,7 @@ async def test_revise_ref_frame_records_chat_feedback_and_links_new_layout(
         ],
         svc=_Service(),
         actions=[],
-        user_feedback="人物太靠前，7号门看不清，重新生成。",
+        user_feedback="人物太靠前，7号门看不清，重新生成这个 Layout。",
     )
 
     saved = load_shot(project.id, shot.id)
@@ -3475,7 +3549,7 @@ async def test_revise_ref_frame_records_chat_feedback_and_links_new_layout(
     assert old.review_status == LayoutReviewStatus.reject
     assert old.review_feedback == "人物站位过近，7号门识别不足"
     assert old.feedback_source == "director_chat"
-    assert old.feedback_quote == "人物太靠前，7号门看不清，重新生成。"
+    assert old.feedback_quote == "人物太靠前，7号门看不清，重新生成这个 Layout。"
     assert old.superseded_by == "lref_revised"
     assert new.revision_of == "lref_original"
     assert touched == {shot.id}
@@ -3592,7 +3666,7 @@ async def test_accept_ref_frame_returns_authoritative_picture_order_without_llm_
     )
 
     class _Service:
-        async def write_prompts_after_layout(self, shot_id: str) -> Shot:
+        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="", on_progress=None) -> Shot:
             current = load_shot(project.id, shot_id)
             assert current is not None
             save_shot(current)
@@ -3681,6 +3755,7 @@ async def test_queue_ref_frame_tool_requires_purpose_for_an_additional_layout(
         ],
         svc=_Service(),
         actions=[],
+        user_feedback="Generate another Layout for this shot.",
     )
 
     assert touched == set()
@@ -3744,6 +3819,7 @@ async def test_queue_ref_frame_tool_applies_explicit_brief_to_all_selected_shots
         ],
         svc=svc,
         actions=[],
+        user_feedback="Generate Layouts for all shots.",
     )
 
     assert [call[0] for call in svc.calls] == [shot.id for shot in shots]
@@ -3783,7 +3859,7 @@ async def test_native_write_prompt_tool_is_executed_and_result_returns_to_model(
     )
 
     class _Service:
-        async def write_prompts_after_layout(self, shot_id: str) -> Shot:
+        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="", on_progress=None) -> Shot:
             current = load_shot(project.id, shot_id)
             assert current is not None
             updated = current.model_copy(
@@ -3837,8 +3913,8 @@ async def test_native_write_prompt_tool_is_executed_and_result_returns_to_model(
     assert calls[0]["tools"]
     assert any(t["function"]["name"] == "write_prompt" for t in calls[0]["tools"])
     offered_tools = {t["function"]["name"] for t in calls[0]["tools"]}
-    assert "queue_ref_frame" not in offered_tools
-    assert "revise_ref_frame" not in offered_tools
+    assert "queue_ref_frame" in offered_tools
+    assert "revise_ref_frame" in offered_tools
     assert "approve_layout" not in offered_tools
     assert "reject_layout" not in offered_tools
     tool_messages = calls[1]["messages"]
@@ -3848,6 +3924,92 @@ async def test_native_write_prompt_tool_is_executed_and_result_returns_to_model(
         and "prompt" in message.get("content", "").lower()
         for message in tool_messages
     )
+
+
+@pytest.mark.asyncio
+async def test_legacy_failed_write_prompt_reports_recoverable_failure(tmp_projects_dir, monkeypatch):
+    from app.config import settings
+    from app.core.managed_runs.context import ManagedTurnScope, managed_turn_scope
+
+    monkeypatch.setattr(settings, "director_agent_runtime", "legacy")
+    project = create_project("Prompt failure", "An actor enters the hallway.")
+    shot = Shot(id="sht_failed_prompt", project_id=project.id, scene_id="sc01",
+                title="Hallway", script_beat="An actor enters.", duration_s=5,
+                status=ShotStatus.needs_review)
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    save_agent_context(project.id, AgentContext(
+        project_id=project.id, script_hash=_script_hash(project.script_text),
+        last_phase="awaiting_prompt", shot_summaries=[{"id": shot.id}],
+    ))
+
+    class FailingService:
+        attempts = 0
+
+        async def write_prompts_after_layout(self, shot_id, *, revision_request="", on_progress=None):
+            self.attempts += 1
+            raise ValueError("dialogue validation failed")
+
+    calls = 0
+    offered_tools = set()
+
+    async def chat_fn(system, user, **kwargs):
+        nonlocal calls, offered_tools
+        calls += 1
+        if calls == 1:
+            offered_tools = {tool["function"]["name"] for tool in kwargs["tools"]}
+            return {"content": "", "thinking": "", "tool_calls": [
+                {"name": "write_prompt", "arguments": {"shot_id": shot.id}},
+                {"name": "write_prompt", "arguments": {"shot_id": shot.id}},
+            ]}
+        return {"content": "Prompt could not be saved.", "thinking": "", "tool_calls": []}
+
+    service = FailingService()
+    scope_token = managed_turn_scope.set(ManagedTurnScope(
+        project_id=project.id, run_id="mrun_test", event_id="start", shot_id=shot.id,
+    ))
+    try:
+        result = await handle_chat(project_id=project.id, message="Write the Shot prompt",
+                                   svc=service, chat_fn=chat_fn)
+    finally:
+        managed_turn_scope.reset(scope_token)
+
+    assert result.failure_code == "PROMPT_GENERATION_FAILED"
+    assert "dialogue validation failed" in result.failure_message
+    assert not any(action.startswith("write_prompt:") for action in result.actions)
+    assert calls == 1
+    assert service.attempts == 1
+    assert offered_tools == {"get_status", "inspect_asset", "write_prompt", "start_h3_video"}
+
+
+@pytest.mark.asyncio
+async def test_managed_legacy_rejects_unplanned_mutation(tmp_projects_dir, monkeypatch):
+    from app.config import settings
+    from app.core.managed_runs.context import ManagedTurnScope, managed_turn_scope
+
+    monkeypatch.setattr(settings, "director_agent_runtime", "legacy")
+    project = create_project("Managed scope", "Original script")
+    calls = []
+
+    async def chat_fn(system, user, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return {"content": "", "thinking": "", "tool_calls": [
+                {"name": "set_script", "arguments": {"script": "Unauthorized rewrite"}},
+            ]}
+        return {"content": "No edit made.", "thinking": "", "tool_calls": []}
+
+    scope_token = managed_turn_scope.set(ManagedTurnScope(
+        project_id=project.id, run_id="mrun_test", event_id="start", shot_id="sht_test",
+    ))
+    try:
+        await handle_chat(project_id=project.id, message="Continue managed run",
+                          svc=object(), chat_fn=chat_fn)
+    finally:
+        managed_turn_scope.reset(scope_token)
+
+    assert load_project(project.id).script_text == "Original script"
+    assert "set_script" not in {tool["function"]["name"] for tool in calls[0]["tools"]}
 
 
 @pytest.mark.asyncio

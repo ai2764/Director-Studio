@@ -24,6 +24,9 @@ from .intent import actor_design_intent, explicit_gpt_image_intent
 from .planner import AppendShotSubmission, ShotRevisionSubmission
 from .tool_schema import director_chat_guides, director_tool_schemas, IMAGE_TOOLS
 from .skill_loader import with_director_skill
+from .task_context_runtime import (scoped_task_turn, current_task_context, present_task_tools,
+    render_task_context, task_authority, available_packet_chars, context_mode)
+from .tool_schema import TASK_CONTEXT_TOOL_NAMES
 
 
 # Vision bytes stay in Python, outside the native text meter. Reserve a labelled
@@ -43,6 +46,8 @@ class BackendTurn:
 
     def __init__(self, project_id, message, svc, chat_fn, *, images=None, captions=None, on_progress=None, compact_only=False, history=None):
         self.project_id, self.message = project_id, message
+        from .turn_identity import current_user_message_id
+        self.user_message_id = current_user_message_id(project_id, message)
         self.compact_only = compact_only
         self.seed_history = list(history or [])
         self.svc, self.chat_fn, self.on_progress = svc, chat_fn, on_progress
@@ -62,10 +67,14 @@ class BackendTurn:
         self.successful_prompt_shot_ids: set[str] = set()
         self.storyboard_failed = False
         self.terminal_failure: str | None = None
+        self.terminal_failure_code = "PROMPT_GENERATION_FAILED"
+        self.prompt_failure_kind = "unknown"
         self.expected_state: str | None = None
         self.local_generation_receipt: str | None = None
         self.offered_context: dict | None = None
         self.offered_version: str | None = None
+        self.context_capacity = None
+        self.context_history = self.seed_history
 
     def snapshot(self):
         project = load_project(self.project_id)
@@ -90,7 +99,15 @@ class BackendTurn:
             allow_save_storyboard=not self.budget.exhausted,
             include_chat_image_import=pending,
         )
-        if not pending and _needs_fresh_storyboard(project, shots):
+        if self.budget.repairing:
+            tools = [tool for tool in tools if tool["function"]["name"] != "set_script"]
+        from ...core.managed_runs.context import managed_turn_scope
+        managed_scope = managed_turn_scope.get()
+        if managed_scope is not None and managed_scope.project_id == self.project_id:
+            tools = [tool for tool in tools if tool["function"]["name"] in {
+                "get_status", "inspect_asset", "write_prompt", "start_h3_video",
+            }]
+        if not pending and managed_scope is None and _needs_fresh_storyboard(project, shots):
             tools = [
                 tool for tool in tools
                 if tool["function"]["name"] not in IMAGE_TOOLS
@@ -115,11 +132,21 @@ class BackendTurn:
                  if explicit_gpt_image_intent(self.message) and not actor_design_intent(self.message)
                  else project_context_blob(project, shots, message=self.message, focused=True))
         system = DIRECTOR_CHAT_SYSTEM
+        if self.budget.repairing:
+            system += (
+                "\nThe screenplay is read-only during this turn's storyboard recovery. "
+                "A failed candidate does not authorize changing the story or dropping "
+                "required beats. Repair the candidate, or explain the unresolved choice."
+            )
         if self.images:
             system += "\nInspect the images attached by the backend."
             if self.uploads:
                 system += " Classify every uploaded image before unrelated changes."
-        if self.terminal_failure:
+        if self.terminal_failure and self.terminal_failure_code == "DIALOGUE_CLARIFICATION_REQUIRED":
+            system += "\nDialogue metadata needs the user's clarification before prompt writing. Ask the confirmed question; do not guess or change the source."
+        elif self.terminal_failure and self.terminal_failure_code in {"MATERIAL_INPUT_INVALID", "MATERIAL_REVIEW_INVALID"}:
+            system += "\nReference preflight failed before prompt writing. Explain the exact affected binding or evidence issue and required next step. Do not claim a prompt retry can repair missing inputs, or silently substitute assets. The user can still edit or relink references in a subsequent turn."
+        elif self.terminal_failure:
             system += (
                 "\nA derived prompt operation already failed after its bounded internal "
                 "repair attempts. Explain the confirmed failure and the unchanged project "
@@ -131,6 +158,15 @@ class BackendTurn:
         system = with_director_skill(system, guides=director_chat_guides(
             project, include_visual_qc=bool(self.images), current_message=self.message,
         ))
+        task_state = current_task_context(project.id)
+        if task_state is not None and context_mode(project) != "off":
+            authority = task_authority(project, tools)
+            if context_mode(project) == "pilot" and not pending and not self.terminal_failure:
+                tools = present_task_tools(tools, task_state)
+            state = render_task_context(project, objective=self.message, authority=authority, legacy_state=state,
+                max_chars=available_packet_chars(system=system,
+                    messages=[*self.context_history, {"role": "user", "content": self.message}], tools=tools,
+                    image_count=len(self.images), context_capacity=self.context_capacity))
         self.offered_context = {"system": system, "state": state, "tools": tools}
         self.offered_version = version
         return self.offered_context
@@ -186,6 +222,7 @@ class BackendTurn:
             messages.append(clean)
         if not messages:
             raise ValueError("Harness conversation is empty")
+        self.context_history = messages
         tool_names = {call["id"]: call["function"]["name"] for m in messages for call in m.get("tool_calls", [])}
         for m in messages:
             if m["role"] == "tool" and m.get("tool_call_id") in tool_names:
@@ -302,17 +339,34 @@ class BackendTurn:
         if errors:
             return {"ok": False, "error": errors[0].message}
         project, shots, version = self.snapshot()
-        if name not in {"get_status", "inspect_asset"} and (
+        if name == "start_h3_video":
+            from ...core.managed_runs.store import active_run_for_project
+
+            run = active_run_for_project(self.project_id)
+            if (run is not None and run.current_index < len(run.steps)
+                    and run.steps[run.current_index].shot_id == args.get("shot_id")
+                    and run.current_job_id):
+                return {"ok": True, "already_started": True,
+                        "shot_id": args["shot_id"], "job_id": run.current_job_id,
+                        "notes": [f"H3 Job {run.current_job_id} is already running for this Shot."]}
+        if name not in {"get_status", "inspect_asset", *TASK_CONTEXT_TOOL_NAMES} and (
             (version, raw_fingerprint) in self.calls
             or (version, fingerprint) in self.calls
         ):
-            return {"ok": False, "error": "Repeated call rejected. Inspect the existing outcome; do not replay a mutation."}
+            from .task_context_runtime import context_retry_ready
+            if name != "write_prompt" or not context_retry_ready(self.project_id, args.get("shot_id")):
+                return {"ok": False, "error": "Repeated call rejected. Inspect the existing outcome; do not replay a mutation."}
         if self.expected_state is not None and version != self.expected_state:
             return {"ok": False, "error": "Project changed since inference. Refresh context and reconsider the call."}
         if self.storyboard_failed and name in IMAGE_TOOLS:
             return {"ok": False, "error": "Storyboard save failed; save a valid storyboard before image or prompt work"}
         requested = {"name": name, "args": args}
-        safe, _ = sanitize_tools_for_pipeline([requested], project=project, shots=shots)
+        from ...core.managed_runs.context import managed_turn_scope
+        scope = managed_turn_scope.get()
+        safe, _ = (
+            ([requested], []) if scope is not None and scope.project_id == self.project_id
+            else sanitize_tools_for_pipeline([requested], project=project, shots=shots)
+        )
         # The compatibility sanitizer can insert planning calls. Harness selects every
         # tool itself; only validate the requested call, never execute injected work.
         if requested not in safe:
@@ -326,6 +380,12 @@ class BackendTurn:
             project_id=self.project_id, tools=[requested], svc=self.svc,
             actions=self.actions, on_progress=self.on_progress, result_payloads=payloads,
             user_feedback=self.message, requested_minimum_duration_s=_requested_minimum_duration_s(self.message),
+            user_message_id=self.user_message_id,
+            previous_assistant=(
+                str(self.seed_history[-1].get("content") or "")
+                if self.seed_history and self.seed_history[-1].get("role") == "assistant"
+                else ""
+            ),
             storyboard_budget=self.budget, images=self.result_images, user_uploads=self.uploads,
         )
         self.notes.extend(notes)
@@ -337,13 +397,19 @@ class BackendTurn:
             result.update(ok=False, error="No successful operation confirmed. " + " ".join(notes))
         if name == "save_storyboard":
             self.storyboard_failed = not result["ok"]
-        if name == "write_prompt" and not result["ok"]:
+        if name == "write_prompt" and not result["ok"] and result.get("code") != "CONTEXT_REQUIRED":
+            self.prompt_failure_kind = result.get("failure_kind", "unknown")
             failure = str(result.get("error") or "Prompt generation failed.")
-            self.terminal_failure = (
-                "Prompt generation did not complete after bounded internal repair. "
-                f"The saved storyboard was not changed to work around it. {failure}"
-            )
-            result.update(retryable=False, code="PROMPT_GENERATION_FAILED")
+            if result.get("code") in {"DIALOGUE_CLARIFICATION_REQUIRED", "DIALOGUE_METADATA_INVALID",
+                                       "MATERIAL_INPUT_INVALID", "MATERIAL_REVIEW_INVALID"}:
+                self.terminal_failure_code = result["code"]
+                self.terminal_failure = str(result.get("reply") or failure)
+            else:
+                self.terminal_failure = (
+                    "Prompt generation did not complete after bounded internal repair. "
+                    f"The saved storyboard was not changed to work around it. {failure}"
+                )
+            result.update(retryable=False, code=self.terminal_failure_code)
         elif name == "write_prompt" and result["ok"]:
             saved_shot_id = result.get("shot_id") or args.get("shot_id")
             if isinstance(saved_shot_id, str) and saved_shot_id:
@@ -378,7 +444,7 @@ class BackendTurn:
             # Keep the model's explanation and partial-work details. A successful
             # save is only one operation, not proof that the entire turn finished.
             reply = f"Storyboard saved: {len(shots)} shots.\n\n" + reply
-        elif "append_shot" in self.actions and _claims_completed_storyboard(reply):
+        elif "append_shot" in self.actions:
             count = self.actions.count("append_shot")
             reply = f"Appended {count} new shot{'s' if count != 1 else ''} at the end."
         elif self.storyboard_failed and "append_shot" not in self.actions:
@@ -387,15 +453,20 @@ class BackendTurn:
             reply = "No storyboard save was confirmed in this turn."
         images = self.result_images + _layout_images(shots, only_shot_ids=self.touched) if self.touched else self.result_images
         return ChatResult(reply=reply, project=project, shots=shots, actions=self.actions,
+                          failure_code=self.terminal_failure_code if self.terminal_failure else "",
+                          failure_message=self.terminal_failure or "",
+                          failure_kind=self.prompt_failure_kind,
                           images=images, thinking=result.get("thinking", ""), steps=self.notes)
 
 
+@scoped_task_turn
 async def handle_harness_chat(*, project_id, message, svc, chat_fn=None, history=None,
                               on_progress=None, user_images_b64=None, user_image_captions=None,
-                              context_capacity=None):
+                              context_capacity=None, managed_session_id=None):
     context_capacity = context_capacity or settings.director_num_ctx
     turn = BackendTurn(project_id, message, svc, chat_fn, images=user_images_b64,
                        captions=user_image_captions, on_progress=on_progress, history=history)
+    turn.context_capacity = context_capacity
     # Reuse Python's existing visual preparation; sidecar receives no file paths/bytes.
     if not turn.images:
         from .vision import collect_vision_attachments, wants_vision, layout_reference_ids_from_message
@@ -409,7 +480,7 @@ async def handle_harness_chat(*, project_id, message, svc, chat_fn=None, history
         result = await HarnessClient(settings.harness_base_url, settings.harness_internal_token,
                                      timeout=settings.harness_turn_timeout_sec).run(
             {"message": message, "history": [],
-             "session_id": harness_session_id(project_id),
+             "session_id": managed_session_id or harness_session_id(project_id),
              # Harness meters prompt pressure. Reserve the provider-reported
              # completion allowance so long history is compacted before it can
              # consume the space Qwen needs to finish reasoning and tool output.
@@ -438,15 +509,9 @@ async def handle_harness_chat(*, project_id, message, svc, chat_fn=None, history
 
 
 def _needs_fresh_storyboard(project, shots) -> bool:
-    from .context_io import load_agent_context
-    from .service import _script_hash
-
-    script = (project.script_text or "").strip()
-    if not script:
-        return False
-    planned = load_agent_context(project.id)
-    planned_hash = (planned.script_hash if planned else "") or ""
-    return not shots or planned_hash != _script_hash(script)
+    # Existing shot IDs remain usable after a script edit. Their derived data
+    # must pass current source checks; replacing all shots is not a prerequisite.
+    return bool((project.script_text or "").strip()) and not shots
 
 
 def harness_session_id(project_id: str) -> str:

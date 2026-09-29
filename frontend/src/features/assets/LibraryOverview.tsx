@@ -116,7 +116,7 @@ export function LibraryOverview({ onSelectKind }: {
               </header>
               {assets.length ? (
                 <div className="mobile-library-preview-strip">
-                  {assets.slice(0, 6).map((asset) => {
+                  {assets.map((asset) => {
                     const preview = assetPreviewUrl(asset);
                     return (
                       <button

@@ -39,9 +39,26 @@ def enable_reference_review(monkeypatch):
             return json.dumps({"readable": True, "description": "Fixture reference inspected.", "concerns": []})
 
         async def with_decision(system, user, *, guides=()):
+            if "Review a Director Studio tail-frame prompt candidate" in system:
+                return json.dumps({"tail_opening": "Inherited view.", "candidate_opening": "Inherited view.",
+                                   "camera_path": "Continuous camera movement.",
+                                   "valid": True, "issues": [], "blocking_question": None})
+            if "For this tail-frame continuation return a candidate envelope" in system:
+                sections = json.loads(await complete(system, user, guides=guides))
+                return json.dumps({"shot_patch": {}, "prompt_sections": sections,
+                                   "reason": "Use inspected references.", "blocking_question": None})
             if "reference review decision" in system.lower():
+                tail_frames = json.loads(user).get("tail_frames") or []
+                handoff = None
+                if tail_frames:
+                    tail = tail_frames[0]
+                    handoff = (
+                        f"Picture {tail['picture_index']}: {tail['visible_observation']} "
+                        "Carry that visible pose into the next action and camera move."
+                    )
                 return json.dumps({"brief": None, "rewrite_prompt": True,
-                                   "reason": "Use the inspected references.", "blocking_question": None})
+                                   "reason": "Use the inspected references.", "blocking_question": None,
+                                   "tail_frame_handoff": handoff})
             return await complete(system, user, guides=guides)
 
         monkeypatch.setattr(provider, "complete_with_images", vision, raising=False)

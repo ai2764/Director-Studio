@@ -4,7 +4,9 @@ import pytest
 
 from app.api import projects as projects_api
 from app.agents.director import skill_loader, stage_guides
+from app.agents.director.tool_schema import director_chat_guides
 from app.config import settings
+from app.core.projects.models import Project, ProjectMode
 
 
 def _write_skill(path, token: str) -> None:
@@ -42,23 +44,45 @@ def test_unknown_stage_guide_fails_clearly():
         stage_guides.load_stage_guides(("bogus",))
 
 
-def test_storyboard_validation_stage_guide_loads_with_semantic_contract():
-    guide = stage_guides.load_stage_guides(("storyboard-validation",))
+@pytest.mark.parametrize("guide_id", ["script-planning", "storyboard-validation"])
+def test_requested_stage_guide_loads_as_a_non_empty_block(guide_id):
+    guide = stage_guides.load_stage_guides((guide_id,))
 
-    assert '<DIRECTOR_STAGE_GUIDE id="storyboard-validation">' in guide
-    assert "screenplay coverage" in guide
-    assert "causal or character contradictions" in guide
-    assert "excessive sequential action or state transitions" in guide
-    assert "model-infeasible motion" in guide
-    assert "Do not propose replacement shots" in guide
-
-
-def test_script_planning_stage_guide_loads_as_a_non_empty_block():
-    guide = stage_guides.load_stage_guides(("script-planning",))
-
-    assert guide.startswith('<DIRECTOR_STAGE_GUIDE id="script-planning">\n')
+    assert guide.startswith(f'<DIRECTOR_STAGE_GUIDE id="{guide_id}">\n')
     assert guide.endswith("\n</DIRECTOR_STAGE_GUIDE>")
     assert len(guide.splitlines()) > 3
+
+
+def test_mv_project_chat_always_loads_music_video_planning_guide():
+    project = Project(
+        id="prj_mv",
+        name="Music video",
+        script_text="",
+        mode=ProjectMode.mv,
+        created_at="2026-09-22T00:00:00+00:00",
+        updated_at="2026-09-22T00:00:00+00:00",
+    )
+
+    guides = director_chat_guides(
+        project,
+        include_visual_qc=False,
+        current_message="Plan the next lyric section",
+    )
+
+    assert guides == ("music-video-planning",)
+
+
+def test_music_video_guide_teaches_job_time_song_segments():
+    guide = (
+        stage_guides._guides_dir() / "music-video-planning.md"
+    ).read_text(encoding="utf-8")
+
+    assert "music_segment" in guide
+    assert "core_start_s/core_end_s" in guide
+    assert "submit_start_s/submit_end_s" in guide
+    assert "Audio 1" in guide
+    assert "canonical H3 submit" in guide
+    assert "Until the project exposes a real source-audio binding" not in guide
 
 
 def test_stage_guide_registry_matches_non_empty_markdown_files():

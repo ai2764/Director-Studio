@@ -107,15 +107,16 @@ Return only a valid JSON array of shots with asset_matches and voice_matches fil
 STORYBOARD_VALIDATION_SYSTEM = """You are a strict semantic acceptance gate for one complete H3 Ref2AV storyboard candidate.
 
 Return JSON only with exactly this shape:
-{"valid": true_or_false, "issues": ["observed problem", "..."]}
+{"valid": true_or_false, "issues": ["observed hard conflict", "..."], "warnings": ["non-blocking generation risk", "..."]}
 
-Judge only observed problems in these four categories:
+Judge only observed problems in these categories:
 - screenplay coverage: an important screenplay beat is absent or materially unsupported;
 - causal/character contradiction: the candidate reverses causality, identity, knowledge, intent, or an established story fact;
-- excessive sequential action/state transitions: one H3 clip is asked to perform too many dependent actions or incompatible state changes;
-- model-infeasible motion: the described motion, transformation, or continuity is not credible for one H3 clip.
+- incompatible state requirements: the same subject must occupy mutually exclusive states at the same time, rather than move through a coherent sequence;
+- explicit directing requirements: camera ownership/style, character roles, runtime, required beats or forbidden dialogue contradict the user's stated requirements. Quote the exact requirement and candidate passage; do not invent preferences.
 
-Report concise evidence-based problems. Never propose replacement shots, shot counts, timings, camera recipes, or rewritten beats. Do not reject for style preferences outside the four categories. A valid candidate must return an empty issues list.
+Generation difficulty belongs in warnings, not issues: several dependent actions, entrances/exits, camera movement, occlusion, motion continuity or uncertain model fidelity are risks, not proven impossibilities. Evaluate their timing against the actual duration. Do not invent a maximum action count or assume that a clip can contain only one action. Only a concrete contradiction of supplied requirements or a documented capability limit can block; cite the exact source and conflicting candidate passage. A valid candidate may have warnings. valid reflects issues only.
+Report concise evidence-based problems. Never propose replacement shots, shot counts, timings, camera recipes, or rewritten beats. Do not reject for your own style preferences. Explicit user direction is an acceptance requirement, not an optional style preference. Newer explicit revisions supersede only the requirements they actually change: a duration update does not waive required actions. Changing the screenplay does not itself prove that the user authorized dropping an earlier requested beat. A valid candidate must return an empty issues list.
 Asset IDs, names and file keys are lookup labels, not established visual or story facts. Use supplied inspected evidence for appearance; without it, do not infer appearance from a label or invent a label-based contradiction. A minimum duration of 0 means no separately specified minimum, not a demand for a zero-length film. Judge concrete conflicts with the actual screenplay and user request.
 """
 
@@ -150,13 +151,15 @@ Output rules:
   - Selected Layout context lists every active Layout's actual Picture number, purpose,
     state, and time hint. Mention every active Layout using its exact <Picture N> at least once.
   - State the geography, composition, blocking, or object state each Layout contributes.
-  - A selected Layout with origin_kind="clip_tail_frame" and
-    visible_transition_required=true is a visible handoff from the previous Shot. In the
-    first action interval beginning at 0 seconds, visibly carry the inherited source state
-    forward and make it transform, dissolve, open, clear, or resolve to reveal the target
-    Shot. Do not replace it with a hard cut, direct destination opening, palette-only cue,
-    style-only cue, or wording that suppresses the visible inherited state. This is action
-    continuity, not a promise that the Picture is the exact first frame.
+  - A selected Layout with origin_kind="clip_tail_frame" came from the prior clip.
+    Treat its visible pose, blocking, wardrobe and geography as continuity evidence.
+    Use a reviewed tail-frame handoff when supplied, otherwise the visible observations,
+    to ground the opening in what is
+    actually visible, then describe the action and camera/edit that reaches the
+    Shot's intended framing. Do not reduce the tail image to wardrobe or identity,
+    or substitute a generic "continuing" claim for visible action. Choose a
+    natural handoff instead of forcing a dissolve or transformation. The Picture
+    conditions the whole clip, not an exact first frame.
   - Put action timing in detailed_description; never claim a Picture activates, is used,
     is shown, or switches at/from/during a time. Every Picture conditions the whole clip.
     Do not say a Picture or Layout confirms, ensures, or keeps a subject/state present or
@@ -170,6 +173,11 @@ Output rules:
   <Audio N> tag at least once, state the named speaker identity and delivery it controls,
   and never copy words from the reference recording. The same tag may be referenced
   again where it clarifies action or sound; the shot dialogue below is the new performance.
+- When the MV song segment is non-null, <Audio 1> is the exact excerpt submitted for
+  this generation. Bind <Audio 1> as the singing, speech, musical, and performance-timing
+  source. Synchronize clearly readable lips to it. Express action time relative to the
+  submitted excerpt: generation second 0 equals submit_start_s, while the core interval
+  marks the edit content protected inside the wider generation window.
 - Treat each ref's approved_description and approved_notes as authoritative for
   identity, wardrobe, set and prop appearance; never replace them with guesses.
 - Use visual_analysis for what the selected Picture visibly establishes. Asset names
@@ -200,7 +208,9 @@ PROMPT_SECTIONS_USER_TEMPLATE = """Shot:
 - dialogue: {dialogue_json}
 - refs (picture order): {refs_json}
 - selected Layout context (actual Picture bindings): {selected_layouts_json}
+- reviewed tail-frame handoff (null when no extracted tail is selected): {tail_frame_handoff_json}
 - voice refs (audio order): {voice_refs_json}
+- MV song segment (null when absent): {music_segment_json}
 - layout_asset_id: {layout_asset_id}
 - human feedback: {feedback}
 

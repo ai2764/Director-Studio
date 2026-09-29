@@ -161,6 +161,26 @@ def _layout_dirs(project_id: str) -> list[Path]:
     return [p for p in root.iterdir() if p.is_dir()]
 
 
+def test_unspecified_clip_selector_uses_latest_usable_generation(isolated):
+    from app.core.media.clip_generations import resolve_source_clip
+
+    project_id, _, _ = _seed_project(isolated)
+    older = _h3_job_with_video(project_id, SOURCE_SHOT_ID, filename="older.mp4")
+    newest = _h3_job_with_video(project_id, SOURCE_SHOT_ID, filename="newest.mp4")
+
+    resolved = resolve_source_clip(
+        project_id=project_id,
+        source_shot_id=SOURCE_SHOT_ID,
+        source_version=None,
+        source_job_id=None,
+        output_kind=None,
+    )
+
+    assert resolved.source_job_id == newest.id
+    assert resolved.source_job_id != older.id
+    assert resolved.source_generation == 2
+
+
 def test_extracts_final_frame_and_appends_pending_layout(isolated, monkeypatch):
     from app.core.media.tail_frame import extract_clip_tail_frame
     from app.core.vram.orchestrator import VramOrchestrator

@@ -98,7 +98,11 @@ class FakePlanProvider:
         self.calls.append(PlanCall(system, user, tuple(guides)))
         if not self._responses:
             raise RuntimeError("FakePlanProvider exhausted")
-        return self._responses.pop(0)
+        result = self._responses.pop(0)
+        if "Director internal response contract" in system:
+            return json.dumps({"prompt_sections": json.loads(result), "dialogue_uses": [
+                {"line_ids": ["l1"], "speaker_id": "char_1", "block_indexes": [0]}]})
+        return result
 
 
 class RecordingOrchestrator:
@@ -415,6 +419,9 @@ def test_revise_shot_preserves_neighbors_and_production_inputs(director_dirs):
                 "prompt_layout_signature": f"layout_sig_{index}",
                 "prompt_picture_signature": f"picture_sig_{index}",
                 "prompt_voice_signature": f"voice_sig_{index}",
+                "prompt_revision_request": "Use the old locked-off framing.",
+                "prompt_revision_requests": ["Use the old locked-off framing."],
+                "material_review_pending": True,
                 "keep": f"value_{index}",
             },
         )
@@ -458,6 +465,9 @@ def test_revise_shot_preserves_neighbors_and_production_inputs(director_dirs):
     assert revised.meta["prompt_layout_signature"] == ""
     assert revised.meta["prompt_picture_signature"] == ""
     assert revised.meta["prompt_voice_signature"] == ""
+    assert "prompt_revision_request" not in revised.meta
+    assert "prompt_revision_requests" not in revised.meta
+    assert revised.meta["material_review_pending"] is False
     assert revised.meta["keep"] == "value_2"
     assert revised.status == ShotStatus.needs_review
 
@@ -532,6 +542,10 @@ async def test_plan_and_h3_writer_request_different_guides(director_dirs, enable
 
     await svc.plan_project(project.id)
     shot = list_shots(project.id)[0]
+    from app.core.projects.dialogue import apply_dialogue_update
+    from test_director_dialogue_attribution import line_payload
+    shot = apply_dialogue_update(shot, {"dialogue_lines": [line_payload(text="Hello there.")]})
+    save_shot(shot)
     enable_reference_review(provider)
     await svc.write_prompts_after_layout(shot.id)
 
@@ -1250,7 +1264,7 @@ async def test_save_storyboard_semantic_rejection_receives_complete_grounding_an
             {
                 "valid": False,
                 "issues": [
-                    "Shot 1 contains excessive sequential state transitions for one H3 clip."
+                    "Shot 1 changes the required sealed-recorder reveal."
                 ],
             }
         )
@@ -1264,7 +1278,7 @@ async def test_save_storyboard_semantic_rejection_receives_complete_grounding_an
         ("scenes", scene.id): load_asset("scenes", scene.id).project_id,
     }
 
-    with pytest.raises(ValueError, match="excessive sequential state transitions"):
+    with pytest.raises(ValueError, match="required sealed-recorder reveal"):
         await svc.save_storyboard(
             project.id,
             [candidate],
@@ -1284,11 +1298,6 @@ async def test_save_storyboard_semantic_rejection_receives_complete_grounding_an
         ensure_ascii=False,
         indent=2,
     ) in call.user
-    assert "never propose replacement shots" in call.system.lower()
-    assert "screenplay coverage" in call.system.lower()
-    assert "causal/character contradiction" in call.system.lower()
-    assert "excessive sequential action/state transitions" in call.system.lower()
-    assert "model-infeasible motion" in call.system.lower()
     assert [shot.model_dump() for shot in list_shots(project.id)] == [old.model_dump()]
     persisted = load_project(project.id)
     assert persisted is not None
@@ -2290,6 +2299,9 @@ async def test_write_prompts_after_layout(director_dirs, enable_reference_review
         ],
         dialogue=["Hello."],
     )
+    from app.core.projects.dialogue import apply_dialogue_update
+    from test_director_dialogue_attribution import line_payload
+    shot = apply_dialogue_update(shot, {"dialogue_lines": [line_payload()]})
     save_shot(shot)
     project.shot_ids = [shot.id]
     save_project(project)
@@ -2333,6 +2345,62 @@ async def test_write_prompts_after_layout(director_dirs, enable_reference_review
     # LLM session used
     assert ("llm_session_enter",) in orch.calls
     assert ("ensure_llm_ready",) in orch.calls
+
+
+@pytest.mark.asyncio
+async def test_tail_frame_prompt_with_visible_carryover_is_saved_without_wording_gate(
+    director_dirs, enable_reference_review,
+):
+    from app.agents.director.service import DirectorService
+    from app.core.projects.layouts import ClipTailFrameOrigin, LayoutReference, LayoutReviewStatus
+    from app.core.projects.models import ShotRef
+
+    project = create_project("Tail continuity", "A dancer releases a held pose into a wave.")
+    _seed_layout_source_asset(
+        director_dirs["library"], kind="layouts", asset_id="lay_tail_continuity",
+        name="Previous shot tail", file_key="layout",
+    )
+    layout = LayoutReference(
+        id="lref_tail_continuity", asset_id="lay_tail_continuity",
+        purpose="carry the previous pose into this shot",
+        review_status=LayoutReviewStatus.usable, selected_for_h3=True,
+        origin=ClipTailFrameOrigin(
+            source_shot_id="sht_previous", source_job_id="job_previous",
+            source_generation=1, output_kind="enhanced", output_key="video",
+            source_filename="video.mp4",
+        ),
+    )
+    shot = Shot(
+        id="sht_tail_continuity", project_id=project.id, scene_id="sc01",
+        title="Continue the wave", script_beat="Release the held pose into a wave.",
+        duration_s=6, status=ShotStatus.needs_review, layout_refs=[layout],
+        refs=[ShotRef(role=RefRole.layout_ref_frame, asset_id=layout.asset_id,
+                      file_key="layout", picture_index=1)],
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    prompt = json.dumps({
+        "subject_definitions": "<Picture 1> supplies the dancer's inherited pose.",
+        "summary": "The dance continues in one coherent shot.",
+        "retention_analysis": "Keep the dancer and studio consistent.",
+        "detailed_description": (
+            "0-2 seconds: The clip begins with the visible inherited freeze pose from "
+            "<Picture 1>; her shoulders drop and the pose dissolves into motion. "
+            "2-6 seconds: A body roll flows into an upper-body wave."
+        ),
+        "overall_soundscape": "Soft room tone and movement.",
+        "non_diegetic_music": "No music.",
+    })
+    provider = FakePlanProvider(responses=[prompt, prompt])
+    enable_reference_review(provider)
+
+    updated = await DirectorService(
+        plan_provider=provider, orchestrator=RecordingOrchestrator(),
+    ).write_prompts_after_layout(shot.id)
+
+    assert updated.prompt_sections.detailed_description.startswith("0-2 seconds: The clip begins with")
+    assert load_shot(project.id, shot.id) == updated
+    assert len(provider.calls) == 1
 
 
 @pytest.mark.asyncio

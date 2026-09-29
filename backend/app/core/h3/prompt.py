@@ -6,6 +6,7 @@ import re
 from collections.abc import Iterable
 
 from app.core.projects.models import PromptSections
+from .errors import PromptFailureError
 
 SECTION_KEYS: list[str] = [
     "subject_definitions",
@@ -19,62 +20,6 @@ SECTION_KEYS: list[str] = [
 # UTF-8 replacement character — optional corruption signal
 _REPLACEMENT_CHAR = "\ufffd"
 
-_TIMED_ACTION_INTERVAL_PATTERN = re.compile(
-    r"(?<![\d.])(?P<start>\d+(?:\.\d+)?)\s*[–—-]\s*"
-    r"(?P<end>\d+(?:\.\d+)?)\s*(?:s|seconds?)\b",
-    re.IGNORECASE,
-)
-_TAIL_TRANSITION_VERB_PATTERN = re.compile(
-    r"\b(?:continue(?:s|d|ing)?|carry(?:ing|ies|ied)?|unwind(?:s|ing)?|"
-    r"dissolv(?:e|es|ed|ing)|transform(?:s|ed|ing)?|morph(?:s|ed|ing)?|"
-    r"open(?:s|ed|ing)?|clear(?:s|ed|ing)?|reveal(?:s|ed|ing)?|"
-    r"resolv(?:e|es|ed|ing))\b",
-    re.IGNORECASE,
-)
-_TAIL_TRANSITION_NEGATION_PATTERNS = (
-    re.compile(r"\bhard[\s-]+cut\b", re.IGNORECASE),
-    re.compile(r"\b(?:palette|style)\s+only\b", re.IGNORECASE),
-    re.compile(r"\bmust\s+not\s+(?:manifest|be\s+visible)\b", re.IGNORECASE),
-    re.compile(r"\b(?:do\s+not|don't|never)\s+(?:show|render|manifest)\b", re.IGNORECASE),
-    re.compile(r"\b(?:open|start|begin)(?:s|ing)?\s+(?:directly\s+)?(?:on|with)\b", re.IGNORECASE),
-)
-
-
-def validate_tail_frame_transition_prompt(
-    sections: PromptSections,
-    selected_layouts: Iterable[dict[str, object]],
-) -> None:
-    """Require an explicit visible handoff for a selected clip-tail Layout.
-
-    The Picture still conditions the full clip. This validates action prose only;
-    it does not claim that the reference is an exact or time-addressable frame.
-    """
-    if not any(
-        bool(layout.get("visible_transition_required"))
-        for layout in selected_layouts
-    ):
-        return
-
-    description = sections.detailed_description
-    intervals = list(_TIMED_ACTION_INTERVAL_PATTERN.finditer(description))
-    if not intervals or float(intervals[0].group("start")) != 0.0:
-        raise ValueError(
-            "tail-frame transition must begin in the first action interval at 0 seconds"
-        )
-
-    first_start = intervals[0].start()
-    first_end = intervals[1].start() if len(intervals) > 1 else len(description)
-    first_interval = description[first_start:first_end]
-    if any(pattern.search(first_interval) for pattern in _TAIL_TRANSITION_NEGATION_PATTERNS):
-        raise ValueError(
-            "tail-frame transition cannot be a hard cut, style-only cue, or hidden source state"
-        )
-    if not _TAIL_TRANSITION_VERB_PATTERN.search(first_interval):
-        raise ValueError(
-            "tail-frame transition needs a visible carryover and transition action in the first interval"
-        )
-
-
 def validate_required_picture_bindings(
     text: str,
     required_indices: Iterable[int],
@@ -82,6 +27,7 @@ def validate_required_picture_bindings(
     submitted_picture_indices: Iterable[int] | None = None,
     binding_label: str = "required Picture",
 ) -> None:
+    errors = []
     found_indices = [
         int(value)
         for value in re.findall(r"<Picture\s+(\d+)>", text, re.IGNORECASE)
@@ -91,13 +37,15 @@ def validate_required_picture_bindings(
         unexpected = sorted(set(found_indices) - submitted)
         if unexpected:
             tags = ", ".join(f"<Picture {index}>" for index in unexpected)
-            raise ValueError(
+            errors.append(
                 f"prompt references unsubmitted Picture tags: {tags}"
             )
     for index in dict.fromkeys(int(value) for value in required_indices):
         tag = f"<Picture {index}>"
         if index not in found_indices:
-            raise ValueError(f"missing {binding_label} binding: {tag}")
+            errors.append(f"missing {binding_label} binding: {tag}")
+    if errors:
+        raise PromptFailureError("contract", "; ".join(errors))
 
 
 def compose_h3_prompt(sections: PromptSections) -> str:
@@ -111,9 +59,26 @@ def compose_h3_prompt(sections: PromptSections) -> str:
 
 def _dialogue_text(text: str) -> str:
     """Ignore formatting whitespace, not words or punctuation."""
-    normalized = " ".join(text.split())
-    # Joining continued Chinese <d> blocks must not introduce a word separator.
-    return re.sub(r"(?<=[\u3400-\u9fff]) (?=[\u3400-\u9fff])", "", normalized)
+    return " ".join(text.split())
+
+
+def dialogue_timeline_matches(spoken: list[str], expected: str) -> bool:
+    """Match all source characters, allowing a cut anywhere in the speech.
+
+    Only a block boundary may consume source whitespace without spoken text.
+    Internal block words, punctuation and spaces must still match exactly.
+    This applies to raw final H3 as well as compiled source references.
+    """
+    source = _dialogue_text(expected)
+    cursor = 0
+    for words in spoken:
+        words = _dialogue_text(words)
+        if cursor < len(source) and source[cursor] == " ":
+            cursor += 1
+        if not words or not source.startswith(words, cursor):
+            return False
+        cursor += len(words)
+    return cursor == len(source)
 
 
 def _spoken_dialogue_text(text: str) -> str:
@@ -202,7 +167,7 @@ def _validate_dialogue(bodies: dict[str, str], dialogue: list[str]) -> None:
     # Compare the ordered spoken timeline, allowing scripted repetitions,
     # multiple lines in one block, and continuation across shot cuts. When no
     # dialogue is specified, source-audio/lyric cues retain their existing role.
-    if expected and _dialogue_text(" ".join(spoken)) != _dialogue_text(" ".join(expected)):
+    if expected and not dialogue_timeline_matches(spoken, " ".join(expected)):
         raise ValueError(
             "detailed_description <d> dialogue does not match shot.dialogue in order "
             "(missing, repeated, reordered, or changed words). "
@@ -249,6 +214,7 @@ def validate_h3_prompt(
 
     # Non-empty section bodies (text between this header and the next, or EOF)
     bodies: dict[str, str] = {}
+    errors: list[str] = []
     for i, (key, pos) in enumerate(positions):
         header = f"{key}:"
         start = pos + len(header)
@@ -258,24 +224,31 @@ def validate_h3_prompt(
             end = len(prompt)
         body = prompt[start:end].strip()
         if not body:
-            raise ValueError(f"section {key!r} is empty")
+            errors.append(f"section {key!r} is empty")
         bodies[key] = body
 
-    _validate_dialogue(bodies, dialogue)
+    try:
+        _validate_dialogue(bodies, dialogue)
+    except ValueError as exc:
+        errors.append(str(exc))
 
     found_audio_indexes = [int(value) for value in re.findall(r"<Audio\s+(\d+)>", prompt)]
     expected_audio_indexes = list(range(1, audio_count + 1))
     for index in expected_audio_indexes:
         count = found_audio_indexes.count(index)
         if count < 1:
-            raise ValueError(f"prompt must reference submitted <Audio {index}>")
+            errors.append(f"prompt must reference submitted <Audio {index}>")
     unexpected = sorted(set(found_audio_indexes) - set(expected_audio_indexes))
     if unexpected:
         tags = ", ".join(f"<Audio {index}>" for index in unexpected)
-        raise ValueError(f"prompt references unsubmitted Audio tags: {tags}")
+        errors.append(f"prompt references unsubmitted Audio tags: {tags}")
 
-    validate_required_picture_bindings(
-        prompt,
-        required_picture_indices,
-        submitted_picture_indices=submitted_picture_indices,
-    )
+    try:
+        validate_required_picture_bindings(
+            prompt, required_picture_indices,
+            submitted_picture_indices=submitted_picture_indices,
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+    if errors:
+        raise PromptFailureError("contract", "; ".join(errors))

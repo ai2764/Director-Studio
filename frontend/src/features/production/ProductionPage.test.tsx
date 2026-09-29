@@ -9,6 +9,8 @@ import { listLibraryAssets } from "../library/api";
 
 const replaceShotMaterialsMock = vi.hoisted(() => vi.fn());
 const getH3ProviderStatusMock = vi.hoisted(() => vi.fn());
+const getLocalH3ResolutionsMock = vi.hoisted(() => vi.fn());
+const getManagedRunMock = vi.hoisted(() => vi.fn());
 const fetchH3ProfilesMock = vi.hoisted(() => vi.fn());
 vi.mock("../../shared/api/client", () => ({ fetchH3Profiles: fetchH3ProfilesMock }));
 
@@ -24,6 +26,11 @@ vi.mock("./api", () => ({
   deleteLayout: vi.fn(),
   getH3Job: vi.fn(),
   getH3ProviderStatus: getH3ProviderStatusMock,
+  getLocalH3Resolutions: getLocalH3ResolutionsMock,
+  getManagedRun: getManagedRunMock,
+  planManagedRun: vi.fn(),
+  startManagedRun: vi.fn(),
+  stopManagedRun: vi.fn(),
   insertLayoutRefFrame: vi.fn(),
   patchShot: vi.fn(),
   skipLayout: vi.fn(),
@@ -109,6 +116,17 @@ describe("ProductionPage prompt refresh", () => {
       minimax_configured: true,
       minimax_resolution: "768P",
     });
+    getLocalH3ResolutionsMock.mockResolvedValue({ presets: [
+      { id: "landscape-480", label: "Landscape 480 tier · 864×480", width: 864, height: 480 },
+      { id: "landscape-720", label: "Landscape 720 tier · 1280×704", width: 1280, height: 704 },
+      { id: "landscape-768", label: "Landscape 768 tier · 1376×768", width: 1376, height: 768 },
+      { id: "landscape-1080", label: "Landscape 1080 tier · 1920×1088", width: 1920, height: 1088 },
+      { id: "portrait-480", label: "Portrait 480 tier · 480×864", width: 480, height: 864 },
+      { id: "portrait-720", label: "Portrait 720 tier · 704×1280", width: 704, height: 1280 },
+      { id: "portrait-768", label: "Portrait 768 tier · 768×1376", width: 768, height: 1376 },
+      { id: "portrait-1080", label: "Portrait 1080 tier · 1088×1920", width: 1088, height: 1920 },
+    ] });
+    getManagedRunMock.mockResolvedValue(null);
   });
 
   it("does not keep reloading every shot after an H3 job has completed", async () => {
@@ -160,8 +178,10 @@ describe("ProductionPage prompt refresh", () => {
   it("shows the resolved custom workflow in Production", async () => {
     vi.mocked(getProject).mockResolvedValue(detail(shot(emptyPrompt)));
     render(<ProductionPage active />);
-    expect(await screen.findByText("Workflow: My H3 Quality Profile")).toBeTruthy();
-    expect(screen.getByText("Local · ComfyUI — My H3 Quality Profile")).toBeTruthy();
+    expect(await screen.findByText("Local · ComfyUI — My H3 Quality Profile")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Production" })).toBeTruthy();
+    expect(screen.queryByText(/Shot list → layout/)).toBeNull();
+    expect(screen.queryByText("Workflow: My H3 Quality Profile")).toBeNull();
   });
 
   it("refreshes a damaged profile before local submission and again after completion while retaining the captured profile", async () => {
@@ -180,9 +200,9 @@ describe("ProductionPage prompt refresh", () => {
       return { ...ready, status: "queued", h3_job_id: captured.id };
     });
     render(<ProductionPage active />);
-    await screen.findByText("Workflow: My H3 Quality Profile");
+    await screen.findByText("Local · ComfyUI — My H3 Quality Profile");
     fetchH3ProfilesMock.mockResolvedValue({ active: {
-      profile_id: "builtin-official-h3", display_name: "Built-in Official H3", source: "builtin",
+      profile_id: "builtin-official-h3", display_name: "Built-in H3 Turbo 8 (temporary test)", source: "builtin",
       warning: { code: "profile_changed", message: "Custom workflow hash changed" },
     }, profiles: [] });
     fireEvent.click(await screen.findByText("Corridor walk-in"));
@@ -191,22 +211,22 @@ describe("ProductionPage prompt refresh", () => {
     await waitFor(() => expect(submitShot).toHaveBeenCalled());
     expect(statusRefreshedBeforeSubmit).toBe(true);
     await screen.findByText("Custom workflow hash changed");
-    await screen.findByText(/Submitted workflow: Built-in Official H3/);
+    expect(screen.queryByText(/Submitted workflow:/)).toBeNull();
     fetchH3ProfilesMock.mockResolvedValue({ active: {
       profile_id: "custom-new", display_name: "Newly active profile", source: "custom", warning: null,
     }, profiles: [] });
     vi.mocked(getH3Job).mockResolvedValue({ ...captured, status: "succeeded", outputs: { video: { key: "video", filename: "done.mp4", url: "/done.mp4", label: "Video" } } });
-    await screen.findByText("Workflow: Newly active profile", {}, { timeout: 3500 });
-    expect(screen.getByText(/Submitted workflow: Built-in Official H3/)).toBeTruthy();
-    expect(screen.getByText(/official-hash/)).toBeTruthy();
+    await screen.findByText("Local · ComfyUI — Newly active profile", {}, { timeout: 3500 });
+    expect(screen.queryByText(/Submitted workflow:/)).toBeNull();
+    expect(screen.queryByText(/official-hash/)).toBeNull();
     expect(submitShot).toHaveBeenCalledTimes(1);
   });
 
   it("discloses fallback without blocking the Production workspace", async () => {
-    fetchH3ProfilesMock.mockResolvedValue({ active: { display_name: "Built-in Official H3", source: "builtin", warning: { code: "custom_profile_unavailable", message: "Custom workflow hash changed" } }, profiles: [] });
+    fetchH3ProfilesMock.mockResolvedValue({ active: { display_name: "Built-in H3 Turbo 8 (temporary test)", source: "builtin", warning: { code: "custom_profile_unavailable", message: "Custom workflow hash changed" } }, profiles: [] });
     vi.mocked(getProject).mockResolvedValue(detail(shot(emptyPrompt)));
     render(<ProductionPage active />);
-    expect(await screen.findByText("Using Built-in Official H3")).toBeTruthy();
+    expect(await screen.findByText("Using Built-in H3 Turbo 8 (temporary test)")).toBeTruthy();
     expect(screen.getByText("Custom workflow hash changed")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Production" })).toBeTruthy();
   });
@@ -220,14 +240,14 @@ describe("ProductionPage prompt refresh", () => {
       h3_provider: "local" as const, h3_profile_id: "custom-captured", h3_profile_sha256: "captured-hash" };
     vi.mocked(getH3Job).mockResolvedValue(job);
     render(<ProductionPage active />);
-    await screen.findByText("Workflow: My H3 Quality Profile");
+    await screen.findByText("Local · ComfyUI — My H3 Quality Profile");
     fireEvent.click(await screen.findByText("Corridor walk-in"));
     await waitFor(() => expect(getH3Job).toHaveBeenCalledWith("job-existing"));
-    fetchH3ProfilesMock.mockResolvedValue({ active: { display_name: "Built-in Official H3", source: "builtin",
+    fetchH3ProfilesMock.mockResolvedValue({ active: { display_name: "Built-in H3 Turbo 8 (temporary test)", source: "builtin",
       warning: { code: "profile_changed", message: "Profile damaged during run" } }, profiles: [] });
     vi.mocked(getH3Job).mockResolvedValue({ ...job, status: "failed", error: "Output failed" });
     await screen.findByText("Profile damaged during run", {}, { timeout: 3500 });
-    expect(screen.getByText(/Submitted workflow: custom-captured/)).toBeTruthy();
+    expect(screen.queryByText(/Submitted workflow:/)).toBeNull();
     expect(submitShot).not.toHaveBeenCalled();
   });
 
@@ -456,6 +476,46 @@ describe("ProductionPage prompt refresh", () => {
     expect(onReviewMaterials).not.toHaveBeenCalled();
   });
 
+  it("refreshes managed run state after Dashboard materials are saved", async () => {
+    const withReference = {
+      ...shot(generatedPrompt),
+      refs: [
+        { role: "actor" as const, asset_id: "act_mia", picture_index: 1, file_key: "master" },
+      ],
+    };
+    const updated = { ...withReference, refs: [] };
+    const savedRun = {
+      run_id: "mrun_old", project_id: "prj_test", state: "stopped",
+      resolution_preset: "landscape-480", current_index: 0, current_job_id: null,
+      pending_event_id: null, paused_reason: "", is_stale: false, stale_reason: "",
+      selected_shot_ids: ["sht_1"], pending_shot_ids: ["sht_1"], skipped_shots: {},
+      tail_source_job_ids: {}, completed_job_ids: {},
+      steps: [{ shot_id: "sht_1", tail_from_shot_id: null, tail_reason: "" }],
+    };
+    vi.mocked(getProject).mockResolvedValue(detail(withReference));
+    replaceShotMaterialsMock.mockResolvedValueOnce(updated);
+    getManagedRunMock.mockResolvedValue(savedRun);
+    render(<ProductionPage active mobile />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Managed run/ }));
+    expect(await screen.findByRole("button", { name: "Resume selected" })).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit materials" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Picture 1 · act_mia" }));
+    getManagedRunMock.mockResolvedValue({
+      ...savedRun, is_stale: true,
+      stale_reason: "Shot brief, order, dialogue, references, or audio changed",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Managed run/ }));
+    expect(await screen.findByRole("button", { name: "Plan managed run" })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Resume selected" })).toBeNull());
+    expect(screen.queryByText("Shot brief, order, dialogue, references, or audio changed")).toBeNull();
+  });
+
   it("runs a ready Shot at the resolution selected in mobile Production", async () => {
     const ready = {
       ...shot(generatedPrompt),
@@ -493,14 +553,14 @@ describe("ProductionPage prompt refresh", () => {
     const runButton = await screen.findByRole("button", { name: "Run H3" });
     expect(runButton.hasAttribute("disabled")).toBe(false);
     fireEvent.change(screen.getByLabelText("Resolution"), {
-      target: { value: "portrait-720" },
+      target: { value: "portrait-1080" },
     });
     fireEvent.click(runButton);
 
     expect(await screen.findByRole("button", { name: "H3 running…" })).toBeTruthy();
     expect(submitShot).toHaveBeenCalledWith("sht_1", "local", {
-      width: 704,
-      height: 1280,
+      width: 1088,
+      height: 1920,
     });
   });
 
@@ -727,6 +787,10 @@ describe("ProductionPage prompt refresh", () => {
 
   it("saves a manual Voice selection with contiguous Audio order", async () => {
     const current = shot(generatedPrompt);
+    current.dialogue = ["Hello."];
+    current.dialogue_lines = [{ line_id: "l1", speaker_id: "person-1", speaker_name: "Mia",
+      text: "Hello.", language: "English", source: { kind: "shot_revision",
+        source_hash: "revision-1", scene_id: current.scene_id, quote: "Mia: Hello.", occurrence: 0 } }];
     const mia = {
       id: "voi_mia",
       kind: "voices",
@@ -822,15 +886,29 @@ describe("ProductionPage prompt refresh", () => {
     fireEvent.click(await screen.findByText("Corridor walk-in"));
     fireEvent.click(screen.getByRole("tab", { name: "Run H3" }));
     fireEvent.change(screen.getByLabelText("Resolution"), {
-      target: { value: "landscape-720" },
+      target: { value: "landscape-768" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Submit H3" }));
 
     await waitFor(() =>
       expect(submitShot).toHaveBeenCalledWith("sht_1", "local", {
-        width: 1280,
-        height: 704,
+        width: 1376,
+        height: 768,
       }),
     );
+  });
+
+  it("does not present local dimensions as MiniMax API resolution", async () => {
+    vi.mocked(getProject).mockResolvedValue(detail(shot(generatedPrompt)));
+
+    render(<ProductionPage active />);
+    fireEvent.click(await screen.findByText("Corridor walk-in"));
+    fireEvent.click(screen.getByRole("tab", { name: "Run H3" }));
+    fireEvent.change(screen.getByLabelText("H3 provider"), {
+      target: { value: "minimax" },
+    });
+
+    expect(screen.queryByLabelText("Resolution")).toBeNull();
+    expect(screen.getByText("Official API · 768P")).toBeTruthy();
   });
 });

@@ -383,9 +383,6 @@ def selected_layout_prompt_context(shot: Shot) -> list[dict[str, Any]]:
                 "state_description": layout.state_description,
                 "time_hint": layout.time_hint,
                 "origin_kind": layout.origin.kind if layout.origin else "",
-                "visible_transition_required": bool(
-                    layout.origin and layout.origin.kind == "clip_tail_frame"
-                ),
             }
         )
     return context
@@ -408,7 +405,9 @@ def layout_prompt_signature(shot: Shot) -> str:
             item["state_description"],
             item["time_hint"],
             item["origin_kind"],
-            item["visible_transition_required"],
+            # Preserve persisted signatures without exposing the old wording
+            # gate to the prompt writer as a model-facing context field.
+            item["origin_kind"] == "clip_tail_frame",
             status_by_asset[item["asset_id"]],
         )
         for item in selected_layout_prompt_context(packed)

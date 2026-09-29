@@ -207,7 +207,7 @@ def test_pipeline_registered():
     assert pipe.asset_kind == "productions"
 
 
-def test_production_graph_is_official_single_stage_ref2va():
+def test_production_graph_is_single_stage_turbo8_ref2va():
     graph = fill_ref2va_graph(load_base_prompt(), _base_job(frames=73))
 
     assert graph["127"]["inputs"]["unet_name"] == (
@@ -218,18 +218,35 @@ def test_production_graph_is_official_single_stage_ref2va():
     )
     assert graph["136"]["inputs"]["width"] == 864
     assert graph["136"]["inputs"]["height"] == 480
-    assert graph["123"]["inputs"]["sampler_name"] == "res_multistep"
-    assert graph["124"]["inputs"] == {
+    assert graph["123"]["inputs"]["sampler_name"] == "euler"
+    assert graph["131"]["inputs"] == {
+        "lora_name": "minimax_h3_turbo_v4_step600_pruned_comfyui.safetensors",
+        "strength_model": 1.0,
         "model": ["127", 0],
+    }
+    assert graph["132"]["inputs"]["model"] == ["131", 0]
+    assert graph["133"]["inputs"]["model"] == ["132", 0]
+    assert graph["134"]["inputs"] == {
+        "model": ["133", 0],
+        "video_budget": 0.15,
+        "denser_early_late_steps": True,
+    }
+    assert graph["124"]["inputs"] == {
+        "model": ["134", 0],
         "scheduler": "simple",
-        "steps": 20,
+        "steps": 8,
         "denoise": 1.0,
     }
+    assert graph["126"]["inputs"]["model"] == ["134", 0]
     assert graph["129"]["inputs"]["noise_seed"] == 7
     assert graph["92"]["class_type"] == "SaveVideo"
     assert graph["92"]["inputs"]["filename_prefix"] == "director-studio/h3/sht1"
     assert len([n for n in graph.values() if n.get("class_type") == "SaveVideo"]) == 1
-    assert not any(n.get("class_type") == "LoraLoaderModelOnly" for n in graph.values())
+    assert [
+        node["inputs"]["lora_name"]
+        for node in graph.values()
+        if node.get("class_type") == "LoraLoaderModelOnly"
+    ] == ["minimax_h3_turbo_v4_step600_pruned_comfyui.safetensors"]
 
 
 def test_history_maps_official_save_video_to_single_video_output():

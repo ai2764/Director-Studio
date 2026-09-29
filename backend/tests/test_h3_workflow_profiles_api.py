@@ -226,12 +226,14 @@ def test_routes_reject_non_opaque_ids_with_structured_errors(
     assert response.json()["code"] == "invalid_import_id"
 
 
-def test_profile_listing_starts_on_builtin_official(profile_client: TestClient) -> None:
+def test_profile_listing_starts_on_temporary_builtin_turbo8(profile_client: TestClient) -> None:
     response = profile_client.get("/api/workflow-profiles/h3")
 
     assert response.status_code == 200
     body = response.json()
     assert body["active"]["profile_id"] == "builtin-official-h3"
+    assert body["active"]["display_name"] == "Built-in H3 Turbo 8 (temporary test)"
+    assert body["profiles"][0]["display_name"] == "Built-in H3 Turbo 8 (temporary test)"
     assert body["active"]["contract_version"] == 2
 
 

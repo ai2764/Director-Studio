@@ -3,18 +3,18 @@
   "120": {"class_type": "VAELoader", "inputs": {"vae_name": "minimax_h3_audio_vae_fp32.safetensors"}, "_meta": {"title": "Audio VAE"}},
   "121": {"class_type": "VAEDecodeAudio", "inputs": {"samples": ["125", 0], "vae": ["120", 0]}, "_meta": {"title": "Decode Audio"}},
   "122": {"class_type": "VAEDecode", "inputs": {"samples": ["125", 0], "vae": ["119", 0]}, "_meta": {"title": "Decode Video"}},
-  "123": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "res_multistep"}, "_meta": {"title": "Sampler"}},
+  "123": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}, "_meta": {"title": "Turbo 8 Sampler"}},
   "124": {
     "class_type": "BasicScheduler",
-    "inputs": {"model": ["127", 0], "scheduler": "simple", "steps": 20, "denoise": 1.0},
-    "_meta": {"title": "Scheduler"}
+    "inputs": {"model": ["134", 0], "scheduler": "simple", "steps": 8, "denoise": 1.0},
+    "_meta": {"title": "Turbo 8 Scheduler"}
   },
   "125": {
     "class_type": "SamplerCustomAdvanced",
     "inputs": {"noise": ["129", 0], "guider": ["126", 0], "sampler": ["123", 0], "sigmas": ["124", 0], "latent_image": ["136", 1]},
     "_meta": {"title": "Sample"}
   },
-  "126": {"class_type": "BasicGuider", "inputs": {"model": ["127", 0], "conditioning": ["136", 0]}, "_meta": {"title": "Guider"}},
+  "126": {"class_type": "BasicGuider", "inputs": {"model": ["134", 0], "conditioning": ["136", 0]}, "_meta": {"title": "Guider"}},
   "127": {
     "class_type": "UNETLoader",
     "inputs": {"unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors", "weight_dtype": "default"},
@@ -30,6 +30,26 @@
     "class_type": "CreateVideo",
     "inputs": {"images": ["122", 0], "audio": ["121", 0], "fps": 24.0, "bit_depth": 8},
     "_meta": {"title": "Create Video"}
+  },
+  "131": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {"model": ["127", 0], "lora_name": "minimax_h3_turbo_v4_step600_pruned_comfyui.safetensors", "strength_model": 1.0},
+    "_meta": {"title": "Load Turbo LoRA"}
+  },
+  "132": {
+    "class_type": "MiniMaxH3SigmaShift",
+    "inputs": {"model": ["131", 0], "shift_video": 12.0, "shift_audio": 3.0},
+    "_meta": {"title": "MiniMax H3 Sigma Shift"}
+  },
+  "133": {
+    "class_type": "H3MemoryOptimization",
+    "inputs": {"model": ["132", 0], "fused_qkv": "auto", "mlp_memory": "auto", "chunk_rows": 4096, "preserve_precision": true, "precision_mode": "Auto", "qkv_streaming_mode": "Auto", "embedding_memory_mode": "Auto", "kitchen_v_memory_mode": "Standard"},
+    "_meta": {"title": "H3 Memory Optimization"}
+  },
+  "134": {
+    "class_type": "H3SparseAttention",
+    "inputs": {"model": ["133", 0], "video_budget": 0.15, "denser_early_late_steps": true},
+    "_meta": {"title": "H3 Sparse Attention"}
   },
   "136": {
     "class_type": "MiniMaxH3ReferenceToVideo",

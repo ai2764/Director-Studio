@@ -63,9 +63,13 @@ def real_sidecar(tmp_path_factory):
 
 class LeaseOrchestrator:
     """Exercise the real API chat_fn residency boundary with a fake provider."""
+    provider_id = "ollama"
+    uses_local_gpu = True
+
     def __init__(self, client):
         self.provider = self
         self.client = client
+        self.lifecycle = self
         self.active = 0
         self.released = 0
 
@@ -83,6 +87,10 @@ class LeaseOrchestrator:
 
     async def ensure_llm_ready(self, **kwargs):
         pass
+
+    async def context_capacity(self, model):
+        assert model == "isolated-test-model"
+        return settings.director_num_ctx
 
 
 @pytest.mark.asyncio

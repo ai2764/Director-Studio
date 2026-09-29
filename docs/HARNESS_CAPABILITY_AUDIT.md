@@ -1,5 +1,13 @@
 # Harness capability audit — 2026-09-12
 
+> Historical snapshot, not a current backlog. “Current” and source line numbers
+> below refer to the implementation inspected on 2026-09-12. Later work added
+> native JSONL sessions, manual compaction, provider usage forwarding and context
+> envelope recovery. For current behavior read [Harness](HARNESS.md),
+> [context recovery](HARNESS_CONTEXT_RECOVERY.md), and
+> [architecture](ARCHITECTURE.md). Original findings and test counts are retained
+> as evidence; this banner does not imply every proposed integration was completed.
+
 ## Scope and evidence
 
 Audited the installed DeepSeek packages pinned to `0.1.1-rc.2`, not just current upstream documentation. Also downloaded (without installing or executing package scripts) the exact-version JSONL persistence, LLM retry and tool-result pruner packages to inspect their published implementations. Upstream master documentation is supplementary; it can differ from the pinned release.
@@ -17,9 +25,9 @@ Keep Director business authority in Python, but let Harness own durable agent ex
 
 A short-lived agent handle is not itself a problem: it can resume a stable persisted session. The problem is creating a new random session and importing plain chat rows every time.
 
-## Native capabilities and integration status
+## Native capabilities and integration status at audit time
 
-| Capability | Native implementation | Current integration | Direction |
+| Capability | Native implementation | Integration at audit time | Direction |
 |---|---|---|---|
 | Automatic history compaction | compaction-basic, token-meter; balanced tool boundaries, shrink validation, retained recent tail | Mounted; extra compaction retries set to 0 | Reuse, configure and test; do not write another summarizer |
 | Confirmed context-overflow recovery | compaction-basic; retries only after replacement progress, bounded separately | Mounted with maxOverflowRetries=1; depends on Python recognizing provider overflow | Improve error mapping; preserve the progress requirement |
@@ -34,7 +42,7 @@ A short-lived agent handle is not itself a problem: it can resume a stable persi
 | Tools and agent loop | Native parsing, tool dispatch, errors returned to model, serial/parallel control | Already using stock loop and serial tools | Keep; Python remains authoritative for domain validation |
 | Multimodal content | LLM content blocks support images | Harness adapter advertises text-only and strips to text/tool records; Python attaches images afterward | Preserve safe attachment references/metadata or account for hidden payload; never silently claim complete token visibility |
 
-## Concrete integration gaps
+## Concrete integration gaps at audit time
 
 ### 1. Session identity and persistence
 

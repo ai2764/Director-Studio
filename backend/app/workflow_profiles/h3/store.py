@@ -1070,7 +1070,7 @@ class H3ProfileStore:
             mapping=_OFFICIAL_MAPPING,
             workflow_sha256=workflow_hash,
             source="builtin",
-            display_name="Built-in Official H3",
+            display_name="Built-in H3 Turbo 8 (temporary test)",
         )
 
     def _resolve_custom(self, profile_id: str) -> ResolvedH3Profile:

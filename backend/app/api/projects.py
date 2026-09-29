@@ -27,9 +27,11 @@ from pydantic import BaseModel, Field
 
 from ..agents.director import DirectorService
 from ..agents.director.llm_plan_provider import DirectorLLMPlanProvider
+from ..agents.director.prompt_retry import PromptRetryRequest, pending_prompt_retry, run_prompt_retry
 from ..agents.director.planner import role_to_library_kind
 from ..agents.director.skill_loader import with_director_skill
 from ..config import settings
+from ..core.projects.dialogue import DialogueLine
 from ..core.h3 import (
     compose_h3_prompt,
     frames_for_audio_seconds,
@@ -43,12 +45,19 @@ from ..core.library.store import (
     load_asset,
     write_asset,
 )
+from ..core.media.music_segments import (
+    import_music_master,
+    music_prompt_signature,
+    prepare_music_segment,
+    resolve_music_master,
+)
 from ..core.projects.models import (
     Project,
     ProjectMode,
     PromptSections,
     RefRole,
     Shot,
+    ShotMusicSegment,
     ShotRef,
     ShotVoiceRef,
     ShotStatus,
@@ -179,6 +188,7 @@ class ChatHistoryItem(BaseModel):
 class ChatBody(BaseModel):
     message: str = Field(min_length=1)
     history: list[ChatHistoryItem] = Field(default_factory=list)
+    prompt_retry: PromptRetryRequest | None = None
 
 
 class ChatMessage(BaseModel):
@@ -200,6 +210,7 @@ class ChatResponse(BaseModel):
     images: list[ChatImageOut] = Field(default_factory=list)
     thinking: str = ""
     steps: list[str] = Field(default_factory=list)
+    prompt_retry: PromptRetryRequest | None = None
 
 
 class ChatSessionStatus(BaseModel):
@@ -234,6 +245,7 @@ class ApproveLayoutBody(BaseModel):
 
 
 class ShotPatchBody(BaseModel):
+    dialogue_lines: list[DialogueLine] | None = None
     refs: list[ShotRef] | None = None
     voice_refs: list[ShotVoiceRef] | None = None
     prompt_sections: PromptSections | None = None
@@ -249,6 +261,7 @@ class ShotPatchBody(BaseModel):
     layout_asset_id: str | None = None
     scene_id: str | None = None
     source_audio_path: str | None = None
+    music_segment: ShotMusicSegment | None = None
 
 
 class ShotMaterialSelection(BaseModel):
@@ -551,7 +564,29 @@ def _chat_result_to_response(result) -> ChatResponse:
         ],
         thinking=getattr(result, "thinking", "") or "",
         steps=list(getattr(result, "steps", None) or []),
+        prompt_retry=(pending_prompt_retry(result.project.id)
+                      if getattr(result, "failure_code", None) == "PROMPT_GENERATION_FAILED" else None),
     )
+
+
+async def _run_scoped_prompt_retry(project_id, request, svc, on_progress=None):
+    from ..agents.director.chat_orchestrator import ChatResult
+    from ..core.prompt_errors import PromptFailureError, MaterialReviewError
+    if on_progress:
+        await on_progress({"type": "status", "text": f"Repairing prompt for {request.shot_id}"})
+    try:
+        shot = await run_prompt_retry(project_id, request, svc, on_progress=on_progress)
+    except MaterialReviewError as exc:
+        return ChatResult(reply=f"Reference preflight did not complete: {exc}. Review the affected materials before writing the prompt again; no replacement was selected.",
+                          actions=[], project=load_project(project_id), shots=list_shots(project_id),
+                          failure_code=exc.code, failure_kind=exc.failure_kind, failure_message=str(exc))
+    except PromptFailureError as exc:
+        return ChatResult(reply=f"Prompt repair did not complete: {exc}", actions=[],
+                          project=load_project(project_id), shots=list_shots(project_id),
+                          failure_code="PROMPT_GENERATION_FAILED", failure_message=str(exc))
+    return ChatResult(reply="Prompt saved. The authored shot and references were preserved.",
+                      actions=[f"write_prompt:{shot.id}"], project=load_project(project_id),
+                      shots=list_shots(project_id))
 
 
 async def _make_chat_fn(
@@ -643,6 +678,7 @@ async def _make_chat_fn(
         **_kwargs,
     ) -> str | dict:
         guides = tuple(_kwargs.get("guides") or ())
+        from ..agents.director.context_metrics import observe_request
         if not _kwargs.get("prepared_system"):
             system = with_director_skill(system, guides=guides)
         max_output_tokens = _kwargs.get("max_output_tokens")
@@ -726,6 +762,9 @@ async def _make_chat_fn(
                 ):
                     messages.insert(0, {"role": "system", "content": system})
                 try:
+                    observe_request("chat.native", messages,
+                        tools=[] if forced_tool_schema is not None else tools,
+                        image_count=sum(len(m.get("images") or []) for m in messages))
                     result = await usage_reporter.call(
                         client, plan_model,
                         purpose=_kwargs.get("inference_purpose", "turn"),
@@ -763,6 +802,7 @@ async def _make_chat_fn(
                         "Do not claim the action succeeded; the application will validate "
                         "and execute it."
                     )
+                    observe_request("chat.fallback", [{"role": "user", "content": fallback_prompt}])
                     return await client.generate(plan_model, fallback_prompt)
                 if on_progress:
                     if result.get("thinking"):
@@ -776,6 +816,9 @@ async def _make_chat_fn(
                 return result
 
             # Prefer streaming so UI can show tokens live
+            observe_request("chat.generate", ([{"role": "system", "content": system},
+                {"role": "user", "content": user}] if use_images else
+                [{"role": "user", "content": prompt}]), image_count=len(use_images))
             if on_progress and hasattr(client, "generate_stream"):
                 parts: list[str] = []
                 think_buf: list[str] = []
@@ -863,9 +906,9 @@ async def project_chat_endpoint(
         history = agent_history(stored_history)
         if not history:
             history = [{"role": h.role, "content": h.content} for h in (body.history or [])]
-        chat_fn = await _make_chat_fn(on_progress=None)
+        chat_fn = None if body.prompt_retry else await _make_chat_fn(on_progress=None)
         append_chat_message(project_id, role="user", content=msg)
-        result = await handle_chat(
+        result = await _run_scoped_prompt_retry(project_id, body.prompt_retry, svc) if body.prompt_retry else await handle_chat(
             project_id=project_id,
             message=msg,
             svc=svc,
@@ -876,6 +919,7 @@ async def project_chat_endpoint(
         append_chat_message(
             project_id, role="assistant", content=response.reply,
             images=[DirectorChatImage.model_validate(image.model_dump()) for image in response.images],
+            prompt_retry=response.prompt_retry.model_dump() if response.prompt_retry else None,
         )
         return response
     except ValueError as e:
@@ -1039,6 +1083,7 @@ async def _project_chat_stream_response(
     user_image_captions: list[str] | None = None,
     user_history_images: list[DirectorChatImage] | None = None,
     user_upload_dir: Path | None = None,
+    prompt_retry: PromptRetryRequest | None = None,
 ):
     from ..agents.director.chat import handle_chat
 
@@ -1065,7 +1110,7 @@ async def _project_chat_stream_response(
     async def on_progress(ev: dict) -> None:
         await queue.put(ev)
 
-    chat_fn = await _make_chat_fn(on_progress=on_progress)
+    chat_fn = None if prompt_retry else await _make_chat_fn(on_progress=on_progress)
     try:
         session = await director_chat_sessions.reserve(project_id)
     except DirectorChatSessionConflict as exc:
@@ -1084,7 +1129,7 @@ async def _project_chat_stream_response(
 
     async def runner() -> None:
         try:
-            result = await handle_chat(
+            result = await _run_scoped_prompt_retry(project_id, prompt_retry, svc, on_progress) if prompt_retry else await handle_chat(
                 project_id=project_id,
                 message=msg,
                 svc=svc,
@@ -1103,6 +1148,7 @@ async def _project_chat_stream_response(
                     DirectorChatImage.model_validate(image.model_dump())
                     for image in response.images
                 ],
+                prompt_retry=response.prompt_retry.model_dump() if response.prompt_retry else None,
             )
             await queue.put(
                 {"type": "result", "data": response.model_dump(mode="json")}
@@ -1208,6 +1254,7 @@ async def project_chat_stream_endpoint(
         message=body.message,
         request_history=body.history,
         svc=svc,
+        prompt_retry=body.prompt_retry,
     )
 
 
@@ -1334,6 +1381,53 @@ async def delete_layout_reference_endpoint(
         )
     save_shot(updated)
 
+    return updated
+
+
+@router.post("/projects/{project_id}/music-master", response_model=Project)
+async def import_music_master_endpoint(
+    project_id: str,
+    file: UploadFile = File(...),
+) -> Project:
+    project = load_project(project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    if project.mode != ProjectMode.mv:
+        raise HTTPException(
+            409,
+            "Song masters are available only for Music Video projects",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Song master is empty")
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    if len(data) > max_bytes:
+        raise HTTPException(
+            400,
+            f"Song master exceeds {settings.max_upload_mb}MB",
+        )
+
+    previous = project.music_master
+    try:
+        master = import_music_master(
+            project.id,
+            file.filename or "master.wav",
+            data,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    updated = project.model_copy(update={"music_master": master})
+    save_project(updated)
+    if previous is not None and previous.relative_path != master.relative_path:
+        try:
+            old_path = resolve_music_master(
+                updated.model_copy(update={"music_master": previous})
+            )
+            old_path.unlink(missing_ok=True)
+        except ValueError:
+            pass
     return updated
 
 
@@ -1579,10 +1673,13 @@ async def reject_ref_frame_endpoint(
 async def patch_shot_endpoint(shot_id: str, body: ShotPatchBody) -> Shot:
     """Edit refs, prompt sections, duration, dialogue, etc. (LLM not required)."""
     shot = _find_shot(shot_id)
+    project = load_project(shot.project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
     updates: dict[str, Any] = {}
     data = body.model_dump(exclude_unset=True)
     for key, val in data.items():
-        if val is not None:
+        if val is not None or key in {"source_audio_path", "music_segment", "dialogue_lines"}:
             updates[key] = val
     if "prompt_sections" in updates and isinstance(updates["prompt_sections"], dict):
         updates["prompt_sections"] = PromptSections.model_validate(
@@ -1602,9 +1699,21 @@ async def patch_shot_endpoint(shot_id: str, body: ShotPatchBody) -> Shot:
         ]
     if not updates:
         return shot
-    payload = shot.model_dump(mode="python")
-    payload.update(updates)
-    shot = Shot.model_validate(payload)
+    from ..core.projects.dialogue import apply_dialogue_update
+    try:
+        shot = apply_dialogue_update(shot, updates)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    if shot.music_segment is not None and project.mode != ProjectMode.mv:
+        raise HTTPException(
+            400,
+            "music_segment is available only for Music Video projects",
+        )
+    if shot.music_segment is not None and shot.voice_refs:
+        raise HTTPException(
+            400,
+            "MV music segments cannot be combined with Voice references",
+        )
     if "voice_refs" in updates:
         try:
             _validate_voice_refs(shot)
@@ -1612,6 +1721,10 @@ async def patch_shot_endpoint(shot_id: str, body: ShotPatchBody) -> Shot:
             raise _http_value_error(exc) from exc
         meta = dict(shot.meta or {})
         meta["prompt_voice_signature"] = ""
+        shot = shot.model_copy(update={"meta": meta})
+    if "music_segment" in updates:
+        meta = dict(shot.meta or {})
+        meta["prompt_music_signature"] = ""
         shot = shot.model_copy(update={"meta": meta})
     save_shot(shot)
     return shot
@@ -1812,6 +1925,29 @@ async def submit_shot_endpoint(
     the Director Agent before preflight. Matching prompts do not wake the LLM.
     """
     shot = _find_shot(shot_id)
+    project = load_project(shot.project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    if shot.music_segment is not None and project.mode != ProjectMode.mv:
+        raise HTTPException(400, "Music segments require a Music Video project")
+    music_active = project.mode == ProjectMode.mv and shot.music_segment is not None
+    if music_active and shot.voice_refs:
+        raise HTTPException(
+            400,
+            "MV music segments cannot be combined with Voice references",
+        )
+    from ..core.managed_runs.context import managed_turn_scope
+    from ..core.managed_runs.store import active_run_for_project
+
+    managed_scope = managed_turn_scope.get()
+    active_run = active_run_for_project(shot.project_id)
+    if active_run is not None and (
+        managed_scope is None
+        or managed_scope.run_id != active_run.run_id
+        or managed_scope.project_id != shot.project_id
+        or managed_scope.shot_id != shot.id
+    ):
+        raise HTTPException(409, "Stop the managed run before submitting H3 manually")
     h3_provider = str(
         (
             options.h3_provider
@@ -1892,19 +2028,32 @@ async def submit_shot_endpoint(
     current_picture_signature = picture_ref_signature(shot.refs)
     picture_contract_present = "prompt_picture_signature" in (shot.meta or {})
     current_voice_signature = _voice_signature(shot.voice_refs)
+    current_music_signature = music_prompt_signature(project, shot)
+    prompt_music_signature = str(
+        (shot.meta or {}).get("prompt_music_signature") or ""
+    )
     voice_contract_present = bool(shot.voice_refs) or (
         "prompt_voice_signature" in (shot.meta or {})
     )
+    from ..agents.director.dialogue_preflight import dialogue_contract_current, require_current_dialogue_contract
+    from ..agents.director.reference_facts import reference_contract_current, require_current_reference_contract
     if (
-        (picture_contract_present and prompt_picture_signature != current_picture_signature)
+        not dialogue_contract_current(project, shot)
+        or not reference_contract_current(project, shot)
+        or (picture_contract_present and prompt_picture_signature != current_picture_signature)
         or (
             layout_contract_present
             and prompt_layout_signature != current_layout_signature
         )
         or (
             not shot.source_audio_path
+            and not music_active
             and voice_contract_present
             and prompt_voice_signature != current_voice_signature
+        )
+        or (
+            music_active
+            and prompt_music_signature != current_music_signature
         )
     ):
         try:
@@ -1922,6 +2071,8 @@ async def submit_shot_endpoint(
             ) from e
 
     try:
+        require_current_dialogue_contract(project, shot)
+        require_current_reference_contract(project, shot)
         assert_h3_submittable(shot)
     except ValueError as e:
         raise _http_value_error(e) from e
@@ -1934,7 +2085,11 @@ async def submit_shot_endpoint(
         validate_h3_prompt(
             prompt_text,
             list(shot.dialogue),
-            audio_count=0 if shot.source_audio_path else len(shot.voice_refs),
+            audio_count=(
+                1 if music_active
+                else 0 if shot.source_audio_path
+                else len(shot.voice_refs)
+            ),
             required_picture_indices=required_layout_indices,
             submitted_picture_indices=(
                 ref.picture_index for ref in shot.refs
@@ -1944,10 +2099,15 @@ async def submit_shot_endpoint(
         raise _http_value_error(e) from e
 
     try:
+        effective_duration_s = (
+            shot.music_segment.submit_end_s - shot.music_segment.submit_start_s
+            if music_active and shot.music_segment is not None
+            else shot.duration_s
+        )
         frames = (
-            frames_for_audio_seconds(shot.duration_s)
-            if shot.source_audio_path
-            else frames_for_seconds(shot.duration_s)
+            frames_for_audio_seconds(effective_duration_s)
+            if shot.source_audio_path or music_active
+            else frames_for_seconds(effective_duration_s)
         )
     except ValueError as e:
         raise _http_value_error(e) from e
@@ -1959,7 +2119,18 @@ async def submit_shot_endpoint(
 
     image_keys = list(images.keys())
     audio_keys: list[str] = []
-    if not shot.source_audio_path:
+    if music_active and shot.music_segment is not None:
+        try:
+            prepared_music = prepare_music_segment(project, shot.music_segment)
+        except ValueError as e:
+            raise _http_value_error(e) from e
+        audio_keys.append("music_audio_1")
+        images["music_audio_1"] = (
+            prepared_music.filename,
+            prepared_music.data,
+        )
+        effective_duration_s = prepared_music.duration_s
+    elif not shot.source_audio_path:
         try:
             resolved_voice_refs = _validate_voice_refs(shot)
         except ValueError as e:
@@ -1968,7 +2139,6 @@ async def submit_shot_endpoint(
             key = f"voice_audio_{ref.audio_index}"
             audio_keys.append(key)
             images[key] = (audio_path.name, audio_path.read_bytes())
-    project = load_project(shot.project_id)
     portrait = bool(
         project
         and any(
@@ -1993,6 +2163,32 @@ async def submit_shot_endpoint(
             "The official H3 Ref2AV workflow cannot preserve locked source audio "
             "exactly; remove the source track or submit it as reference audio.",
         )
+    managed_tags = (
+        {"managed_run_id": managed_scope.run_id,
+         "managed_step_shot_id": shot.id,
+         "managed_event_id": managed_scope.event_id}
+        if managed_scope is not None
+        and managed_scope.project_id == shot.project_id
+        and managed_scope.shot_id == shot.id
+        and h3_provider == "local"
+        else {}
+    )
+    # No await between this freshness check and snapshot creation.
+    latest_project = load_project(shot.project_id)
+    latest_shot = load_shot(shot.project_id, shot.id)
+    if latest_project is None or latest_shot != shot or latest_project.script_text != project.script_text:
+        raise HTTPException(409, "Shot or script changed before submission; refresh before submitting")
+    try:
+        require_current_dialogue_contract(latest_project, latest_shot)
+        require_current_reference_contract(latest_project, latest_shot)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    reference_evidence = (latest_shot.meta.get("material_review") or {}).get("references", [])
+    if latest_project.mode == ProjectMode.director and latest_shot.refs:
+        import hashlib
+        staged_hashes = [hashlib.sha256(images[key][1]).hexdigest() for key in image_keys]
+        if staged_hashes != [record.get("content_sha256") for record in reference_evidence]:
+            raise HTTPException(409, "reference_input_changed: staged images differ from reviewed references; refresh before submitting")
     job = create_job(
         pipeline_id="h3_ref2va",
         asset_kind="productions",
@@ -2002,8 +2198,11 @@ async def submit_shot_endpoint(
             "h3_provider": h3_provider,
             "prompt": prompt_text,
             "dialogue": list(shot.dialogue),
+            "dialogue_contract": shot.meta.get("prompt_dialogue_contract"),
+            "reference_contract": latest_shot.meta.get("prompt_reference_contract"),
+            "reference_evidence": reference_evidence,
             "frames": frames,
-            "duration_s": shot.duration_s,
+            "duration_s": effective_duration_s,
             "image_keys": image_keys,
             "audio_keys": audio_keys,
             "native_audio_key": native_audio_key,
@@ -2011,6 +2210,7 @@ async def submit_shot_endpoint(
             "height": height,
             "shot_id": shot.id,
             "project_id": shot.project_id,
+            **managed_tags,
             "layout_asset_id": shot.layout_asset_id,
             "layout_asset_ids": [
                 str(item["asset_id"]) for item in selected_layouts
@@ -2036,6 +2236,14 @@ async def submit_shot_endpoint(
     except ValueError as e:
         raise _http_value_error(e) from e
 
-    shot = shot.model_copy(update={"h3_job_id": job.id})
-    save_shot(shot)
+    submitted = shot.model_copy(update={"h3_job_id": job.id})
+    # A user edit during reservation belongs to the user, not the older response.
+    current = load_shot(shot.project_id, shot.id)
+    if current != latest_shot:
+        from ..core.jobs import cancel_job
+        await cancel_job(job.id)
+        raise HTTPException(409, "Shot changed during submission; the stale local job was cancelled. "
+                            "Check its provider status before retrying if remote submission began.")
+    save_shot(submitted)
+    shot = submitted
     return shot

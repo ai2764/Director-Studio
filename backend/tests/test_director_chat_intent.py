@@ -191,7 +191,7 @@ def test_configured_gpt_and_local_reference_tools_are_both_offered(
     assert {"queue_ref_frame", "queue_gpt_ref_frame"} <= explicit_names
 
 
-def test_actor_design_intent_offers_only_the_actor_generation_tool(
+def test_actor_design_intent_keeps_full_catalog_and_confirmation_tool(
     tmp_projects_dir, monkeypatch
 ):
     project = create_project("Mobile Actor", "A detective enters.")
@@ -203,9 +203,8 @@ def test_actor_design_intent_offers_only_the_actor_generation_tool(
         current_message="用 GPT 生成人物设定，四十岁的女侦探，黑色风衣",
     )
 
-    assert [item["function"]["name"] for item in tools] == [
-        "queue_actor_design"
-    ]
+    names = {item["function"]["name"] for item in tools}
+    assert {"queue_actor_design", "confirm_actor_design", "extract_clip_tail_frame", "write_prompt"} <= names
 
 
 def test_ambiguous_gpt_generation_from_character_setting_does_not_authorize_layout(
@@ -220,9 +219,7 @@ def test_ambiguous_gpt_generation_from_character_setting_does_not_authorize_layo
     names = {item["function"]["name"] for item in tools}
 
     assert actor_design_intent(message) is False
-    assert "queue_gpt_ref_frame" not in names
-    assert "queue_ref_frame" not in names
-    assert "revise_ref_frame" not in names
+    assert {"queue_gpt_ref_frame", "queue_ref_frame", "revise_ref_frame"} <= names
 
 
 @pytest.mark.asyncio
@@ -370,7 +367,7 @@ def test_explicit_single_shot_layout_command_bypasses_llm(message):
         "检查 Shot 1 当前素材绑定；如果缺关键 reference 就问我。",
     ],
 )
-def test_shot_material_discussion_offers_only_relevant_tools(
+def test_shot_material_discussion_keeps_full_catalog(
     tmp_projects_dir,
     message,
 ):
@@ -388,16 +385,10 @@ def test_shot_material_discussion_offers_only_relevant_tools(
         "write_prompt",
         "get_status",
     } <= names
-    assert "queue_ref_frame" not in names
-    assert "revise_ref_frame" not in names
-    assert "queue_gpt_ref_frame" not in names
-    assert "extract_clip_tail_frame" not in names
-    assert names.isdisjoint(
-        {"set_script", "save_storyboard", "plan_shots", "queue_actor_design"}
-    )
+    assert {"queue_ref_frame", "revise_ref_frame", "extract_clip_tail_frame", "set_script", "save_storyboard", "plan_shots", "queue_actor_design"} <= names
 
 
-def test_generic_discussion_does_not_offer_gpt_layout_generation(
+def test_generic_discussion_offers_gpt_layout_capability_without_authorizing_use(
     tmp_projects_dir,
     monkeypatch,
 ):
@@ -411,9 +402,7 @@ def test_generic_discussion_does_not_offer_gpt_layout_generation(
     )
     names = {item["function"]["name"] for item in tools}
 
-    assert "queue_ref_frame" not in names
-    assert "revise_ref_frame" not in names
-    assert "queue_gpt_ref_frame" not in names
+    assert {"queue_ref_frame", "revise_ref_frame", "queue_gpt_ref_frame"} <= names
 
 
 def test_shot_layout_review_still_offers_exact_scene_override_tool(tmp_projects_dir):
@@ -557,7 +546,7 @@ def test_parse_tools_fence():
     assert tools[0]["name"] == "plan_shots"
 
 
-def test_sanitize_tools_blocks_image_after_set_script():
+def test_sanitize_tools_preserves_existing_shots_after_set_script():
     from app.agents.director.chat import sanitize_tools_for_pipeline
     from app.core.projects.models import Project
 
@@ -576,12 +565,12 @@ def test_sanitize_tools_blocks_image_after_set_script():
     out, notes = sanitize_tools_for_pipeline(tools, project=project, shots=_shots())
     names = [t["name"] for t in out]
     assert "set_script" in names
-    assert "plan_shots" in names
-    assert "queue_ref_frame" not in names
-    assert any("plan_shots" in n or "拆镜" in n for n in notes)
+    assert "plan_shots" not in names
+    assert "queue_ref_frame" in names
+    assert not notes
 
 
-def test_sanitize_tools_stale_shots_forces_plan_not_image():
+def test_sanitize_tools_stale_shots_do_not_authorize_replanning():
     from app.agents.director.chat import sanitize_tools_for_pipeline
     from app.core.projects.models import Project
 
@@ -597,9 +586,9 @@ def test_sanitize_tools_stale_shots_forces_plan_not_image():
     tools = [{"name": "queue_ref_frame", "args": {"shot_index": 1}}]
     out, notes = sanitize_tools_for_pipeline(tools, project=project, shots=_shots())
     names = [t["name"] for t in out]
-    assert "queue_ref_frame" not in names
-    assert "plan_shots" in names
-    assert notes
+    assert "queue_ref_frame" in names
+    assert "plan_shots" not in names
+    assert not notes
 
 
 def test_split_thinking():
@@ -611,3 +600,20 @@ def test_split_thinking():
     assert "Mia" in think or "库存" in think
     assert "beach" in visible
     assert "<think>" not in visible
+
+
+def test_short_followup_offers_all_normal_director_tools(tmp_projects_dir):
+    project = create_project("tail frame followup", "A dancer finishes a shot.")
+
+    names = {
+        item["function"]["name"]
+        for item in _director_tool_schemas(project, current_message="抽帧")
+    }
+
+    assert {
+        "extract_clip_tail_frame",
+        "queue_actor_design",
+        "queue_ref_frame",
+        "start_h3_video",
+        "save_storyboard",
+    } <= names

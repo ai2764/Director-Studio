@@ -131,7 +131,7 @@ async def test_tail_frame_redraw_uses_extracted_layout_as_image1(tmp_projects_di
         ],
         svc=svc,
         actions=[],
-        user_feedback="去运动模糊，走廊结构别变。",
+        user_feedback="重新生成这个 Layout，去运动模糊，走廊结构别变。",
     )
 
     brief = svc.briefs[0]
@@ -199,7 +199,7 @@ async def test_tail_frame_redraw_rejects_more_than_two_additional_sources(
         ],
         svc=svc,
         actions=[],
-        user_feedback="再加演员、衣服和钥匙",
+        user_feedback="重新生成这个 Layout，再加演员、衣服和钥匙",
     )
 
     assert svc.briefs == []
@@ -243,7 +243,7 @@ async def test_ordinary_generated_layout_is_not_reused_as_qwen_image1(
         ],
         svc=svc,
         actions=[],
-        user_feedback="人物太靠前，重新生成。",
+        user_feedback="人物太靠前，重新生成这个 Layout。",
     )
 
     brief = svc.briefs[0]
@@ -287,7 +287,7 @@ async def test_tail_frame_redraw_with_zero_additional_sources(tmp_projects_dir):
         ],
         svc=svc,
         actions=[],
-        user_feedback="走廊结构别变。",
+        user_feedback="重新生成这个 Layout，走廊结构别变。",
     )
 
     brief = svc.briefs[0]

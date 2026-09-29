@@ -1,5 +1,10 @@
 # Slim Harness sidecar
 
+Implementation reference; dated verification sections below are historical test
+snapshots, not current suite totals. See [runtime configuration](../docs/HARNESS.md)
+and [context recovery](../docs/HARNESS_CONTEXT_RECOVERY.md) for the current host
+envelope and recovery contract.
+
 Uses pinned DeepSeek Harness packages, including `dsh-agent-loop`, stock
 `dsh-compaction-basic`, and `dsh-session-persistence-jsonl` (0.1.1-rc.2).
 Each HTTP request creates/disposes a short-lived runtime but resumes a stable
@@ -12,14 +17,15 @@ authority. Successful responses explicitly await native session flush.
 same admission guard as chat. It does not add a user message, execute tools or
 retry the prior action. The UI displays estimated before/after token counts and
 preserves the draft. No-op and failed compaction leave history available.
-Old sidecars without the `native-sessions-v1` health capability are rejected
-before any model/tool request is sent.
+Old sidecars missing either `native-sessions-v1` or `context-envelope-v2` are
+rejected before any model/tool request is sent.
 
 The adapter delegates every inference to the Python host, with `purpose: turn`
 or `purpose: compaction`. Stock summary instructions remain in the user message
-sent by the compactor. Current host context is refreshed before each inference
-(including retries and summaries), and current tool availability is checked before
-every sequential tool execution. Python owns authoritative tools and validation;
+sent by the compactor. Business inference uses the current host context; summaries
+use a minimal system envelope without Director skill, project payload or business
+tools. Current tool availability is checked before every sequential tool execution.
+Python owns authoritative tools and validation;
 the schema adapter only translates Pydantic references/unions for Harness.
 
 The launcher entry is `node --import tsx src/server.ts` (or `npm start`).

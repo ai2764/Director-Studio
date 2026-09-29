@@ -24,6 +24,7 @@ class DirectorChatMessage(BaseModel):
     content: str
     created_at: str
     images: list[DirectorChatImage] = Field(default_factory=list)
+    prompt_retry: dict | None = None
 
 
 def chat_history_path(project_id: str) -> Path:
@@ -53,6 +54,7 @@ def append_chat_message(
     role: Literal["user", "assistant"],
     content: str,
     images: list[DirectorChatImage] | None = None,
+    prompt_retry: dict | None = None,
 ) -> DirectorChatMessage:
     message = DirectorChatMessage(
         id=f"msg_{uuid.uuid4().hex}",
@@ -60,6 +62,7 @@ def append_chat_message(
         content=content,
         created_at=datetime.now(timezone.utc).isoformat(),
         images=list(images or []),
+        prompt_retry=prompt_retry,
     )
     path = chat_history_path(project_id)
     with path.open("a", encoding="utf-8", newline="\n") as stream:

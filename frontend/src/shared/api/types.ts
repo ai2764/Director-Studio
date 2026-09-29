@@ -150,6 +150,14 @@ export interface Shot {
   voice_refs: ShotVoiceRef[];
   prompt_sections: PromptSections;
   dialogue: string[];
+  dialogue_lines?: {
+    line_id: string;
+    speaker_id: string;
+    speaker_name: string;
+    text: string;
+    language: string;
+    source: { kind: "script" | "shot_revision" | "user_message"; source_hash: string; scene_id: string; quote: string; occurrence: number; source_id?: string | null; shot_hash?: string | null };
+  }[] | null;
   layout_asset_id: string | null;
   layout_review_status: LayoutReviewStatus | string | null;
   ref_frame_job_id: string | null;
@@ -161,7 +169,15 @@ export interface Shot {
   meta?: Record<string, unknown>;
 }
 
-export type ProjectMode = "director" | "json_production";
+export type ProjectMode = "director" | "mv" | "json_production";
+
+export interface ProjectMusicMaster {
+  filename: string;
+  relative_path: string;
+  duration_s: number;
+  content_sha256: string;
+  source_format: string;
+}
 
 export interface AssetCoverageRecommendation {
   kind: "actor" | "scene" | "prop" | "costume" | "layout" | "other";
@@ -188,6 +204,7 @@ export interface Project {
   created_at: string;
   updated_at: string;
   shot_ids: string[];
+  music_master?: ProjectMusicMaster | null;
   asset_coverage_review?: AssetCoverageReview | null;
 }
 

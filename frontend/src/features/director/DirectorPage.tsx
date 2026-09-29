@@ -9,6 +9,7 @@ import { ShotWorkspace } from "./ShotWorkspace";
 import { ContextUsagePanel } from "./ContextUsage";
 import { ContextCompaction } from "./ContextCompaction";
 import { MobileShotDrawer } from "./MobileShotDrawer";
+import { MusicMasterControl } from "./MusicMasterControl";
 import {
   cancelDirectorChatSession,
   DirectorChatError,
@@ -20,6 +21,7 @@ import {
   getProject,
   setDirectorModel,
   type ChatMessage,
+  type PromptRetryRequest,
   type ContextUsage,
   type DirectorChatSessionStatus,
 } from "./api";
@@ -472,7 +474,7 @@ function DirectorAgentWorkspace({
     if (log) log.scrollTop = log.scrollHeight;
   }, [messages, busy, liveStatus, liveRuntime, liveThink, liveTokens]);
 
-  const send = async (text?: string, options?: { preserveComposer?: boolean }) => {
+  const send = async (text?: string, options?: { preserveComposer?: boolean; promptRetry?: PromptRetryRequest }) => {
     const preserveComposer = options?.preserveComposer === true;
     const typedMessage = (text ?? draft).trim();
     const message = typedMessage || (pendingImages.length ? "Please analyze the attached image(s)." : "");
@@ -554,7 +556,9 @@ function DirectorAgentWorkspace({
         onToken: (t: string) => setLiveTokens((prev) => prev + t),
         onTool: (t: string) => setLiveStatus((s) => [...s.slice(-40), t]),
       };
-      const res = outgoingImages.length
+      const res = options?.promptRetry
+        ? await chatWithDirectorStream(projectId, requestMessage, [], handlers, [], controller.signal, options.promptRetry)
+        : outgoingImages.length
         ? await chatWithDirectorStream(
             projectId,
             requestMessage,
@@ -591,6 +595,7 @@ function DirectorAgentWorkspace({
           images: images.length ? images : undefined,
           thinking: (res.thinking || "").trim() || undefined,
           steps: res.steps?.length ? res.steps : undefined,
+          prompt_retry: res.prompt_retry,
         },
       ]);
       replaceShots(res.shots);
@@ -684,13 +689,6 @@ function DirectorAgentWorkspace({
       text: "I want to discuss whether any shots would benefit from optional Layout studies. Ask what visual states I want before proposing sources. Do not queue generation yet.",
     },
   ];
-  const promptRetryMessage =
-    "Retry the previous failed H3 prompt once. Preserve the current storyboard, Picture references, dialogue, and shot structure. Correct only the reported prompt validation error. Do not generate a Layout or change the story.";
-  const isPromptGenerationFailure = (content: string) => {
-    const normalized = content.toLowerCase();
-    return normalized.includes("prompt generation did not complete after bounded internal repair")
-      || normalized.includes("prompt_generation_failed");
-  };
   const selectedShotIndex = Math.max(0, shots.findIndex((shot) => shot.id === selectedShotId));
   const selectedShot = shots[selectedShotIndex] ?? null;
 
@@ -747,6 +745,8 @@ function DirectorAgentWorkspace({
           </div>
         </div>
 
+        <MusicMasterControl />
+
         {mobile && !chatOnly ? (
           <MobileShotDrawer shots={shots} onOpenImage={setLightbox} />
         ) : null}
@@ -767,7 +767,7 @@ function DirectorAgentWorkspace({
             const images = visibleChatImages(m.images, shots);
             const canRetryPrompt = m.role === "assistant"
               && i === messages.length - 1
-              && isPromptGenerationFailure(m.content);
+              && !!m.prompt_retry;
             return (
               <div
                 key={m.id || i}
@@ -797,7 +797,7 @@ function DirectorAgentWorkspace({
                     type="button"
                     className="prompt-retry-button"
                     disabled={chatDisabled}
-                    onClick={() => void send(promptRetryMessage, { preserveComposer: true })}
+                    onClick={() => void send("Retry prompt", { preserveComposer: true, promptRetry: m.prompt_retry ?? undefined })}
                   >
                     Retry prompt
                   </button>

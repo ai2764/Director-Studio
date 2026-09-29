@@ -241,7 +241,7 @@ def test_resolve_latest_v2_numeric_and_job_id(jobs_dir):
     assert by_id.source_filename == "enhanced_custom.mp4"
 
 
-def test_resolve_rejects_missing_conflicting_and_out_of_range(jobs_dir):
+def test_resolve_defaults_to_latest_and_rejects_conflicting_and_out_of_range(jobs_dir):
     from app.core.media.clip_generations import ClipGenerationError, resolve_source_clip
 
     v1 = _h3_job(project_id=PROJECT_ID, shot_id=SHOT_A, name="v1")
@@ -257,14 +257,14 @@ def test_resolve_rejects_missing_conflicting_and_out_of_range(jobs_dir):
         outputs={"video": "video.mp4"},
     )
 
-    with pytest.raises(ClipGenerationError):
-        resolve_source_clip(
-            project_id=PROJECT_ID,
-            source_shot_id=SHOT_A,
-            source_version=None,
-            source_job_id=None,
-            output_kind=None,
-        )
+    selected = resolve_source_clip(
+        project_id=PROJECT_ID,
+        source_shot_id=SHOT_A,
+        source_version=None,
+        source_job_id=None,
+        output_kind=None,
+    )
+    assert selected.source_job_id == v2.id
 
     with pytest.raises(ClipGenerationError):
         resolve_source_clip(
@@ -285,7 +285,8 @@ def test_resolve_rejects_missing_conflicting_and_out_of_range(jobs_dir):
         )
 
 
-def test_latest_ambiguous_when_newer_active_or_failed(jobs_dir):
+@pytest.mark.parametrize("version", [None, "latest"])
+def test_latest_ambiguous_when_newer_active_or_failed(jobs_dir, version):
     from app.core.media.clip_generations import (
         ClipGenerationAmbiguous,
         resolve_source_clip,
@@ -309,7 +310,7 @@ def test_latest_ambiguous_when_newer_active_or_failed(jobs_dir):
         resolve_source_clip(
             project_id=PROJECT_ID,
             source_shot_id=SHOT_A,
-            source_version="latest",
+            source_version=version,
             source_job_id=None,
             output_kind=None,
         )

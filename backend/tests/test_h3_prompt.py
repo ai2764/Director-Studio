@@ -3,6 +3,21 @@ from app.core.projects.models import PromptSections
 import pytest
 
 
+def test_reports_dialogue_audio_and_picture_errors_together():
+    sections = PromptSections(
+        subject_definitions="Person.", summary="A greeting.", retention_analysis="Same face.",
+        detailed_description="0-5 seconds: Waves.", overall_soundscape="Room tone.",
+        non_diegetic_music="No music.",
+    )
+    with pytest.raises(ValueError) as error:
+        validate_h3_prompt(sections.as_ordered_text(), ["Hello."], audio_count=1,
+                           required_picture_indices=[1, 2], submitted_picture_indices=[1, 2])
+    assert "dialogue does not match" in str(error.value)
+    assert "Audio 1" in str(error.value)
+    assert "Picture 1" in str(error.value)
+    assert "Picture 2" in str(error.value)
+
+
 def test_order_and_dialogue():
     sections = PromptSections(
         subject_definitions="A",
@@ -110,62 +125,6 @@ def test_rejects_picture_tag_not_in_submitted_picture_set():
             "<Picture 1> controls identity. <Picture 3> controls geography.",
             [],
             submitted_picture_indices=[1, 2],
-        )
-
-
-def _tail_transition_sections(detailed_description: str) -> PromptSections:
-    return PromptSections(
-        subject_definitions="<Picture 1> grounds the inherited vortex geometry.",
-        summary="The inherited image state gives way to Mia.",
-        retention_analysis="Retain coherent motion and Mia's identity.",
-        detailed_description=detailed_description,
-        overall_soundscape="A soft atmospheric swell.",
-        non_diegetic_music="No music.",
-    )
-
-
-def _tail_transition_layouts() -> list[dict[str, object]]:
-    return [
-        {
-            "asset_id": "lay_tail",
-            "picture_index": 1,
-            "origin_kind": "clip_tail_frame",
-            "visible_transition_required": True,
-        }
-    ]
-
-
-def test_allows_visible_tail_frame_handoff_in_first_action_interval():
-    from app.core.h3.prompt import validate_tail_frame_transition_prompt
-
-    validate_tail_frame_transition_prompt(
-        _tail_transition_sections(
-            "0–0.8 seconds: The inherited vortex continues, then dissolves open, "
-            "revealing Mia's face. 0.8–5 seconds: Mia looks into camera."
-        ),
-        _tail_transition_layouts(),
-    )
-
-
-@pytest.mark.parametrize(
-    "detailed_description",
-    [
-        "0–0.8 seconds: Hard cut to Mia's face. 0.8–5 seconds: She watches.",
-        "0–0.8 seconds: Use the vortex as palette only. Mia watches.",
-        "0–0.8 seconds: Use the vortex for style only. Mia watches.",
-        "0–0.8 seconds: The inherited vortex must not manifest. Mia watches.",
-        "0–0.8 seconds: The inherited vortex must not be visible. Mia watches.",
-        "0.5–1.2 seconds: The inherited vortex dissolves to reveal Mia.",
-        "0–0.8 seconds: Mia is already in close-up and looks into camera.",
-    ],
-)
-def test_rejects_missing_or_neutralized_tail_frame_handoff(detailed_description):
-    from app.core.h3.prompt import validate_tail_frame_transition_prompt
-
-    with pytest.raises(ValueError, match="tail-frame transition"):
-        validate_tail_frame_transition_prompt(
-            _tail_transition_sections(detailed_description),
-            _tail_transition_layouts(),
         )
 
 

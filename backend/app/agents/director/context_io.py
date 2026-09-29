@@ -20,14 +20,14 @@ def context_path(project_id: str) -> Path:
 
 
 def save_agent_context(project_id: str, context: AgentContext) -> Path:
-    """Write context.json before every release_llm / Comfy handoff."""
-    d = agent_dir(project_id)
-    d.mkdir(parents=True, exist_ok=True)
-    path = context_path(project_id)
-    # Ensure project_id on the model matches the path
-    payload = context.model_copy(update={"project_id": project_id})
-    path.write_text(payload.model_dump_json(indent=2), encoding="utf-8")
-    return path
+    """Publish durable context under the same lock as project/shot decisions."""
+    from ...core.managed_runs.store import _project_lock
+    from ...core.projects.store import _atomic_model_write
+    with _project_lock(project_id):
+        path = context_path(project_id)
+        payload = context.model_copy(update={"project_id": project_id})
+        _atomic_model_write(path, payload)
+        return path
 
 
 def load_agent_context(project_id: str) -> AgentContext | None:

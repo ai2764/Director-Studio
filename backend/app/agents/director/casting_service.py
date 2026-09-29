@@ -94,7 +94,7 @@ def _heuristic_match(
             role=ref_role,
             asset_id=asset_id,
             index=index,
-            notes="llm-cast" if match.asset_id == asset_id else "llm-cast-fallback",
+            notes=match.notes if "notes" in match.model_fields_set else ("llm-cast" if match.asset_id == asset_id else "llm-cast-fallback"),
             file_key=requested_key,
             picture_index=match.picture_index,
         )
@@ -350,7 +350,7 @@ def _shot_from_draft(
     status = ShotStatus.blocked if blocked else ShotStatus.ref_frame_pending
     if not blocked:
         status = ShotStatus.ref_frame_pending
-    return Shot(
+    shot = Shot(
         id=new_shot_id(),
         project_id=project_id,
         scene_id=draft.scene_id,
@@ -364,10 +364,16 @@ def _shot_from_draft(
         status=status,
         refs=refs,
         voice_refs=voice_refs,
+        music_segment=draft.music_segment,
         dialogue=list(draft.dialogue),
         blocked_reasons=blocked,
         prompt_sections=PromptSections(),
     )
+    if draft.dialogue_lines is not None:
+        from ...core.projects.dialogue import apply_dialogue_update
+        shot = apply_dialogue_update(shot, {"dialogue": list(draft.dialogue),
+                                          "dialogue_lines": draft.dialogue_lines})
+    return shot
 
 
 def _validate_storyboard_bindings(

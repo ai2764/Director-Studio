@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 
 from app.config import settings
+from app.agents.director.material_review import observe_reference
 from app.agents.director.service import DirectorService
 from app.core.projects.models import (
     AssetCoverageRecommendation,
@@ -17,6 +18,7 @@ from app.core.projects.models import (
     Shot,
     ShotRef,
 )
+from app.core.projects.layouts import ClipTailFrameOrigin, LayoutReference, LayoutReviewStatus
 from app.core.projects.store import create_project, load_shot, save_project, save_shot
 from app.core.schemas import LibraryAsset
 
@@ -76,7 +78,233 @@ class Provider:
                                "blocking_question": "Which wardrobe should be retained?" if self.fault == "conflict" else None})
         if self.mutate:
             self.mutate("prompt", len(self.text))
-        return json.dumps(sections(self.count))
+        return json.dumps({"prompt_sections": sections(self.count), "dialogue_uses": [
+            {"line_ids": ["l1"], "speaker_id": "char_1", "block_indexes": [0]}]})
+
+
+class ObservationProvider:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.systems = []
+
+    async def complete_with_images(self, system, user, *, images, guides=()):
+        assert len(images) == 1
+        self.systems.append(system)
+        return self.responses.pop(0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", [
+    json.dumps([{
+        "readable": True,
+        "description": "Tao faces the camera in a centered head-and-shoulders portrait.",
+        "concerns": ["Sunglasses obscure his eyes."],
+    }]),
+    json.dumps([{"text": json.dumps({
+        "readable": True,
+        "description": "Tao faces the camera in a centered head-and-shoulders portrait.",
+        "concerns": ["Sunglasses obscure his eyes."],
+    })}]),
+])
+async def test_reference_observation_accepts_safe_singleton_wrappers(raw):
+    result = await observe_reference(
+        ObservationProvider([raw]),
+        {"picture_index": 2, "asset_id": "act_tao_face"},
+        "encoded-image",
+    )
+
+    assert result["description"] == "Tao faces the camera in a centered head-and-shoulders portrait."
+    assert result["concerns"] == ["Sunglasses obscure his eyes."]
+
+
+@pytest.mark.asyncio
+async def test_reference_observation_repairs_invalid_structure_once():
+    provider = ObservationProvider([
+        json.dumps([{"id": "img-001", "role": "assistant", "content": "analysis"}]),
+        json.dumps({
+            "readable": True,
+            "description": "Tao is centered against a plain white background.",
+            "concerns": [],
+        }),
+    ])
+
+    result = await observe_reference(
+        provider,
+        {"picture_index": 2, "asset_id": "act_tao_face"},
+        "encoded-image",
+    )
+
+    assert result["description"] == "Tao is centered against a plain white background."
+    assert len(provider.systems) == 2
+    assert "exactly one JSON object" in provider.systems[1]
+
+
+@pytest.mark.asyncio
+async def test_reference_observation_stops_after_one_structure_repair():
+    malformed = json.dumps([{"id": "img-001", "role": "assistant", "content": "analysis"}])
+    provider = ObservationProvider([malformed, malformed])
+
+    with pytest.raises(ValueError, match="ReferenceObservation"):
+        await observe_reference(
+            provider,
+            {"picture_index": 2, "asset_id": "act_tao_face"},
+            "encoded-image",
+        )
+
+    assert len(provider.systems) == 2
+
+
+class TailHandoffProvider(Provider):
+    def __init__(self, orch, *, handoff="Begin from the visible waist-up standing pose; lower the camera as she bends into the floor move.", rewrite=True):
+        super().__init__(orch, count=1, rewrite=rewrite)
+        self.handoff = handoff
+
+    async def complete_with_images(self, system, user, *, images, guides=()):
+        assert self.orch.active
+        self.visual.append((user, images[0]))
+        return json.dumps({
+            "readable": True,
+            "description": "The dancer stands upright in a waist-up front view, arms lowered, facing the camera.",
+            "concerns": [],
+        })
+
+    async def complete(self, system, user, *, guides=()):
+        assert self.orch.active
+        self.text.append((system, user))
+        if "Review a Director Studio tail-frame prompt candidate" in system:
+            return json.dumps({"valid": self.handoff is not None,
+                               "tail_opening": "Waist-up front view.",
+                               "candidate_opening": "Waist-up front view.",
+                               "camera_path": self.handoff or "Absent.",
+                               "issues": [] if self.handoff else ["Missing credible tail-frame handoff"],
+                               "blocking_question": None})
+        if "reference review decision" in system.lower():
+            decision = {
+                "brief": None, "rewrite_prompt": self.rewrite,
+                "reason": "The visible pose can lead into the low action with a camera move.",
+                "blocking_question": None,
+            }
+            if self.handoff is not None:
+                decision["tail_frame_handoff"] = self.handoff
+            return json.dumps(decision)
+        return json.dumps({"shot_patch": {}, "blocking_question": None,
+                           "reason": "The camera move carries the visible source stance forward.", "prompt_sections": {
+            "subject_definitions": "The dancer and studio are grounded by <Picture 1>.",
+            "summary": "One continuous dance move in the same studio.",
+            "retention_analysis": "The dancer and studio remain consistent.",
+            "detailed_description": "0-2 seconds: She bends from standing as the camera lowers. 2-6 seconds: She completes the floor move.",
+            "overall_soundscape": "Studio room tone.",
+            "non_diegetic_music": "No music.",
+        }})
+
+
+@pytest.fixture
+def tail_handoff_shot(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr(settings, "library_root", tmp_path / "library")
+    monkeypatch.setattr(settings, "jobs_dir", tmp_path / "jobs")
+    project = create_project("Dance continuity", "The dancer carries her move into the next shot.")
+    asset_dir = settings.library_root / "layouts" / "lay_previous_tail"
+    asset_dir.mkdir(parents=True)
+    Image.effect_noise((480, 640), 30).convert("RGB").save(asset_dir / "layout.png")
+    asset = LibraryAsset(
+        id="lay_previous_tail", kind="layouts", name="Previous shot tail",
+        pipeline_id="external", job_id="fixture", created_at="2026-09-12T00:00:00Z",
+        files={"layout": "layout.png"},
+    )
+    (asset_dir / "asset.json").write_text(asset.model_dump_json(), encoding="utf-8")
+    layout = LayoutReference(
+        id="lref_previous_tail", asset_id=asset.id,
+        purpose="continue the visible action from the previous shot",
+        review_status=LayoutReviewStatus.usable, selected_for_h3=True,
+        origin=ClipTailFrameOrigin(
+            source_shot_id="sht_previous", source_job_id="job_previous",
+            source_generation=1, output_kind="enhanced", output_key="video",
+            source_filename="video.mp4",
+        ),
+    )
+    shot = Shot(
+        id="sht_continuation", project_id=project.id, scene_id="sc01",
+        title="Low-angle continuation", script_beat="Continue the visible stance into a low floor move.",
+        camera_angle="low-angle 24mm", camera_motion="camera lowers into the move",
+        duration_s=6, layout_refs=[layout],
+        refs=[ShotRef(role=RefRole.layout_ref_frame, asset_id=asset.id,
+                      file_key="layout", picture_index=1)],
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    return project, shot
+
+
+@pytest.mark.asyncio
+async def test_tail_handoff_from_review_is_saved_and_grounded_into_prompt_request(tail_handoff_shot):
+    project, shot = tail_handoff_shot
+    orch = Orchestrator()
+    provider = TailHandoffProvider(orch)
+
+    updated = await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
+
+    review_request = json.loads(provider.text[0][1])
+    assert review_request["selected_layouts"][0]["picture_index"] == 1
+    assert review_request["references"][0]["description"].startswith(
+        "The dancer stands upright in a waist-up front view"
+    )
+    assert updated.meta["material_review"]["prompt_review"]["valid"] is True
+    assert "camera lowers" in provider.text[1][1]
+    assert load_shot(project.id, shot.id) == updated
+    assert len(provider.text) == 2  # draft and independent review
+
+
+@pytest.mark.asyncio
+async def test_tail_handoff_review_refreshes_when_shot_camera_changes(tail_handoff_shot):
+    project, shot = tail_handoff_shot
+    orch = Orchestrator()
+    provider = TailHandoffProvider(orch)
+    svc = DirectorService(plan_provider=provider, orchestrator=orch)
+    first = await svc.write_prompts_after_layout(shot.id)
+    save_shot(first.model_copy(update={"camera_angle": "overhead crane angle"}))
+
+    await svc.write_prompts_after_layout(shot.id)
+
+    review_requests = [json.loads(user) for system, user in provider.text
+                       if "For this tail-frame continuation return a candidate envelope" in system]
+    assert len(review_requests) == 2
+    assert review_requests[-1]["original_shot"]["camera_angle"] == "overhead crane angle"
+    assert len(provider.visual) == 1  # a camera change does not invalidate image facts
+
+
+@pytest.mark.asyncio
+async def test_tail_handoff_missing_from_review_does_not_save_prompt(tail_handoff_shot):
+    project, shot = tail_handoff_shot
+    provider = TailHandoffProvider(Orchestrator(), handoff=None)
+
+    with pytest.raises(ValueError, match="tail-frame handoff"):
+        await DirectorService(plan_provider=provider, orchestrator=provider.orch).write_prompts_after_layout(shot.id)
+
+    stored = load_shot(project.id, shot.id)
+    assert stored.prompt_sections == shot.prompt_sections
+    assert stored.refs == shot.refs
+    assert stored.meta["material_review_pending"] is True
+
+
+@pytest.mark.asyncio
+async def test_new_tail_handoff_rewrites_old_prompt_even_when_review_says_keep(tail_handoff_shot):
+    _, shot = tail_handoff_shot
+    shot = shot.model_copy(update={"prompt_sections": PromptSections(
+        subject_definitions="<Picture 1> supplies wardrobe and hair.",
+        summary="A dance move in the same studio.",
+        retention_analysis="The wardrobe stays the same.",
+        detailed_description="0-6 seconds: The dancer starts already crouching and rises.",
+        overall_soundscape="Studio room tone.", non_diegetic_music="No music.",
+    )})
+    save_shot(shot)
+    orch = Orchestrator()
+    provider = TailHandoffProvider(orch, rewrite=False)
+
+    await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
+
+    assert len(provider.text) == 2
+    assert "waist-up front view" in provider.text[1][1]
 
 
 @pytest.fixture
@@ -104,6 +332,17 @@ def material_shot(tmp_path, monkeypatch):
                 script_beat="The watchmaker examines the gear.", duration_s=6, dialogue=["Hello."],
                 refs=refs, prompt_sections=PromptSections(**sections()),
                 meta={"material_review_pending": True, "material_changes": {"reordered": [1]}})
+    from app.core.projects.dialogue import apply_dialogue_update
+    from app.core.h3.dialogue_binding import DialoguePromptDraft, annotate_speakers
+    from app.agents.director.dialogue_preflight import prompt_dialogue_record
+    from test_director_dialogue_attribution import line_payload
+    payload = {**line_payload(), "speaker_name": "watchmaker"}
+    shot = apply_dialogue_update(shot, {"dialogue_lines": [payload]})
+    draft = DialoguePromptDraft(prompt_sections=shot.prompt_sections, dialogue_uses=[
+        {"line_ids": ["l1"], "speaker_id": "char_1", "block_indexes": [0]}])
+    shot = shot.model_copy(update={"prompt_sections": annotate_speakers(draft, shot.dialogue_lines)})
+    record = prompt_dialogue_record(project, shot, shot.dialogue_lines, draft)
+    shot = shot.model_copy(update={"meta": {**shot.meta, "prompt_dialogue_contract": record}})
     neighbor = shot.model_copy(update={"id": "sht_neighbor", "title": "Untouched"}, deep=True)
     save_shot(shot)
     save_shot(neighbor)
@@ -112,7 +351,7 @@ def material_shot(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_all_nine_refs_reviewed_before_brief_and_prompt_save(material_shot):
+async def test_material_review_cannot_rewrite_authored_brief(material_shot):
     project, shot, neighbor, files = material_shot
     orch = Orchestrator()
     provider = Provider(orch, brief="The watchmaker examines the brass gear on the table.")
@@ -123,14 +362,91 @@ async def test_all_nine_refs_reviewed_before_brief_and_prompt_save(material_shot
         with Image.open(io.BytesIO(base64.b64decode(encoded))) as thumbnail:
             assert max(thumbnail.size) <= 768
     assert all(f"Observed detail {i}" in provider.text[0][1] for i in range(1, 10))
-    assert "brass gear" in provider.text[-1][1]
-    assert updated.script_beat.endswith("brass gear on the table.")
+    assert "brass gear" not in provider.text[-1][1]
+    assert updated.script_beat == shot.script_beat
+    assert updated.meta["material_review"]["decision"]["brief"] is None
     assert updated.meta["material_review_pending"] is False
     assert len(updated.meta["material_review"]["references"]) == 9
     assert updated.refs == shot.refs and updated.dialogue == shot.dialogue
     assert load_shot(project.id, neighbor.id) == neighbor
     assert load_shot(project.id, shot.id) == updated
     assert not orch.active
+
+
+@pytest.mark.asyncio
+async def test_review_and_writer_receive_shot_authoring_source_and_current_request(material_shot):
+    from app.core.projects.chat_history import append_chat_message
+    project, shot, _, _ = material_shot
+    message = append_chat_message(project.id, role="user", content="Add a shot of the creature jumping around the lounge.")
+    shot = shot.model_copy(update={"script_beat": "The creature jumps around the lounge.",
+        "meta": {**shot.meta, "dialogue_authoring": {"user_message_id": message.id,
+            "user_message": message.content}}})
+    save_shot(shot)
+    orch = Orchestrator()
+    provider = Provider(orch)
+    await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(
+        shot.id, revision_request="Keep the creature's identity; write its prompt.")
+    request = json.loads(provider.text[0][1])
+    assert request["intent"]["authoring_request"] == {
+        "source_message_id": message.id, "text": message.content}
+    assert request["intent"]["current_request"] == "Keep the creature's identity; write its prompt."
+    assert request["shot"]["brief"] == "The creature jumps around the lounge."
+    assert message.content in provider.text[-1][1]
+
+
+@pytest.mark.asyncio
+async def test_review_does_not_promote_unverified_authoring_metadata(material_shot):
+    project, shot, _, _ = material_shot
+    shot.meta["dialogue_authoring"] = {"user_message_id": "missing", "user_message": "Invented approval"}
+    save_shot(shot)
+    orch = Orchestrator()
+    provider = Provider(orch)
+    await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
+    request = json.loads(provider.text[0][1])
+    assert request["intent"]["authoring_request"] is None
+    assert "Invented approval" not in provider.text[0][1]
+
+
+@pytest.mark.asyncio
+async def test_prompt_progress_is_visible_before_inference_and_reports_elapsed(material_shot):
+    _, shot, _, _ = material_shot
+    events = []
+    async def progress(event):
+        events.append(event)
+    orch = Orchestrator()
+    provider = Provider(orch)
+    original = provider.complete_with_images
+    async def inspect(*args, **kwargs):
+        assert events[-1]["phase"] == "reference_observation"
+        assert events[-1]["state"] == "started"
+        return await original(*args, **kwargs)
+    provider.complete_with_images = inspect
+    await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(
+        shot.id, on_progress=progress)
+    completed = [e for e in events if e.get("state") == "completed"]
+    assert [e["phase"] for e in completed] == ["reference_observation"] * 9 + ["material_review", "prompt_writing"]
+    assert all(e["elapsed_s"] >= 0 and "s" in e["text"] for e in completed)
+
+
+@pytest.mark.asyncio
+async def test_harness_forwards_material_phase_events_to_chat(material_shot):
+    from app.agents.director.harness_runtime import BackendTurn
+    from app.agents.director.context_io import save_agent_context
+    from app.agents.director.service import _script_hash
+    from app.core.projects.models import AgentContext
+    project, shot, _, _ = material_shot
+    save_agent_context(project.id, AgentContext(project_id=project.id, script_hash=_script_hash(project.script_text)))
+    events = []
+    async def progress(event):
+        events.append(event)
+    orch = Orchestrator()
+    turn = BackendTurn(project.id, "Write the prompt", DirectorService(plan_provider=Provider(orch),
+        orchestrator=orch), None, on_progress=progress)
+    await turn.dispatch("context", {})
+    result = await turn.dispatch("tool", {"call_id": "write", "name": "write_prompt", "arguments": {"shot_id": shot.id}})
+    assert result["ok"], result
+    assert any(e.get("phase") == "reference_observation" for e in events)
+    assert any(e.get("phase") == "prompt_writing" and e["state"] == "completed" for e in events)
 
 
 @pytest.mark.asyncio
@@ -303,6 +619,20 @@ async def test_ref_change_during_review_or_prompt_never_overwrites_user_edit(mat
 
 
 @pytest.mark.asyncio
+async def test_confirmed_choices_changed_during_review_rejects_stale_prompt(material_shot):
+    from app.agents.director.service import _script_hash
+    project, shot, _, _ = material_shot
+    def mutate(phase, count):
+        if phase == "prompt":
+            save_project(project.model_copy(update={"asset_coverage_review": AssetCoverageReview(
+                script_hash=_script_hash(project.script_text), status="reviewed", notes="Use the new exterior scene.")}))
+    orch = Orchestrator()
+    with pytest.raises(ValueError, match="changed"):
+        await DirectorService(plan_provider=Provider(orch, mutate=mutate), orchestrator=orch).write_prompts_after_layout(shot.id)
+    assert load_shot(project.id, shot.id) == shot
+
+
+@pytest.mark.asyncio
 async def test_same_asset_file_replacement_invalidates_review(material_shot):
     project, shot, _, files = material_shot
     orch = Orchestrator()
@@ -311,7 +641,8 @@ async def test_same_asset_file_replacement_invalidates_review(material_shot):
     first = await svc.write_prompts_after_layout(shot.id)
     Image.effect_noise((640, 480), 70).convert("RGB").save(files[0])
     second = await svc.write_prompts_after_layout(shot.id)
-    assert len(provider.visual) == 18  # whole current pack, not just the changed image
+    assert len(provider.visual) == 10  # Only changed bytes need new vision; decision still sees all nine.
+    assert "Picture 1" in provider.visual[-1][0]
     assert first.meta["material_review"]["signature"] != second.meta["material_review"]["signature"]
 
 
@@ -345,6 +676,76 @@ async def test_harness_receives_review_failure_not_success(material_shot):
     assert "Picture 1" in result["error"]
     assert not turn.actions
     assert load_shot(project.id, shot.id) == shot
+
+
+@pytest.mark.asyncio
+async def test_failed_prompt_preserves_both_raw_drafts_and_validation_errors(material_shot):
+    project, shot, _, _ = material_shot
+    orch = Orchestrator()
+    provider = Provider(orch)
+    original_complete = provider.complete
+    drafts = ['{"subject_definitions":"initial draft"}', '{"subject_definitions":"repair draft"}']
+
+    async def fail_prompt(system, user, *, guides=()):
+        if "reference review decision" in system.lower():
+            return await original_complete(system, user, guides=guides)
+        return drafts.pop(0)
+
+    provider.complete = fail_prompt
+    with pytest.raises(ValueError, match="prompt section 'summary' missing or empty"):
+        await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
+
+    debug_dir = settings.projects_dir / project.id / "agent" / "prompt_failures"
+    records = list(debug_dir.glob("*.json"))
+    assert len(records) == 1
+    record = json.loads(records[0].read_text(encoding="utf-8"))
+    assert record["project_id"] == project.id
+    assert record["shot_id"] == shot.id
+    assert record["attempts"] == [
+        {"stage": "initial", "raw": '{"subject_definitions":"initial draft"}',
+         "error": "prompt section 'summary' missing or empty"},
+        {"stage": "repair", "raw": '{"subject_definitions":"repair draft"}',
+         "error": "prompt section 'summary' missing or empty"},
+    ]
+    assert load_shot(project.id, shot.id) == shot
+
+
+@pytest.mark.asyncio
+async def test_retry_repairs_saved_candidate_without_losing_other_sections(material_shot):
+    project, shot, _, _ = material_shot
+    orch = Orchestrator()
+    provider = Provider(orch)
+    original_complete = provider.complete
+    broken = sections()
+    broken["detailed_description"] = "0-6 seconds: Waves without speaking."
+    uses = [{"line_ids": ["l1"], "speaker_id": "char_1", "block_indexes": [0]}]
+    drafts = [json.dumps({"prompt_sections": broken, "dialogue_uses": uses}),
+              json.dumps({"prompt_sections": {"detailed_description": "0-6 seconds: Still silent."}, "dialogue_uses": uses})]
+
+    async def fail(system, user, *, guides=()):
+        if "reference review decision" in system.lower():
+            return await original_complete(system, user, guides=guides)
+        return drafts.pop(0)
+
+    provider.complete = fail
+    with pytest.raises(ValueError, match="dialogue"):
+        await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
+
+    seen = []
+    async def repair(system, user, *, guides=()):
+        if "reference review decision" in system.lower():
+            return await original_complete(system, user, guides=guides)
+        seen.append(user)
+        assert "Still silent" in user
+        return json.dumps({"prompt_sections": {"detailed_description": sections()["detailed_description"]}, "dialogue_uses": uses})
+
+    provider.complete = repair
+    updated = await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
+    assert len(seen) == 1
+    assert updated.prompt_sections.subject_definitions == broken["subject_definitions"]
+    assert "the watchmaker examines the gear" in updated.prompt_sections.detailed_description
+    assert updated.prompt_sections.detailed_description.endswith("<d>[English] Hello.</d>")
+    assert load_shot(project.id, shot.id) == updated
 
 
 @pytest.mark.asyncio
@@ -385,7 +786,7 @@ async def test_missing_binding_forces_rewrite_even_when_model_says_keep(material
 
 
 @pytest.mark.asyncio
-async def test_changed_brief_archives_previous_completed_video(material_shot):
+async def test_material_review_cannot_retire_video_by_proposing_a_different_brief(material_shot):
     from app.core.projects.models import ShotStatus
     _, shot, _, _ = material_shot
     shot = shot.model_copy(update={"status": ShotStatus.succeeded, "h3_job_id": "old_completed"})
@@ -393,9 +794,9 @@ async def test_changed_brief_archives_previous_completed_video(material_shot):
     orch = Orchestrator()
     provider = Provider(orch, brief="The watchmaker examines the brass gear.")
     updated = await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
-    assert updated.status == ShotStatus.needs_review
-    assert updated.h3_job_id is None
-    assert "old_completed" in updated.meta["superseded_h3_job_ids"]
+    assert updated.script_beat == shot.script_beat
+    assert updated.status == ShotStatus.succeeded
+    assert updated.h3_job_id == "old_completed"
 
 
 @pytest.mark.asyncio

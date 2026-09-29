@@ -134,6 +134,7 @@ export function ProjectPicker() {
                 onChange={(event) => setNewMode(event.target.value as ProjectMode)}
               >
                 <option value="director">Director</option>
+                <option value="mv">Music Video</option>
                 <option value="json_production">JSON Production</option>
               </select>
             </label>

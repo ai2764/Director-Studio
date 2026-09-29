@@ -8,6 +8,23 @@ from typing import Any
 from ...core.projects.models import Project, RefRole, Shot
 
 
+def verified_dialogue_lines(project, shot):
+    """Current explicit bindings or source-verified cached grounding."""
+    if shot.dialogue_lines is not None:
+        return shot.dialogue_lines
+    from ...core.projects.dialogue import DialogueLine, verify_dialogue_sources
+    try:
+        cached = (shot.meta.get("dialogue_grounding") or
+                  shot.meta.get("prompt_dialogue_contract") or {}).get("lines", [])
+        lines = [DialogueLine.model_validate(item) for item in cached]
+        if lines:
+            verify_dialogue_sources(project, shot, lines)
+            return lines
+    except (ValueError, TypeError, KeyError):
+        pass
+    return None
+
+
 def project_context_blob(
     project: Project,
     shots: list[Shot],
@@ -15,11 +32,18 @@ def project_context_blob(
     message: str = "",
     focused: bool = False,
 ) -> str:
+    from ...core.jobs.store import list_jobs
+    from ...core.schemas import JobStatus
+    from ...pipelines.h3_ref2va.resolutions import list_local_resolutions
     from .context_io import load_agent_context
     from .intent import explicit_layout_generation_intent, shot_ref
     from .service import _inventory, _script_hash
+    from .tool_handlers.actor import _load_proposal
+    from .tool_handlers.project import _load_storyboard_replacement
 
     inv = _inventory(project.id)
+    from .brief import directing_requests, duration_issues
+    requirements_issues = duration_issues(project, shots) if shots else []
     script = project.script_text or ""
     script_hash = _script_hash(script)
     agent_ctx = load_agent_context(project.id)
@@ -28,15 +52,34 @@ def project_context_blob(
         not planned_hash or planned_hash != script_hash
     )
     coverage_review = project.asset_coverage_review
+    pending_actor = _load_proposal(project.id)
+    pending_storyboard_replacement = _load_storyboard_replacement(project.id)
+    latest_successful_h3: dict[str, Any] = {}
+    for job in list_jobs(limit=None, pipeline_id="h3_ref2va", project_id=project.id):
+        params = job.params or {}
+        shot_id = params.get("shot_id")
+        width, height = params.get("width"), params.get("height")
+        if (job.status != JobStatus.succeeded or not isinstance(shot_id, str)
+                or type(width) is not int or type(height) is not int
+                or width <= 0 or height <= 0):
+            continue
+        previous = latest_successful_h3.get(shot_id)
+        if previous is None or (job.created_at, job.id) > previous["sort_key"]:
+            latest_successful_h3[shot_id] = {
+                "sort_key": (job.created_at, job.id),
+                "job_id": job.id, "width": width, "height": height,
+            }
     coverage_current = bool(
         coverage_review and coverage_review.script_hash == script_hash
     )
     # Suggested next step for the model (also enforced in tool sanitizer).
     if not script.strip():
         next_step = "ask_or_set_script"
-    elif (not shots or shots_stale) and not coverage_current:
+    elif shots_stale:
+        next_step = "review_existing_shots"
+    elif not shots and not coverage_current:
         next_step = "review_asset_coverage"
-    elif not shots or shots_stale:
+    elif not shots:
         next_step = "save_storyboard"
     elif explicit_layout_generation_intent(message) and any(
         (s.status.value if hasattr(s.status, "value") else str(s.status))
@@ -51,6 +94,8 @@ def project_context_blob(
         next_step = "write_or_rewrite_prompt"
     else:
         next_step = "ready_for_h3"
+    if requirements_issues:
+        next_step = "revise_storyboard_requirements"
 
     def layout_refs_context(
         shot: Shot,
@@ -165,6 +210,7 @@ def project_context_blob(
     compact_project_overview = bool(message) and target_shot is None
 
     def shot_context(index: int, shot: Shot) -> dict[str, Any]:
+        prior_h3 = latest_successful_h3.get(shot.id)
         summary = {
             "index": index,
             "id": shot.id,
@@ -177,13 +223,22 @@ def project_context_blob(
             "layout_review": shot.layout_review_status,
             "layout_asset_id": shot.layout_asset_id,
             "duration_s": shot.duration_s,
+            "latest_successful_h3": (
+                {key: prior_h3[key] for key in ("job_id", "width", "height")}
+                if prior_h3 else None
+            ),
         }
         if target_shot is not None and shot.id != target_shot.id:
             return summary
         if focused and target_shot is None:
             return summary
+        dialogue_lines = verified_dialogue_lines(project, shot)
         return {
             **summary,
+            "music_segment": (
+                shot.music_segment.model_dump(mode="json")
+                if shot.music_segment else None
+            ),
             "material_review_pending": bool(
                 (shot.meta or {}).get("material_review_pending")
             ),
@@ -194,6 +249,8 @@ def project_context_blob(
             ),
             "blocked": shot.blocked_reasons,
             "script_beat": (shot.script_beat or "")[:1200],
+            "dialogue": list(shot.dialogue),
+            "dialogue_lines": [line.model_dump(mode="json") for line in dialogue_lines] if dialogue_lines is not None else None,
             "shot_type": shot.shot_type,
             "camera_angle": shot.camera_angle,
             "camera_motion": shot.camera_motion,
@@ -217,9 +274,17 @@ def project_context_blob(
         "project": {
             "id": project.id,
             "name": project.name,
+            "mode": project.mode.value,
             "script_locked": project.script_locked,
+            "music_master": (
+                project.music_master.model_dump(mode="json")
+                if project.music_master else None
+            ),
         },
         "script_chars": len(script),
+        "directing_requests": directing_requests(project),
+        "storyboard_requirement_issues": requirements_issues,
+        "storyboard_total_duration_s": sum(shot.duration_s for shot in shots),
         "script_hash": script_hash,
         "last_shot_id": shots[-1].id if shots else None,
         "script_hash_at_last_plan": planned_hash or None,
@@ -252,8 +317,38 @@ def project_context_blob(
         "script_text": script[:4000],
         "script_preview": script[:1200],
         "library_inventory": inv,
+        "local_h3_resolution_presets": list_local_resolutions(),
+        "pending_actor_design": (
+            {
+                "proposal_id": pending_actor["id"],
+                "name": pending_actor["args"]["name"],
+                "description": pending_actor["args"]["description"],
+                "body_description": pending_actor["args"]["body_description"],
+                "hair_description": pending_actor["args"]["hair_description"],
+                "wardrobe_description": pending_actor["args"]["wardrobe_description"],
+                "provider": pending_actor["args"]["provider"],
+                "status": "awaiting_text_confirmation",
+            }
+            if pending_actor and pending_actor.get("state") == "pending"
+            else None
+        ),
+        "pending_storyboard_replacement": (
+            {
+                "proposal_id": pending_storyboard_replacement["id"],
+                "shot_count": pending_storyboard_replacement["shot_count"],
+                "status": "awaiting_explicit_destructive_confirmation",
+                "changes": pending_storyboard_replacement.get("changes", {}),
+                "last_error": pending_storyboard_replacement.get("error"),
+            }
+            if pending_storyboard_replacement
+            and pending_storyboard_replacement.get("state") in {"pending", "failed"}
+            else None
+        ),
         "shots": [shot_context(i + 1, shot) for i, shot in enumerate(shots)],
         "note": (
+            "Script evidence changed. Review the affected existing Shots and repair only the requested fields or prompts. "
+            "A stale script version does not authorize replacing the storyboard. Retain existing Shot IDs."
+            if shots_stale else
             "Review asset coverage before storyboarding when useful. This is advisory: "
             "save_storyboard and plan_shots remain available, and the user may persist status=skipped."
             if next_step == "review_asset_coverage"
@@ -261,7 +356,7 @@ def project_context_blob(
             "For a user-requested end addition, use append_shot only and preserve existing Shots, even if stale. Otherwise, if shots_stale_vs_script=true or recommended_next_step=save_storyboard, "
             "author and call save_storyboard against script_hash; do not call queue_ref_frame first. "
             "plan_shots remains available only for compatibility."
-            if shots_stale or next_step == "save_storyboard"
+            if next_step == "save_storyboard"
             else None
         ),
     }

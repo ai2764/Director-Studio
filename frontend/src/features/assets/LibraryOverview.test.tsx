@@ -63,6 +63,22 @@ describe("LibraryOverview asset details", () => {
     expect(screen.getByText("Lead performer identity set")).toBeTruthy();
   });
 
+  it("renders every asset when a Library group contains more than six", async () => {
+    const actors = ["Mara", "Tao", "Mia", "Noah", "June", "Iris", "Omar"].map((name, index) => ({
+      ...actor,
+      id: `act_${index + 1}`,
+      name,
+    }));
+    vi.mocked(listLibraryAssets).mockImplementation(async (kind) =>
+      kind === "actors" ? actors : [],
+    );
+
+    render(<LibraryOverview onSelectKind={vi.fn()} />);
+
+    expect(await screen.findByRole("button", { name: "View Omar asset set" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /^View .* asset set$/ })).toHaveLength(7);
+  });
+
   it("deletes an asset from its Library overview detail and refreshes that group", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<LibraryOverview onSelectKind={vi.fn()} />);

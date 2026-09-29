@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import wave
 from pathlib import Path
 from typing import Iterable
 
@@ -13,14 +14,22 @@ from PIL import Image
 from app.config import settings
 from app.core.projects.models import (
     Project,
+    ProjectMusicMaster,
     PromptSections,
     RefRole,
     Shot,
+    ShotMusicSegment,
     ShotRef,
     ShotStatus,
 )
 from app.core.projects.layouts import LayoutReference, LayoutReviewStatus
-from app.core.projects.store import create_project, load_shot, save_project, save_shot
+from app.core.projects.store import (
+    create_project,
+    load_project,
+    load_shot,
+    save_project,
+    save_shot,
+)
 from app.core.schemas import LibraryAsset
 from app.core.projects.chat_history import load_chat_history
 from app.core.vram import GenerationActiveError, GenerationReservation
@@ -546,7 +555,7 @@ def test_replace_shot_materials_rewrites_prompt_from_the_persisted_new_refs(
         def __init__(self) -> None:
             self.refs: list[tuple[str, str, str]] = []
 
-        async def write_prompts_after_layout(self, shot_id: str) -> Shot:
+        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="") -> Shot:
             current = load_shot(project.id, shot_id)
             assert current is not None
             self.refs = [
@@ -606,7 +615,7 @@ def test_replace_shot_materials_reports_prompt_failure_after_preserving_new_refs
     save_project(project.model_copy(update={"shot_ids": [shot.id]}))
 
     class FailingPromptRewrite:
-        async def write_prompts_after_layout(self, shot_id: str) -> Shot:
+        async def write_prompts_after_layout(self, shot_id: str, *, revision_request="") -> Shot:
             raise RuntimeError("LLM unavailable")
 
     client.app.state.director_service = FailingPromptRewrite()
@@ -1140,6 +1149,143 @@ def test_create_json_project(client):
     })
     assert response.status_code == 200
     assert response.json()["mode"] == "json_production"
+
+
+def test_create_mv_project(client):
+    response = client.post(
+        "/api/projects",
+        json={"name": "Song project", "script_text": "", "mode": "mv"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "mv"
+
+
+def test_legacy_project_and_shot_default_mv_audio_fields_to_none():
+    project = Project.model_validate(
+        {
+            "id": "prj_old",
+            "name": "Old",
+            "script_text": "",
+            "mode": "director",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+    )
+    shot = Shot(
+        id="sht_old",
+        project_id=project.id,
+        scene_id="sc1",
+        title="Old",
+        script_beat="beat",
+        duration_s=2,
+    )
+
+    assert project.music_master is None
+    assert shot.music_segment is None
+
+
+def test_music_segment_requires_submit_interval_to_contain_core():
+    with pytest.raises(ValueError, match="contain"):
+        ShotMusicSegment(
+            core_start_s=4.5,
+            core_end_s=8.0,
+            submit_start_s=5.0,
+            submit_end_s=8.5,
+        )
+
+
+def test_project_music_master_round_trips():
+    master = ProjectMusicMaster(
+        filename="song.wav",
+        relative_path="music/master.wav",
+        duration_s=325.12,
+        content_sha256="a" * 64,
+        source_format="wav",
+    )
+    project = Project(
+        id="prj_mv_master",
+        name="MV",
+        script_text="",
+        mode="mv",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+        music_master=master,
+    )
+
+    restored = Project.model_validate_json(project.model_dump_json())
+
+    assert restored.music_master == master
+
+
+def _silent_wav_bytes(duration_s: float = 0.25) -> bytes:
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(2)
+        wav.setframerate(32000)
+        wav.writeframes(b"\0\0\0\0" * int(32000 * duration_s))
+    return output.getvalue()
+
+
+def test_mv_music_master_upload_is_project_owned_and_relative(client):
+    project = create_project("MV", "", mode="mv")
+
+    response = client.post(
+        f"/api/projects/{project.id}/music-master",
+        files={"file": ("song.wav", _silent_wav_bytes(), "audio/wav")},
+    )
+
+    assert response.status_code == 200, response.text
+    master = response.json()["music_master"]
+    assert master["relative_path"] == "music/master.wav"
+    assert master["duration_s"] == pytest.approx(0.25, abs=0.05)
+    assert Path(master["relative_path"]).is_absolute() is False
+
+
+def test_director_project_cannot_import_music_master(client):
+    project = create_project("Director", "", mode="director")
+
+    response = client.post(
+        f"/api/projects/{project.id}/music-master",
+        files={"file": ("song.wav", _silent_wav_bytes(), "audio/wav")},
+    )
+
+    assert response.status_code == 409
+
+
+def test_invalid_music_master_replacement_keeps_previous_master(client):
+    project = create_project("MV", "", mode="mv")
+    initial = client.post(
+        f"/api/projects/{project.id}/music-master",
+        files={"file": ("song.wav", _silent_wav_bytes(), "audio/wav")},
+    )
+    assert initial.status_code == 200, initial.text
+    original = load_project(project.id).music_master
+
+    response = client.post(
+        f"/api/projects/{project.id}/music-master",
+        files={"file": ("broken.wav", b"not audio", "audio/wav")},
+    )
+
+    assert response.status_code == 400
+    assert load_project(project.id).music_master == original
+
+
+def test_resolve_music_master_rejects_path_escape(api_env):
+    from app.core.media.music_segments import resolve_music_master
+
+    project = create_project("MV", "", mode="mv")
+    project.music_master = ProjectMusicMaster(
+        filename="outside.wav",
+        relative_path="../outside.wav",
+        duration_s=1,
+        content_sha256="a" * 64,
+        source_format="wav",
+    )
+
+    with pytest.raises(ValueError, match="project directory"):
+        resolve_music_master(project)
 
 
 def test_legacy_project_json_defaults_script_lock_to_false():
@@ -2051,7 +2197,8 @@ async def test_make_chat_fn_forces_single_actor_design_tool_through_structured_o
     assert captured[0]["format"]["properties"]["tool"]["const"] == "queue_actor_design"
 
 
-def test_approve_shot_and_submit_h3(client, api_env, monkeypatch):
+@pytest.mark.parametrize("edit_during_start", [False, True])
+def test_approve_shot_and_submit_h3(client, api_env, monkeypatch, edit_during_start):
     _seed_layout(api_env["library"])
     _seed_actor(api_env["library"])
     project = create_project("P", "script")
@@ -2086,6 +2233,8 @@ def test_approve_shot_and_submit_h3(client, api_env, monkeypatch):
         layout_review_status="approved",
     )
     shot = shot.model_copy(update={"meta": _fresh_layout_prompt_meta(shot)})
+    from test_director_dialogue_attribution import certify_test_shot
+    shot = certify_test_shot(project, shot, "Actor")
     save_shot(shot)
     project.shot_ids = [shot.id]
     save_project(project)
@@ -2098,11 +2247,18 @@ def test_approve_shot_and_submit_h3(client, api_env, monkeypatch):
 
     async def capture_start(job, *, images=None):
         started.append({"job": job, "images": images})
+        if edit_during_start:
+            current = load_shot(project.id, shot.id)
+            save_shot(current.model_copy(update={"title": "New user title"}))
         return job
 
     import app.api.projects as projects_api
 
     monkeypatch.setattr(projects_api, "start_pipeline_job", capture_start)
+    cancelled = []
+    async def capture_cancel(job_id):
+        cancelled.append(job_id)
+    monkeypatch.setattr("app.core.jobs.cancel_job", capture_cancel)
 
     monkeypatch.setattr(projects_api.settings, "h3_minimax_api_key", None)
     missing_key = client.post(
@@ -2119,6 +2275,11 @@ def test_approve_shot_and_submit_h3(client, api_env, monkeypatch):
         f"/api/shots/{shot.id}/submit",
         json={"h3_provider": "minimax", "width": 1280, "height": 704},
     )
+    if edit_during_start:
+        assert r2.status_code == 409, r2.text
+        assert cancelled == [started[0]["job"].id]
+        assert load_shot(project.id, shot.id).title == "New user title"
+        return
     assert r2.status_code == 200, r2.text
     body = r2.json()
     assert body["status"] == ShotStatus.queued.value
@@ -2182,6 +2343,8 @@ def test_submit_rejects_prompt_picture_tag_without_a_matching_shot_ref(
             non_diegetic_music="No music.",
         ),
     )
+    from test_reference_facts import certify_reference_test_shot
+    shot = certify_reference_test_shot(project, shot)
     save_shot(shot)
     save_project(project.model_copy(update={"shot_ids": [shot.id]}))
 
@@ -2227,6 +2390,8 @@ def test_submit_h3_rejects_locked_source_audio_for_official_providers(
         source_audio_path=str(audio_path),
     )
     shot = shot.model_copy(update={"meta": _fresh_layout_prompt_meta(shot)})
+    from test_reference_facts import certify_reference_test_shot
+    shot = certify_reference_test_shot(project, shot)
     save_shot(shot)
     project.shot_ids = [shot.id]
     save_project(project)
@@ -2255,6 +2420,83 @@ def test_submit_h3_rejects_locked_source_audio_for_official_providers(
     assert "official H3" in response.text
     assert "locked source audio" in response.text
     assert started == []
+
+
+def test_submit_stages_mv_music_segment_as_audio_1(
+    client, api_env, monkeypatch
+):
+    _seed_layout(api_env["library"])
+    project = create_project("MV", "song", mode="mv")
+    uploaded = client.post(
+        f"/api/projects/{project.id}/music-master",
+        files={"file": ("song.wav", _silent_wav_bytes(3.0), "audio/wav")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    segment = ShotMusicSegment(
+        core_start_s=0.75,
+        core_end_s=1.75,
+        submit_start_s=0.5,
+        submit_end_s=2.75,
+    )
+    shot = Shot(
+        id="sht_mv_audio_1",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Sing",
+        script_beat="Readable singing",
+        duration_s=8.0,
+        status=ShotStatus.approved,
+        refs=[ShotRef(
+            role=RefRole.layout_ref_frame,
+            asset_id="lay_testlayout01",
+            picture_index=1,
+        )],
+        music_segment=segment,
+        prompt_sections=PromptSections(
+            subject_definitions="<Picture 1> controls composition. <Audio 1> is the submitted song excerpt.",
+            summary="The singer performs to the supplied excerpt.",
+            retention_analysis="Retain the singer and set.",
+            detailed_description="0–2.25 seconds: the singer performs in sync.",
+            overall_soundscape="<Audio 1> supplies the singing performance and timing.",
+            non_diegetic_music="The submitted excerpt is generation guidance.",
+        ),
+        layout_asset_id="lay_testlayout01",
+        layout_review_status="approved",
+    )
+    shot = shot.model_copy(update={"meta": _fresh_layout_prompt_meta(shot)})
+    save_shot(shot)
+    save_project((load_project(project.id) or project).model_copy(update={"shot_ids": [shot.id]}))
+
+    refreshed: list[str] = []
+
+    async def keep_current_prompt(shot_id):
+        refreshed.append(shot_id)
+        return load_shot(project.id, shot_id)
+
+    client.app.state.director_service.write_prompts_after_layout = keep_current_prompt
+    started: list[dict] = []
+
+    async def capture_start(job, *, images=None):
+        started.append({"job": job, "images": images or {}})
+        return job
+
+    import app.api.projects as projects_api
+
+    monkeypatch.setattr(projects_api, "start_pipeline_job", capture_start)
+
+    response = client.post(
+        f"/api/shots/{shot.id}/submit",
+        json={"h3_provider": "local", "width": 864, "height": 480},
+    )
+
+    assert response.status_code == 200, response.text
+    assert refreshed == [shot.id]
+    assert len(started) == 1
+    job = started[0]["job"]
+    assert job.params["audio_keys"] == ["music_audio_1"]
+    assert job.params["duration_s"] == pytest.approx(2.25)
+    assert started[0]["images"]["music_audio_1"][0] == "music_audio_1.wav"
+    assert started[0]["images"]["music_audio_1"][1][:4] == b"RIFF"
 
 
 def test_submit_refreshes_prompt_when_layout_provenance_is_stale(
@@ -2744,6 +2986,27 @@ async def test_legacy_deselect_removes_the_current_layout_from_h3(
     assert list(started[0]["images"]) == ["ref_0", "ref_1", "ref_2"]
 
 
+def test_patch_shot_roundtrip_preserves_then_invalidates_attribution(client, api_env):
+    from test_director_dialogue_attribution import certify_test_shot, writer_sections
+    project = create_project("Roundtrip", "Visitor: Hello.")
+    shot = Shot(id="sht_dialogue_roundtrip", project_id=project.id, scene_id="s1",
+        title="Greeting", script_beat="Greeting", duration_s=6, dialogue=["Hello."],
+        prompt_sections=PromptSections(**writer_sections()))
+    shot = certify_test_shot(project, shot)
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    url = f"/api/shots/{shot.id}"
+    response = client.patch(url, json={"dialogue": shot.dialogue,
+        "dialogue_lines": [x.model_dump() for x in shot.dialogue_lines]})
+    assert response.status_code == 200, response.text
+    assert response.json()["dialogue_lines"] == [x.model_dump() for x in shot.dialogue_lines]
+    assert response.json()["meta"]["prompt_dialogue_contract"] == shot.meta["prompt_dialogue_contract"]
+    changed = client.patch(url, json={"dialogue": ["Goodbye."]})
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["dialogue_lines"] is None
+    assert "prompt_dialogue_contract" not in changed.json()["meta"]
+
+
 def test_patch_shot_prompt(client, api_env):
     project = create_project("P", "script")
     shot = Shot(
@@ -2784,6 +3047,93 @@ def test_patch_shot_prompt(client, api_env):
     got = client.get(f"/api/shots/{shot.id}")
     assert got.status_code == 200
     assert got.json()["id"] == shot.id
+
+
+def test_patch_shot_can_clear_source_audio_path(client, api_env):
+    project = create_project("P", "script")
+    shot = Shot(
+        id="sht_clear_audio",
+        project_id=project.id,
+        scene_id="sc01",
+        title="t",
+        script_beat="beat",
+        duration_s=2.0,
+        source_audio_path=r"C:\audio\locked.wav",
+    )
+    save_shot(shot)
+    project.shot_ids = [shot.id]
+    save_project(project)
+
+    response = client.patch(
+        f"/api/shots/{shot.id}",
+        json={"source_audio_path": None},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["source_audio_path"] is None
+    assert load_shot(project.id, shot.id).source_audio_path is None
+
+
+def test_patch_shot_sets_and_clears_mv_music_segment(client, api_env):
+    project = create_project("MV", "song", mode="mv")
+    shot = Shot(
+        id="sht_patch_mv_segment",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Sing",
+        script_beat="beat",
+        duration_s=3.0,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    segment = {
+        "core_start_s": 1.0,
+        "core_end_s": 2.0,
+        "submit_start_s": 0.5,
+        "submit_end_s": 2.75,
+    }
+
+    response = client.patch(
+        f"/api/shots/{shot.id}",
+        json={"music_segment": segment},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["music_segment"] == segment
+    cleared = client.patch(
+        f"/api/shots/{shot.id}",
+        json={"music_segment": None},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["music_segment"] is None
+
+
+def test_patch_shot_rejects_music_segment_outside_mv(client, api_env):
+    project = create_project("Director", "scene")
+    shot = Shot(
+        id="sht_reject_mv_segment",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Speak",
+        script_beat="beat",
+        duration_s=3.0,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+
+    response = client.patch(
+        f"/api/shots/{shot.id}",
+        json={"music_segment": {
+            "core_start_s": 1.0,
+            "core_end_s": 2.0,
+            "submit_start_s": 0.5,
+            "submit_end_s": 2.75,
+        }},
+    )
+
+    assert response.status_code == 400
+    assert "Music Video" in response.text
+    assert load_shot(project.id, shot.id).music_segment is None
 
 
 def test_get_shot_404(client):

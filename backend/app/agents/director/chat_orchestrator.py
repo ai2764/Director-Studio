@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from ...config import settings
+from ...core.h3.errors import PromptFailureKind
 from ...core.jobs import create_job, load_job, start_pipeline_job
 from ...core.jobs.runner import await_pipeline_job
 from ...core.projects.layouts import (
@@ -153,6 +154,9 @@ class ChatImage:
 @dataclass
 class ChatResult:
     reply: str
+    failure_code: str = ""
+    failure_message: str = ""
+    failure_kind: PromptFailureKind = "unknown"
     actions: list[str] = field(default_factory=list)
     project: Project | None = None
     shots: list[Shot] = field(default_factory=list)
@@ -173,6 +177,7 @@ class _StoryboardSubmissionBudget:
 
     limit: int = _MAX_STORYBOARD_SUBMISSIONS
     submissions: int = 0
+    repairing: bool = False
 
     @property
     def exhausted(self) -> bool:
@@ -268,6 +273,10 @@ def _status_summary(project: Project, shots: list[Shot]) -> str:
         )
         if s.blocked_reasons:
             lines.append(f"   ⚠ {'; '.join(s.blocked_reasons)}")
+    from .brief import duration_budget, duration_issues
+    budget = duration_budget(project, shots)
+    lines.append(f"Runtime: {budget['total_s']:g}s; requested minimum: {budget['required_minimum_s']:g}s; remaining deficit: {budget['deficit_s']:g}s.")
+    lines.extend(duration_issues(project, shots))
     return "\n".join(lines)
 
 
@@ -324,10 +333,11 @@ Recommended pipeline; use judgment to decide when to advance:
 2) review_asset_coverage — before first storyboarding or after a script change, inspect the script and available file_keys; recommend only useful missing actor angles, scene angles/zones, props, costumes, or future Layout states. Explain why each would help. This is advisory: the user may skip it, and storyboard tools remain available.
 3) revise_shot — for an authored-field change to exactly one Shot, update only the supplied fields and preserve all other Shots, refs, voices, and Layouts. If the same request also asks for a rewritten production prompt, call revise_shot then write_prompt
    append_shot — when the user asks to add one Shot at the end, submit ONLY the new Shot with expected_script_hash=PROJECT_STATE.script_hash and expected_last_shot_id=PROJECT_STATE.last_shot_id. Python assigns its ID. Never rewrite the script or resubmit existing Shots for this request, even when the old plan is stale. On tail mismatch inspect current state; do not blindly retry with a refreshed tail.
-   save_storyboard — reserve complete storyboard replacement for first authoring, explicit removal/reordering, or coordinated multi-Shot revisions; use append_shot for end additions. Save against PROJECT_STATE.script_hash, copy each existing Shot's id into shot_id unchanged, and omit shot_id only for genuinely new Shots
+   save_storyboard — reserve complete storyboard replacement for first authoring, explicit removal/reordering, or coordinated multi-Shot revisions; use append_shot for end additions. Save against PROJECT_STATE.script_hash, copy each existing Shot's id into shot_id unchanged, and omit shot_id only for genuinely new Shots. When Shots already exist, the first call only records the exact replacement proposal and ends the turn with a warning that all Shots will be cleared and rewritten
+   confirm_storyboard_replacement — only after a later user message explicitly confirms clearing and rewriting all Shots, execute the exact pending replacement. "ok", "continue", or a reply that changes the proposal is not confirmation
    candidates are checked before replacement; if the tool returns observed issues, revise your own complete payload and resubmit
    each chat turn permits up to three automatic save_storyboard submissions; a new user turn starts with a fresh budget and may continue the discussion
-   proposed storyboards may be discussed without persistence; only a validated save_storyboard result persists, and discussion does not require an approval gate or an immediate save
+   proposed storyboards may be discussed without persistence; only a validated save_storyboard result persists. Replacing an existing storyboard always requires the separate destructive confirmation gate above
    after the automatic budget is exhausted, explain the unresolved issues and invite further user discussion instead of treating the project as permanently failed
    plan_shots remains available only as a compatibility shortcut that invokes the separate legacy planner
    when only Picture bindings change, use patch_shot_refs instead; it cannot rewrite story beats, dialogue, durations, titles, or shot order. Do not generate a Layout merely because Library refs were added, removed, or replaced; queue_ref_frame is only for an explicit composition-reference request
@@ -345,14 +355,26 @@ Recommended pipeline; use judgment to decide when to advance:
    never fall back from failed GPT generation to local Comfy, or from failed local generation to GPT, unless the user chooses the other provider
    for GPT, source_refs may be empty when no useful real asset exists; then write a prompt-only generation_prompt without ImageN labels. When sources are attached, name every Image1…ImageN and state the visual job of each. An Actor image is an authoritative character reference, never a loose style hint: require the same exact identity, facial structure, hair, body proportions, and approved wardrobe. Do not write "identity only" or invent replacement clothing. A wardrobe change requires an attached Costume source or an explicit user request. Use an exact actor file_key; prefer bust_threeview for face fidelity and a full-body/master source for wardrobe when both are important and capacity allows. Always request one final frame rather than a collage
 5) extract_clip_tail_frame — extract the last decoded frame of a succeeded H3 clip as a pending Layout on a later shot
-   parse natural language into exact source_shot_id and target_shot_id plus version/job/output selectors; clarify rather than guess
-   do not visually approve the extracted image; wait for the user to accept it or request a redraw
+   parse natural language into exact source_shot_id and target_shot_id; omitted version/job means latest, with backend ambiguity checks
+   do not independently approve the image; if the user pre-authorized direct approval, use only the successful extraction's returned layout_ref_id for accept_ref_frame
 6) accept_ref_frame — when the user accepts an existing Layout, record the dialogue decision and select that exact Layout for H3
-   acceptance rewrites the target shot H3 prompt with its real Picture index; do not also call write_prompt in the same tool batch
+   acceptance only binds the Picture; if the user also asked for a prompt, call write_prompt once after successful acceptance. Do not repeat an unchanged failed prompt request
 7) revise_ref_frame — when the user critiques an existing Layout and asks for another version, record the feedback on that exact Layout and generate a linked replacement
    for a tail-frame origin, the extracted frame is Image1; add other references only when they have a specific job
 8) write_prompt — generate or rewrite the six H3 sections from the selected Pictures; Layout is optional. The backend ensures current Pictures have visual evidence before writing. No approval step is required.
-9) H3 video generation happens later in Production
+9) H3 video generation is normally submitted in Production. During an explicitly
+   active managed local H3 run, write the planned Shot prompt as needed and call
+   start_h3_video for the exact next Shot. A backend job event wakes a new turn
+   after completion; do not poll, retry failed jobs, or generate unplanned Layouts.
+   Outside management, start_h3_video may be offered for an explicit one-Shot
+   video request; that single job never authorizes automatic continuation.
+   For a one-Shot local run, check PROJECT_STATE's actual successful H3 widths
+   and heights and its local resolution presets. Honor an explicit user choice;
+   otherwise carry forward an unambiguous prior resolution when suitable for
+   the intended aspect ratio. If prior results are absent, conflict, or leave
+   the desired orientation/tier unclear, ask the user before starting. Supply
+   resolution_preset to start_h3_video; never silently use project Auto/default.
+   Managed runs instead keep the resolution the user selected at activation.
 
 Tools (name + args):
 - set_script  {"script":"..."}  // only when the user supplies or changes story content; a question is not set_script
@@ -365,13 +387,15 @@ Tools (name + args):
 - plan_shots  {}  // compatibility shortcut; prefer save_storyboard for natural authoring/revision
 - queue_ref_frame  {"shot_index":1,"activation_mode":"replace|append"} | {"all":true} | {"shot_id":"..."} | {"force":true}
 - queue_gpt_ref_frame  {"shot_id":"...","purpose":"...","state_description":"...","time_hint":"...","activation_mode":"replace|append","source_refs":[],"generation_prompt":"..."}  // use only when the user chooses GPT/ChatGPT
-- queue_actor_design  {"name":"...","description":"...","body_description":"...","hair_description":"...","wardrobe_description":"...","provider":"gpt|local","generation_prompt":"..."}  // generate a review image; local is default, GPT requires an explicit user request
+- queue_actor_design  {"name":"...","description":"...","body_description":"...","hair_description":"...","wardrobe_description":"...","provider":"gpt|local","generation_prompt":"..."}  // record a proposal; no image generation yet
+- confirm_actor_design  {"proposal_id":"..."}  // run the saved proposal only after a later unqualified text confirmation
 - accept_actor_design  {"job_id":"...","name":"...","notes":"..."}  // only after the user explicitly accepts the shown design
 - classify_chat_image  {"image_index":1,"kind":"actors|costumes|scenes|props|layouts|chat_only","name":"...","notes":"...","confidence":0.0}  // required once for every current user upload
-- extract_clip_tail_frame  {"source_shot_id":"...","target_shot_id":"...","source_version":"latest|vN","source_job_id":null,"output_kind":"enhanced|raw"}
+- extract_clip_tail_frame  {"source_shot_id":"...","target_shot_id":"..."}  // optional source_version/source_job_id/output_kind; omitted selector means latest
 - accept_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"optional concise acceptance note"}
 - revise_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"concise actionable summary","additional_source_refs":[]}
 - write_prompt / get_status
+- start_h3_video  {"shot_id":"...","resolution_preset":"..."}  // one-Shot requires a chosen local preset; managed runs use the user's existing preset
 
 Vision: the system may attach Image 1…N when the user asks you to inspect references or composition. Describe only what is actually visible.
 
@@ -413,24 +437,8 @@ def _filter_tools_to_offered_schemas(
 
 
 def _requested_minimum_duration_s(message: str) -> float:
-    """Extract an explicitly requested minimum duration from the current message."""
-    text = message or ""
-    number = r"(\d+(?:\.\d+)?)"
-    unit = r"(seconds?|secs?|s|minutes?|mins?|min)"
-    patterns = (
-        rf"(?:at\s+least|minimum(?:\s+duration)?(?:\s+of)?|no\s+less\s+than)\s+{number}\s*{unit}\b",
-        rf"{number}\s*{unit}\s*(?:minimum|at\s+minimum)\b",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if not match:
-            continue
-        value = float(match.group(1))
-        unit_value = match.group(2).lower()
-        if unit_value.startswith("m"):
-            value *= 60.0
-        return max(value, 0.0)
-    return 0.0
+    from .brief import requested_minimum_duration_s
+    return requested_minimum_duration_s(message)
 
 
 def _native_reply(value: dict[str, Any]) -> tuple[str, str, list[dict[str, Any]]]:
@@ -471,6 +479,20 @@ def sanitize_tools_for_pipeline(
     from .service import _script_hash
 
     notes: list[str] = []
+    from ...core.managed_runs.context import managed_turn_scope
+    scope = managed_turn_scope.get()
+    if scope is not None and scope.project_id == project.id:
+        managed_tools = {"get_status", "inspect_asset", "write_prompt", "start_h3_video",
+                         "set_task_context", "read_task_context"}
+        allowed_tools = []
+        for item in tools:
+            name = _tool_name(item) if isinstance(item, dict) else ""
+            if name in managed_tools:
+                allowed_tools.append(item)
+            else:
+                notes.append(f"Skipped {name or '(missing name)'}: unavailable during a managed H3 run.")
+        return allowed_tools, notes
+
     if project.script_locked:
         unlocked_tools: list[dict[str, Any]] = []
         for item in tools:
@@ -483,12 +505,20 @@ def sanitize_tools_for_pipeline(
     if not tools:
         return [], notes
 
+    # A changed script invalidates derived evidence, not the authored board.
+    # Per-shot source/reference checks still gate publication. Never inject a
+    # destructive re-plan as a side effect of a local operation on existing shots.
+    if shots:
+        return tools, notes
+
     names = [_tool_name(t) for t in tools if isinstance(t, dict)]
     # Read-only tools must never implicitly replace a board (including before
     # or after an append on a stale board).
-    if names and set(names) <= {"get_status", "status", "inspect_asset"}:
+    if names and set(names) <= {"get_status", "status", "inspect_asset", "set_task_context", "read_task_context"}:
         return tools, notes
-    if names and set(names) <= {"queue_actor_design", "accept_actor_design"}:
+    if names and set(names) <= {"start_h3_video", "get_status", "inspect_asset"}:
+        return tools, notes
+    if names and set(names) <= {"queue_actor_design", "confirm_actor_design", "accept_actor_design"}:
         return tools, notes
     has_set = any(n in _SCRIPT_TOOLS for n in names)
     has_plan = any(n in _PLAN_TOOLS or n in _STORYBOARD_TOOLS or n == "append_shot" for n in names)
@@ -562,7 +592,7 @@ async def _approve_layout_with_prompt(
         return s2, note + " (prompt not written)"
     await _emit(on_progress, "status", f"Approval complete · Writing the six-section H3 prompt for {s2.title}…")
     try:
-        s2 = await svc.write_prompts_after_layout(s2.id)
+        s2 = await svc.write_prompts_after_layout(s2.id, **({"on_progress": on_progress} if on_progress else {}))
         note += "; six-section prompt written"
         await _emit(on_progress, "status", f"Prompt complete: {s2.title}")
     except Exception as e:
@@ -681,6 +711,10 @@ def _storyboard_snapshot(shots: list[Shot]) -> dict[str, Any]:
                 "voice_refs": [
                     ref.model_dump(mode="json") for ref in shot.voice_refs
                 ],
+                "music_segment": (
+                    shot.music_segment.model_dump(mode="json")
+                    if shot.music_segment else None
+                ),
             }
             for shot in shots
         ]
@@ -960,7 +994,8 @@ async def _execute_intent(
             return f"Shot not found: {sid}", actions, touched
         await _emit(on_progress, "status", f"Writing the six-section H3 prompt for {s.title}…")
         try:
-            s2 = await svc.write_prompts_after_layout(s.id)
+            s2 = await svc.write_prompts_after_layout(s.id, revision_request=message,
+                                                     **({"on_progress": on_progress} if on_progress else {}))
             touched.add(s2.id)
             return f"The six-section H3 prompt for **{s2.title}** is ready. You can generate the video in Production.", actions, touched
         except Exception as e:
@@ -1000,6 +1035,11 @@ async def _execute_intent(
     return "", actions, touched
 
 
+from .task_context_runtime import (scoped_task_turn, current_task_context, present_task_tools,
+    render_task_context, task_authority, available_packet_chars, context_mode)
+
+
+@scoped_task_turn
 async def orchestrate_chat(
     *,
     project_id: str,
@@ -1030,6 +1070,9 @@ async def orchestrate_chat(
     steps: list[str] = []
     storyboard_save_attempted = False
     storyboard_save_blocked = False
+    prompt_failure_message = ""
+    prompt_failure_code = "PROMPT_GENERATION_FAILED"
+    prompt_failure_kind = "unknown"
 
     async def progress(type_: str, text: str) -> None:
         """Local helper — also forwards to external on_progress as event dict."""
@@ -1049,7 +1092,7 @@ async def orchestrate_chat(
         if "save_storyboard" in acts:
             shot_count = len(sh)
             r = f"Storyboard saved: {shot_count} shot{'s' if shot_count != 1 else ''}."
-        elif "append_shot" in acts and _claims_completed_storyboard(r):
+        elif "append_shot" in acts:
             count = acts.count("append_shot")
             r = f"Appended {count} new shot{'s' if count != 1 else ''} at the end."
         elif (
@@ -1092,6 +1135,9 @@ async def orchestrate_chat(
             all_think = (all_think + "\n" + thinking).strip() if all_think else thinking
         return ChatResult(
             reply=r,
+            failure_code=prompt_failure_code if prompt_failure_message else "",
+            failure_message=prompt_failure_message,
+            failure_kind=prompt_failure_kind,
             actions=acts,
             project=p,
             shots=sh,
@@ -1211,12 +1257,24 @@ async def orchestrate_chat(
             not isinstance(upload.get("classification"), dict)
             for upload in user_uploads
         )
-        return _director_tool_schemas(
+        schemas = _director_tool_schemas(
             current_project,
             current_message=message,
             allow_save_storyboard=allow_save_storyboard,
             include_chat_image_import=pending_uploads,
         )
+        if storyboard_budget.repairing:
+            schemas = [schema for schema in schemas if schema["function"]["name"] != "set_script"]
+        from ...core.managed_runs.context import managed_turn_scope
+        scope = managed_turn_scope.get()
+        if scope is not None and scope.project_id == current_project.id:
+            managed_tools = {"get_status", "inspect_asset", "write_prompt", "start_h3_video"}
+            schemas = [schema for schema in schemas
+                       if schema["function"]["name"] in managed_tools]
+        state = current_task_context(current_project.id)
+        if state is not None and context_mode(current_project) == "pilot" and not pending_uploads:
+            schemas = present_task_tools(schemas, state)
+        return schemas
 
     context_blob = (
         _gpt_generation_context_blob(project, shots, message)
@@ -1230,6 +1288,8 @@ async def orchestrate_chat(
         + f"USER:\n{message}\n"
     )
     requested_minimum_duration_s = _requested_minimum_duration_s(message)
+    from .turn_identity import current_user_message_id
+    user_message_id = current_user_message_id(project_id, message)
     storyboard_budget = _StoryboardSubmissionBudget()
     offered_tool_schemas = tool_schemas_for(project)
     chat_guides = _director_chat_guides(
@@ -1237,6 +1297,26 @@ async def orchestrate_chat(
         include_visual_qc=bool(vision_b64),
         current_message=message,
     )
+
+    original_suffix = user_prompt[len(f"PROJECT_STATE:\n{context_blob}"):]
+
+    def refresh_task_prompt(conversation=None):
+        if current_task_context(project_id) is None:
+            return user_prompt
+        from .skill_loader import with_director_skill
+        budget_messages = ([{**item, "content": original_suffix} if i == 0 else item
+                            for i, item in enumerate(conversation)] if conversation else
+                           [{"role": "user", "content": original_suffix}])
+        state_text = render_task_context(project, objective=message,
+            authority=task_authority(project, offered_tool_schemas), legacy_state=context_blob,
+            max_chars=available_packet_chars(system=with_director_skill(DIRECTOR_CHAT_SYSTEM, guides=chat_guides),
+                messages=budget_messages, tools=offered_tool_schemas, image_count=len(vision_b64)))
+        refreshed = f"PROJECT_STATE:\n{state_text}{original_suffix}"
+        if conversation:
+            conversation[0] = {**conversation[0], "content": refreshed}
+        return refreshed
+
+    user_prompt = refresh_task_prompt()
 
     try:
         if vision_b64:
@@ -1285,8 +1365,20 @@ async def orchestrate_chat(
             conversation[0]["images"] = vision_b64
         final_reply = ""
         storyboard_retry_pending = False
+        from ...core.managed_runs.context import managed_turn_scope
+        managed_scope = managed_turn_scope.get()
+        tool_turn_limit = (
+            5
+            if managed_scope is not None and managed_scope.project_id == project_id
+            else 4
+        )
+        safety_limit_reply = (
+            "Tool calling exceeded the managed-turn safety limit."
+            if tool_turn_limit > 4
+            else "Tool calling exceeded the four-turn safety limit."
+        )
 
-        for _tool_turn in range(4):
+        for _tool_turn in range(tool_turn_limit):
             native_content, native_think, native_tools = _native_reply(raw)
             if native_think:
                 await progress("think", native_think)
@@ -1330,6 +1422,7 @@ async def orchestrate_chat(
                             project,
                             allow_save_storyboard=not storyboard_budget.exhausted,
                         )
+                        user_prompt = refresh_task_prompt(conversation)
                         raw = await chat_fn(
                             DIRECTOR_CHAT_SYSTEM,
                             user_prompt,
@@ -1437,6 +1530,7 @@ async def orchestrate_chat(
                     on_progress=progress_event,
                     result_payloads=structured_results,
                     user_feedback=message,
+                    user_message_id=user_message_id,
                     requested_minimum_duration_s=requested_minimum_duration_s,
                     storyboard_budget=storyboard_budget,
                     images=attached_images,
@@ -1449,6 +1543,17 @@ async def orchestrate_chat(
                 }
                 for structured_result in structured_results:
                     tool_payload.update(structured_result)
+                if tool["name"] == "write_prompt":
+                    prompt_failure_kind = tool_payload.get("failure_kind", "unknown")
+                    prompt_failure_code = tool_payload.get("code") or "PROMPT_GENERATION_FAILED"
+                    prompt_failure_message = (
+                        str(tool_payload.get("reply") or tool_payload.get("error") or "Prompt generation failed")
+                        if tool_payload.get("ok") is False and tool_payload.get("code") != "CONTEXT_REQUIRED" else ""
+                    )
+                    if prompt_failure_message:
+                        from ...core.managed_runs.context import managed_turn_scope
+                        if managed_turn_scope.get() is not None:
+                            terminal_tool_reply = prompt_failure_message
                 if tool["name"] == "save_storyboard":
                     storyboard_retry_pending = (
                         tool_payload.get("ok") is False
@@ -1464,12 +1569,19 @@ async def orchestrate_chat(
                         ),
                     }
                 )
+                if tool_payload.get("concludes_turn") is True:
+                    terminal_tool_reply = str(tool_payload.get("reply") or "\n".join(tool_notes)).strip()
+                    break
                 if tool["name"] in {
                     "queue_gpt_ref_frame",
                     "queue_actor_design",
                     "accept_ref_frame",
                 }:
                     terminal_tool_reply = "\n".join(tool_notes).strip()
+                if tool["name"] == "write_prompt" and prompt_failure_message:
+                    from ...core.managed_runs.context import managed_turn_scope
+                    if managed_turn_scope.get() is not None:
+                        break
 
             for tool, unknown_payload in unknown_tool_results:
                 conversation.append(
@@ -1492,6 +1604,7 @@ async def orchestrate_chat(
                 project,
                 allow_save_storyboard=not storyboard_budget.exhausted,
             )
+            user_prompt = refresh_task_prompt(conversation)
             raw = await chat_fn(
                 DIRECTOR_CHAT_SYSTEM,
                 user_prompt,
@@ -1509,12 +1622,12 @@ async def orchestrate_chat(
                 if followup_think:
                     await progress("think", followup_think)
                 break
-            if _tool_turn == 3:
+            if _tool_turn == tool_turn_limit - 1:
                 final_content, final_think, final_tools = _native_reply(raw)
                 if final_think:
                     await progress("think", final_think)
                 final_reply = (
-                    "Tool calling exceeded the four-turn safety limit."
+                    safety_limit_reply
                     if final_tools
                     else final_content or final_reply
                 )
@@ -1522,7 +1635,7 @@ async def orchestrate_chat(
                     storyboard_save_blocked = True
                 break
         else:
-            final_reply = "Tool calling exceeded the four-turn safety limit."
+            final_reply = safety_limit_reply
 
         if not final_reply:
             refreshed_project = load_project(project_id)
@@ -1580,6 +1693,7 @@ async def orchestrate_chat(
             actions=actions,
             on_progress=progress_event,
             user_feedback=message,
+            user_message_id=user_message_id,
             requested_minimum_duration_s=requested_minimum_duration_s,
             storyboard_budget=storyboard_budget,
             images=attached_images,

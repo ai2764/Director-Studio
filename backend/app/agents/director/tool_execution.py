@@ -41,6 +41,8 @@ from ...core.projects.transitions import (
 from ...core.schemas import JobStatus
 from .intent import (
     actor_acceptance_intent,
+    explicit_gpt_image_intent,
+    explicit_layout_generation_intent,
     normalize_text,
     resolve_shot,
     validate_gpt_generation_prompt,
@@ -52,6 +54,7 @@ from .tool_handlers.actor import handle_actor_tool
 from .tool_handlers.layout import handle_layout_tool
 from .tool_handlers.library import handle_library_tool
 from .tool_handlers.media import handle_media_tool
+from .tool_handlers.video import handle_video_tool
 from .tool_handlers.casting import handle_casting_tool
 from .tool_handlers.project import handle_project_tool
 
@@ -91,17 +94,24 @@ async def execute_tools(
     on_progress: ProgressFn | None = None,
     result_payloads: list[dict[str, Any]] | None = None,
     user_feedback: str = "",
+    user_message_id: str | None = None,
+    previous_assistant: str = "",
     requested_minimum_duration_s: float = 0.0,
     storyboard_budget: Any | None = None,
     images: list[Any] | None = None,
     user_uploads: list[dict[str, Any]] | None = None,
 ) -> tuple[list[str], set[str]]:
     """Execute tool list; return (note lines for LLM/user, shot ids touched for images)."""
+    # Control-flow receipts must exist even for callers that only consume notes.
+    if result_payloads is None:
+        result_payloads = []
     notes: list[str] = []
     touched: set[str] = set()
     prompt_written_shot_ids: set[str] = set()
     budget = storyboard_budget or runtime.storyboard_budget_factory()
     storyboard_save_failed = False
+    from .turn_identity import current_user_message_id
+    user_message_id = user_message_id or current_user_message_id(project_id, user_feedback)
 
     def refresh_shots() -> list[Shot]:
         return list_shots(project_id)
@@ -116,6 +126,20 @@ async def execute_tools(
         if project is None:
             notes.append("Project not found")
             break
+
+        # A failed storyboard enters bounded recovery. Repair the candidate,
+        # never rewrite its source to make acceptance easier.
+        # The shared turn budget also covers separate Harness tool dispatches.
+        if name == "set_script" and budget.repairing:
+            error = (
+                "The screenplay is read-only during this turn's storyboard recovery. "
+                "Repair the candidate against the existing user requirements; do not "
+                "delete required beats to pass validation. If the story itself needs "
+                "to change, explain the trade-off and request a new authoring decision."
+            )
+            notes.append(error)
+            result_payloads.append({"ok": False, "code": "STORYBOARD_SOURCE_READ_ONLY", "error": error})
+            continue
 
         if storyboard_save_failed and name in IMAGE_TOOLS:
             error = (
@@ -140,6 +164,18 @@ async def execute_tools(
         await runtime.emit(on_progress, "status", f"Executing: {name}…")
 
         try:
+            from .tool_handlers.context import handle_context_tool
+            if handle_context_tool(name=name, args=args, project_id=project_id, result_payloads=result_payloads):
+                continue
+            if name in {"queue_ref_frame", "ref_frame", "revise_ref_frame", "queue_gpt_ref_frame"}:
+                if not explicit_layout_generation_intent(user_feedback):
+                    raise ValueError(
+                        "Layout generation requires an explicit request in the current user turn"
+                    )
+                if name == "queue_gpt_ref_frame" and not explicit_gpt_image_intent(user_feedback):
+                    raise ValueError(
+                        "GPT Layout generation requires an explicit GPT image request"
+                    )
             if name == "inspect_asset":
                 observation = await svc.inspect_asset(project_id, args["asset_id"], args["file_key"])
                 if result_payloads is not None:
@@ -170,6 +206,7 @@ async def execute_tools(
             ):
                 continue
             handled_project_tool = await handle_project_tool(
+                user_message_id=user_message_id,
                 name=name,
                 args=args,
                 project_id=project_id,
@@ -187,6 +224,8 @@ async def execute_tools(
             if handled_project_tool:
                 if name in STORYBOARD_TOOLS and "save_storyboard" in actions:
                     storyboard_save_failed = False
+                if result_payloads and result_payloads[-1].get("concludes_turn") is True:
+                    break
                 continue
             if await handle_layout_tool(
                 name=name,
@@ -205,6 +244,8 @@ async def execute_tools(
                 on_progress=on_progress,
                 refresh_shots=refresh_shots,
             ):
+                if result_payloads and result_payloads[-1].get("concludes_turn") is True:
+                    break
                 continue
             if await handle_media_tool(
                 name=name,
@@ -219,6 +260,13 @@ async def execute_tools(
                 result_payloads=result_payloads,
                 images=images,
                 user_feedback=user_feedback,
+            ):
+                continue
+            if await handle_video_tool(
+                name=name, args=args, project_id=project_id, svc=svc,
+                actions=actions, notes=notes, result_payloads=result_payloads,
+                user_feedback=user_feedback,
+                previous_assistant=previous_assistant,
             ):
                 continue
             if await handle_casting_tool(
@@ -252,6 +300,7 @@ async def execute_tools(
                 notes[-1] = f"{name} failed: {failure['error']}"
             if name in STORYBOARD_TOOLS:
                 storyboard_save_failed = True
+                budget.repairing = True
             if result_payloads is not None:
                 result_payloads.append(failure)
 

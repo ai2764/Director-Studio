@@ -7,6 +7,9 @@ import re
 from typing import Any, Callable
 
 from ....config import settings
+from ..task_context_builder import ContextRequired
+from ..dialogue_metadata import DialogueMetadataError, DialogueClarificationRequired
+from ....core.prompt_errors import MaterialReviewError, MaterialInputError
 from ....core.library.store import load_asset
 from ....core.projects.layouts import (
     GptLayoutBrief,
@@ -163,21 +166,10 @@ async def handle_layout_tool(
         notes.append(
             f"Selected Layout {target.id} for H3 on **{shot.title}** and recorded the Director dialogue decision."
         )
-        writer = getattr(svc, "write_prompts_after_layout", None)
-        if writer is not None:
-            try:
-                await writer(shot.id)
-                prompt_written_shot_ids.add(shot.id)
-                actions.append(f"write_prompt:{shot.id}")
-                notes.append(
-                    "Rewrote the H3 prompt with the accepted Layout's real Picture index."
-                )
-            except Exception as exc:
-                logger.exception(
-                    "write_prompt after accept_ref_frame failed for %s",
-                    shot.id,
-                )
-                notes.append(f"write_prompt after accept failed: {exc}")
+        notes.append(
+            "The H3 prompt was not rewritten. If the current user requested a prompt, "
+            f"call write_prompt for Shot {shot.id} once."
+        )
         persisted = load_shot(project_id, shot.id) or accepted
         notes.append(
             _accepted_picture_order_note(
@@ -668,7 +660,7 @@ async def handle_layout_tool(
             return True
         if shot.id in prompt_written_shot_ids:
             notes.append(
-                f"Prompt already rewritten for **{shot.title}** after Layout acceptance; "
+                f"Prompt already written in this tool batch for **{shot.title}**; "
                 "skipped duplicate write_prompt."
             )
             return True
@@ -676,7 +668,8 @@ async def handle_layout_tool(
             on_progress, "status", f"Reviewing current references and preparing the H3 prompt for {shot.title}…"
         )
         try:
-            s2 = await svc.write_prompts_after_layout(shot.id)
+            s2 = await svc.write_prompts_after_layout(shot.id, revision_request=user_feedback,
+                                                     **({"on_progress": on_progress} if on_progress else {}))
             prompt_written_shot_ids.add(s2.id)
             actions.append(f"write_prompt:{shot.id}")
             review = (s2.meta or {}).get("material_review") or {}
@@ -692,14 +685,48 @@ async def handle_layout_tool(
                 result_payloads.append({"ok": True, "shot_id": s2.id,
                                         "brief_changed": s2.script_beat != shot.script_beat,
                                         "prompt_changed": s2.prompt_sections != shot.prompt_sections,
+                                        "shot_changes": decision.get("shot_patch", {}),
+                                        "prompt_review": review.get("prompt_review"),
                                         "reviewed_picture_indices": [r["picture_index"] for r in review.get("references", [])],
                                         "review_reason": decision.get("reason", "")})
             touched.add(s2.id)
+        except MaterialReviewError as e:
+            instruction = (
+                "Restore the missing material or explicitly relink the affected reference, then review it again. "
+                "No substitute image was selected."
+                if isinstance(e, MaterialInputError) else
+                "Reference inspection did not produce valid evidence; review the materials again. "
+                "This is not a creative prompt failure and does not imply that the selected asset should be replaced."
+            )
+            reply = f"{e}. {instruction}"
+            notes.append(reply)
+            if result_payloads is not None:
+                result_payloads.append({"ok": False, "code": e.code, "shot_id": shot.id,
+                    "failure_kind": "contract", "retryable": False, "concludes_turn": True,
+                    "issues": e.issues, "error": str(e), "reply": reply})
+        except DialogueMetadataError as e:
+            reply = e.question if isinstance(e, DialogueClarificationRequired) else str(e)
+            notes.append(reply)
+            if result_payloads is not None:
+                result_payloads.append({"ok": False, "code": e.code, "shot_id": shot.id,
+                    "failure_kind": "contract", "retryable": False, "concludes_turn": True,
+                    "issues": [issue.model_dump(mode="json") for issue in e.issues],
+                    "error": str(e), "reply": reply})
+        except ContextRequired as e:
+            if result_payloads is not None:
+                result_payloads.append({"ok": False, "code": e.code, "shot_id": shot.id,
+                    "missing": e.packet.missing, "available_context": e.packet.available_context,
+                    "concludes_turn": False, "error": str(e)})
+            notes.append("Prompt input needs additional evidence or context capacity; no candidate was generated.")
         except Exception as e:
             logger.exception("write_prompt tool failed")
             notes.append(f"Prompt writing failed: {e}")
             if result_payloads is not None:
-                result_payloads.append({"ok": False, "shot_id": shot.id, "error": str(e)})
+                from ....core.h3.errors import prompt_failure_kind
+                result_payloads.append({"ok": False, "shot_id": shot.id, "error": str(e),
+                                        "failure_kind": prompt_failure_kind(e),
+                                        "concludes_turn": True,
+                                        "reply": f"Prompt writing did not complete: {e}. Existing storyboard was preserved; no broader rewrite was attempted."})
 
     elif name == "reject_layout" or name == "reject":
         shot = resolve_shot(

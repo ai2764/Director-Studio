@@ -75,6 +75,8 @@ async def _run_tools(
     on_progress: ProgressFn | None = None,
     result_payloads: list[dict[str, Any]] | None = None,
     user_feedback: str = "",
+    user_message_id: str | None = None,
+    previous_assistant: str = "",
     requested_minimum_duration_s: float = 0.0,
     storyboard_budget: _StoryboardSubmissionBudget | None = None,
     images: list[ChatImage] | None = None,
@@ -109,6 +111,8 @@ async def _run_tools(
         on_progress=on_progress,
         result_payloads=result_payloads,
         user_feedback=user_feedback,
+        user_message_id=user_message_id,
+        previous_assistant=previous_assistant,
         requested_minimum_duration_s=requested_minimum_duration_s,
         storyboard_budget=storyboard_budget,
         images=images,
@@ -126,6 +130,7 @@ async def handle_chat(
     on_progress: ProgressFn | None = None,
     user_images_b64: list[str] | None = None,
     user_image_captions: list[str] | None = None,
+    managed_session_id: str | None = None,
 ) -> ChatResult:
     """Preserve the public chat entry point while delegating orchestration."""
     from ...config import settings
@@ -142,6 +147,7 @@ async def handle_chat(
             user_images_b64=user_images_b64,
             user_image_captions=user_image_captions,
             context_capacity=context_capacity,
+            managed_session_id=managed_session_id,
         )
     return await orchestrate_chat(
         project_id=project_id,

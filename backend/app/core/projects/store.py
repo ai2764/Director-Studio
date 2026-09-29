@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -54,7 +55,9 @@ def save_project(project: Project) -> None:
     project.updated_at = _now()
     ensure_project_tree(project.id)
     path = project_dir(project.id) / "project.json"
-    path.write_text(project.model_dump_json(indent=2), encoding="utf-8")
+    from ..managed_runs.store import _project_lock
+    with _project_lock(project.id):
+        _atomic_model_write(path, project)
 
 
 def load_project(project_id: str) -> Project | None:
@@ -82,7 +85,26 @@ def save_shot(shot: Shot) -> None:
     d = shots_dir(shot.project_id)
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{shot.id}.json"
-    path.write_text(shot.model_dump_json(indent=2), encoding="utf-8")
+    from ..managed_runs.store import _project_lock
+    with _project_lock(shot.project_id):
+        _atomic_model_write(path, shot)
+
+
+def _atomic_model_write(path, model) -> None:
+    temporary = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(model.model_dump_json(indent=2), encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def save_shot_if_current(shot: Shot, *, check_current) -> None:
+    """Process-local compare-and-save; no model inference while the lock is held."""
+    from ..managed_runs.store import _project_lock
+    with _project_lock(shot.project_id):
+        check_current()
+        save_shot(shot)
 
 
 def load_shot(project_id: str, shot_id: str) -> Shot | None:

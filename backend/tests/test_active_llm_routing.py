@@ -33,6 +33,55 @@ class RecordingProvider:
         return {"model": "catalog-model"}
 
 
+@pytest.mark.asyncio
+async def test_bounded_prompt_call_cancels_silent_transport_at_deadline(monkeypatch):
+    import asyncio
+
+    from app.agents.director import llm_plan_provider as module
+
+    cancelled = asyncio.Event()
+
+    class SilentClient:
+        async def chat_response(self, model, **kwargs):
+            try:
+                await asyncio.sleep(0.1)
+                return {"content": "late reply", "finish_reason": "stop"}
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+    monkeypatch.setattr(module, "PROMPT_CALL_TIMEOUT_SEC", 0.01, raising=False)
+    adapter = module.DirectorLLMPlanProvider(provider=RecordingProvider(SilentClient()))
+    with pytest.raises(TimeoutError, match="timed out"):
+        await adapter.complete_bounded("Review", "Candidate", max_tokens=1024)
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_bounded_prompt_review_uses_provider_schema_and_rejects_truncation():
+    from app.agents.director.llm_plan_provider import DirectorLLMPlanProvider
+    requests = []
+
+    class Client:
+        finish_reason = "stop"
+
+        async def chat_response(self, model, **kwargs):
+            requests.append({"model": model, **kwargs})
+            return {"content": '{"valid":true}', "finish_reason": self.finish_reason}
+
+    client = Client()
+    adapter = DirectorLLMPlanProvider(provider=RecordingProvider(client))
+    schema = {"type": "object", "properties": {"valid": {"type": "boolean"}}}
+    result = await adapter.complete_bounded("Review", "Candidate", max_tokens=1024, schema=schema)
+    assert result == '{"valid":true}'
+    assert requests[0]["format"] == schema
+    assert requests[0]["options"]["num_predict"] == 1024
+    assert requests[0]["model"] == "catalog-model"
+    client.finish_reason = "length"
+    with pytest.raises(ValueError, match="truncated"):
+        await adapter.complete_bounded("Review", "Candidate", max_tokens=1024, schema=schema)
+
+
 class RecordingLifecycle:
     uses_local_gpu = True
 

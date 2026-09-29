@@ -186,7 +186,7 @@ def test_material_review_note_can_offer_tail_frame_for_only_changed_shot(
     assert extract_schema["properties"]["target_shot_id"]["const"] == "sht_review_target"
 
 
-def test_layout_generation_tool_requires_an_explicit_current_turn_request(
+def test_layout_generation_tool_is_visible_even_without_explicit_request(
     tmp_projects_dir,
 ):
     from app.agents.director.tool_schema import director_tool_schemas
@@ -208,13 +208,13 @@ def test_layout_generation_tool_requires_an_explicit_current_turn_request(
         for tool in director_tool_schemas(project, current_message=explicit)
     }
 
-    assert "queue_ref_frame" not in discussion_names
-    assert "revise_ref_frame" not in discussion_names
+    assert "queue_ref_frame" in discussion_names
+    assert "revise_ref_frame" in discussion_names
     assert "queue_ref_frame" in explicit_names
     assert "revise_ref_frame" in explicit_names
 
 
-def test_tail_frame_request_offers_extraction_without_layout_generation(
+def test_tail_frame_request_keeps_full_layout_tool_catalog(
     tmp_projects_dir,
 ):
     from app.agents.director.tool_schema import director_tool_schemas
@@ -229,7 +229,7 @@ def test_tail_frame_request_offers_extraction_without_layout_generation(
     }
 
     assert "extract_clip_tail_frame" in names
-    assert "queue_ref_frame" not in names
+    assert "queue_ref_frame" in names
 
 
 @pytest.mark.asyncio
@@ -260,7 +260,7 @@ async def test_material_review_execution_rejects_a_different_shot(
     class Service:
         calls: list[str] = []
 
-        async def write_prompts_after_layout(self, shot_id):
+        async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
             self.calls.append(shot_id)
             return load_shot(project.id, shot_id)
 
@@ -513,6 +513,92 @@ async def test_invalid_calls_consume_tool_budget_even_after_fresh_inference(tmp_
 
 
 @pytest.mark.asyncio
+async def test_shot_status_exposes_clip_generations_and_can_be_read_again(
+    tmp_projects_dir, monkeypatch
+):
+    from app.agents.director.harness_runtime import BackendTurn
+    from app.core.jobs.store import create_job, save_job
+    from app.core.schemas import JobStatus
+
+    jobs = tmp_projects_dir.parent / "jobs"
+    jobs.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "jobs_dir", jobs)
+
+    project = create_project("tail continuity", "A cat waits.")
+    shot = Shot(
+        id="sht_read_once", project_id=project.id, scene_id="sc01",
+        title="Source", script_beat="A cat waits.", duration_s=5,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    first_job = create_job(
+        pipeline_id="h3_ref2va", asset_kind="productions", name="first",
+        project_id=project.id, params={"shot_id": shot.id, "width": 768, "height": 1376},
+    )
+    first_job.created_at = "2026-09-21T10:00:00Z"
+    first_job.status = JobStatus.succeeded
+    save_job(first_job)
+    second_job = create_job(
+        pipeline_id="h3_ref2va", asset_kind="productions", name="second",
+        project_id=project.id, params={"shot_id": shot.id, "width": 864, "height": 480},
+    )
+    second_job.created_at = "2026-09-21T11:00:00Z"
+    second_job.status = JobStatus.failed
+    save_job(second_job)
+    turn = BackendTurn(project.id, "Read Shot 1", None, None)
+    await turn.dispatch("context", {})
+
+    first = await turn.dispatch("tool", {
+        "name": "get_status", "arguments": {"shot_id": shot.id}, "call_id": "read-1",
+    })
+    repeated = await turn.dispatch("tool", {
+        "name": "get_status", "arguments": {"shot_id": shot.id}, "call_id": "read-2",
+    })
+
+    assert first["shot"]["id"] == shot.id
+    expected = [
+        {"version": "v1", "job_id": first_job.id, "status": "succeeded", "width": 768, "height": 1376},
+        {"version": "v2", "job_id": second_job.id, "status": "failed", "width": 864, "height": 480},
+    ]
+    assert first["h3_generations"] == expected
+    assert repeated["ok"] is True
+    assert repeated["shot"]["id"] == shot.id
+    assert repeated["h3_generations"] == expected
+    status_schema = next(
+        tool["function"]["parameters"] for tool in turn.context()["tools"]
+        if tool["function"]["name"] == "get_status"
+    )
+    assert not list(Draft202012Validator(status_schema).iter_errors({"shot_id": shot.id}))
+
+
+def test_harness_does_not_preemptively_whitelist_layout_ids(tmp_projects_dir):
+    from app.agents.director.harness_runtime import BackendTurn
+
+    project = create_project("tail acceptance", "")
+    shot = Shot(
+        id="sht_target", project_id=project.id, scene_id="sc01",
+        title="Target", script_beat="A cat waits.", duration_s=5,
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    turn = BackendTurn(project.id, "抽尾帧后直接 approve", None, None)
+
+    before = {tool["function"]["name"] for tool in turn.context()["tools"]}
+    assert "accept_ref_frame" in before
+
+    save_shot(shot.model_copy(update={
+        "layout_refs": [LayoutReference(id="lref_real", asset_id="lay_real")],
+    }))
+    after = next(
+        tool["function"] for tool in turn.context()["tools"]
+        if tool["function"]["name"] == "accept_ref_frame"
+    )
+    validator = Draft202012Validator(after["parameters"])
+    assert not list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_real"}))
+    assert not list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_invented"}))
+
+
+@pytest.mark.asyncio
 async def test_explicit_runtime_dispatch(monkeypatch):
     from app.agents.director import chat, harness_runtime
 
@@ -667,7 +753,7 @@ async def test_backend_tools_validate_refresh_and_deduplicate(tmp_projects_dir):
     assert load_project(project.id).script_text == "A cat opens a box."
 
 
-def test_stale_storyboard_does_not_offer_tools_the_pipeline_will_reject(
+def test_stale_script_keeps_local_prompt_tools_available(
     tmp_projects_dir,
 ):
     from app.agents.director.harness_runtime import BackendTurn
@@ -688,8 +774,10 @@ def test_stale_storyboard_does_not_offer_tools_the_pipeline_will_reject(
     names = {tool["function"]["name"] for tool in context["tools"]}
 
     assert "save_storyboard" in names
-    assert "write_prompt" not in names
-    assert "queue_ref_frame" not in names
+    assert "write_prompt" in names
+    assert "queue_ref_frame" in names
+    # Staleness is reported, but does not mandate full-board replacement.
+    assert json.loads(context["state"])["recommended_next_step"] == "review_existing_shots"
 
 
 @pytest.mark.asyncio
@@ -713,7 +801,7 @@ async def test_failed_prompt_write_makes_remainder_of_turn_explain_only(
     save_project(project.model_copy(update={"shot_ids": [shot.id]}))
 
     class Service:
-        async def write_prompts_after_layout(self, shot_id):
+        async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
             raise ValueError("dialogue validation failed")
 
     turn = BackendTurn(project.id, "Write Shot 1's prompt", Service(), None)
@@ -775,7 +863,7 @@ async def test_successful_prompt_write_is_idempotent_for_remainder_of_turn(
     class Service:
         calls = 0
 
-        async def write_prompts_after_layout(self, shot_id):
+        async def write_prompts_after_layout(self, shot_id, *, revision_request=""):
             self.calls += 1
             current = load_shot(project.id, shot_id)
             assert current is not None

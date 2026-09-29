@@ -14,6 +14,7 @@ import {
   getDirectorVramStatus,
   getProject,
   queueRefFrame,
+  uploadMusicMaster,
 } from "./api";
 
 const projectState = vi.hoisted(() => ({
@@ -30,12 +31,14 @@ const projectState = vi.hoisted(() => ({
 }));
 
 const getDirectorChatHistoryMock = vi.hoisted(() => vi.fn());
+const refreshProjectsMock = vi.hoisted(() => vi.fn());
+const uploadMusicMasterMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../shared/project/ProjectContext", () => ({
   useProject: () => ({
     projectId: projectState.projectId,
     project: projectState.project,
-    refreshProjects: vi.fn(),
+    refreshProjects: refreshProjectsMock,
     createAndSelect: vi.fn(),
   }),
 }));
@@ -67,6 +70,7 @@ vi.mock("./api", () => ({
   queueRefFrame: vi.fn(),
   replaceShotMaterials: vi.fn(),
   setDirectorModel: vi.fn(),
+  uploadMusicMaster: uploadMusicMasterMock,
 }));
 
 function deferred<T>() {
@@ -207,6 +211,97 @@ describe("Director shot actions", () => {
     expect(queueRefFrame).not.toHaveBeenCalled();
   });
 
+  it("shows song master import only for Music Video projects", () => {
+    projectState.project = {
+      id: "prj_mv",
+      name: "Music video",
+      script_text: "[0.0-2.0] Sing",
+      mode: "mv",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      shot_ids: [],
+      music_master: null,
+    } as Project;
+    projectState.projectId = "prj_mv";
+
+    const view = render(<DirectorPage />);
+    expect(screen.getByLabelText("Song master")).toBeTruthy();
+
+    view.unmount();
+    projectState.project = {
+      ...projectState.project,
+      id: "prj_director",
+      mode: "director",
+    };
+    projectState.projectId = "prj_director";
+    render(<DirectorPage />);
+    expect(screen.queryByLabelText("Song master")).toBeNull();
+  });
+
+  it("imports a song master and changes the action to replace", async () => {
+    projectState.project = {
+      id: "prj_mv",
+      name: "Music video",
+      script_text: "[0.0-2.0] Sing",
+      mode: "mv",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      shot_ids: [],
+      music_master: null,
+    };
+    projectState.projectId = "prj_mv";
+    vi.mocked(uploadMusicMaster).mockResolvedValue({
+      ...projectState.project,
+      music_master: {
+        filename: "final-song.wav",
+        relative_path: "music/master.wav",
+        duration_s: 125.25,
+        content_sha256: "a".repeat(64),
+        source_format: "wav",
+      },
+    });
+    render(<DirectorPage />);
+
+    fireEvent.change(screen.getByLabelText("Song master"), {
+      target: {
+        files: [new File(["audio"], "final-song.wav", { type: "audio/wav" })],
+      },
+    });
+
+    expect(await screen.findByText("final-song.wav")).toBeTruthy();
+    expect(screen.getByText("2:05")).toBeTruthy();
+    expect(screen.getByText("Replace song")).toBeTruthy();
+  });
+
+  it("shows the song upload error without hiding the import action", async () => {
+    projectState.project = {
+      id: "prj_mv",
+      name: "Music video",
+      script_text: "",
+      mode: "mv",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      shot_ids: [],
+      music_master: null,
+    };
+    projectState.projectId = "prj_mv";
+    vi.mocked(uploadMusicMaster).mockRejectedValue(
+      new Error("unsupported audio file type"),
+    );
+    render(<DirectorPage />);
+
+    fireEvent.change(screen.getByLabelText("Song master"), {
+      target: {
+        files: [new File(["audio"], "song.txt", { type: "text/plain" })],
+      },
+    });
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "unsupported audio file type",
+    );
+    expect(screen.getByText("Import song")).toBeTruthy();
+  });
+
   it("hides shot controls while keeping chat in chat-only mode", async () => {
     render(<DirectorPage chatOnly />);
 
@@ -291,6 +386,7 @@ describe("Director shot actions", () => {
       {
         id: "prompt-failure",
         role: "assistant",
+        prompt_retry: { retry_id: "retry1", shot_id: "shot1", source_version: "version1" },
         content:
           "Prompt generation did not complete after bounded internal repair. The saved storyboard was not changed to work around it. detailed_description <d> block 1 must contain [Language] and spoken words only",
         images: [],
@@ -309,13 +405,24 @@ describe("Director shot actions", () => {
 
     await waitFor(() => expect(chatWithDirectorStream).toHaveBeenCalledWith(
       "prj_test",
-      expect.stringMatching(/Retry the previous failed H3 prompt once.*Correct only the reported prompt validation error/is),
+      "Retry prompt",
       [],
       expect.any(Object),
       [],
       expect.any(AbortSignal),
+      { retry_id: "retry1", shot_id: "shot1", source_version: "version1" },
     ));
     expect(draft.value).toBe("Keep this unsent note");
+  });
+
+  it("does not infer retry authority from failure keywords", async () => {
+    getDirectorChatHistoryMock.mockResolvedValue([{
+      id: "failure-text-only", role: "assistant",
+      content: "PROMPT_GENERATION_FAILED: Prompt generation did not complete after bounded internal repair.",
+    }]);
+    render(<DirectorPage />);
+    await screen.findByText(/PROMPT_GENERATION_FAILED:/);
+    expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
   });
 
   it("does not offer prompt retry for an older or unrelated failure", async () => {

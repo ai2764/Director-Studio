@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .dialogue import DialogueLine, validate_dialogue_projection
+
 
 class ShotStatus(str, Enum):
     draft = "draft"
@@ -57,6 +59,34 @@ class ShotVoiceRef(BaseModel):
             raise ValueError("voice asset_id is required")
         if not self.file_key:
             raise ValueError("voice file_key is required")
+        return self
+
+
+class ProjectMusicMaster(BaseModel):
+    filename: str
+    relative_path: str
+    duration_s: float = Field(gt=0)
+    content_sha256: str
+    source_format: str
+
+
+class ShotMusicSegment(BaseModel):
+    core_start_s: float = Field(ge=0)
+    core_end_s: float = Field(gt=0)
+    submit_start_s: float = Field(ge=0)
+    submit_end_s: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_intervals(self) -> "ShotMusicSegment":
+        if self.core_start_s >= self.core_end_s:
+            raise ValueError("music core interval must have positive duration")
+        if self.submit_start_s >= self.submit_end_s:
+            raise ValueError("music submit interval must have positive duration")
+        if (
+            self.submit_start_s > self.core_start_s
+            or self.submit_end_s < self.core_end_s
+        ):
+            raise ValueError("music submit interval must contain the core interval")
         return self
 
 
@@ -138,8 +168,10 @@ class Shot(BaseModel):
     status: ShotStatus = ShotStatus.draft
     refs: list[ShotRef] = Field(default_factory=list)
     voice_refs: list[ShotVoiceRef] = Field(default_factory=list)
+    music_segment: ShotMusicSegment | None = None
     prompt_sections: PromptSections = Field(default_factory=PromptSections)
     dialogue: list[str] = Field(default_factory=list)
+    dialogue_lines: list[DialogueLine] | None = None
     layout_asset_id: str | None = None
     layout_review_status: str | None = None  # pending_review | approved | rejected
     ref_frame_job_id: str | None = None
@@ -175,6 +207,12 @@ class Shot(BaseModel):
         return values
 
     @model_validator(mode="after")
+    def _validate_dialogue_lines(self) -> "Shot":
+        if self.dialogue_lines is not None:
+            validate_dialogue_projection(self.dialogue, self.dialogue_lines)
+        return self
+
+    @model_validator(mode="after")
     def _validate_voice_refs(self) -> "Shot":
         refs = list(self.voice_refs)
         if len(refs) > 3:
@@ -189,6 +227,7 @@ class Shot(BaseModel):
 
 class ProjectMode(str, Enum):
     director = "director"
+    mv = "mv"
     json_production = "json_production"
 
 
@@ -201,6 +240,7 @@ class Project(BaseModel):
     created_at: str
     updated_at: str
     shot_ids: list[str] = Field(default_factory=list)
+    music_master: ProjectMusicMaster | None = None
     asset_coverage_review: AssetCoverageReview | None = None
 
 

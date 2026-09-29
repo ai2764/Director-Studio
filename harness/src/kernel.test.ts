@@ -174,6 +174,31 @@ describe("real Harness kernel", () => {
     expect(calls).toBe(2);
     expect(contexts).toBeGreaterThanOrEqual(5);
   });
+  it("concludes the turn after a terminal host tool without another model call", async () => {
+    let models = 0;
+    const host: Host = async (method) => {
+      if (method === "context") return { system: "fixture", state: {}, tools };
+      if (method === "tool") return {
+        ok: true,
+        concludes_turn: true,
+        reply: "Started local H3 video; waiting for the Job event.",
+      };
+      models++;
+      if (models > 1) throw new Error("terminal tool must prevent a second model call");
+      return {
+        content: "",
+        tool_calls: [{
+          id: "start-1",
+          name: "change",
+          arguments: { value: "start" },
+        }],
+      };
+    };
+
+    expect((await runTurn(input, host, new AbortController().signal)).reply)
+      .toBe("Started local H3 video; waiting for the Job event.");
+    expect(models).toBe(1);
+  });
   it("bounds steps", async () => {
     let calls = 0;
     const host: Host = async (method) =>

@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     llm_keep_loaded: bool = True
 
     director_agent_runtime: Literal["legacy", "harness"] = "legacy"
+    director_task_context_mode: Literal["off", "shadow", "pilot"] = "off"
+    director_task_context_projects: list[str] = Field(default_factory=list)
     harness_managed: bool = True
     harness_base_url: str = "http://127.0.0.1:8791"
     harness_internal_token: str = Field(default="", repr=False)
