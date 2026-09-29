@@ -6,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$pythonCommand = (Get-Command python -ErrorAction Stop).Source
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $frontendRoot = Join-Path $repoRoot "frontend"
 $backendRoot = Join-Path $repoRoot "backend"
@@ -56,7 +57,7 @@ finally {
 
 Push-Location $backendRoot
 try {
-    py -m pytest `
+    & $pythonCommand -m pytest `
         tests/test_packaged_runtime.py `
         tests/test_projects_api.py `
         tests/test_portable_tools_installer.py `
@@ -74,7 +75,7 @@ try {
         tests/test_windows_ci.py `
         -q
     if ($LASTEXITCODE -ne 0) { throw "backend packaging tests failed" }
-    py -m PyInstaller --version
+    & $pythonCommand -m PyInstaller --version
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller is unavailable; install backend/requirements-build.txt"
     }
@@ -106,7 +107,7 @@ New-Item -ItemType Directory -Path $pyinstallerDist -Force | Out-Null
 New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
 
 $specPath = Join-Path $backendRoot "packaging/director-studio-legacy.spec"
-py -m PyInstaller `
+& $pythonCommand -m PyInstaller `
     --clean `
     --noconfirm `
     --workpath $pyinstallerRoot `
@@ -139,7 +140,7 @@ $stageArguments = @(
 if ($NodeArchive) {
     $stageArguments += @("--node-archive", $NodeArchive)
 }
-& py @stageArguments
+& $pythonCommand @stageArguments
 if ($LASTEXITCODE -ne 0) { throw "Harness runtime staging failed" }
 
 $comfyStageArguments = @(
@@ -153,10 +154,10 @@ if ($PythonArchive) {
 if ($PipWheel) {
     $comfyStageArguments += @("--pip-wheel", $PipWheel)
 }
-& py @comfyStageArguments
+& $pythonCommand @comfyStageArguments
 if ($LASTEXITCODE -ne 0) { throw "Comfy MCP runtime staging failed" }
 
-py (Join-Path $PSScriptRoot "verify_bundled_comfy.py") `
+& $pythonCommand (Join-Path $PSScriptRoot "verify_bundled_comfy.py") `
     --package-root $packageRoot
 if ($LASTEXITCODE -ne 0) { throw "Comfy first-launch bootstrap verification failed" }
 
@@ -168,7 +169,7 @@ if ($LASTEXITCODE -ne 0) { throw "Portable package verification failed" }
 tar.exe -a -c -f $zipPath -C $distRoot $packageName
 if ($LASTEXITCODE -ne 0) { throw "Portable zip creation failed" }
 
-py (Join-Path $PSScriptRoot "verify_portable_contents.py") `
+& $pythonCommand (Join-Path $PSScriptRoot "verify_portable_contents.py") `
     --platform windows `
     --package-root $packageRoot `
     --executable $builtExe `

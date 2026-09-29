@@ -4,6 +4,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "windows-portable.yml"
 BUILDER = REPO_ROOT / "scripts" / "build-windows-portable.ps1"
+WINDOWS_PYTHON_SCRIPTS = (
+    BUILDER,
+    REPO_ROOT / "scripts" / "verify-windows-portable.ps1",
+    REPO_ROOT / "scripts" / "test-packaged-workflow-assets.ps1",
+    REPO_ROOT / "scripts" / "test-packaged-director-guides.ps1",
+    REPO_ROOT / "scripts" / "test-packaged-h3-profiles.ps1",
+)
 
 
 def test_windows_portable_ci_builds_and_publishes_verified_artifacts() -> None:
@@ -22,3 +29,11 @@ def test_windows_builder_emits_checksum_file() -> None:
 
     assert '$checksumPath = "$zipPath.sha256"' in text
     assert "Set-Content -LiteralPath $checksumPath" in text
+
+
+def test_windows_build_scripts_use_setup_python_instead_of_launcher_default() -> None:
+    for path in WINDOWS_PYTHON_SCRIPTS:
+        text = path.read_text(encoding="utf-8")
+        assert "Get-Command py -ErrorAction SilentlyContinue" not in text
+        assert "py -m " not in text
+        assert "\npy " not in text

@@ -4,13 +4,14 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$pythonCommand = (Get-Command python -ErrorAction Stop).Source
 $resolvedExecutable = [System.IO.Path]::GetFullPath($ExecutablePath)
 if (-not (Test-Path -LiteralPath $resolvedExecutable -PathType Leaf)) {
     throw "Packaged executable does not exist: $resolvedExecutable"
 }
 
 $archiveListing = @(
-    py -m PyInstaller.utils.cliutils.archive_viewer -l $resolvedExecutable
+    & $pythonCommand -m PyInstaller.utils.cliutils.archive_viewer -l $resolvedExecutable
 )
 if ($LASTEXITCODE -ne 0) {
     throw "Could not inspect packaged executable: $resolvedExecutable"

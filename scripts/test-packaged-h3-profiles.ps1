@@ -21,10 +21,7 @@ function Normalize-ArchivePath([string]$Path) {
 }
 
 function Get-ExecutableArchiveEntries([string]$Path) {
-    $pythonCommand = Get-Command py -ErrorAction SilentlyContinue
-    if ($null -eq $pythonCommand) {
-        $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
-    }
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
     if ($null -eq $pythonCommand) {
         $pythonCommand = Get-Command python3 -ErrorAction SilentlyContinue
     }

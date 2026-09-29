@@ -8,6 +8,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$pythonCommand = (Get-Command python -ErrorAction Stop).Source
 $processHelpers = Join-Path $PSScriptRoot "portable-processes.ps1"
 . $processHelpers
 $packagePath = [System.IO.Path]::GetFullPath($PackageRoot)
@@ -119,7 +120,7 @@ foreach ($item in Get-ChildItem -LiteralPath $packagePath -Recurse -Force) {
     }
 }
 
-py (Join-Path $PSScriptRoot "verify_portable_contents.py") `
+& $pythonCommand (Join-Path $PSScriptRoot "verify_portable_contents.py") `
     --platform windows `
     --package-root $packagePath
 if ($LASTEXITCODE -ne 0) {
@@ -134,7 +135,7 @@ if (-not $SkipOfflineHarnessCheck) {
     $sidecarListener.Start()
     $sidecarVerificationPort = ([System.Net.IPEndPoint]$sidecarListener.LocalEndpoint).Port
     $sidecarListener.Stop()
-    py (Join-Path $PSScriptRoot "verify_bundled_harness.py") `
+    & $pythonCommand (Join-Path $PSScriptRoot "verify_bundled_harness.py") `
         --package-root $packagePath `
         --port $sidecarVerificationPort
     if ($LASTEXITCODE -ne 0) {
@@ -143,7 +144,7 @@ if (-not $SkipOfflineHarnessCheck) {
 }
 
 if (-not $SkipOfflineComfyCheck) {
-    py (Join-Path $PSScriptRoot "verify_bundled_comfy.py") `
+    & $pythonCommand (Join-Path $PSScriptRoot "verify_bundled_comfy.py") `
         --package-root $packagePath
     if ($LASTEXITCODE -ne 0) {
         throw "Comfy first-launch bootstrap verification failed"

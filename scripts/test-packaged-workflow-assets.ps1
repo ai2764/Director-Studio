@@ -9,10 +9,7 @@ if (-not (Test-Path -LiteralPath $resolvedExecutable -PathType Leaf)) {
     throw "Packaged executable does not exist: $resolvedExecutable"
 }
 
-$pythonCommand = Get-Command py -ErrorAction SilentlyContinue
-if ($null -eq $pythonCommand) {
-    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
-}
+$pythonCommand = Get-Command python -ErrorAction SilentlyContinue
 if ($null -eq $pythonCommand) {
     $pythonCommand = Get-Command python3 -ErrorAction SilentlyContinue
 }
