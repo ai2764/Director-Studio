@@ -14,10 +14,9 @@ and reports record their own historical scope; proposed work is not automaticall
 implemented. The architecture page separates current behavior from the refactor target.
 
 The [slim Harness runtime](docs/HARNESS.md) is the default Director agent loop,
-using the same Python-owned providers and tools. Windows portable includes its
-private Node runtime and sidecar; source checkouts retain an explicit Legacy switch.
-Linux and macOS portable packages retain Legacy as their default until they
-bundle the Harness sidecar and a private Node runtime.
+using the same Python-owned providers and tools. Windows, Linux, and macOS
+portable packages each include a native private Node runtime and compiled
+Harness sidecar; source checkouts retain an explicit Legacy switch.
 Harness can compact older conversation history, but the model server still sets
 the usable context capacity. Director Studio reads that capacity when the
 provider reports it and shows context usage in the Director UI.
@@ -194,7 +193,7 @@ and models are installed.
 
 ## macOS portable installation
 
-Choose `arm64` for Apple Silicon (M-series chips) or `x86_64` for Intel, on macOS 15 or newer. Both packages include the native executable, frontend, and Python runtime. A separate Python installation is only needed for the Comfy command-line tools. Ollama, LM Studio, and ComfyUI remain external services.
+Choose `arm64` for Apple Silicon (M-series chips) or `x86_64` for Intel, on macOS 15 or newer. Both packages include the native executable, frontend, private Node runtime, and native Harness sidecar. A separate Python installation is only needed for the Comfy command-line tools. Ollama, LM Studio, and ComfyUI remain external services.
 
 ### 1. Download and extract
 
@@ -237,6 +236,7 @@ Current builds have an ad-hoc signature and are not Apple Developer ID signed or
 The [macOS workflow](https://github.com/ai2764/Director-Studio/actions/workflows/macos-portable.yml) builds and tests both architectures in separate macOS 15 virtual machines. CI verifies:
 
 - The frontend and backend automated test suites, plus shell syntax, launcher behavior, and package safety checks.
+- The native private Node runtime, production-only Harness dependencies, native Koffi binary, and an offline deterministic Harness turn.
 - The executable's CPU architecture and ad-hoc signature, archive contents, and launch permissions.
 - Startup of the executable from the extracted archive, `/api/health`, `/`, `/mobile`, `/docs`, and the built-in H3 profile.
 
@@ -260,7 +260,7 @@ The **macOS Portable** GitHub Actions workflow builds both architectures on nati
 
 ## Linux portable installation
 
-Supported: Ubuntu 22.04 or 24.04, x86_64. Ollama and ComfyUI remain external services and must be installed and running separately.
+Supported: Ubuntu 22.04 or 24.04, x86_64. The package includes its private Node runtime and native Harness sidecar. Ollama and ComfyUI remain external services and must be installed and running separately.
 
 Install the required host tools. Ubuntu's `ffmpeg` package provides both `ffmpeg` and `ffprobe`, which Director Studio uses for voice references and video tail-frame extraction:
 
@@ -779,6 +779,9 @@ profiles, active pointer, user data, projects, jobs, outputs, compiled tests, or
 Harness development dependencies:
 
 - `dist/Director-Studio-Windows-x64.zip`
+- `dist/Director-Studio-Windows-x64.zip.sha256`
+
+The [Windows Portable workflow](https://github.com/ai2764/Director-Studio/actions/workflows/windows-portable.yml) builds and verifies the x64 package on Windows Server 2022 for pull requests and manual runs. A `v*` tag publishes the verified ZIP and checksum to the matching GitHub release.
 
 ## Build the Linux portable package
 
@@ -790,7 +793,7 @@ python3 -m pip install -r backend/requirements-build.txt
 ./scripts/build-linux-portable.sh
 ```
 
-The Linux build runs the same application and packaged-content checks with Linux-specific launcher, process-cleanup, executable-permission, and archive-safety verification. It produces:
+The Linux build stages the pinned native Node runtime and production-only Harness dependencies, runs an offline Harness turn, then runs the application and packaged-content checks with Linux-specific launcher, process-cleanup, executable-permission, and archive-safety verification. It produces:
 
 - `dist/Director-Studio-Linux-x86_64.tar.gz`
 - `dist/Director-Studio-Linux-x86_64.tar.gz.sha256`

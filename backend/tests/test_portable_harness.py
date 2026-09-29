@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from app import portable_harness
 from app.portable_harness import (
     HarnessStartupError,
     PortableHarnessSettings,
@@ -11,6 +12,14 @@ from app.portable_harness import (
     read_portable_harness_settings,
     start_managed_harness,
 )
+
+
+@pytest.mark.parametrize(
+    "system,expected",
+    [("Windows", "node.exe"), ("Linux", "node"), ("Darwin", "node")],
+)
+def test_bundled_node_name_matches_target_platform(system: str, expected: str) -> None:
+    assert portable_harness.node_executable_name(system) == expected
 
 
 EXPECTED_HEALTH = {
@@ -46,7 +55,7 @@ class FakeProcess:
 
 
 def _runtime_tree(root: Path) -> None:
-    node = root / "runtime" / "node" / "node.exe"
+    node = root / "runtime" / "node" / portable_harness.node_executable_name()
     entry = root / "harness" / "dist" / "server.js"
     node.parent.mkdir(parents=True)
     entry.parent.mkdir(parents=True)
@@ -97,7 +106,9 @@ def test_invalid_managed_setting_is_a_configuration_error(tmp_path: Path) -> Non
 def test_bundled_paths_follow_install_and_data_roots(tmp_path: Path) -> None:
     result = bundled_harness_paths(tmp_path, tmp_path / "data")
 
-    assert result.node == tmp_path / "runtime" / "node" / "node.exe"
+    assert result.node == (
+        tmp_path / "runtime" / "node" / portable_harness.node_executable_name()
+    )
     assert result.entry == tmp_path / "harness" / "dist" / "server.js"
     assert result.root == tmp_path / "harness"
     assert result.session_root == tmp_path / "data" / "harness-sessions"

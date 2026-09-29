@@ -6,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$pythonCommand = (Get-Command python -ErrorAction Stop).Source
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $frontendRoot = Join-Path $repoRoot "frontend"
 $backendRoot = Join-Path $repoRoot "backend"
@@ -16,6 +17,7 @@ $distRoot = Join-Path $repoRoot "dist"
 $packageName = "Director-Studio-Windows-x64"
 $packageRoot = Join-Path $distRoot $packageName
 $zipPath = Join-Path $distRoot "$packageName.zip"
+$checksumPath = "$zipPath.sha256"
 
 function Remove-GeneratedDirectory([string]$Path) {
     $resolvedParent = [System.IO.Path]::GetFullPath((Split-Path $Path -Parent))
@@ -55,7 +57,7 @@ finally {
 
 Push-Location $backendRoot
 try {
-    py -m pytest `
+    & $pythonCommand -m pytest `
         tests/test_packaged_runtime.py `
         tests/test_projects_api.py `
         tests/test_portable_tools_installer.py `
@@ -63,14 +65,17 @@ try {
         tests/test_llm_provider.py `
         tests/test_packaged_runtime_paths.py `
         tests/test_portable_runtime_paths.py `
+        tests/test_portable_contents_verifier.py `
+        tests/test_stage_portable_harness.py `
         tests/test_stage_windows_harness.py `
         tests/test_stage_windows_comfy.py `
         tests/test_portable_comfy.py `
         tests/test_verify_bundled_harness.py `
         tests/test_verify_bundled_comfy.py `
+        tests/test_windows_ci.py `
         -q
     if ($LASTEXITCODE -ne 0) { throw "backend packaging tests failed" }
-    py -m PyInstaller --version
+    & $pythonCommand -m PyInstaller --version
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller is unavailable; install backend/requirements-build.txt"
     }
@@ -94,12 +99,15 @@ if (Test-Path -LiteralPath $zipPath) {
     }
     Remove-Item -LiteralPath $resolvedZip -Force
 }
+if (Test-Path -LiteralPath $checksumPath) {
+    Remove-Item -LiteralPath $checksumPath -Force
+}
 New-Item -ItemType Directory -Path $pyinstallerRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $pyinstallerDist -Force | Out-Null
 New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
 
 $specPath = Join-Path $backendRoot "packaging/director-studio-legacy.spec"
-py -m PyInstaller `
+& $pythonCommand -m PyInstaller `
     --clean `
     --noconfirm `
     --workpath $pyinstallerRoot `
@@ -124,14 +132,15 @@ Copy-Item -LiteralPath (Join-Path $backendRoot ".env.example") -Destination (Joi
 Copy-Item -LiteralPath (Join-Path $repoRoot "packaging/windows-portable-readme.md") -Destination (Join-Path $packageRoot "README.md")
 
 $stageArguments = @(
-    (Join-Path $PSScriptRoot "stage_windows_harness.py"),
+    (Join-Path $PSScriptRoot "stage_portable_harness.py"),
     "--repo-root", $repoRoot,
-    "--destination", $packageRoot
+    "--destination", $packageRoot,
+    "--target", "windows-x64"
 )
 if ($NodeArchive) {
     $stageArguments += @("--node-archive", $NodeArchive)
 }
-& py @stageArguments
+& $pythonCommand @stageArguments
 if ($LASTEXITCODE -ne 0) { throw "Harness runtime staging failed" }
 
 $comfyStageArguments = @(
@@ -145,10 +154,10 @@ if ($PythonArchive) {
 if ($PipWheel) {
     $comfyStageArguments += @("--pip-wheel", $PipWheel)
 }
-& py @comfyStageArguments
+& $pythonCommand @comfyStageArguments
 if ($LASTEXITCODE -ne 0) { throw "Comfy MCP runtime staging failed" }
 
-py (Join-Path $PSScriptRoot "verify_bundled_comfy.py") `
+& $pythonCommand (Join-Path $PSScriptRoot "verify_bundled_comfy.py") `
     --package-root $packageRoot
 if ($LASTEXITCODE -ne 0) { throw "Comfy first-launch bootstrap verification failed" }
 
@@ -160,7 +169,7 @@ if ($LASTEXITCODE -ne 0) { throw "Portable package verification failed" }
 tar.exe -a -c -f $zipPath -C $distRoot $packageName
 if ($LASTEXITCODE -ne 0) { throw "Portable zip creation failed" }
 
-py (Join-Path $PSScriptRoot "verify_portable_contents.py") `
+& $pythonCommand (Join-Path $PSScriptRoot "verify_portable_contents.py") `
     --platform windows `
     --package-root $packageRoot `
     --executable $builtExe `
@@ -208,10 +217,13 @@ if ($LASTEXITCODE -ne 0) { throw "packaged H3 profile isolation test failed" }
 
 $hash = Get-FileHash -LiteralPath $zipPath -Algorithm SHA256
 $size = (Get-Item -LiteralPath $zipPath).Length
+$checksumLine = "$($hash.Hash.ToLowerInvariant())  $([System.IO.Path]::GetFileName($zipPath))"
+Set-Content -LiteralPath $checksumPath -Value $checksumLine -Encoding utf8
 
 [ordered]@{
     package_root = $packageRoot
     zip = $zipPath
+    checksum = $checksumPath
     sha256 = $hash.Hash
     bytes = $size
 } | ConvertTo-Json

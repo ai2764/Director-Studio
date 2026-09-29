@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
+import platform
 import secrets
 import socket
 import subprocess
@@ -136,12 +137,16 @@ def bundled_harness_paths(
 ) -> BundledHarnessPaths:
     root = install_root / "harness"
     return BundledHarnessPaths(
-        node=install_root / "runtime" / "node" / "node.exe",
+        node=install_root / "runtime" / "node" / node_executable_name(),
         entry=root / "dist" / "server.js",
         root=root,
         session_root=data_root / "harness-sessions",
         log_path=data_root / "logs" / "harness-sidecar.log",
     )
+
+
+def node_executable_name(system: str | None = None) -> str:
+    return "node.exe" if (platform.system() if system is None else system) == "Windows" else "node"
 
 
 def reserve_loopback_port() -> int:

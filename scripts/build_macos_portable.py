@@ -34,20 +34,16 @@ def stage_package(repo: Path, executable: Path, package: Path) -> None:
     package.mkdir(parents=True, exist_ok=False)
     # Both Mac architectures have the same files. Never copy the live .env/data.
     flavor = FLAVORS["macos-arm64"]
-    for name in required_package_files(flavor):
+    base_files = (
+        name for name in required_package_files(flavor)
+        if not name.startswith(("harness/", "runtime/")) and name != "portable-manifest.json"
+    )
+    for name in base_files:
         source = executable if name == "DirectorStudio" else repo / name
         if name == ".env":
             source = repo / "backend" / ".env.example"
         destination = package / name
         shutil.copyfile(source, destination)
-        if name == ".env":
-            portable_env = destination.read_bytes()
-            runtime_line = b"DS_DIRECTOR_AGENT_RUNTIME=harness"
-            if portable_env.count(runtime_line) != 1:
-                raise RuntimeError("Portable .env is missing the Harness runtime setting")
-            destination.write_bytes(
-                portable_env.replace(runtime_line, b"DS_DIRECTOR_AGENT_RUNTIME=legacy")
-            )
         executable_file = name == "DirectorStudio" or name in flavor.wrappers
         if name in flavor.wrappers:
             destination.write_bytes(destination.read_bytes().replace(b"\r\n", b"\n"))
@@ -57,11 +53,18 @@ def stage_package(repo: Path, executable: Path, package: Path) -> None:
 def create_archive(package: Path, archive_path: Path) -> None:
     with tarfile.open(archive_path, "w:gz", format=tarfile.PAX_FORMAT) as archive:
         for path in [package, *sorted(package.rglob("*"))]:
-            info = archive.gettarinfo(str(path), arcname=f"{package.name}/{path.relative_to(package).as_posix()}".rstrip("/."))
+            relative = path.relative_to(package).as_posix()
+            info = archive.gettarinfo(str(path), arcname=f"{package.name}/{relative}".rstrip("/."))
             info.uid = info.gid = 0
             info.uname = info.gname = ""
             # Preserve POSIX launch permissions even in packaging tests on Windows.
-            info.mode = 0o755 if path.is_dir() or path.name == "DirectorStudio" or path.suffix in (".sh", ".command") else 0o644
+            executable = (
+                path.is_dir()
+                or path.name == "DirectorStudio"
+                or path.suffix in (".sh", ".command")
+                or relative == "runtime/node/node"
+            )
+            info.mode = 0o755 if executable else 0o644
             if path.is_file():
                 with path.open("rb") as stream:
                     archive.addfile(info, stream)
@@ -102,6 +105,12 @@ def main() -> int:
         run("codesign", "--verify", "--strict", str(executable))
         package = work / flavor.name
         stage_package(repo, executable, package)
+        run(sys.executable, str(repo / "scripts" / "stage_portable_harness.py"),
+            "--repo-root", str(repo), "--destination", str(package),
+            "--target", f"macos-{architecture}")
+        run(sys.executable, str(repo / "scripts" / "verify_bundled_harness.py"),
+            "--package-root", str(package), "--port",
+            os.environ.get("DS_MACOS_HARNESS_VERIFICATION_PORT", "18793"))
         archive = work / f"{flavor.name}.tar.gz"
         create_archive(package, archive)
         verify_archive(archive, package, flavor)
