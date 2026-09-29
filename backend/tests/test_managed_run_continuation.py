@@ -313,7 +313,7 @@ async def test_unplanned_step_deselects_stale_managed_tail_but_preserves_manual_
 
 
 @pytest.mark.asyncio
-async def test_rerun_source_replaces_prepared_tail_with_new_job(monkeypatch) -> None:
+async def test_rerun_source_replaces_same_lineage_tail_from_director_chat(monkeypatch) -> None:
     from app.core.managed_runs import continuation
     from app.core.managed_runs.store import _save_run
     from app.core.projects.layouts import (
@@ -341,7 +341,7 @@ async def test_rerun_source_replaces_prepared_tail_with_new_job(monkeypatch) -> 
         asset_id="lay_old_tail",
         purpose="old continuity",
         review_status=LayoutReviewStatus.usable,
-        feedback_source="managed_run",
+        feedback_source="director_chat",
         selected_for_h3=True,
         origin=ClipTailFrameOrigin(
             source_shot_id="sht_1",
