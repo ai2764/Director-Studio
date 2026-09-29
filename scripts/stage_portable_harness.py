@@ -96,11 +96,11 @@ def verify_sha256(path: Path, expected: str) -> None:
         raise StageError(f"Node archive checksum mismatch: expected {expected}, got {actual}")
 
 
-def _safe_parts(name: str, *, link: bool = False) -> tuple[str, ...]:
+def _safe_parts(name: str) -> tuple[str, ...]:
     normalized = name.replace("\\", "/")
     path = PurePosixPath(normalized)
     parts = tuple(part for part in path.parts if part not in {"", "."})
-    if path.is_absolute() or not parts or ".." in parts or (len(parts[0]) >= 2 and parts[0][1] == ":") or link:
+    if path.is_absolute() or not parts or ".." in parts or (len(parts[0]) >= 2 and parts[0][1] == ":"):
         raise StageError(f"unsafe archive member: {name}")
     return parts
 
@@ -117,18 +117,19 @@ def extract_node_runtime(archive_path: Path, destination: Path, config: RuntimeC
         if config.archive_kind == "zip":
             with zipfile.ZipFile(archive_path) as archive:
                 for info in archive.infolist():
-                    parts = _safe_parts(info.filename, link=stat.S_IFMT(info.external_attr >> 16) == stat.S_IFLNK)
+                    is_link = stat.S_IFMT(info.external_attr >> 16) == stat.S_IFLNK
+                    parts = _safe_parts(info.filename)
                     if parts[0] != root:
                         raise StageError(f"unsafe archive member outside {root}: {info.filename}")
                     target = wanted.get(parts)
                     if target is not None:
-                        if info.is_dir():
+                        if is_link or info.is_dir():
                             raise StageError(f"Node runtime entry is not a file: {info.filename}")
                         found[target] = archive.read(info)
         else:
             with tarfile.open(archive_path, "r:*") as archive:
                 for member in archive.getmembers():
-                    parts = _safe_parts(member.name, link=member.issym() or member.islnk())
+                    parts = _safe_parts(member.name)
                     if parts[0] != root:
                         raise StageError(f"unsafe archive member outside {root}: {member.name}")
                     target = wanted.get(parts)

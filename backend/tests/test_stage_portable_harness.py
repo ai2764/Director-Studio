@@ -92,3 +92,56 @@ def test_manifest_records_target_specific_runtime(tmp_path: Path) -> None:
     }
     assert "python" not in manifest
     assert "comfy_bootstrap" not in manifest
+
+
+def test_tar_extraction_ignores_unselected_symlinks(tmp_path: Path) -> None:
+    stager = _load_stager()
+    archive = tmp_path / "node.tar.gz"
+    root = "node-runtime"
+    with tarfile.open(archive, "w:gz") as bundle:
+        for name, value in {
+            f"{root}/bin/node": b"private-node",
+            f"{root}/LICENSE": b"Node license",
+        }.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(value)
+            bundle.addfile(info, io.BytesIO(value))
+        link = tarfile.TarInfo(f"{root}/bin/corepack")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "../lib/node_modules/corepack/shims/corepack"
+        bundle.addfile(link)
+    config = stager.RuntimeConfig(
+        target="test", platform="test", arch="arm64", version="22.23.2",
+        archive=archive.name, archive_kind="tar.gz", archive_root=root,
+        url="https://example.invalid/node", sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        node_member="bin/node", node_name="node",
+        koffi_binary=Path("harness/node_modules/koffi/koffi.node"),
+    )
+
+    stager.extract_node_runtime(archive, tmp_path / "package", config)
+
+    assert (tmp_path / "package" / "runtime" / "node" / "node").is_file()
+
+
+def test_tar_extraction_rejects_symlink_for_selected_node(tmp_path: Path) -> None:
+    stager = _load_stager()
+    archive = tmp_path / "node.tar.gz"
+    root = "node-runtime"
+    with tarfile.open(archive, "w:gz") as bundle:
+        license_info = tarfile.TarInfo(f"{root}/LICENSE")
+        license_info.size = len(b"Node license")
+        bundle.addfile(license_info, io.BytesIO(b"Node license"))
+        link = tarfile.TarInfo(f"{root}/bin/node")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "node-real"
+        bundle.addfile(link)
+    config = stager.RuntimeConfig(
+        target="test", platform="test", arch="arm64", version="22.23.2",
+        archive=archive.name, archive_kind="tar.gz", archive_root=root,
+        url="https://example.invalid/node", sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        node_member="bin/node", node_name="node",
+        koffi_binary=Path("harness/node_modules/koffi/koffi.node"),
+    )
+
+    with pytest.raises(stager.StageError, match="not a file"):
+        stager.extract_node_runtime(archive, tmp_path / "package", config)
