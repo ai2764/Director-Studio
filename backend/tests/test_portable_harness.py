@@ -55,7 +55,7 @@ class FakeProcess:
 
 
 def _runtime_tree(root: Path) -> None:
-    node = root / "runtime" / "node" / "node.exe"
+    node = root / "runtime" / "node" / portable_harness.node_executable_name()
     entry = root / "harness" / "dist" / "server.js"
     node.parent.mkdir(parents=True)
     entry.parent.mkdir(parents=True)
@@ -106,7 +106,9 @@ def test_invalid_managed_setting_is_a_configuration_error(tmp_path: Path) -> Non
 def test_bundled_paths_follow_install_and_data_roots(tmp_path: Path) -> None:
     result = bundled_harness_paths(tmp_path, tmp_path / "data")
 
-    assert result.node == tmp_path / "runtime" / "node" / "node.exe"
+    assert result.node == (
+        tmp_path / "runtime" / "node" / portable_harness.node_executable_name()
+    )
     assert result.entry == tmp_path / "harness" / "dist" / "server.js"
     assert result.root == tmp_path / "harness"
     assert result.session_root == tmp_path / "data" / "harness-sessions"

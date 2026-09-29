@@ -137,5 +137,5 @@ def test_child_environment_excludes_system_node_and_provider_secrets(tmp_path: P
 
 
 def test_missing_private_node_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(verifier.HarnessVerificationError, match="node.exe"):
+    with pytest.raises(verifier.HarnessVerificationError, match="private node"):
         verifier.run_bundled_harness(tmp_path, port=19004, timeout=0.1)
