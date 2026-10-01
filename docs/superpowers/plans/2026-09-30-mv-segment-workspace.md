@@ -290,19 +290,17 @@ if (segmentSelection) {
 
 - [ ] **Step 4: Verify pass and commit.** Run all affected Vitest files, `npm run build`, and the MV backend tests. Stage listed files, run `python scripts/check_staged_secrets.py`, and commit `feat: connect MV segment discussion to Shots`.
 
-### Task 8: Custom H3 Audio 1 discovery and preflight
+### Task 8: Verify existing custom H3 audio mapping before queueing
 
 **Files:**
-- Modify: `backend/app/workflow_profiles/h3/inspector.py`, `backend/app/workflow_profiles/h3/validator.py`
-- Modify: `backend/app/pipelines/h3_ref2va/workflow.py`, `backend/app/pipelines/h3_ref2va/pipeline.py`, `backend/app/api/h3_workflow_profiles.py`
-- Modify: `frontend/src/features/settings/H3WorkflowSetup.tsx`, `frontend/src/features/settings/H3WorkflowSetup.test.tsx`
+- Modify: `backend/app/workflow_profiles/h3/validator.py`, `backend/app/pipelines/h3_ref2va/pipeline.py`
 - Test: `backend/tests/test_h3_workflow_validator.py`, `backend/tests/test_h3_profile_runtime.py`, `backend/tests/test_mv_segment_production.py`
 
 **Interfaces:**
-- Produces: `validate_h3_audio_route(profile: ResolvedH3Profile) -> ValidationReport`; it exercises `fill_profile_graph` with one Picture and one Audio and checks that Audio 1 resolves to the expected uploaded name on the mapped H3 input. A graph without a valid audio route is still valid for zero-audio Shots.
+- Keeps the inspector's existing `audio_input_pattern="ref_audios.ref_audio_{index}"` mapping for a confirmed official Ref2AV node and the filler's existing Audio 1–3 support. Produces: `validate_h3_audio_route(profile: ResolvedH3Profile) -> ValidationReport`; it exercises `fill_profile_graph` with one Picture and one Audio and checks that Audio 1 resolves to the expected uploaded name on the mapped H3 input. A graph without a valid audio route is still valid for zero-audio Shots.
 - Local H3 queue preparation checks this capability against its captured profile snapshot when `audio_keys` contains the prepared song excerpt; a failing route returns a clear submission error before the Job enters the queue. The existing `prepare_music_segment` result remains the uploaded Audio 1 bytes.
 
-- [ ] **Step 1: Write failing graph and submission tests.** Use an imported custom graph whose H3 node has a direct `ref_audios.ref_audio_0` path and a separate fixed `LoadAudio`; assert the route report identifies the direct path, and the filled graph's new `LoadAudio` holds the prepared master excerpt filename rather than the fixed file. Remove the direct audio mapping and assert no-audio fill remains valid while an MV singing submission fails before the Job enters the queue. Check an ambiguous/invalid mapping reports a specific input issue during setup. In the setup UI, show whether song Audio 1 is supported and identify fixed files as workflow-owned, not as the Project song.
+- [ ] **Step 1: Write failing graph and submission tests.** Use a confirmed official Ref2AV node with the existing `ref_audios.ref_audio_{index}` mapping; assert one prepared master excerpt enters Audio 1. Assert three Voice-only references enter Audio 1–3 in order and a fourth fails, preserving current behavior. Include a separate fixed `LoadAudio` node and assert it is not substituted for the master. Remove the dynamic audio mapping and assert no-audio fill remains valid while an MV singing submission fails before the Job enters the queue. A graph that claims an invalid Audio 1 mapping reports a specific input issue during profile validation.
 
 ```python
 report = validate_h3_audio_route(profile)
@@ -313,7 +311,7 @@ assert filled[audio_node_id]["inputs"]["audio"] == "master-excerpt.wav"
 ```
 
 - [ ] **Step 2: Verify failure.** Run `python -m pytest backend/tests/test_h3_workflow_validator.py backend/tests/test_h3_profile_runtime.py backend/tests/test_mv_segment_production.py -q`; expect the new route assertions to fail.
-- [ ] **Step 3: Implement discovery and preflight.** In the inspector, distinguish the selected H3 node's dynamic Audio 1 mapping from upstream `LoadAudio` fixed dependencies and present both separately. In the validator, retain its zero-audio boundary check and also test one-audio filling whenever the mapping claims audio support; report the mapped socket and failure, not a generic Comfy error. In `H3Ref2VAPipeline.prepare_job_submission`, first capture the existing immutable profile snapshot, then validate its Audio 1 route when `job.params.audio_keys` is nonempty; reject before queueing. The setup UI states “Audio 1 supported” or “No song Audio 1 route”; it must not call a fixed `LoadAudio` file the Project song. Keep the current no-audio graph path for cutaways.
+- [ ] **Step 3: Implement validation and preflight.** Keep inspector and graph fill behavior unchanged. In the validator, retain its zero-audio boundary check and add one-audio filling whenever the mapping claims audio support; report the mapped socket and failure, not a generic Comfy error. In `H3Ref2VAPipeline.prepare_job_submission`, first capture the existing immutable profile snapshot, then validate its Audio 1 route when `job.params.audio_keys` is nonempty; reject before queueing. Keep the current no-audio graph path for cutaways. Do not rebind standalone `LoadAudio` nodes.
 
 ```python
 if job.params.get("audio_keys") and self.execution_adapter_id_for_job(job) == "comfy_mcp":
@@ -322,7 +320,7 @@ if job.params.get("audio_keys") and self.execution_adapter_id_for_job(job) == "c
         raise ValueError("Active H3 workflow has no valid Audio 1 input")
 ```
 
-- [ ] **Step 4: Verify pass and commit.** Run the three pytest files, `npm test -- --run src/features/settings/H3WorkflowSetup.test.tsx` and `npm run build` from `frontend`; stage only listed files, run `python scripts/check_staged_secrets.py`, and commit `feat: validate custom H3 song audio input`.
+- [ ] **Step 4: Verify pass and commit.** Run the three pytest files; stage only listed files, run `python scripts/check_staged_secrets.py`, and commit `feat: validate custom H3 song audio input`.
 
 ### Task 9: End-to-end acceptance and documentation
 

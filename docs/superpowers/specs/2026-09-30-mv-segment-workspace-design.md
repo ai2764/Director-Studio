@@ -77,8 +77,9 @@ The Agent receives the selected segment records, their revision, the master iden
 - Existing MV projects and Shots with only freeform script timestamps continue to load. There is no automatic migration or overwrite; the user can import the old source text when ready.
 - Non-MV projects never receive the Music workspace or segment-only API behavior.
 - Changes to segment text do not mutate a completed Job. A new generation after an affected change must use current, reviewed Shot timing and prompt state.
-- For a custom local H3 workflow, inspect and validate the route for a job-time song excerpt as Audio 1 before an MV Shot is submitted. The current custom-profile validator's zero-audio synthetic fill alone is insufficient proof that a singing Shot can use the profile. Report an unsupported or ambiguous audio route before queueing rather than silently using a workflow-owned fixed audio file. Existing no-audio custom workflows continue to support visual cutaways.
+- A confirmed official Ref2AV node already maps `ref_audios.ref_audio_{index}` to three ordered reference inputs in a custom local H3 profile; existing Agent Voice refs can use Audio 1–3. Validate an audio-bearing fill before an MV singing Shot is queued, because the current profile validator only fills a zero-audio synthetic boundary. Report an invalid audio route before queueing rather than substituting a workflow-owned fixed audio file. No-audio custom workflows continue to support visual cutaways.
 - The three H3 audio-reference positions are ordered generic inputs, not dedicated music or timbre slots. In this phase DS submits the song excerpt as Audio 1 for face-readable singing Shots; role comes from the prompt. Reference audio does not guarantee an exact copy of the source song, so the final edit still uses the master.
+- Current Shot validation disallows combining `music_segment` with Voice refs. Supporting song Audio 1 plus separate voice references in Audio 2–3 requires a separate Shot and submission-contract change; confirming the custom Ref2AV node alone does not enable that combination.
 
 ## Acceptance checks
 
@@ -89,7 +90,7 @@ The Agent receives the selected segment records, their revision, the master iden
 - Selecting a segment scopes Agent context and allows a batch to create multiple linked Shots without forcing one Shot per segment.
 - Text corrections during discussion update the saved segment, retain the original song, and flag linked Shots that require review.
 - A readable singing Shot still uses the existing master-to-job Audio 1 path; a non-singing cutaway submits without song audio.
-- A custom H3 profile that claims Audio 1 support passes a one-audio boundary validation and receives the prepared master excerpt in the intended input. A profile without a valid Audio 1 route remains usable for cutaways and gives a clear error for singing Shots before a Job starts.
+- A custom H3 profile that claims Audio 1 support passes a one-audio boundary validation and receives the prepared master excerpt in the intended input. The existing Voice-only path still accepts up to three ordered audio references. A profile without a valid Audio 1 route remains usable for cutaways and gives a clear error for singing Shots before a Job starts.
 - Existing Director and JSON Production behavior and legacy MV data remain intact.
 
 ## Outside this phase
