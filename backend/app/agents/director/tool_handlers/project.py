@@ -362,10 +362,15 @@ async def handle_project_tool(
                 {"ok": True, "shot": storyboard_snapshot([revised])["shots"][0],
                  "duration_budget": duration_budget(project, persisted)}
             )
+        audio_note = (
+            " Voice references were replaced."
+            if "voice_matches" in revision.model_fields_set else
+            " Voice references were preserved."
+        )
         notes.append(
             f"Revised exactly one Shot ({revision.shot_id}); neighboring Shots, "
-            "references, and Layouts were preserved. Its stale prompt and active "
-            "H3 link were cleared for regeneration."
+            "Picture references, and Layouts were preserved. Its stale prompt "
+            "and active H3 link were cleared for regeneration." + audio_note
         )
         return True
 

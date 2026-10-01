@@ -974,11 +974,157 @@ def test_revise_shot_tool_only_accepts_partial_authored_fields():
         "duration_s",
         "dialogue",
         "music_segment",
+        "voice_matches",
         "dialogue_lines",
         "dialogue_language_updates",
     }
     assert "refs" not in parameters["properties"]
     assert "layout_refs" not in parameters["properties"]
+
+
+def test_revise_shot_replaces_and_clears_voice_references(
+    tmp_projects_dir, tmp_path, monkeypatch,
+):
+    from app.agents.director.service import DirectorService
+    from app.config import settings
+    from app.core.library.store import write_asset
+    from app.core.projects.models import ShotVoiceRef
+
+    monkeypatch.setattr(settings, "library_root", tmp_path / "library")
+    project = create_project("Voice revision", "Mia speaks.")
+    for asset_id in ("voi_old", "voi_new"):
+        write_asset(LibraryAsset(
+            id=asset_id, kind="voices", name=asset_id, pipeline_id="external",
+            job_id="", created_at="2026-01-01T00:00:00+00:00",
+            project_id=project.id, files={"reference": f"{asset_id}.wav"},
+            meta={"h3_ready": True, "duration_s": 2.0},
+        ))
+    shot = Shot(
+        id="sht_voice_revision", project_id=project.id, scene_id="sc01",
+        title="Mia", script_beat="Mia speaks.", duration_s=4,
+        voice_refs=[ShotVoiceRef(asset_id="voi_old", audio_index=1)],
+        prompt_sections=PromptSections(summary="Old voice prompt"),
+        h3_job_id="job_old", meta={"prompt_voice_signature": "old"},
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    svc = DirectorService(plan_provider=None)
+
+    revised = svc.revise_shot(project.id, {
+        "shot_id": shot.id,
+        "voice_matches": [{
+            "asset_id": "voi_new", "audio_index": 1,
+            "file_key": "reference", "speaker": "Mia", "reason": "Current voice",
+        }],
+    })[0]
+    assert [(ref.asset_id, ref.audio_index, ref.file_key, ref.speaker, ref.notes)
+            for ref in revised.voice_refs] == [
+                ("voi_new", 1, "reference", "Mia", "Current voice")]
+    assert revised.prompt_sections.summary == ""
+    assert revised.h3_job_id is None
+    assert revised.meta["prompt_voice_signature"] == ""
+    assert revised.meta["superseded_h3_job_ids"] == ["job_old"]
+
+    title_only = svc.revise_shot(project.id, {"shot_id": shot.id, "title": "New title"})[0]
+    assert [ref.asset_id for ref in title_only.voice_refs] == ["voi_new"]
+    cleared = svc.revise_shot(project.id, {"shot_id": shot.id, "voice_matches": []})[0]
+    assert cleared.voice_refs == []
+
+
+def test_revise_shot_rejects_invalid_voice_reference_without_saving(
+    tmp_projects_dir, tmp_path, monkeypatch,
+):
+    from app.agents.director.service import DirectorService
+    from app.config import settings
+    from app.core.library.store import write_asset
+
+    monkeypatch.setattr(settings, "library_root", tmp_path / "library")
+    project = create_project("Voice validation", "Mia speaks.")
+    write_asset(LibraryAsset(
+        id="voi_valid", kind="voices", name="Mia", pipeline_id="external",
+        job_id="", created_at="2026-01-01T00:00:00+00:00",
+        project_id=project.id, files={"reference": "mia.wav"},
+        meta={"h3_ready": True, "duration_s": 2.0},
+    ))
+    shot = Shot(id="sht_voice_validation", project_id=project.id,
+                scene_id="sc01", title="Mia", script_beat="Mia speaks.", duration_s=4)
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    svc = DirectorService(plan_provider=None)
+
+    for matches, message in (
+        ([{"asset_id": "voi_missing", "audio_index": 1}], "voice asset"),
+        ([{"asset_id": "voi_valid", "audio_index": 1, "file_key": "wrong"}], "file_key"),
+        ([{"asset_id": "voi_valid", "audio_index": 2}], "audio_index"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            svc.revise_shot(project.id, {"shot_id": shot.id, "voice_matches": matches})
+        assert load_shot(project.id, shot.id).voice_refs == []
+
+
+def test_revise_shot_audio_switch_requires_explicitly_clearing_other_source(
+    tmp_projects_dir, tmp_path, monkeypatch,
+):
+    from app.agents.director.service import DirectorService
+    from app.config import settings
+    from app.core.library.store import write_asset
+
+    monkeypatch.setattr(settings, "library_root", tmp_path / "library")
+    project = create_project("MV audio switch", "song", mode="mv")
+    write_asset(LibraryAsset(
+        id="voi_mv", kind="voices", name="Singer", pipeline_id="external",
+        job_id="", created_at="2026-01-01T00:00:00+00:00",
+        project_id=project.id, files={"reference": "singer.wav"},
+        meta={"h3_ready": True, "duration_s": 2.0},
+    ))
+    shot = Shot(id="sht_mv_switch", project_id=project.id, scene_id="sc01",
+                title="Singer", script_beat="Singer performs.", duration_s=4)
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    svc = DirectorService(plan_provider=None)
+    segment = {"core_start_s": 1, "core_end_s": 2,
+               "submit_start_s": 0.5, "submit_end_s": 2.5}
+    voice = [{"asset_id": "voi_mv", "audio_index": 1}]
+
+    svc.revise_shot(project.id, {"shot_id": shot.id, "music_segment": segment})
+    with pytest.raises(ValueError, match="cannot be combined"):
+        svc.revise_shot(project.id, {"shot_id": shot.id, "voice_matches": voice})
+    assert load_shot(project.id, shot.id).voice_refs == []
+    revised = svc.revise_shot(project.id, {
+        "shot_id": shot.id, "music_segment": None, "voice_matches": voice,
+    })[0]
+    assert revised.music_segment is None
+    assert [ref.asset_id for ref in revised.voice_refs] == ["voi_mv"]
+
+
+def test_revise_shot_claims_selected_unassigned_voice_for_submission(
+    tmp_projects_dir, tmp_path, monkeypatch,
+):
+    from app.agents.director.service import DirectorService
+    from app.config import settings
+    from app.core.library.store import asset_dir, load_asset, write_asset
+
+    monkeypatch.setattr(settings, "library_root", tmp_path / "library")
+    project = create_project("Claim Voice", "Mia speaks.")
+    write_asset(LibraryAsset(
+        id="voi_shared", kind="voices", name="Mia", pipeline_id="external",
+        job_id="", created_at="2026-01-01T00:00:00+00:00",
+        files={"reference": "mia.wav"},
+        meta={"h3_ready": True, "duration_s": 2.0},
+    ))
+    (asset_dir("voices", "voi_shared") / "mia.wav").write_bytes(b"reference")
+    shot = Shot(id="sht_claim_voice", project_id=project.id, scene_id="sc01",
+                title="Mia", script_beat="Mia speaks.", duration_s=4)
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+
+    DirectorService(plan_provider=None).revise_shot(project.id, {
+        "shot_id": shot.id,
+        "voice_matches": [{"asset_id": "voi_shared", "audio_index": 1}],
+    })
+
+    assert load_asset("voices", "voi_shared").project_id == project.id
+    assert (asset_dir("voices", "voi_shared", project_id=project.id) / "mia.wav").is_file()
 
 
 @pytest.mark.asyncio

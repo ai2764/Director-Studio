@@ -375,8 +375,10 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "revise_shot",
             "description": (
                 "Update only explicitly supplied authored fields on exactly one "
-                "existing Shot. Preserves neighboring Shots, Picture and voice refs, "
-                "Layouts, and historical jobs while invalidating that Shot's stale "
+                "existing Shot. Preserves neighboring Shots, Picture refs, "
+                "Layouts, and historical jobs. voice_matches optionally replaces "
+                "this Shot's complete ordered Voice reference list ([] clears it; "
+                "omission preserves it). Invalidates that Shot's stale "
                 "prompt and active H3 link. For a language-only dialogue change, use "
                 "dialogue_language_updates with saved line_id and language; do not retype words. "
                 "For missing legacy attribution, resubmit unchanged dialogue with its speaker-cued "

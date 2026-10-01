@@ -244,6 +244,14 @@ class ShotRevisionSubmission(BaseModel):
     dialogue_lines: list[DialogueLine] | None = None
     dialogue_language_updates: list[DialogueLanguageUpdate] | None = Field(default=None, min_length=1)
     music_segment: ShotMusicSegment | None = None
+    voice_matches: list[VoiceMatchDraft] | None = Field(
+        default=None,
+        max_length=3,
+        description=(
+            "Complete ordered Voice reference replacement for this Shot. "
+            "Omit to preserve existing references; use [] to clear them."
+        ),
+    )
 
     @field_validator(
         "shot_id",
@@ -281,6 +289,17 @@ class ShotRevisionSubmission(BaseModel):
     def _require_language_updates(cls, value: list[DialogueLanguageUpdate] | None):
         if value is None:
             raise ValueError("dialogue_language_updates must be a nonempty list")
+        return value
+
+    @field_validator("voice_matches")
+    @classmethod
+    def _require_ordered_voice_matches(cls, value: list[VoiceMatchDraft] | None):
+        if value is None:
+            raise ValueError("voice_matches must be a list; use [] to clear Voice references")
+        if len({match.asset_id for match in value}) != len(value):
+            raise ValueError("voice match assets must be unique")
+        if [match.audio_index for match in value] != list(range(1, len(value) + 1)):
+            raise ValueError("audio_index must be contiguous and ordered from 1")
         return value
 
     @model_validator(mode="after")

@@ -93,6 +93,7 @@ from .casting_service import (
     _heuristic_match,
     _kind_candidates,
     _resolve_voice_matches,
+    resolve_revised_voice_matches,
     _shot_from_draft,
     _validate_materialized_storyboard_bindings,
     _validate_storyboard_bindings,
@@ -509,13 +510,22 @@ class DirectorService:
             validate_shot_duration(authored_updates["duration_s"])
         if "music_segment" in authored_updates:
             authored_updates["music_segment"] = validated.music_segment
+        if "voice_matches" in authored_updates:
+            inventory, index = _inventory(project_id), _asset_index(project_id)
+            authored_updates["voice_refs"] = resolve_revised_voice_matches(
+                validated.voice_matches,
+                inventory=inventory,
+                index=index,
+            )
+            authored_updates.pop("voice_matches")
         if (
             authored_updates.get("music_segment") is not None
             and project.mode != ProjectMode.mv
         ):
             raise ValueError("music_segment is available only for Music Video projects")
         resulting_music = authored_updates.get("music_segment", shot.music_segment)
-        if resulting_music is not None and shot.voice_refs:
+        resulting_voices = authored_updates.get("voice_refs", shot.voice_refs)
+        if resulting_music is not None and resulting_voices:
             raise ValueError("music_segment cannot be combined with Voice references")
         meta = dict(shot.meta or {})
         if shot.h3_job_id:
@@ -561,6 +571,15 @@ class DirectorService:
             save_shot_if_current(revised, check_current=check_authored_source)
         else:
             save_shot(revised)
+
+        if "voice_refs" in authored_updates and revised.voice_refs:
+            # Match storyboard casting: a selected unassigned Voice becomes
+            # project-owned so canonical H3 submission can use it.
+            _claim_storyboard_assets(
+                project_id,
+                [revised.model_copy(update={"refs": []})],
+                index=index,
+            )
 
         persisted = list_shots(project_id)
         save_agent_context(

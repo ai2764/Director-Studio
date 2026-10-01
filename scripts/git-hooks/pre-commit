@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+scanner="$repo_root/scripts/check_staged_secrets.py"
+
+if command -v python >/dev/null 2>&1; then
+    exec python "$scanner"
+elif command -v python3 >/dev/null 2>&1; then
+    exec python3 "$scanner"
+elif command -v py >/dev/null 2>&1; then
+    exec py -3 "$scanner"
+fi
+
+echo "Commit blocked: Python is required for the staged secret check." >&2
+exit 2

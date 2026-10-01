@@ -11,7 +11,7 @@ from ...core.projects.models import PromptSections, RefRole, Shot, ShotRef, Shot
 from ...core.projects.store import new_shot_id
 from ...core.schemas import LibraryAsset
 from .asset_catalog import _asset_index, _default_file_key, _inventory, _repair_unique_file_key_typo
-from .planner import ShotDraft, role_to_library_kind, role_to_ref_role
+from .planner import ShotDraft, VoiceMatchDraft, role_to_library_kind, role_to_ref_role
 
 logger = logging.getLogger("director_studio.director.casting")
 
@@ -131,6 +131,37 @@ def _resolve_voice_matches(
             )
         )
     return resolved
+
+
+def resolve_revised_voice_matches(
+    matches: list[VoiceMatchDraft],
+    *,
+    inventory: list[dict[str, Any]],
+    index: dict[str, LibraryAsset],
+) -> list[ShotVoiceRef]:
+    """Materialize an explicit Voice replacement without silently dropping a match."""
+    available = {str(item.get("id") or ""): item for item in inventory}
+    refs: list[ShotVoiceRef] = []
+    for match in matches:
+        asset = index.get(match.asset_id)
+        item = available.get(match.asset_id)
+        if (asset is None or item is None or asset.kind != "voices"
+                or not item.get("h3_ready")):
+            raise ValueError(
+                f"unknown or non-H3-ready voice asset {match.asset_id!r}"
+            )
+        if not (asset.files or {}).get(match.file_key):
+            raise ValueError(
+                f"invalid voice file_key {match.file_key!r} for asset {match.asset_id}"
+            )
+        refs.append(ShotVoiceRef(
+            asset_id=match.asset_id,
+            audio_index=match.audio_index,
+            file_key=match.file_key,
+            speaker=match.speaker,
+            notes=match.reason,
+        ))
+    return refs
 
 
 def _kind_candidates(
