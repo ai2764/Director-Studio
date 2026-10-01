@@ -6,9 +6,10 @@ import { PropsPage } from "../props/PropsPage";
 import { SetDesignPage } from "../set/SetDesignPage";
 import { LibraryOverview } from "./LibraryOverview";
 import { AssetImportDialog } from "../library/AssetImportDialog";
+import { MusicMasterControl } from "./MusicMasterControl";
 
 type PreparedAssetCategory = Exclude<LibraryKind, "layouts" | "costumes">;
-type AssetCategory = "library" | PreparedAssetCategory;
+type AssetCategory = "library" | PreparedAssetCategory | "music";
 
 const CATEGORIES: { id: AssetCategory; label: string; eyebrow: string }[] = [
   { id: "library", label: "Library", eyebrow: "All reusable assets" },
@@ -16,6 +17,7 @@ const CATEGORIES: { id: AssetCategory; label: string; eyebrow: string }[] = [
   { id: "scenes", label: "Scenes", eyebrow: "World and locations" },
   { id: "props", label: "Props", eyebrow: "Story objects" },
   { id: "voices", label: "Voices", eyebrow: "Performance reference" },
+  { id: "music", label: "Music", eyebrow: "Original song master" },
 ];
 
 const IMPORT_LABELS: Record<PreparedAssetCategory, string> = {
@@ -26,7 +28,7 @@ const IMPORT_LABELS: Record<PreparedAssetCategory, string> = {
 };
 
 export function AssetWorkspace() {
-  const { projectId } = useProject();
+  const { project, projectId } = useProject();
   const [category, setCategory] = useState<AssetCategory>("library");
   const [importKind, setImportKind] = useState<PreparedAssetCategory | null>(null);
 
@@ -46,7 +48,7 @@ export function AssetWorkspace() {
 
       <div className="asset-workspace-body">
         <nav className="asset-category-rail" aria-label="Asset categories">
-          {CATEGORIES.map((item) => (
+          {CATEGORIES.filter((item) => item.id !== "music" || project?.mode === "mv").map((item) => (
             <button
               key={item.id}
               type="button"
@@ -67,7 +69,15 @@ export function AssetWorkspace() {
               <LibraryOverview onSelectKind={setCategory} />
             </div>
           ) : null}
-          {CATEGORIES.filter((item) => item.id !== "library").map((item) => {
+          {category === "music" && project?.mode === "mv" ? (
+            <div className="asset-preparation-panel">
+              <div className="workspace-kicker">Music Video source</div>
+              <h2>Original song</h2>
+              <p>Import the complete song used as the source for this project.</p>
+              <MusicMasterControl />
+            </div>
+          ) : null}
+          {CATEGORIES.filter((item) => item.id !== "library" && item.id !== "music").map((item) => {
             const workflowCategory = item.id as PreparedAssetCategory;
             return (
               <div

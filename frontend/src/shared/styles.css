@@ -3818,12 +3818,12 @@ select {
   display: none;
 }
 
-.mobile-director-layout .music-master-control {
+.mobile-asset-workspace .music-master-control {
   margin: 0;
   padding-inline: 0.35rem;
 }
 
-.mobile-director-layout .music-master-label {
+.mobile-asset-workspace .music-master-label {
   display: none;
 }
 

@@ -1,7 +1,7 @@
 import { useState, type ChangeEvent } from "react";
 import type { ProjectMusicMaster } from "../../shared/api/types";
 import { useProject } from "../../shared/project/ProjectContext";
-import { uploadMusicMaster } from "./api";
+import { uploadMusicMaster } from "../director/api";
 
 function formatDuration(durationS: number): string {
   const totalSeconds = Math.max(0, Math.floor(durationS));

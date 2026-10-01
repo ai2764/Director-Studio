@@ -4,12 +4,13 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "../../shared/api/types";
 import { listLibraryAssets } from "../library/api";
+import { uploadMusicMaster } from "../director/api";
 import { AssetWorkspace } from "./AssetWorkspace";
 
 const state = vi.hoisted(() => ({ project: null as Project | null }));
 
 vi.mock("../../shared/project/ProjectContext", () => ({
-  useProject: () => ({ project: state.project, projectId: state.project?.id ?? null }),
+  useProject: () => ({ project: state.project, projectId: state.project?.id ?? null, refreshProjects: vi.fn(async () => {}) }),
 }));
 vi.mock("../library/LibraryPage", () => ({
   LibraryPage: ({ lockedKind }: { lockedKind?: string }) => (
@@ -33,9 +34,60 @@ vi.mock("../library/api", () => ({
     urls: { master: "/mara.png" }, project_id: "prj_1",
   }] : []),
 }));
+vi.mock("../director/api", () => ({ uploadMusicMaster: vi.fn() }));
 
 describe("AssetWorkspace", () => {
-  afterEach(cleanup);
+  afterEach(() => { cleanup(); vi.mocked(uploadMusicMaster).mockReset(); });
+
+  it("offers the MV song master upload inside Assets Music", () => {
+    state.project = {
+      id: "prj_mv", name: "Song film", script_text: "", mode: "mv",
+      created_at: "2026-01-01", updated_at: "2026-01-01", shot_ids: [], music_master: null,
+    };
+    render(<AssetWorkspace />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Music" }));
+    expect(screen.getByLabelText("Song master")).toBeTruthy();
+    expect(screen.getByText("Import song")).toBeTruthy();
+  });
+
+  it("uploads the song in Assets and shows its duration", async () => {
+    const project: Project = {
+      id: "prj_mv", name: "Song film", script_text: "", mode: "mv",
+      created_at: "2026-01-01", updated_at: "2026-01-01", shot_ids: [], music_master: null,
+    };
+    state.project = project;
+    vi.mocked(uploadMusicMaster).mockResolvedValue({
+      ...project,
+      music_master: {
+        filename: "final-song.wav", relative_path: "music/master.wav", duration_s: 125.25,
+        content_sha256: "a".repeat(64), source_format: "wav",
+      },
+    });
+    render(<AssetWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Music" }));
+    fireEvent.change(screen.getByLabelText("Song master"), {
+      target: { files: [new File(["audio"], "final-song.wav", { type: "audio/wav" })] },
+    });
+    expect(await screen.findByText("final-song.wav")).toBeTruthy();
+    expect(screen.getByText("2:05")).toBeTruthy();
+    expect(screen.getByText("Replace song")).toBeTruthy();
+  });
+
+  it("retains the song import action when upload fails", async () => {
+    state.project = {
+      id: "prj_mv", name: "Song film", script_text: "", mode: "mv",
+      created_at: "2026-01-01", updated_at: "2026-01-01", shot_ids: [], music_master: null,
+    };
+    vi.mocked(uploadMusicMaster).mockRejectedValue(new Error("unsupported audio file type"));
+    render(<AssetWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Music" }));
+    fireEvent.change(screen.getByLabelText("Song master"), {
+      target: { files: [new File(["audio"], "song.txt", { type: "text/plain" })] },
+    });
+    expect((await screen.findByRole("alert")).textContent).toContain("unsupported audio file type");
+    expect(screen.getByText("Import song")).toBeTruthy();
+  });
 
   it("opens on a project-wide Library and keeps Layouts out of Assets", async () => {
     state.project = {
