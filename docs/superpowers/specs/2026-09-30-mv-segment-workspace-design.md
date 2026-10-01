@@ -77,6 +77,8 @@ The Agent receives the selected segment records, their revision, the master iden
 - Existing MV projects and Shots with only freeform script timestamps continue to load. There is no automatic migration or overwrite; the user can import the old source text when ready.
 - Non-MV projects never receive the Music workspace or segment-only API behavior.
 - Changes to segment text do not mutate a completed Job. A new generation after an affected change must use current, reviewed Shot timing and prompt state.
+- For a custom local H3 workflow, inspect and validate the route for a job-time song excerpt as Audio 1 before an MV Shot is submitted. The current custom-profile validator's zero-audio synthetic fill alone is insufficient proof that a singing Shot can use the profile. Report an unsupported or ambiguous audio route before queueing rather than silently using a workflow-owned fixed audio file. Existing no-audio custom workflows continue to support visual cutaways.
+- The three H3 audio-reference positions are ordered generic inputs, not dedicated music or timbre slots. In this phase DS submits the song excerpt as Audio 1 for face-readable singing Shots; role comes from the prompt. Reference audio does not guarantee an exact copy of the source song, so the final edit still uses the master.
 
 ## Acceptance checks
 
@@ -87,6 +89,7 @@ The Agent receives the selected segment records, their revision, the master iden
 - Selecting a segment scopes Agent context and allows a batch to create multiple linked Shots without forcing one Shot per segment.
 - Text corrections during discussion update the saved segment, retain the original song, and flag linked Shots that require review.
 - A readable singing Shot still uses the existing master-to-job Audio 1 path; a non-singing cutaway submits without song audio.
+- A custom H3 profile that claims Audio 1 support passes a one-audio boundary validation and receives the prepared master excerpt in the intended input. A profile without a valid Audio 1 route remains usable for cutaways and gives a clear error for singing Shots before a Job starts.
 - Existing Director and JSON Production behavior and legacy MV data remain intact.
 
 ## Outside this phase
@@ -95,3 +98,4 @@ The Agent receives the selected segment records, their revision, the master iden
 - Dedicated CSV, LRC, SRT, or Whisper-specific import buttons.
 - A full audio workstation, source-song editing, or final timeline assembly and muxing.
 - Automatic rewriting of imported lyrics, song boundaries, or previously approved Shots.
+- Rebinding a custom workflow's independent `LoadAudio` node to the Project song. This phase verifies and uses the H3 `ref_audios` reference input.
