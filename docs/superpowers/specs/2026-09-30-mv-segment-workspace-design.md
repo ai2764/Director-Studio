@@ -2,22 +2,22 @@
 
 ## Purpose
 
-Make the original song and an externally prepared, timecoded transcript the starting point for Music Video projects. A user imports the song, imports segment text through one flexible entry, then selects a segment or adjacent segments to discuss visuals and produce Shots with the Director Agent. The original song remains the authority for sound and timing. Imported words are working text and can be corrected during production discussion.
+Make the original song and an externally prepared, timecoded transcript the starting point for Music Video projects. A user uploads the song in Assets, imports segment text through one flexible entry in Music, then selects a segment or adjacent segments to discuss visuals and produce Shots with the Director Agent. The original song remains the authority for sound and timing. Imported words are working text and can be corrected during production discussion.
 
 The workflow must not add Whisper, another transcription engine, or an automatic transcription dependency to Director Studio.
 
 ## Current state
 
-- MV projects already have one `music_master` upload. The Director page shows its filename and duration.
+- MV projects already have one `music_master` upload. Today the Director page shows its filename and duration and exposes the upload control; the new UI moves that control to Assets.
 - `Project.script_text` is freeform. The older Anywhere Will Do project embeds timecoded lyrics, visual rules, and production instructions in that one field. There is no dedicated segment importer, song timeline, or segment-scoped Agent discussion.
 - `Shot.music_segment` already carries core and submit intervals for source-song Audio 1 at H3 job time. It is distinct from Voice Library references. The UI does not yet expose segment timing or a relationship between song units and Shots.
 - Assets, Director, and Production reuse the non-MV navigation. Existing project data must remain loadable.
 
 ## Product flow
 
-For `mode == "mv"`, show **Music → Assets → Director → Production**. Other project modes retain their current navigation. The Music workspace is the entry point for song preparation and segment-led discussion.
+For `mode == "mv"`, show **Assets → Music → Director → Production**. Other project modes retain their current navigation. Assets owns media intake; Music owns segment preparation and segment-led discussion.
 
-1. Import or replace the original song using the existing Music master operation. Show its filename and duration, and allow local playback.
+1. In the MV-only Music category of Assets, import or replace the original song using the existing Music master operation. This is one Project song master, not a Voice Library asset. Show its filename and duration there.
 2. Use one **Import segments** action. The same panel accepts pasted text or a text file. The user can supply prose, a table, CSV, LRC/SRT-like text, or the existing Whisper JSON structure. There are no separate format-specific user flows.
 3. When the user requests a preview, the existing configured LLM converts that text to a draft of ordered segments. Opening the panel does not call the model or change the project. Display the parsed result alongside the supplied text, with editable start, end, and words. Validate it against the song before saving.
 4. Save the confirmed segments as structured project data. Show them as proportional blocks against the song duration; unannotated spans remain visible as unannotated time, without an assumed lyric or instrumental label. The user may import only a portion of the song.
@@ -62,9 +62,9 @@ Replacing the song master preserves segment revisions and Shot work but marks se
 
 ## Interface
 
-The Music workspace has three connected regions:
+The MV-only Assets Music category contains the only song import/replace control. The Music workspace has three connected regions:
 
-- **Song header:** master filename, duration, playback, import/replace song, and the single Import segments action.
+- **Song header:** master filename, duration, playback, a link to manage the master in Assets, and the single Import segments action. It does not duplicate song upload.
 - **Song map:** a duration-scaled strip and accessible segment list. Each block shows time, text preview, and derived progress (unplanned, planned, in production, or produced). Selecting a block seeks to its start; playback can be limited to the selected range.
 - **Segment work area:** exact text and timing, editing controls, linked Shots, and the existing Director chat scoped to the selection. On narrow screens, the list and chat become sequential panels with the active segment kept visible in the chat header.
 
@@ -72,7 +72,7 @@ The Agent receives the selected segment records, their revision, the master iden
 
 ## Failure and compatibility behavior
 
-- Music Video projects without a song or segments remain open and editable; their missing preparation step is visible. Segment import can be drafted before song upload, but final save requires a master for duration validation.
+- Music Video projects without a song or segments remain open and editable; Music shows the missing-song state and a route to Assets Music. Segment import can be drafted before song upload, but final save requires a master for duration validation.
 - If the configured LLM is unavailable, the import panel retains the supplied text and reports that parsing is unavailable. Existing saved segments and production remain readable.
 - Existing MV projects and Shots with only freeform script timestamps continue to load. There is no automatic migration or overwrite; the user can import the old source text when ready.
 - Non-MV projects never receive the Music workspace or segment-only API behavior.
@@ -81,6 +81,7 @@ The Agent receives the selected segment records, their revision, the master iden
 ## Acceptance checks
 
 - The Anywhere Will Do `audio/whisper.json` can be supplied through the single entry and previewed as sentence-level blocks without running Whisper in Director Studio. Its optional word records do not have to become production data.
+- MV song upload and replacement are available from Assets Music on desktop and mobile, with no duplicate upload control in Music or Director. The song remains a Project master, not a Voice Library reference.
 - Pasted human-written timecoded prose follows the same preview and save path.
 - A 325.12-second song validates boundaries; partial coverage and gaps remain visible; malformed or out-of-range rows cannot be saved silently.
 - Selecting a segment scopes Agent context and allows a batch to create multiple linked Shots without forcing one Shot per segment.
