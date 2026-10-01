@@ -13,6 +13,7 @@ from .library import router as library_router
 from .managed_runs import router as managed_runs_router
 from .pipelines import router as pipelines_router
 from .projects import router as projects_router
+from .song_segments import router as song_segments_router
 
 
 def build_api_router() -> APIRouter:
@@ -26,6 +27,7 @@ def build_api_router() -> APIRouter:
     api.include_router(h3_ref2va_router)
     api.include_router(h3_workflow_profiles_router)
     api.include_router(projects_router)
+    api.include_router(song_segments_router)
     api.include_router(managed_runs_router)
     api.include_router(json_production_router)
     api.include_router(director_router)

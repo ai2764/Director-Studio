@@ -1,5 +1,7 @@
 # MV Segment Workspace Implementation Plan
 
+> **Scope update (2026-09-30):** The user narrowed the current implementation to two UI surfaces and internal segment normalization: song upload in Assets; an MV Music page for text import, correction, song map, selection, and Director discussion; project-local JSON for the saved segments. Selected saved segments are passed to Agent chat without changing `script_text`. The Shot provenance, revision history, Production status, and H3 workflow tasks below are deferred and are not part of this implementation.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let MV projects upload the original song in Assets, import externally prepared timed lyrics through one flexible entry, and plan and discuss Shots against selected song segments.

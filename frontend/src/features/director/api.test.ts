@@ -87,6 +87,18 @@ it("carries retry authority as typed data instead of chat text", async () => {
   });
 });
 
+it("sends saved segment IDs and revision as typed chat context", async () => {
+  const stream = new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode('data: {"type":"result","data":{"reply":"ok"}}\n\n'));
+    controller.close();
+  } });
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, body: stream });
+  vi.stubGlobal("fetch", fetchMock);
+  const selection = { revision: 2, ids: ["seg_a", "seg_b"] };
+  await chatWithDirectorStream("prj_mv", "Discuss these", [], {}, [], undefined, undefined, selection);
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).segment_selection).toEqual(selection);
+});
+
 it("uploads the selected song as the MV project master", async () => {
   const updated = {
     id: "prj_mv",

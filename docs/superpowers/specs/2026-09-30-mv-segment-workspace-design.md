@@ -1,5 +1,7 @@
 # MV Segment Workspace Design
 
+> **Scope update (2026-09-30):** The implemented slice follows the user's later direction: Assets upload, one Music import and discussion page, and project-local segment JSON passed to Agent chat by saved IDs. The Shot links, recoverable revision history, proportional audio timeline, and H3 routing described below are earlier design ideas deferred from this slice.
+
 ## Purpose
 
 Make the original song and an externally prepared, timecoded transcript the starting point for Music Video projects. A user uploads the song in Assets, imports segment text through one flexible entry in Music, then selects a segment or adjacent segments to discuss visuals and produce Shots with the Director Agent. The original song remains the authority for sound and timing. Imported words are working text and can be corrected during production discussion.

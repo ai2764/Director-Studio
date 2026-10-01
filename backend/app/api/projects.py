@@ -71,6 +71,7 @@ from ..core.projects.chat_history import (
     append_chat_message,
     load_chat_history,
 )
+from ..core.projects.song_segments import SegmentRevisionConflict, context_for_selection
 from ..core.projects.chat_sessions import (
     DirectorChatSessionConflict,
     director_chat_sessions,
@@ -185,10 +186,16 @@ class ChatHistoryItem(BaseModel):
     content: str
 
 
+class SegmentSelection(BaseModel):
+    revision: int = Field(ge=1)
+    ids: list[str] = Field(min_length=1, max_length=32)
+
+
 class ChatBody(BaseModel):
     message: str = Field(min_length=1)
     history: list[ChatHistoryItem] = Field(default_factory=list)
     prompt_retry: PromptRetryRequest | None = None
+    segment_selection: SegmentSelection | None = None
 
 
 class ChatMessage(BaseModel):
@@ -870,6 +877,23 @@ async def _make_chat_fn(
     return chat_fn
 
 
+def _chat_message_with_segments(
+    project_id: str, message: str, selection: SegmentSelection | None,
+) -> str:
+    if selection is None:
+        return message
+    project = load_project(project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    try:
+        context = context_for_selection(project, revision=selection.revision, ids=selection.ids)
+    except SegmentRevisionConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return f"{message}\n\n{context}"
+
+
 @router.post("/projects/{project_id}/chat", response_model=ChatResponse)
 async def project_chat_endpoint(
     project_id: str,
@@ -886,6 +910,9 @@ async def project_chat_endpoint(
     msg = (body.message or "").strip()
     if not msg:
         raise HTTPException(400, "message is required")
+    agent_msg = msg if body.prompt_retry else _chat_message_with_segments(
+        project_id, msg, body.segment_selection,
+    )
     try:
         await _assert_chat_available()
     except GenerationActiveError as exc:
@@ -910,7 +937,7 @@ async def project_chat_endpoint(
         append_chat_message(project_id, role="user", content=msg)
         result = await _run_scoped_prompt_retry(project_id, body.prompt_retry, svc) if body.prompt_retry else await handle_chat(
             project_id=project_id,
-            message=msg,
+            message=agent_msg,
             svc=svc,
             chat_fn=chat_fn,
             history=history,
@@ -1084,6 +1111,7 @@ async def _project_chat_stream_response(
     user_history_images: list[DirectorChatImage] | None = None,
     user_upload_dir: Path | None = None,
     prompt_retry: PromptRetryRequest | None = None,
+    segment_selection: SegmentSelection | None = None,
 ):
     from ..agents.director.chat import handle_chat
 
@@ -1092,6 +1120,9 @@ async def _project_chat_stream_response(
     msg = (message or "").strip()
     if not msg:
         raise HTTPException(400, "message is required")
+    agent_msg = msg if prompt_retry else _chat_message_with_segments(
+        project_id, msg, segment_selection,
+    )
     try:
         await _assert_chat_available()
     except GenerationActiveError as exc:
@@ -1131,7 +1162,7 @@ async def _project_chat_stream_response(
         try:
             result = await _run_scoped_prompt_retry(project_id, prompt_retry, svc, on_progress) if prompt_retry else await handle_chat(
                 project_id=project_id,
-                message=msg,
+                message=agent_msg,
                 svc=svc,
                 chat_fn=chat_fn,
                 history=history,
@@ -1211,11 +1242,18 @@ async def project_chat_image_stream_endpoint(
     project_id: str,
     message: str = Form(...),
     history: str = Form("[]"),
+    segment_selection: str = Form(""),
     images: list[UploadFile] = File(...),
     svc: DirectorService = Depends(get_director_service),
 ):
     if load_project(project_id) is None:
         raise HTTPException(404, "Project not found")
+    try:
+        selection = SegmentSelection.model_validate_json(segment_selection) if segment_selection else None
+    except ValueError as exc:
+        raise HTTPException(422, "segment_selection must be valid JSON") from exc
+    if selection is not None:
+        _chat_message_with_segments(project_id, message.strip(), selection)
     try:
         await _assert_chat_available()
     except GenerationActiveError as exc:
@@ -1223,16 +1261,21 @@ async def project_chat_image_stream_endpoint(
     batch = await _persist_chat_images(project_id, images)
     if not batch.encoded:
         raise HTTPException(400, "at least one image is required")
-    return await _project_chat_stream_response(
-        project_id=project_id,
-        message=message,
-        request_history=_parse_chat_history(history),
-        svc=svc,
-        user_images_b64=batch.encoded,
-        user_image_captions=batch.captions,
-        user_history_images=batch.history_images,
-        user_upload_dir=batch.directory,
-    )
+    try:
+        return await _project_chat_stream_response(
+            project_id=project_id,
+            message=message,
+            request_history=_parse_chat_history(history),
+            svc=svc,
+            user_images_b64=batch.encoded,
+            user_image_captions=batch.captions,
+            user_history_images=batch.history_images,
+            user_upload_dir=batch.directory,
+            segment_selection=selection,
+        )
+    except Exception:
+        _cleanup_chat_upload_batch(project_id, batch.directory)
+        raise
 
 
 @router.post("/projects/{project_id}/chat/stream")
@@ -1255,6 +1298,7 @@ async def project_chat_stream_endpoint(
         request_history=body.history,
         svc=svc,
         prompt_retry=body.prompt_retry,
+        segment_selection=body.segment_selection,
     )
 
 
