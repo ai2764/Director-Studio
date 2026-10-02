@@ -8,6 +8,34 @@ from test_director_material_review import tail_handoff_shot
 
 
 @pytest.mark.asyncio
+async def test_context_overflow_does_not_offer_or_execute_identical_retry(material_shot):
+    from app.agents.director.prompt_retry import record_prompt_failure, pending_prompt_retry, run_prompt_retry
+    project, shot, _, _ = material_shot
+    receipt = record_prompt_failure(shot, "Sing softly", RuntimeError(
+        "request (79647 tokens) exceeds the available context size (65536 tokens)"))
+    assert pending_prompt_retry(project.id) is None
+    with pytest.raises(ValueError, match="blocked"):
+        await run_prompt_retry(project.id, receipt, None)
+
+
+@pytest.mark.asyncio
+async def test_tail_writer_does_not_repair_a_context_overflow(tail_handoff_shot, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from app.agents.director import tail_prompt_review as writer
+    from app.core.prompt_errors import PromptContextOverflow
+    project, shot = tail_handoff_shot
+    monkeypatch.setattr(writer, "observe_references_cached", AsyncMock(return_value=[]))
+    monkeypatch.setattr(writer, "prepare_dialogue", AsyncMock(return_value=None))
+    call = AsyncMock(side_effect=PromptContextOverflow("too many tokens"))
+    monkeypatch.setattr(writer, "complete_bounded", call)
+    with pytest.raises(PromptContextOverflow):
+        await writer.draft_and_review(SimpleNamespace(model="local"), project, shot,
+            [], [], "signature", lambda: None, lambda *args: None)
+    assert call.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_retry_rejects_changed_inputs_before_inference(material_shot):
     from app.agents.director.prompt_retry import record_prompt_failure, run_prompt_retry
     project, shot, _, _ = material_shot

@@ -261,7 +261,8 @@ async def test_plain_write_repairs_legacy_protocol_using_source_reference(saved_
 
 
 @pytest.mark.asyncio
-async def test_mv_prompt_write_binds_planned_song_excerpt_as_audio_1(saved_shot):
+@pytest.mark.parametrize("use_audio", [True, False])
+async def test_mv_prompt_write_binds_planned_song_excerpt_as_audio_1(saved_shot, use_audio):
     project = create_project("unused", "unused")
     project = project.model_copy(update={
         "id": saved_shot.project_id,
@@ -283,21 +284,24 @@ async def test_mv_prompt_write_binds_planned_song_excerpt_as_audio_1(saved_shot)
         core_end_s=2.0,
         submit_start_s=0.5,
         submit_end_s=2.75,
+        use_as_audio_reference=use_audio,
     )
     save_shot(saved_shot.model_copy(update={
         "duration_s": 2.25,
         "music_segment": segment,
+        **({"dialogue": [], "dialogue_lines": []} if not use_audio else {}),
     }))
     provider = Provider([prompt(
         subject_definitions=(
             "A watchmaker stands by a table. "
-            "<Audio 1> is the submitted song excerpt and performance timing."
+            + ("<Audio 1> is the submitted song excerpt and performance timing." if use_audio else "")
         ),
         detailed_description=(
-            "0–2.25 seconds: the watchmaker sings in sync, saying "
-            "<d>[English] Hello.</d>"
+            "0–2.25 seconds: the watchmaker sings in sync, saying <d>[English] Hello.</d>"
+            if use_audio else "0–2.25 seconds: the watchmaker silently waits."
         ),
-        overall_soundscape="<Audio 1> supplies the vocal and musical timing.",
+        overall_soundscape=("<Audio 1> supplies the vocal and musical timing."
+                            if use_audio else "Quiet room ambience only."),
     )])
 
     updated = await DirectorService(
@@ -308,7 +312,7 @@ async def test_mv_prompt_write_binds_planned_song_excerpt_as_audio_1(saved_shot)
     assert '"core_start_s": 1.0' in provider.requests[0]
     assert '"submit_end_s": 2.75' in provider.requests[0]
     assert updated.meta["prompt_music_signature"]
-    assert "<Audio 1>" in updated.prompt_sections.subject_definitions
+    assert ("<Audio 1>" in updated.prompt_sections.as_ordered_text()) is use_audio
 
 
 @pytest.mark.asyncio
@@ -319,3 +323,43 @@ async def test_failed_repair_keeps_previously_saved_prompt(saved_shot):
         await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(saved_shot.id)
     assert load_shot(saved_shot.project_id, saved_shot.id) == saved_shot
     assert len(provider.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_editorial_song_title_is_repaired_before_prompt_is_saved(saved_shot):
+    from app.core.projects.store import load_project
+    project = load_project(saved_shot.project_id).model_copy(update={
+        "mode": ProjectMode.mv,
+        "music_master": ProjectMusicMaster(filename="Anywhere Will Do (Remix).wav",
+            relative_path="music/master.wav", duration_s=30,
+            content_sha256="a" * 64, source_format="wav"),
+    })
+    save_project(project)
+    shot = saved_shot.model_copy(update={
+        "dialogue": [], "dialogue_lines": [],
+        "music_segment": ShotMusicSegment(core_start_s=20.8, core_end_s=24.02,
+            submit_start_s=20.3, submit_end_s=24.77, use_as_audio_reference=False),
+    })
+    save_shot(shot)
+    clean = prompt(detailed_description="The camera slowly approaches the clock.",
+                   overall_soundscape="Quiet room tone. No singing or speech.",
+                   non_diegetic_music="None. No background music.")
+    leaked = clean.model_copy(update={"non_diegetic_music":
+        "None generated. Anywhere Will Do (Remix) will be overlaid in post-production."})
+    provider = Provider([leaked, clean])
+    updated = await DirectorService(plan_provider=provider,
+        orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+    assert updated.prompt_sections.non_diegetic_music == clean.non_diegetic_music
+    assert len(provider.requests) == 2
+    assert "editorial" in provider.requests[1].lower()
+
+
+@pytest.mark.asyncio
+async def test_writer_does_not_repeat_history_or_current_request(saved_shot):
+    from app.agents.director.brief import remember_directing_request
+    remember_directing_request(saved_shot.project_id, "Keep the distinctive turquoise counter.")
+    provider = Provider([prompt()])
+    await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(
+        saved_shot.id, revision_request="Use a steady camera for this revision.")
+    assert provider.requests[0].count("Keep the distinctive turquoise counter.") == 1
+    assert provider.requests[0].count("Use a steady camera for this revision.") == 1

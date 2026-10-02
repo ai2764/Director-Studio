@@ -6,7 +6,7 @@ import pytest
 
 from app.core.library.audio import probe_audio
 from app.core.media import music_segments
-from app.core.projects.models import Project, ProjectMusicMaster, ShotMusicSegment
+from app.core.projects.models import Project, ProjectMusicMaster, Shot, ShotMusicSegment
 from app.core.projects.store import project_dir
 
 
@@ -55,4 +55,25 @@ def test_prepare_music_segment_outputs_job_local_32khz_stereo_window() -> None:
     assert metadata.duration_s == pytest.approx(2.25, abs=0.05)
     assert metadata.source_sample_rate == 32000
     assert metadata.source_channels == 2
+
+
+def test_disabled_song_reference_keeps_timing_without_audio_binding():
+    project = Project(id="prj_mv", name="MV", mode="mv", script_text="",
+                      created_at="", updated_at="", music_master=ProjectMusicMaster(
+                          filename="song.wav", relative_path="music/master.wav",
+                          duration_s=30, content_sha256="a" * 64, source_format="wav"))
+    segment = ShotMusicSegment(core_start_s=20.8, core_end_s=24.02,
+                               submit_start_s=20.3, submit_end_s=24.77)
+    shot = Shot(id="sht_lobby", project_id=project.id, scene_id="lobby",
+                title="Lobby", script_beat="Empty lobby", duration_s=3.22, music_segment=segment)
+    enabled_signature = music_segments.music_prompt_signature(project, shot)
+    shot.music_segment = segment.model_copy(update={"use_as_audio_reference": False})
+    context = music_segments.music_prompt_context(project, shot)
+    assert context["audio_tag"] is None
+    assert context["use_as_audio_reference"] is False
+    assert context["master_filename"] is None
+    assert context["generation_duration_s"] == pytest.approx(4.47)
+    assert music_segments.music_prompt_signature(project, shot) != enabled_signature
+    with pytest.raises(ValueError, match="disabled"):
+        music_segments.prepare_music_segment(project, shot.music_segment)
 

@@ -6,6 +6,7 @@ import { PropsPage } from "../props/PropsPage";
 import { SetDesignPage } from "../set/SetDesignPage";
 import { LibraryOverview } from "./LibraryOverview";
 import { AssetImportDialog } from "../library/AssetImportDialog";
+import { SongSegmentsEditor } from "../music/SongSegmentsEditor";
 import { MusicMasterControl } from "./MusicMasterControl";
 
 type PreparedAssetCategory = Exclude<LibraryKind, "layouts" | "costumes">;
@@ -75,6 +76,7 @@ export function AssetWorkspace() {
               <h2>Original song</h2>
               <p>Import the complete song used as the source for this project.</p>
               <MusicMasterControl />
+              <SongSegmentsEditor />
             </div>
           ) : null}
           {CATEGORIES.filter((item) => item.id !== "library" && item.id !== "music").map((item) => {

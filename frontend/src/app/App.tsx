@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AssetWorkspace } from "../features/assets/AssetWorkspace";
 import { MobileAssetWorkspace } from "../features/assets/MobileAssetWorkspace";
-import { MusicPage } from "../features/music/MusicPage";
 import { DirectorPage, type DirectorChatRequest } from "../features/director/DirectorPage";
 import { materialReviewMessage } from "../features/director/materialReview";
 import { JsonProductionPage } from "../features/json-production/JsonProductionPage";
@@ -28,12 +27,12 @@ function materialReviewRequest(
 }
 
 function MobileAppShell() {
-  const [page, setPage] = useState<"asset" | "music" | "director" | "production">("director");
+  const [page, setPage] = useState<"asset" | "director" | "production">("director");
   const [directorRequest, setDirectorRequest] = useState<DirectorChatRequest | null>(null);
   const requestSequence = useRef(0);
   const { project } = useProject();
   const jsonProductionMode = project?.mode === "json_production";
-  const activePage = jsonProductionMode ? "production" : page === "music" && project?.mode !== "mv" ? "director" : page;
+  const activePage = jsonProductionMode ? "production" : page;
   const reviewMaterials = (shot: Shot, shotNumber: number, message: string) => {
     requestSequence.current += 1;
     setDirectorRequest(materialReviewRequest(shot, shotNumber, requestSequence.current, message));
@@ -68,14 +67,6 @@ function MobileAppShell() {
           >
             Asset
           </button>
-          {project?.mode === "mv" ? <button
-            type="button"
-            className={activePage === "music" ? "active" : ""}
-            aria-current={activePage === "music" ? "page" : undefined}
-            onClick={() => setPage("music")}
-          >
-            Music
-          </button> : null}
           <button
             type="button"
             className={activePage === "director" ? "active" : ""}
@@ -98,11 +89,8 @@ function MobileAppShell() {
       <div className="mobile-page mobile-asset-page" hidden={activePage !== "asset"}>
         <MobileAssetWorkspace />
       </div>
-      {project?.mode === "mv" ? <div className="mobile-page mobile-music-page" hidden={activePage !== "music"}>
-        <MusicPage mobile />
-      </div> : null}
       <div className="mobile-page mobile-director-page" hidden={activePage !== "director"}>
-        <DirectorPage mobile chatOnly requestedMessage={directorRequest} />
+        <DirectorPage mobile chatOnly active={activePage === "director"} requestedMessage={directorRequest} />
       </div>
       <div
         className={`mobile-page mobile-production-page${
@@ -137,7 +125,7 @@ function AppShell() {
   } | null>(null);
   const { project } = useProject();
   const jsonProductionMode = project?.mode === "json_production";
-  const activePage = jsonProductionMode && page !== "settings" ? "production" : page === "music" && project?.mode !== "mv" ? "director" : page;
+  const activePage = jsonProductionMode && page !== "settings" ? "production" : page;
   const openSettings = () => {
     if (activePage !== "settings") settingsReturnPage.current = activePage;
     setSettingsVisited(true);
@@ -219,17 +207,11 @@ function AppShell() {
       >
         <AssetWorkspace />
       </div>
-      {project?.mode === "mv" ? <div
-        className={activePage === "music" ? "page-pane active" : "page-pane"}
-        hidden={activePage !== "music"}
-      >
-        <MusicPage />
-      </div> : null}
       <div
         className={activePage === "director" ? "page-pane active" : "page-pane"}
         hidden={activePage !== "director"}
       >
-        <DirectorPage requestedMessage={directorRequest} />
+        <DirectorPage active={activePage === "director"} requestedMessage={directorRequest} />
       </div>
       <div
         className={activePage === "production" ? "page-pane active" : "page-pane"}

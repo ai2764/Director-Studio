@@ -370,6 +370,9 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
             }, "references": reviewed, "tail_frames": tail_frames,
                 "confirmed_project_review": confirmed_project_review,
                 "intent": shot_execution_intent(project, shot, revision_request)}
+    from .writer_context import project_writer_context
+    _, request["references"] = project_writer_context({}, request["intent"], reviewed)
+    system += "\nReference source text_ref links resolve to intent.directing_requests by id in this request."
     for attempt in range(2):
         async with report_phase(on_progress, "material_review",
                                 f"Checking reference suitability for {shot.title} (attempt {attempt + 1}/2)"):

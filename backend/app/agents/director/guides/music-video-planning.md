@@ -2,12 +2,14 @@
 
 Plan from the authoritative timestamped song units supplied by the project or user. Do not transcribe, retime, or silently rewrite them. Treat the final song master as the editorial soundtrack.
 
+For MV chat, the project supplies its complete saved, timecoded song-segment map when available. Use it to understand whole-song coverage even when the project script contains a shorter excerpt. A selected range marks the current discussion focus; it does not hide the other saved segments. Do not ask the user to provide later song units that are already present in this map. Follow any narrower scope stated in the project script until the user asks to expand it.
+
 ## Progressive batches
 
 - Propose concrete images, action, framing, and one dominant camera behavior for every Shot.
-- Plan 1–10 new Shots per batch. Stop at a useful musical boundary; ten is a limit, not a target.
+- Plan shots in useful musical batches, stopping at clear lyrical or musical boundaries when that helps review. There is no fixed shot-count limit; continue through the scope the user requested, including across multiple musical batches in one turn when practical.
 - Preserve existing Shots. Discuss, save, and generate the current batch without waiting for a complete song-wide storyboard.
-- Finish only the current batch in one turn. After its discussion, save, or generation work, report the covered song boundary and stop for user review; do not append the next batch in the same turn even when the user requested more than ten Shots overall.
+- Report the song boundary covered by the work so the user can review progress. Do not stop solely because a batch reaches a particular number of Shots.
 - Normal MV cuts do not need film-style pose, geography, or screen-direction continuity across Shots or batches. Preserve approved identity, wardrobe, visual language, and deliberate recurring motifs; vary scale, energy, setting, and camera to avoid repetition.
 - One song unit may support multiple Shots, and one Shot may cover multiple units. Favor complete lyrical or musical thoughts over arbitrary equal durations.
 
@@ -20,7 +22,9 @@ Every video Shot uses H3 Ref2AV. Express a single state, first/last intent, firs
 - Request the source-song segment only when a clearly readable mouth must synchronize to singing, yodeling, or speech. A cutaway, rear view, distant figure, environment, prop, or reaction normally receives no generation audio even though the master song continues in the final edit.
 - When source audio is used, preserve the core content interval and prefer a wider generation interval. Start with about 0.5 seconds of pre-roll and 0.75 seconds of post-roll, then adjust around breaths, singer changes, song boundaries, and provider limits. Overlap between neighboring generation windows is allowed.
 - Never shorten away required words or the landing of a sustained note merely to fit a convenient duration. Reduce handles first; split only at a defensible musical boundary.
-- Set `music_segment` only for face-readable song speech, singing, or yodeling. `core_start_s/core_end_s` protect the edit content; `submit_start_s/submit_end_s` add generation handles. The canonical H3 submit path extracts that interval from the Project song master as Audio 1. Do not create or request a Voice Library asset for a song excerpt.
+- `music_segment` records timing independently of audio conditioning. `core_start_s/core_end_s` protect the edit content; `submit_start_s/submit_end_s` add generation handles. Set `use_as_audio_reference=true` for readable song speech, singing, or yodeling that needs the song as Audio 1. Set it to `false` for cutaways, editorial-only music, or an explicit request to remove song audio references. False preserves all timestamps but sends no song excerpt to H3. Do not create or request a Voice Library asset for a song excerpt.
+- When revising an existing Shot, inspect and update its saved audio state before `write_prompt` or `start_h3_video`. Replacing Pictures or saying "no audio" in a prompt does not clear old audio bindings. Use `revise_shot` with the saved `music_segment` timestamps and `use_as_audio_reference=false`; clear unwanted `voice_matches` with `[]`. Clear `dialogue` with `[]` when lyrics belong only to the editorial song and no generated speech/singing is requested. The full song-segment map retains those lyrics. Do not clear genuine requested off-screen dialogue merely because no person is visible.
+- Keep editorial soundtrack information outside the six H3 prompt fields. For editorial-only music, omit song titles, lyrics, filenames, artists and explanations about adding music later; these can still induce music when no Audio reference is attached. State only the sound H3 should generate. If no score is requested, use `non_diegetic_music: "None. No background music."`; describe requested ambience or silence in `overall_soundscape`.
 
 ## Visual proposals and assets
 

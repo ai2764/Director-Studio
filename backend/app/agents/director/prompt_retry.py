@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ...core.projects.dialogue import digest
 from ...core.projects.store import load_project, load_shot, project_dir
 from ...core.managed_runs.store import _project_lock
-from ...core.prompt_errors import PromptFailureError, MaterialReviewError
+from ...core.prompt_errors import PromptFailureError, MaterialReviewError, is_context_overflow
 
 
 class PromptRetryRequest(BaseModel):
@@ -95,7 +95,8 @@ def record_prompt_failure(shot, revision_request, error):
     receipt = PromptRetryRequest(retry_id=f"prtry_{uuid.uuid4().hex}", shot_id=shot.id,
                                  source_version=source_version(project, current)).model_dump()
     with _project_lock(project.id):
-        _save(project.id, {**receipt, "state": "blocked" if isinstance(error, (PromptRepairNoProgress, DialogueMetadataError, MaterialReviewError)) else "pending", "revision_request": revision_request,
+        blocked = is_context_overflow(error) or isinstance(error, (PromptRepairNoProgress, DialogueMetadataError, MaterialReviewError))
+        _save(project.id, {**receipt, "state": "blocked" if blocked else "pending", "revision_request": revision_request,
                            "error": str(error)})
     return receipt
 
@@ -153,6 +154,8 @@ async def run_prompt_retry(project_id, request, svc, *, on_progress=None):
                 raise ValueError("Prompt changed after this retry completed; inspect the current result")
             return shot
         if record["state"] != "pending":
+            if record["state"] == "blocked":
+                raise ValueError("Prompt retry is blocked; resolve the input failure before writing a new prompt. " + record.get("error", ""))
             raise ValueError("Prompt retry is already executing; inspect its outcome")
         record["state"] = "executing"
         _save(project_id, record)
@@ -165,7 +168,7 @@ async def run_prompt_retry(project_id, request, svc, *, on_progress=None):
         with _project_lock(project_id):
             latest = _load(project_id)
             if latest and latest.get("retry_id") == request.retry_id and latest.get("state") == "executing":
-                latest["state"] = "pending"
+                latest["state"] = "blocked" if is_context_overflow(exc) else "pending"
                 _save(project_id, latest)
         from .task_context_builder import ContextRequired
         if isinstance(exc, ContextRequired):

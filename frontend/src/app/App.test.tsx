@@ -67,9 +67,7 @@ vi.mock("../features/assets/MobileAssetWorkspace", () => ({
     </label>
   ),
 }));
-vi.mock("../features/music/MusicPage", () => ({
-  MusicPage: ({ mobile }: { mobile?: boolean }) => <div data-testid="music-page" data-mobile={String(Boolean(mobile))} />,
-}));
+
 vi.mock("../features/voice/VoicePage", () => ({
   VoicePage: () => <div data-testid="voice-page" />,
 }));
@@ -309,17 +307,15 @@ describe("App mode routing", () => {
     expect(screen.getByTestId("asset-workspace")).toBeTruthy();
   });
 
-  it("shows a Music workspace only for MV projects on desktop and mobile", () => {
+  it("keeps MV music tools inside Assets on desktop and mobile", () => {
     projectState.project = { ...projectState.project!, mode: "mv" };
     const { unmount } = render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Music" }));
-    expect(screen.getByTestId("music-page").closest("[hidden]")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Music" })).toBeNull();
     unmount();
 
     window.history.replaceState({}, "", "/mobile");
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Music" }));
-    expect(screen.getByTestId("music-page").dataset.mobile).toBe("true");
+    expect(screen.queryByRole("button", { name: "Music" })).toBeNull();
   });
 
   it("opens desktop Director chat with a saved-material review request", () => {

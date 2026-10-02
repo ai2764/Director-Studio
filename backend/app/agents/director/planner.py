@@ -127,8 +127,9 @@ class ShotDraft(BaseModel):
     music_segment: ShotMusicSegment | None = Field(
         default=None,
         description=(
-            "MV-only song timestamps for readable lip sync. Leave null for "
-            "audio-free cutaways."
+            "MV song timing and optional audio conditioning. Set "
+            "use_as_audio_reference=false for cutaways or editorial-only music; "
+            "use true when the song must condition generation."
         ),
     )
     asset_matches: list[AssetMatchDraft] = Field(default_factory=list)
@@ -179,7 +180,7 @@ class ShotDraft(BaseModel):
             raise ValueError("voice match assets must be unique")
         if [voice.audio_index for voice in voices] != list(range(1, len(voices) + 1)):
             raise ValueError("audio_index must be contiguous and ordered from 1")
-        if self.music_segment is not None and voices:
+        if self.music_segment is not None and self.music_segment.use_as_audio_reference and voices:
             raise ValueError("music_segment cannot be combined with voice matches")
         return self
 
@@ -243,7 +244,15 @@ class ShotRevisionSubmission(BaseModel):
     dialogue: list[str] | None = None
     dialogue_lines: list[DialogueLine] | None = None
     dialogue_language_updates: list[DialogueLanguageUpdate] | None = Field(default=None, min_length=1)
-    music_segment: ShotMusicSegment | None = None
+    music_segment: ShotMusicSegment | None = Field(
+        default=None,
+        description=(
+            "Replace the song timing/audio configuration. Omit to preserve it; "
+            "null removes it. To disable song conditioning while retaining edit "
+            "timing, copy the saved timestamps and set use_as_audio_reference=false. "
+            "Voice references are independent; clear voice_matches separately."
+        ),
+    )
     voice_matches: list[VoiceMatchDraft] | None = Field(
         default=None,
         max_length=3,

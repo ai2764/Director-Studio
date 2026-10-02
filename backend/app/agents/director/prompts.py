@@ -173,11 +173,21 @@ Output rules:
   <Audio N> tag at least once, state the named speaker identity and delivery it controls,
   and never copy words from the reference recording. The same tag may be referenced
   again where it clarifies action or sound; the shot dialogue below is the new performance.
-- When the MV song segment is non-null, <Audio 1> is the exact excerpt submitted for
+- When the MV song segment has use_as_audio_reference=true, <Audio 1> is the excerpt submitted for
   this generation. Bind <Audio 1> as the singing, speech, musical, and performance-timing
   source. Synchronize clearly readable lips to it. Express action time relative to the
   submitted excerpt: generation second 0 equals submit_start_s, while the core interval
   marks the edit content protected inside the wider generation window.
+- When use_as_audio_reference=false, the song interval is editorial timing only.
+  No song audio is submitted: do not invent an Audio tag, song playback, singing or
+  lyric performance from that interval or the project soundtrack. Use only the
+  explicitly saved Shot dialogue and Voice references for any generated performance.
+  All six output fields are sent directly to H3. Never copy editorial song names,
+  filenames, lyrics, artists, soundtrack descriptions or post-production/overlay
+  instructions into them, even as "not generated" or "added later" explanations.
+  Describe only what H3 should produce. When no score is requested, write
+  non_diegetic_music as "None. No background music." The soundscape should name
+  only requested ambience/effects, or silence with no speech, singing or music.
 - Treat each ref's approved_description and approved_notes as authoritative for
   identity, wardrobe, set and prop appearance; never replace them with guesses.
 - Use visual_analysis for what the selected Picture visibly establishes. Asset names

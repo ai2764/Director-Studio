@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   } as Project | null,
 }));
 
+vi.mock("../music/api", () => ({ getSongSegments: vi.fn(async () => ({ document: null, master_stale: false })) }));
 vi.mock("../../shared/project/ProjectContext", () => ({
   useProject: () => ({ project: state.project, projectId: state.project?.id ?? null, refreshProjects: vi.fn(async () => {}) }),
 }));
@@ -54,6 +55,7 @@ describe("MobileAssetWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Music" }));
     expect(screen.getByLabelText("Song master")).toBeTruthy();
     expect(screen.getByText("Import song")).toBeTruthy();
+    expect(screen.getByLabelText("Lyrics and time notes")).toBeTruthy();
   });
 
   it("opens on a cross-category Library overview", async () => {

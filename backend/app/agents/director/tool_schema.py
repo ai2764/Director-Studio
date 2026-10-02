@@ -378,8 +378,11 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "existing Shot. Preserves neighboring Shots, Picture refs, "
                 "Layouts, and historical jobs. voice_matches optionally replaces "
                 "this Shot's complete ordered Voice reference list ([] clears it; "
-                "omission preserves it). Invalidates that Shot's stale "
-                "prompt and active H3 link. For a language-only dialogue change, use "
+                "omission preserves it). Invalidates that Shot's stale prompt and active H3 link. "
+                "For MV, music_segment.use_as_audio_reference=false "
+                "disables the song reference while preserving timestamps; null removes the segment. "
+                "For an editorial-only lyric cutaway, also clear dialogue=[] when no generated "
+                "speech/singing is requested. For a language-only dialogue change, use "
                 "dialogue_language_updates with saved line_id and language; do not retype words. "
                 "For missing legacy attribution, resubmit unchanged dialogue with its speaker-cued "
                 "script_beat or explicit dialogue_lines from source evidence before writing a prompt. "
@@ -542,7 +545,10 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "for every current Picture, reviewing new or changed references first, decides whether the Creative brief "
         "and prompt need changes, and preserves old drafts if review is incomplete or needs a user choice. "
         "For selected clip tails, the current user request reaches a bounded drafting and semantic review pass; "
-        "it may reconcile this shot's camera plan with the requested continuity. Read returned shot_changes.",
+        "it may reconcile this shot's camera plan with the requested continuity. Read returned shot_changes. "
+        "This tool uses saved audio bindings; it does not clear them from prose. Before calling it, "
+        "apply any requested audio-reference changes with revise_shot, including disabling MV song "
+        "conditioning for editorial-only cutaways and clearing unwanted generated dialogue.",
         dict(SHOT_SELECTOR),
     ),
     function_tool(

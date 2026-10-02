@@ -6,6 +6,7 @@ import { SetDesignPage } from "../set/SetDesignPage";
 import { MobileLibraryOverview } from "./MobileLibraryOverview";
 import { AssetImportDialog } from "../library/AssetImportDialog";
 import { useProject } from "../../shared/project/ProjectContext";
+import { SongSegmentsEditor } from "../music/SongSegmentsEditor";
 import { MusicMasterControl } from "./MusicMasterControl";
 
 type PreparedMobileCategory = Exclude<LibraryKind, "layouts" | "costumes">;
@@ -63,6 +64,7 @@ export function MobileAssetWorkspace() {
         <section className="mobile-workflow-callout">
           <div><span className="mobile-eyebrow">Music Video source</span><h2>Original song</h2></div>
           <MusicMasterControl />
+          <SongSegmentsEditor />
         </section>
       ) : null}
       {CATEGORIES.filter((item) => item.id !== "library" && item.id !== "music").map((item) => {

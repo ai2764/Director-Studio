@@ -273,7 +273,11 @@ export async function runTurn(
         // Native bounded attempts may commit useful summaries yet remain above
         // the early-pressure threshold. That is not a failed checkpoint.
         const after = ctx.tokenMeter.measure(args[0].session).totalTokens;
-        if (!args[2]?.aborted && this.committed && !this.regionFailed && after < input.context_window)
+        const noFurtherReduction = error instanceof Error
+          && error.message.startsWith("summary is not smaller than the shadowed content");
+        if (!args[2]?.aborted && this.committed
+          && (!this.regionFailed || noFurtherReduction)
+          && after < input.context_window)
           return this.committed;
         compactionFailure = error;
         throw error;

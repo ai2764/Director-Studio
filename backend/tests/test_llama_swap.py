@@ -129,3 +129,24 @@ async def test_context_capacity_comes_from_llama_cpp_props_for_selected_model():
 
     assert requests[0].url.path == "/props"
     assert requests[0].url.params["model"] == "qwen3_8"
+
+
+@pytest.mark.asyncio
+async def test_prompt_token_count_uses_upstream_chat_template_and_tokenizer():
+    import json
+    requests = []
+    def handler(request):
+        requests.append(request)
+        body = json.loads(request.content)
+        if request.url.path.endswith("/apply-template"):
+            assert body["messages"] == [{"role": "user", "content": "你好"}]
+            assert body["add_generation_prompt"] is True
+            return httpx.Response(200, json={"prompt": "<user>你好<assistant>"})
+        assert body == {"content": "<user>你好<assistant>", "add_special": False, "parse_special": True}
+        return httpx.Response(200, json={"tokens": [1, 2, 3, 4]})
+    lifecycle = LlamaSwapLifecycle("http://localhost:11435/v1", transport=httpx.MockTransport(handler))
+    try:
+        assert await lifecycle.prompt_token_count("qwen3_8", "你好") == 4
+    finally:
+        await lifecycle.close()
+    assert [r.url.path for r in requests] == ["/upstream/qwen3_8/apply-template", "/upstream/qwen3_8/tokenize"]

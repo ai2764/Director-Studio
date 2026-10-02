@@ -20,7 +20,8 @@ export interface SegmentPreview {
 export interface SongSegmentsDocument {
   revision: number;
   master_sha256: string;
-  raw_input: string;
+  /** Legacy servers may return this; canonical storage keeps only timed rows. */
+  raw_input?: string;
   segments: SongSegment[];
 }
 

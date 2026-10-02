@@ -1221,7 +1221,13 @@ def test_revise_shot_persists_music_segment_only_for_mv_project(
         {"shot_id": mv_shot.id, "music_segment": segment},
     )[0]
 
-    assert revised.music_segment.model_dump() == segment
+    assert revised.music_segment.model_dump() == {**segment, "use_as_audio_reference": True}
+    disabled = svc.revise_shot(mv_project.id, {
+        "shot_id": mv_shot.id,
+        "music_segment": {**segment, "use_as_audio_reference": False},
+    })[0]
+    assert disabled.music_segment.model_dump() == {**segment, "use_as_audio_reference": False}
+    assert disabled.meta["prompt_music_signature"] == ""
 
     director_project = create_project("Director", "scene")
     director_shot = mv_shot.model_copy(update={

@@ -9,6 +9,7 @@ import { AssetWorkspace } from "./AssetWorkspace";
 
 const state = vi.hoisted(() => ({ project: null as Project | null }));
 
+vi.mock("../music/api", () => ({ getSongSegments: vi.fn(async () => ({ document: null, master_stale: false })) }));
 vi.mock("../../shared/project/ProjectContext", () => ({
   useProject: () => ({ project: state.project, projectId: state.project?.id ?? null, refreshProjects: vi.fn(async () => {}) }),
 }));
@@ -49,6 +50,7 @@ describe("AssetWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Music" }));
     expect(screen.getByLabelText("Song master")).toBeTruthy();
     expect(screen.getByText("Import song")).toBeTruthy();
+    expect(screen.getByLabelText("Lyrics and time notes")).toBeTruthy();
   });
 
   it("uploads the song in Assets and shows its duration", async () => {

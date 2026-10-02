@@ -49,6 +49,7 @@ from ..core.media.music_segments import (
     import_music_master,
     music_prompt_signature,
     prepare_music_segment,
+    validate_editorial_music_prompt,
     resolve_music_master,
 )
 from ..core.projects.models import (
@@ -71,7 +72,11 @@ from ..core.projects.chat_history import (
     append_chat_message,
     load_chat_history,
 )
-from ..core.projects.song_segments import SegmentRevisionConflict, context_for_selection
+from ..core.projects.song_segments import (
+    SegmentRevisionConflict,
+    context_for_discussion,
+    load_segments,
+)
 from ..core.projects.chat_sessions import (
     DirectorChatSessionConflict,
     director_chat_sessions,
@@ -386,6 +391,44 @@ def _validate_voice_refs(shot: Shot) -> list[tuple[ShotVoiceRef, LibraryAsset, P
     if total_duration > 15.0:
         raise ValueError("Voice reference total duration must not exceed 15 seconds")
     return resolved
+
+
+def _mv_dialogue_song_matches(project: Project, shot: Shot) -> list[tuple[str, list[Any]]]:
+    """Match dialogue to saved lyrics inside the shot's authored song timecode."""
+    if project.mode != ProjectMode.mv or project.music_master is None or not shot.dialogue:
+        return []
+    document = load_segments(project.id)
+    if document is None or document.master_sha256 != project.music_master.content_sha256:
+        return []
+
+    def normalize(text: str) -> str:
+        return re.sub(r"[^\w]+", " ", text.casefold()).strip()
+
+    timecode = re.match(
+        r"^\s*\[\s*(\d+):(\d{2}(?:\.\d+)?)\s*[–—-]\s*"
+        r"(\d+):(\d{2}(?:\.\d+)?)\s*\]",
+        shot.script_beat,
+    )
+    if timecode:
+        start_s = int(timecode.group(1)) * 60 + float(timecode.group(2))
+        end_s = int(timecode.group(3)) * 60 + float(timecode.group(4))
+        timed_segments = [
+            segment for segment in document.segments
+            if segment.start_s >= start_s - 0.05 and segment.end_s <= end_s + 0.05
+        ]
+    else:
+        timed_segments = []
+
+    matches = []
+    for line in shot.dialogue:
+        normalized = normalize(line)
+        if normalized:
+            saved_lyrics = [segment for segment in document.segments if normalize(segment.text) == normalized]
+            if saved_lyrics:
+                matches.append((normalized, [
+                    segment for segment in timed_segments if normalize(segment.text) == normalized
+                ]))
+    return matches
 
 
 def _voice_signature(refs: list[ShotVoiceRef]) -> str:
@@ -880,18 +923,20 @@ async def _make_chat_fn(
 def _chat_message_with_segments(
     project_id: str, message: str, selection: SegmentSelection | None,
 ) -> str:
-    if selection is None:
-        return message
     project = load_project(project_id)
     if project is None:
         raise HTTPException(404, "Project not found")
     try:
-        context = context_for_selection(project, revision=selection.revision, ids=selection.ids)
+        context = context_for_discussion(
+            project,
+            revision=selection.revision if selection else None,
+            ids=selection.ids if selection else None,
+        )
     except SegmentRevisionConflict as exc:
         raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return f"{message}\n\n{context}"
+    return f"{message}\n\n{context}" if context else message
 
 
 @router.post("/projects/{project_id}/chat", response_model=ChatResponse)
@@ -1753,7 +1798,7 @@ async def patch_shot_endpoint(shot_id: str, body: ShotPatchBody) -> Shot:
             400,
             "music_segment is available only for Music Video projects",
         )
-    if shot.music_segment is not None and shot.voice_refs:
+    if shot.music_segment is not None and shot.music_segment.use_as_audio_reference and shot.voice_refs:
         raise HTTPException(
             400,
             "MV music segments cannot be combined with Voice references",
@@ -1974,7 +2019,31 @@ async def submit_shot_endpoint(
         raise HTTPException(404, "Project not found")
     if shot.music_segment is not None and project.mode != ProjectMode.mv:
         raise HTTPException(400, "Music segments require a Music Video project")
-    music_active = project.mode == ProjectMode.mv and shot.music_segment is not None
+    music_active = (
+        project.mode == ProjectMode.mv
+        and shot.music_segment is not None
+        and shot.music_segment.use_as_audio_reference
+    )
+    lyric_matches = _mv_dialogue_song_matches(project, shot)
+    if lyric_matches and not music_active:
+        raise HTTPException(
+            400,
+            "Shot dialogue matches a saved song lyric but has no active, time-aligned music segment. "
+            "Bind the matching song interval with use_as_audio_reference=true and clear Voice references; "
+            "for a no-vocal shot, clear dialogue and Voice references.",
+        )
+    if lyric_matches and shot.music_segment is not None:
+        segment = shot.music_segment
+        if not all(any(
+            candidate.start_s >= segment.core_start_s - 0.05
+            and candidate.end_s <= segment.core_end_s + 0.05
+            for candidate in candidates
+        ) for _line, candidates in lyric_matches):
+            raise HTTPException(
+                400,
+                "The active song interval does not contain the saved lyric timing for this dialogue. "
+                "Align music_segment.core_start_s/core_end_s to the matching song segments.",
+            )
     if music_active and shot.voice_refs:
         raise HTTPException(
             400,
@@ -2081,8 +2150,14 @@ async def submit_shot_endpoint(
     )
     from ..agents.director.dialogue_preflight import dialogue_contract_current, require_current_dialogue_contract
     from ..agents.director.reference_facts import reference_contract_current, require_current_reference_contract
+    try:
+        validate_editorial_music_prompt(project, shot, shot.prompt_sections)
+        editorial_music_leaked = False
+    except ValueError:
+        editorial_music_leaked = True
     if (
-        not dialogue_contract_current(project, shot)
+        editorial_music_leaked
+        or not dialogue_contract_current(project, shot)
         or not reference_contract_current(project, shot)
         or (picture_contract_present and prompt_picture_signature != current_picture_signature)
         or (
@@ -2096,7 +2171,7 @@ async def submit_shot_endpoint(
             and prompt_voice_signature != current_voice_signature
         )
         or (
-            music_active
+            (music_active or "prompt_music_signature" in (shot.meta or {}) or shot.music_segment is not None)
             and prompt_music_signature != current_music_signature
         )
     ):
@@ -2126,6 +2201,7 @@ async def submit_shot_endpoint(
         int(item["picture_index"]) for item in selected_layouts
     ]
     try:
+        validate_editorial_music_prompt(project, shot, shot.prompt_sections)
         validate_h3_prompt(
             prompt_text,
             list(shot.dialogue),
@@ -2145,7 +2221,7 @@ async def submit_shot_endpoint(
     try:
         effective_duration_s = (
             shot.music_segment.submit_end_s - shot.music_segment.submit_start_s
-            if music_active and shot.music_segment is not None
+            if shot.music_segment is not None
             else shot.duration_s
         )
         frames = (

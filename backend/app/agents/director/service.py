@@ -16,6 +16,7 @@ from ...core.library.store import load_asset
 from ...core.media.music_segments import (
     music_prompt_context,
     music_prompt_signature,
+    validate_editorial_music_prompt,
 )
 from ...core.h3.prompt import (
     validate_h3_prompt,
@@ -525,7 +526,7 @@ class DirectorService:
             raise ValueError("music_segment is available only for Music Video projects")
         resulting_music = authored_updates.get("music_segment", shot.music_segment)
         resulting_voices = authored_updates.get("voice_refs", shot.voice_refs)
-        if resulting_music is not None and resulting_voices:
+        if resulting_music is not None and resulting_music.use_as_audio_reference and resulting_voices:
             raise ValueError("music_segment cannot be combined with Voice references")
         meta = dict(shot.meta or {})
         if shot.h3_job_id:
@@ -2336,7 +2337,7 @@ class DirectorService:
         )
         effective_audio_count = (
             1
-            if music_context is not None
+            if music_context is not None and music_context["use_as_audio_reference"]
             else 0 if shot.source_audio_path else len(shot.voice_refs)
         )
 
@@ -2354,6 +2355,11 @@ class DirectorService:
                     dialogue_lines=[line.model_dump(mode="json") for line in dialogue_lines] if dialogue_lines else [],
                     reference_evidence=(review or {}).get("references", []))
                 context_json = json.dumps(canonical, ensure_ascii=False)
+            from .writer_context import project_writer_context
+            intent = shot_execution_intent(project, shot, revision_request)
+            writer_context, writer_refs = project_writer_context(json.loads(context_json), intent, prompt_refs)
+            context_json = json.dumps(writer_context, ensure_ascii=False)
+            refs_json = json.dumps(writer_refs, ensure_ascii=False)
             user = prompt_text.PROMPT_SECTIONS_USER_TEMPLATE.format(
                 title=shot.title,
                 scene_id=shot.scene_id,
@@ -2376,10 +2382,10 @@ class DirectorService:
                     ensure_ascii=False,
                 ),
                 layout_asset_id=selected_layout_asset_id,
-                feedback=(shot.feedback or "") + (f"\nCurrent user revision request: {revision_request}" if revision_request else ""),
+                feedback=shot.feedback or "",
                 context_json=context_json,
             )
-            user += "\nShot execution intent:\n" + json.dumps(shot_execution_intent(project, shot, revision_request), ensure_ascii=False)
+            user += "\nShot execution intent (intent; text_ref links above resolve here):\n" + json.dumps(intent, ensure_ascii=False)
             if dialogue_lines:
                 user += "\nSource dialogue lines:\n" + json.dumps([line.model_dump(mode="json") for line in dialogue_lines], ensure_ascii=False)
                 user += "\nExisting prompt, if present: preserve valid creative choices while repairing attribution or applying the current requested revision:\n" + shot.prompt_sections.model_dump_json()
@@ -2393,6 +2399,7 @@ class DirectorService:
                                    and dialogue_contract_current(project, shot))
             if preserve_prompt:
                 try:
+                    validate_editorial_music_prompt(project, shot, shot.prompt_sections)
                     validate_h3_prompt(shot.prompt_sections.as_ordered_text(), shot.dialogue,
                                        audio_count=effective_audio_count,
                                        required_picture_indices=[r.picture_index for r in shot.refs],
@@ -2441,6 +2448,7 @@ class DirectorService:
                         dialogue_draft = compile_dialogue_draft(dialogue_draft, dialogue_lines)
                         parsed = dialogue_draft.prompt_sections
                     ordered_text = parsed.as_ordered_text()
+                    validate_editorial_music_prompt(project, shot, parsed)
                     validate_h3_prompt(ordered_text, shot.dialogue,
                                        audio_count=effective_audio_count,
                                        required_picture_indices=(required_ordinary_picture_indices
