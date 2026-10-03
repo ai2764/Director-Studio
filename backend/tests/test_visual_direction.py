@@ -90,6 +90,61 @@ def test_analysis_prompt_uses_planned_camera_brief_as_authoritative_direction():
     assert "Treat this planned camera brief as authoritative" in prompt
 
 
+@pytest.mark.parametrize("captions,expected", [
+    (["Image1 ACTOR Mia", "Image2 costume Alpine", "Image3 scene Room"], ["Image1"]),
+    (["Image1 = actor Mia", "Image2 scene Room", "Image3 CHARACTER Puppet"], ["Image1", "Image3"]),
+])
+def test_analysis_schema_assigns_actual_character_images_not_costume_or_scene(captions, expected):
+    prompt = _analysis_prompt(_shot(), captions)
+    schema = json.loads(prompt.split("Use exactly this schema:\n", 1)[1])
+    assert [character["reference_image"] for character in schema["characters"]] == expected
+
+
+def test_layout_revision_feedback_reaches_visual_director_without_previous_image():
+    from app.core.projects.layouts import LayoutBrief, LayoutSourceRef
+
+    prompt = _analysis_prompt(
+        _shot(),
+        ["Image1 ACTOR qian master"],
+        layout_brief=LayoutBrief(source_refs=[LayoutSourceRef(role="actor", asset_id="act_qian")]),
+        feedback="Pull back to show the full doorway and costume.",
+    )
+    assert "LAYOUT REVISION" in prompt
+    assert "Pull back to show the full doorway and costume." in prompt
+
+
+@pytest.mark.asyncio
+async def test_text_only_layout_analysis_does_not_require_visual_inputs():
+    payload = {
+        "shot_type": "wide shot",
+        "camera": "eye level, centered perspective",
+        "scene_lock": ["flat floor", "one cardboard panel rising into a hallway"],
+        "characters": [],
+        "forbidden": ["pre-existing hallway before the transformation"],
+        "generation_prompt": "A single wide frame of a flat floor as one cardboard panel rises.",
+    }
+
+    class TextOnlyClient:
+        calls = []
+
+        async def chat(self, model, prompt, **kwargs):
+            self.calls.append(kwargs)
+            return json.dumps(payload)
+
+    client = TextOnlyClient()
+    result = await analyze_ref_frame(
+        _shot(),
+        images={},
+        captions=[],
+        model="test-model",
+        ollama=client,
+    )
+
+    assert client.calls[0]["images"] == []
+    assert client.calls[0]["require_vision"] is False
+    assert result.compiled_prompt == payload["generation_prompt"]
+
+
 def test_parse_visual_brief_accepts_fenced_json():
     payload = json.dumps(_brief_payload())
     brief = parse_visual_brief(f"```json\n{payload}\n```")

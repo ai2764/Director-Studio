@@ -530,6 +530,44 @@ async def test_inspect_library_asset_before_planning_is_read_only(material_shot)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("external", [False, True])
+async def test_inspect_layout_reads_actual_image_without_mutating_shot(material_shot, external):
+    import hashlib
+    from app.core.library.store import write_asset
+    project, shot, _, files = material_shot
+    asset = write_asset(LibraryAsset(
+        id="lay_current", kind="layouts", name="Current Layout", project_id=project.id,
+        pipeline_id="external" if external else "qwen21_layout", job_id="fixture",
+        created_at="2026-10-03T00:00:00Z", files={"layout": str(files[0])},
+        meta={"external": external},
+    ))
+    orch = Orchestrator()
+    svc = DirectorService(plan_provider=Provider(orch), orchestrator=orch)
+    observation = await svc.inspect_asset(project.id, asset.id, "layout")
+    assert observation["asset_id"] == "lay_current"
+    assert observation["file_key"] == "layout"
+    assert observation["content_sha256"] == hashlib.sha256(files[0].read_bytes()).hexdigest()
+    assert observation["description"] == "Observed detail 1"
+    assert load_shot(project.id, shot.id) == shot
+
+
+@pytest.mark.asyncio
+async def test_inspect_layout_rejects_another_projects_image(material_shot):
+    from app.core.library.store import write_asset
+    project, _, _, files = material_shot
+    foreign = create_project("Foreign", "Unrelated")
+    write_asset(LibraryAsset(
+        id="lay_foreign", kind="layouts", name="Foreign Layout", project_id=foreign.id,
+        pipeline_id="external", job_id="fixture", created_at="2026-10-03T00:00:00Z",
+        files={"layout": str(files[0])}, meta={"external": True},
+    ))
+    orch = Orchestrator()
+    svc = DirectorService(plan_provider=Provider(orch), orchestrator=orch)
+    with pytest.raises(ValueError, match="not in this project's inventory"):
+        await svc.inspect_asset(project.id, "lay_foreign", "layout")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("fault", ["empty", "truncated", "unreadable", "vision_error", "conflict", "missing_file"])
 async def test_incomplete_review_preserves_old_brief_prompt_and_pending(material_shot, fault):
     project, shot, _, files = material_shot
@@ -577,6 +615,25 @@ async def test_review_can_preserve_brief_and_valid_prompt(material_shot):
     assert updated.script_beat == shot.script_beat
     assert updated.prompt_sections == shot.prompt_sections
     assert not updated.meta["material_review_pending"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_prompt_revision_overrides_review_preserve_advice(material_shot):
+    _, shot, _, _ = material_shot
+    orch = Orchestrator()
+    class RevisionProvider(Provider):
+        async def complete(self, system, user, *, guides=()):
+            response = await super().complete(system, user, guides=guides)
+            payload = json.loads(response)
+            if "prompt_sections" in payload:
+                payload["prompt_sections"]["summary"] = "The gear turns slowly in the watchmaker's hands."
+            return json.dumps(payload)
+    provider = RevisionProvider(orch, rewrite=False)
+    updated = await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(
+        shot.id, revision_request="Make the gear turn slowly."
+    )
+    assert updated.prompt_sections.summary == "The gear turns slowly in the watchmaker's hands."
+    assert updated.script_beat == shot.script_beat
 
 
 @pytest.mark.asyncio

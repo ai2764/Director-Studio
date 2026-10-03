@@ -158,7 +158,6 @@ async def handle_project_tool(
                 {
                     "ok": True,
                     "shot": storyboard_snapshot([shot])["shots"][0],
-                    "concludes_turn": True,
                     "reply": "Appended 1 new shot at the end.",
                 }
             )

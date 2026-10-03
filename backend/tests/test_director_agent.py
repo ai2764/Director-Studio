@@ -1531,12 +1531,13 @@ async def test_queue_two_layout_briefs_for_one_shot(director_dirs, monkeypatch):
 @pytest.mark.parametrize(
     "source_names",
     [
+        (),
         ("lu",),
         ("scene", "lu"),
         ("scene", "lu", "recorder"),
     ],
 )
-async def test_explicit_layout_pack_preserves_one_to_three_sources_in_order(
+async def test_explicit_layout_pack_preserves_zero_to_three_sources_in_order(
     director_dirs, monkeypatch, source_names
 ):
     import app.agents.director.service as service_module
@@ -1563,6 +1564,8 @@ async def test_explicit_layout_pack_preserves_one_to_three_sources_in_order(
 
     assert len(started) == 1
     job, images = started[0]
+    assert job.pipeline_id == "qwen21_layout"
+    assert job.params["comfy_base_url"] == settings.qwen_image_21_comfy_base_url
     assert list(images) == [f"ref_{index}" for index in range(len(source_names))]
     assert [item["asset_id"] for item in job.params["layout_source_refs"]] == [
         source.asset_id for source in ordered_sources
@@ -2248,7 +2251,9 @@ async def test_planner_retries_on_bad_json_then_blocks(director_dirs):
 
 
 @pytest.mark.asyncio
-async def test_write_prompts_after_layout(director_dirs, enable_reference_review):
+@pytest.mark.parametrize("language_prefix", ["[English]", "English", "EN"])
+@pytest.mark.parametrize("picture_delimiters", [True, False])
+async def test_write_prompts_after_layout(director_dirs, enable_reference_review, language_prefix, picture_delimiters):
     from app.agents.director.context_io import save_agent_context
     from app.agents.director.service import DirectorService
     from app.core.projects.models import RefRole, ShotRef
@@ -2322,11 +2327,13 @@ async def test_write_prompts_after_layout(director_dirs, enable_reference_review
             ),
             "summary": "A short cafe walk-in.",
             "retention_analysis": "Retain the actor and Layout continuity.",
-            "detailed_description": "Actor enters and (S1) says <d>[English] Hello.</d>",
+            "detailed_description": f"Actor enters and (S1) says <d>{language_prefix} Hello.</d>",
             "overall_soundscape": "Cafe ambience.",
             "non_diegetic_music": "Soft piano.",
         }
     )
+    if not picture_delimiters:
+        sections_json = sections_json.replace("<Picture 1>", "Picture 1").replace("<Picture 2>", "Picture 2")
     provider = FakePlanProvider(response=sections_json)
     enable_reference_review(provider)
     orch = RecordingOrchestrator()
@@ -2336,6 +2343,7 @@ async def test_write_prompts_after_layout(director_dirs, enable_reference_review
     assert updated.prompt_sections.subject_definitions.startswith("S1")
     assert "<Picture 2>" in updated.prompt_sections.subject_definitions
     assert updated.prompt_sections.summary
+    assert "<d>[English] Hello.</d>" in updated.prompt_sections.detailed_description
     assert updated.meta["prompt_layout_asset_id"] == "lay_approved01"
     prompt_user = provider.calls[0][1]
     assert "Lin Ya" in prompt_user

@@ -11,6 +11,19 @@ from ...core.projects.store import load_project
 from .context_io import load_agent_context, save_agent_context
 
 
+def _authored_request_text(message: str) -> str:
+    """Discard the generated song-map appendix from older chat turns."""
+    focus_marker = "\n\nSelected song segment IDs: "
+    head, separator, appendix = message.partition(focus_marker)
+    if separator and appendix.lstrip().startswith("["):
+        return head.strip()
+    marker = "\n\nComplete saved song segmentation:"
+    head, separator, appendix = message.partition(marker)
+    if separator and "\nAll saved song segments:\n[" in appendix:
+        return head.strip()
+    return message.strip()
+
+
 def requested_minimum_duration_s(text: str) -> float:
     number = r"(\d+(?:\.\d+)?)"
     unit = r"(seconds?|secs?|s|minutes?|mins?|min|分钟|秒)"
@@ -47,7 +60,8 @@ def directing_request_sources(project) -> list[dict]:
         entries = [dict(id=f"request-{index}-{hashlib.sha256(text.encode()).hexdigest()[:12]}",
                         source_message_id=None, text=text, script_hash=record.get("script_hash"))
                    for index, text in enumerate(record.get("messages", []))]
-    return [{**entry, "kind": "user_directing_request",
+    return [{**entry, "text": _authored_request_text(entry.get("text") or ""),
+             "kind": "user_directing_request",
              "script_current": entry.get("script_hash") == script_hash} for entry in entries]
 
 
@@ -63,6 +77,10 @@ intent.authoring_request is the verified user request associated with this shot'
 not an instruction to undo later saved edits. intent.directing_requests are ordered historical
 requirements: apply only those relevant to this shot, respecting later replacements and scope.
 intent.current_request is this prompt-writing request, not blanket permission to edit the story.
+Apply the latest explicit shot-specific directing requirement when an older saved camera or
+composition field contradicts it. Do not silently let a stale descriptive field cancel a newer
+action in script_beat or the current request. Keep all six prompt sections consistent with the
+resolved action and camera sequence; an initial Layout pose does not lock the camera for the clip.
 Preserve the current saved brief, dialogue and duration. Use references according to their
 assigned contribution: identity/design evidence need not share the desired rendering style or
 depict the intended action. Ground actual visible facts honestly. Ask only if an essential
@@ -89,6 +107,7 @@ def shot_execution_intent(project, shot, current_request: str = "") -> dict:
 
 
 def remember_directing_request(project_id: str, message: str) -> None:
+    message = _authored_request_text(message)
     if not message.strip():
         return
     project = load_project(project_id)

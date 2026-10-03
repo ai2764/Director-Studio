@@ -361,6 +361,8 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "Append exactly one new Shot at the end. Submit only the new shot's "
                 "authored fields, not existing Shots or production state. Python assigns "
                 "its ID and preserves every existing Shot, ref, prompt, Layout and video link. "
+                  "asset_matches is authoritative: only bind assets that actually fit this Shot; "
+                  "missing roles remain empty rather than being filled from inventory. "
                 "Copy PROJECT_STATE.script_hash and last_shot_id for stale/replay checks. "
                 "Provide attributed dialogue_lines with stable narrative speaker IDs when known. "
                 "Otherwise include exact words and speaker cues in script_beat; attribution is "
@@ -379,6 +381,8 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "Layouts, and historical jobs. voice_matches optionally replaces "
                 "this Shot's complete ordered Voice reference list ([] clears it; "
                 "omission preserves it). Invalidates that Shot's stale prompt and active H3 link. "
+                "Keep the supplied authored fields coherent: when changing camera or blocking in "
+                "script_beat, also update any saved camera_motion or composition that would contradict it. "
                 "For MV, music_segment.use_as_audio_reference=false "
                 "disables the song reference while preserving timestamps; null removes the segment. "
                 "For an editorial-only lyric cutaway, also clear dialogue=[] when no generated "
@@ -424,9 +428,10 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "For an additional Layout, use only after discussion establishes a "
             "distinct visual purpose, and set activation_mode=append only when "
             "the user explicitly wants to preserve existing active Layouts. "
-            "Provide an explicit continuity brief and "
-            "1–3 exact source assets from the inventory so the downstream Qwen "
-            "prompt can assign each image a clear visual job."
+            "Choose zero to three exact source assets from the inventory only when "
+            "they materially help the shot. An empty source_refs list deliberately "
+            "requests text-to-image; useful references request reference-to-image. "
+            "Use Qwen Image 2.1 for either mode."
         ),
         {
             **SHOT_SELECTOR,
@@ -512,6 +517,8 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "Record feedback from this Director conversation on one existing "
             "Layout and generate a linked replacement. Use this instead of "
             "queue_ref_frame when the user critiques a generated reference. "
+            "For ordinary Layouts, source_refs may override the inherited source pack; "
+            "use a scene-only pack when removing a person from the image. "
             "For a clip_tail_frame origin, additional_source_refs (max 2) are "
             "honored; the extracted Layout is always Qwen Image1."
         ),
@@ -526,6 +533,15 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "type": "string",
                 "minLength": 1,
                 "description": "Concise actionable summary of the user's feedback.",
+            },
+            "source_refs": {
+                "type": "array",
+                "maxItems": 3,
+                "description": (
+                    "Optional replacement source pack for an ordinary Layout revision. "
+                    "Omit to inherit the prior real sources; pass [] for text-to-image."
+                ),
+                "items": LAYOUT_SOURCE_REF_ITEM,
             },
             "additional_source_refs": {
                 "type": "array",
@@ -544,6 +560,9 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "Prepare the six-section H3 production prompt for one shot. The backend ensures visual evidence "
         "for every current Picture, reviewing new or changed references first, decides whether the Creative brief "
         "and prompt need changes, and preserves old drafts if review is incomplete or needs a user choice. "
+        "For prompt-only corrections, call this tool directly: the current user feedback is passed to "
+        "the writer. Do not call revise_shot merely to restate prompt timing, reference responsibilities, "
+        "style, or sound direction when the authored Shot and saved bindings already fit the request. "
         "For selected clip tails, the current user request reaches a bounded drafting and semantic review pass; "
         "it may reconcile this shot's camera plan with the requested continuity. Read returned shot_changes. "
         "This tool uses saved audio bindings; it does not clear them from prose. Before calling it, "
@@ -554,6 +573,7 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     function_tool(
         "inspect_asset",
         "Read one exact Library image before casting or answering visual questions, even with no Shots. "
+        "Includes imported and generated Layout images. Inspect the actual current image before claiming to have seen or reviewed it; get_status returns saved metadata, not visible pixels. "
         "Returns visual observations, metadata conflicts and content hash, not image bytes. "
         "Use when appearance is unknown or names/descriptions may be misleading; does not change the asset or project.",
         {"asset_id": {"type": "string", "minLength": 1}, "file_key": {"type": "string", "minLength": 1}},

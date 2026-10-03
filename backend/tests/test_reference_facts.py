@@ -148,6 +148,19 @@ async def test_invalid_conflict_quote_cannot_delete_unrelated_description():
 
 
 @pytest.mark.asyncio
+async def test_conflict_quote_repair_targets_description_not_external_sources():
+    wrong = observation("Hands grip a wooden seat beside the bed.")
+    wrong["concerns"] = ["No backrest is visible."]
+    wrong["conflicts"] = [dict(attribute="chair_structure", quote="No backrest is visible.",
+        reason="The reference notes describe a chair back.")]
+    provider = Vision(wrong, observation("Hands grip a wooden seat beside the bed."))
+    await observe_reference(provider, {"sources": []}, "image")
+    repair = provider.calls[1][1]
+    assert "conflicts[].quote must be copied verbatim from your CURRENT description" in repair
+    assert "not from concerns, source metadata, or the previous response" in repair
+
+
+@pytest.mark.asyncio
 async def test_writer_carries_structured_evidence_and_unknowns(material_shot):
     from app.agents.director.service import DirectorService
     project, shot, _, _ = material_shot

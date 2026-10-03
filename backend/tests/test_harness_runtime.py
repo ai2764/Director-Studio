@@ -25,6 +25,98 @@ def test_runtime_defaults_and_loopback_validation():
             Settings(_env_file=None, harness_base_url=url)
 
 
+def test_harness_never_reports_uncreated_layout_job(tmp_projects_dir):
+    from app.agents.director.harness_runtime import BackendTurn
+    from app.core.jobs.store import create_job
+
+    project = create_project("missing layout job", "An empty hallway.")
+    turn = BackendTurn(project.id, "需要换layout", None, None)
+    result = turn.finish({
+        "reply": "Shot 6 的新 Layout 已提交生成（job_e25d6d185a24，lay_239f68f13e68）。",
+    })
+    assert "已提交生成" not in result.reply
+    assert "job_e25d6d185a24" not in result.reply
+    assert "不存在" in result.reply
+
+    another = BackendTurn(project.id, "清理地面的纸片", None, None)
+    result = another.finish({
+        "reply": "Shot 6 的 Layout 已重新生成（job_2d9a1b5440d2，lay_56b0388a5274）。",
+    })
+    assert "已重新生成" not in result.reply
+    assert "job_2d9a1b5440d2" not in result.reply
+
+    third = BackendTurn(project.id, "走廊", None, None)
+    result = third.finish({"reply": "请看 job_5d59a2c929c5 的布局。"})
+    assert "job_5d59a2c929c5" not in result.reply
+
+    real = create_job(pipeline_id="qwen21_layout", asset_kind="layouts",
+                      name="test", project_id=project.id)
+    without_receipt = BackendTurn(project.id, "走廊", None, None)
+    assert real.id not in without_receipt.finish({"reply": f"{real.id} 可以看了。"}).reply
+    with_receipt = BackendTurn(project.id, "走廊", None, None)
+    with_receipt.tool_exposed_job_ids.add(real.id)
+    assert real.id in with_receipt.finish({"reply": f"{real.id} 可以看了。"}).reply
+
+
+def test_agent_history_does_not_reseed_phantom_job_claims(tmp_projects_dir):
+    from app.core.projects.chat_history import agent_history, append_chat_message, load_chat_history
+
+    project = create_project("phantom job history", "An empty hallway.")
+    append_chat_message(project.id, role="user", content="重新设计空走廊")
+    append_chat_message(project.id, role="assistant", content="已提交 job_5d59a2c929c5。")
+    append_chat_message(project.id, role="assistant", content="Earlier assistant reply cited a Job with no matching project record. No task can be inferred from that reply.")
+    visible = load_chat_history(project.id)
+    assert "job_5d59a2c929c5" in visible[-2].content
+    seeded = agent_history(visible, project_id=project.id)
+    assert seeded == [{"role": "user", "content": "重新设计空走廊"}]
+
+
+def test_harness_reseeds_only_recent_chat_messages(tmp_projects_dir):
+    from app.agents.director.harness_runtime import BackendTurn, MAX_HARNESS_SEED_MESSAGES
+
+    project = create_project("recent chat", "A hallway.")
+    history = [{"role": "user", "content": str(i)} for i in range(40)]
+    turn = BackendTurn(project.id, "continue", None, None, history=history)
+    assert len(turn.seed_history) == MAX_HARNESS_SEED_MESSAGES
+    assert turn.seed_history[0]["content"] == "16"
+    assert turn.seed_history[-1]["content"] == "39"
+
+
+@pytest.mark.asyncio
+async def test_harness_exposes_new_layout_job_from_tool_receipt(tmp_projects_dir, monkeypatch):
+    from app.agents.director import chat
+    from app.agents.director.harness_runtime import BackendTurn
+    from app.core.jobs.store import create_job
+
+    project = create_project("layout receipt", "An empty hallway.")
+    shot = Shot(id="sht_receipt", project_id=project.id, scene_id="sc01",
+                title="Hallway", script_beat="Empty floor", duration_s=4)
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    made = []
+
+    async def queue_layout(**kwargs):
+        job = create_job(pipeline_id="qwen21_layout", asset_kind="layouts",
+                         name="layout", project_id=project.id)
+        made.append(job.id)
+        current = load_shot(project.id, shot.id)
+        save_shot(current.model_copy(update={
+            "layout_refs": [LayoutReference(id="lref_receipt", job_id=job.id)],
+            "ref_frame_job_id": job.id,
+        }))
+        kwargs["actions"].append(f"ref_frame:{shot.id}")
+        return ["Queued Layout"], {shot.id}
+
+    monkeypatch.setattr(chat, "_run_tools", queue_layout)
+    turn = BackendTurn(project.id, "Generate a Layout", None, None)
+    result = await turn.dispatch("tool", {
+        "name": "queue_ref_frame", "arguments": {"shot_id": shot.id}, "call_id": "queue-1",
+    })
+    assert result["ok"] is True
+    assert result["created_job_ids"] == made
+    assert made[0] in turn.finish({"reply": f"Queued {made[0]}."}).reply
+
+
 @pytest.mark.parametrize("limit", [0, -1, 65])
 def test_tool_budget_rejects_unbounded_configuration(limit):
     with pytest.raises(ValueError):
@@ -569,6 +661,33 @@ async def test_shot_status_exposes_clip_generations_and_can_be_read_again(
         if tool["function"]["name"] == "get_status"
     )
     assert not list(Draft202012Validator(status_schema).iter_errors({"shot_id": shot.id}))
+
+
+@pytest.mark.asyncio
+async def test_shot_status_omits_large_internal_material_review(tmp_projects_dir):
+    from app.agents.director.harness_runtime import BackendTurn
+
+    project = create_project("bounded status", "A wall rises from a flat floor.")
+    shot = Shot(
+        id="sht_bounded", project_id=project.id, scene_id="sc01",
+        title="Empty hallway", script_beat="The wall rises.", duration_s=5,
+        meta={"material_review": {"references": [{"sources": [{"text": "archive " * 16000}]}]},
+              "material_review_pending": True, "material_changes": {"changed": ["layout"]}},
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    turn = BackendTurn(project.id, "Read the hallway shot", None, None)
+    await turn.dispatch("context", {})
+
+    result = await turn.dispatch("tool", {
+        "name": "get_status", "arguments": {"shot_id": shot.id}, "call_id": "bounded-read",
+    })
+
+    assert result["ok"] is True
+    assert result["shot"]["script_beat"] == "The wall rises."
+    assert result["shot"]["meta"]["material_review_pending"] is True
+    assert "material_review" not in result["shot"]["meta"]
+    assert len(json.dumps(result, ensure_ascii=False)) < 12000
 
 
 def test_harness_does_not_preemptively_whitelist_layout_ids(tmp_projects_dir):

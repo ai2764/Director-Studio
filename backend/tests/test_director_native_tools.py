@@ -105,7 +105,7 @@ def test_actor_design_tool_defaults_to_local_and_requires_identity_description()
 
 
 @pytest.mark.asyncio
-async def test_visible_layout_tool_cannot_generate_from_a_discussion_only(
+async def test_natural_image_request_can_queue_without_layout_keyword(
     tmp_projects_dir,
 ):
     project = create_project("Layout discussion", "A door opens.")
@@ -120,20 +120,23 @@ async def test_visible_layout_tool_cannot_generate_from_a_discussion_only(
     save_shot(shot)
     save_project(project.model_copy(update={"shot_ids": [shot.id]}))
 
+    called = []
+
     class Service:
-        async def queue_reference_frame(self, *args, **kwargs):
-            raise AssertionError("Layout generation was not authorized")
+        async def queue_ref_frames(self, *args, **kwargs):
+            called.append((args, kwargs))
+            return [shot]
 
     notes, touched = await _run_tools(
         project_id=project.id,
         tools=[{"name": "queue_ref_frame", "args": {"shot_id": shot.id}}],
         svc=Service(),
         actions=[],
-        user_feedback="Explain whether another Layout would help; do not generate yet.",
+        user_feedback="Please draw this shot now.",
     )
 
-    assert touched == set()
-    assert "requires an explicit request" in notes[0]
+    assert called
+    assert touched == {shot.id}
 
 
 def test_actor_design_does_not_inject_storyboarding_for_an_unplanned_script(
@@ -895,6 +898,7 @@ def test_save_storyboard_tool_exposes_the_complete_typed_shot_draft_shape():
         "duration_s",
         "dialogue",
         "music_segment",
+        "actor_presence",
         "asset_matches",
         "dialogue_lines",
         "voice_matches",
@@ -3542,6 +3546,42 @@ async def test_queue_ref_frame_tool_queues_explicit_layout_brief_and_reports_ide
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("has_previous_layout", [False, True])
+async def test_explicit_layout_queue_reports_failure_without_reusing_old_job(
+    tmp_projects_dir, has_previous_layout,
+):
+    project = create_project("Failed Layout", "Mia enters a paper room.")
+    previous = LayoutReference(id="lref_old", job_id="job_old", purpose="old room")
+    shot = Shot(id="sht_queue_failure", project_id=project.id, scene_id="room",
+                title="Room", script_beat="Mia enters.", duration_s=4,
+                layout_refs=[previous] if has_previous_layout else [])
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    reason = "visual direction failed: character Image2 must point to an attached CHARACTER reference"
+
+    class Service:
+        async def queue_reference_frame(self, *args, **kwargs):
+            failed = shot.model_copy(update={"meta": {"layout_generation_issues": [reason]}})
+            save_shot(failed)
+            return failed
+
+    payloads = []
+    notes, touched = await _run_tools(
+        project_id=project.id,
+        tools=[{"name":"queue_ref_frame", "args":{"shot_id":shot.id,
+                "purpose":"new room", "state_description":"Mia entering", "source_refs":[]}}],
+        svc=Service(), actions=[], result_payloads=payloads,
+        user_feedback="Generate the room Layout.",
+    )
+    assert payloads[-1]["ok"] is False
+    assert reason in payloads[-1]["error"]
+    assert reason in "\n".join(notes)
+    assert "Queued Layout" not in "\n".join(notes)
+    assert not payloads[-1].get("job_id")
+    assert touched == {shot.id}
+
+
+@pytest.mark.asyncio
 async def test_agent_can_append_a_two_person_layout_to_the_same_shot(
     tmp_projects_dir,
 ):
@@ -3628,8 +3668,9 @@ async def test_agent_can_append_a_two_person_layout_to_the_same_shot(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("include_shot_selector", [True, False])
 async def test_revise_ref_frame_records_chat_feedback_and_links_new_layout(
-    tmp_projects_dir,
+    tmp_projects_dir, include_shot_selector,
 ):
     project = create_project("Dialogue Layout Revision", "Lu faces door seven.")
     original = LayoutReference(
@@ -3658,7 +3699,9 @@ async def test_revise_ref_frame_records_chat_feedback_and_links_new_layout(
         layout_refs=[original],
     )
     save_shot(shot)
-    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    neighbor = shot.model_copy(update={"id":"sht_neighbor", "layout_refs":[], "layout_asset_id":None})
+    save_shot(neighbor)
+    save_project(project.model_copy(update={"shot_ids": [neighbor.id, shot.id]}))
 
     class _Service:
         async def queue_reference_frame(self, shot_id: str, *, brief, force=False):
@@ -3684,7 +3727,7 @@ async def test_revise_ref_frame_records_chat_feedback_and_links_new_layout(
             {
                 "name": "revise_ref_frame",
                 "args": {
-                    "shot_id": shot.id,
+                    **({"shot_id": shot.id} if include_shot_selector else {}),
                     "layout_ref_id": original.id,
                     "feedback": "人物站位过近，7号门识别不足",
                 },
@@ -3706,11 +3749,13 @@ async def test_revise_ref_frame_records_chat_feedback_and_links_new_layout(
     assert new.revision_of == "lref_original"
     assert touched == {shot.id}
     assert any("Recorded dialogue feedback" in note for note in notes)
+    assert load_shot(project.id, neighbor.id) == neighbor
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("include_shot_selector", [True, False])
 async def test_accept_ref_frame_records_chat_decision_and_selects_layout(
-    tmp_projects_dir,
+    tmp_projects_dir, include_shot_selector,
 ):
     project = create_project("Dialogue Layout Acceptance", "Lu faces door seven.")
     layout = LayoutReference(
@@ -3734,7 +3779,9 @@ async def test_accept_ref_frame_records_chat_decision_and_selects_layout(
         layout_refs=[layout],
     )
     save_shot(shot)
-    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    neighbor = shot.model_copy(update={"id":"sht_neighbor", "layout_refs":[], "layout_asset_id":None})
+    save_shot(neighbor)
+    save_project(project.model_copy(update={"shot_ids": [neighbor.id, shot.id]}))
 
     notes, touched = await _run_tools(
         project_id=project.id,
@@ -3742,7 +3789,7 @@ async def test_accept_ref_frame_records_chat_decision_and_selects_layout(
             {
                 "name": "accept_ref_frame",
                 "args": {
-                    "shot_id": shot.id,
+                    **({"shot_id": shot.id} if include_shot_selector else {}),
                     "layout_ref_id": layout.id,
                     "feedback": "构图和人物位置符合要求",
                 },
@@ -3767,6 +3814,7 @@ async def test_accept_ref_frame_records_chat_decision_and_selects_layout(
     )
     assert touched == {shot.id}
     assert any("Selected Layout lref_accept for H3" in note for note in notes)
+    assert load_shot(project.id, neighbor.id) == neighbor
 
 
 @pytest.mark.asyncio

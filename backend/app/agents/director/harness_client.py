@@ -19,6 +19,15 @@ class HarnessError(RuntimeError):
         self.code = code
 
 
+def is_context_overflow_error(message: str) -> bool:
+    return bool(re.search(
+        r"context[\s_-]+(?:length|window).*(?:exceed|overflow|limit)"
+        r"|(?:exceed|maximum).*context[\s_-]+(?:length|window)"
+        r"|request\s*\(\d+\s*tokens\)\s*exceeds\s*the\s*available\s*context\s*size",
+        message, re.I,
+    ))
+
+
 class HarnessClient:
     def __init__(self, base_url: str, token: str, *, http=None, timeout=1800):
         from ...config import Settings
@@ -89,10 +98,7 @@ class HarnessClient:
                                     isinstance(exc, (httpx.ConnectError, httpx.ReadTimeout))
                                     or status in {429, 502, 503, 504}
                                 )
-                                overflow = event["method"] == "llm" and re.search(
-                                    r"context[\s_-]+(?:length|window).*(?:exceed|overflow|limit)|(?:exceed|maximum).*context[\s_-]+(?:length|window)",
-                                    str(exc), re.I,
-                                )
+                                overflow = event["method"] == "llm" and is_context_overflow_error(str(exc))
                                 # Capability errors are model-visible; cancellation is never caught.
                                 reply = {"ok": False, "error": {
                                     "code": "CONTEXT_WINDOW_EXCEEDED" if overflow else "TRANSIENT_LLM" if retryable else "CAPABILITY_ERROR",

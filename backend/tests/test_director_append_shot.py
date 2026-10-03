@@ -58,6 +58,31 @@ def test_append_preserves_every_old_file_and_rejects_replay(board):
     assert len(list_shots(project.id)) == 5
 
 
+def test_append_preserves_explicit_reference_selection_without_inventory_fill(board, monkeypatch):
+    from app.agents.director import service
+    from app.core.schemas import LibraryAsset
+
+    project, svc = board
+    actor = LibraryAsset(id="actor-1", kind="actors", name="Mia", pipeline_id="external",
+                         job_id="job-actor", created_at="2026-10-03T00:00:00Z",
+                         files={"master": "actor.png"})
+    lobby = LibraryAsset(id="lobby-1", kind="scenes", name="Hotel Lobby", pipeline_id="external",
+                         job_id="job-scene", created_at="2026-10-03T00:00:00Z",
+                         files={"master": "lobby.png"})
+    inventory = [{"id": a.id, "kind": a.kind, "name": a.name,
+                  "file_keys": ["master"], "owned_by_project": True} for a in (actor, lobby)]
+    monkeypatch.setattr(service, "_inventory", lambda _: inventory)
+    monkeypatch.setattr(service, "_asset_index", lambda _: {a.id: a for a in (actor, lobby)})
+    request = payload(project)
+    request["shot"]["asset_matches"] = [{"role": "actor", "asset_id": actor.id}]
+    shot = svc.append_shot(project.id, request)
+    assert [(r.role.value, r.asset_id) for r in shot.refs] == [("actor", actor.id)]
+    assert shot.meta["asset_binding_policy"] == "explicit"
+    from app.agents.director.casting_service import recast_shot_assets
+    assert recast_shot_assets(project.id, shot, inventory=inventory,
+                             index={a.id: a for a in (actor, lobby)}).refs == shot.refs
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("runtime", ["native", "harness"])
 @pytest.mark.parametrize("status_first", [False, True])
@@ -88,7 +113,7 @@ async def test_real_node_append_roundtrip(board, real_sidecar, monkeypatch, runt
 
     handler = handle_harness_chat if runtime == "harness" else handle_chat
     result = await handler(project_id=project.id, message="Add one final wave shot.", svc=svc, chat_fn=inference)
-    assert calls == (2 if status_first else 1)
+    assert calls == 3
     svc.plan_project.assert_not_called()
     assert "append_shot" in result.actions and "plan_shots" not in result.actions
     assert "not saved" not in result.reply
@@ -136,7 +161,7 @@ def test_mv_append_rejects_a_beat_outside_the_authorized_test_span(board):
 
 
 @pytest.mark.asyncio
-async def test_native_append_concludes_the_turn_with_persisted_success(board):
+async def test_native_append_returns_receipt_before_agent_finishes(board):
     from app.agents.director.chat import handle_chat
 
     project, svc = board
@@ -145,8 +170,11 @@ async def test_native_append_concludes_the_turn_with_persisted_success(board):
     async def inference(system, user, **kwargs):
         nonlocal calls
         calls += 1
-        if calls > 1:
-            raise AssertionError("a successful single-Shot append must conclude the turn")
+        if calls == 2:
+            results = [json.loads(m["content"]) for m in kwargs["messages"] if m["role"] == "tool"]
+            assert results and results[-1].get("shot", {}).get("id")
+            return {"content": "The new shot is saved.", "tool_calls": []}
+        assert calls == 1
         return {
             "content": "",
             "tool_calls": [
@@ -161,7 +189,7 @@ async def test_native_append_concludes_the_turn_with_persisted_success(board):
         chat_fn=inference,
     )
 
-    assert calls == 1
+    assert calls == 2
     assert result.reply == "Appended 1 new shot at the end."
     assert "append_shot" in result.actions
     assert len(list_shots(project.id)) == 5

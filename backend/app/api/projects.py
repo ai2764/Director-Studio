@@ -75,6 +75,7 @@ from ..core.projects.chat_history import (
 from ..core.projects.song_segments import (
     SegmentRevisionConflict,
     context_for_discussion,
+    context_for_selection,
     load_segments,
 )
 from ..core.projects.chat_sessions import (
@@ -394,7 +395,7 @@ def _validate_voice_refs(shot: Shot) -> list[tuple[ShotVoiceRef, LibraryAsset, P
 
 
 def _mv_dialogue_song_matches(project: Project, shot: Shot) -> list[tuple[str, list[Any]]]:
-    """Match dialogue to saved lyrics inside the shot's authored song timecode."""
+    """Match dialogue to saved lyrics inside the configured source-song interval."""
     if project.mode != ProjectMode.mv or project.music_master is None or not shot.dialogue:
         return []
     document = load_segments(project.id)
@@ -409,15 +410,20 @@ def _mv_dialogue_song_matches(project: Project, shot: Shot) -> list[tuple[str, l
         r"(\d+):(\d{2}(?:\.\d+)?)\s*\]",
         shot.script_beat,
     )
-    if timecode:
+    if shot.music_segment is not None:
+        # This is the interval actually submitted. Creative prose can lose or
+        # retain an old timecode when revised; it must not override this binding.
+        start_s = shot.music_segment.core_start_s
+        end_s = shot.music_segment.core_end_s
+    elif timecode:
         start_s = int(timecode.group(1)) * 60 + float(timecode.group(2))
         end_s = int(timecode.group(3)) * 60 + float(timecode.group(4))
-        timed_segments = [
-            segment for segment in document.segments
-            if segment.start_s >= start_s - 0.05 and segment.end_s <= end_s + 0.05
-        ]
     else:
-        timed_segments = []
+        start_s = end_s = None
+    timed_segments = [
+        segment for segment in document.segments
+        if segment.start_s >= start_s - 0.05 and segment.end_s <= end_s + 0.05
+    ] if start_s is not None else []
 
     matches = []
     for line in shot.dialogue:
@@ -927,6 +933,17 @@ def _chat_message_with_segments(
     if project is None:
         raise HTTPException(404, "Project not found")
     try:
+        if settings.director_agent_runtime == "harness":
+            # Bind the current focus to saved timestamps and lyrics in this
+            # turn. The full map in system state is too easy to misread when
+            # the selection is represented only by IDs.
+            if selection is not None:
+                selected = context_for_selection(
+                    project, revision=selection.revision, ids=selection.ids,
+                )
+                return (message + "\n\nSelected song segment IDs: "
+                        + json.dumps(selection.ids) + "\n" + selected)
+            return message
         context = context_for_discussion(
             project,
             revision=selection.revision if selection else None,
@@ -975,7 +992,7 @@ async def project_chat_endpoint(
     try:
         await director_chat_sessions.attach(project_id, session.session_id or "", asyncio.current_task())
         stored_history = load_chat_history(project_id)
-        history = agent_history(stored_history)
+        history = agent_history(stored_history, project_id=project_id)
         if not history:
             history = [{"role": h.role, "content": h.content} for h in (body.history or [])]
         chat_fn = None if body.prompt_retry else await _make_chat_fn(on_progress=None)
@@ -1040,7 +1057,7 @@ async def compact_project_chat_endpoint(project_id: str) -> ChatCompactionResult
     try:
         await director_chat_sessions.attach(project_id, session.session_id or "", asyncio.current_task())
         result = await compact_harness_chat(project_id=project_id, chat_fn=await _make_chat_fn(),
-                                            history=agent_history(load_chat_history(project_id)))
+                                            history=agent_history(load_chat_history(project_id), project_id=project_id))
         return ChatCompactionResult.model_validate(result)
     except GenerationActiveError as exc:
         raise _generation_active_http(exc) from exc
@@ -1175,7 +1192,7 @@ async def _project_chat_stream_response(
         raise _generation_active_http(exc) from exc
 
     stored_history = load_chat_history(project_id)
-    history = agent_history(stored_history)
+    history = agent_history(stored_history, project_id=project_id)
     if not history:
         history = [
             {"role": item.role, "content": item.content}

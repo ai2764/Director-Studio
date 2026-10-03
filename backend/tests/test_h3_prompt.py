@@ -3,6 +3,21 @@ from app.core.projects.models import PromptSections
 import pytest
 
 
+def test_reference_delimiter_recovery_keeps_unsubmitted_reference_checks():
+    from app.core.h3.prompt import normalize_reference_tag_delimiters
+    sections = PromptSections(
+        subject_definitions="Picture 1 controls the room; Picture 2 controls the actor.",
+        summary="A greeting.", retention_analysis="Keep <Picture 1> stable.",
+        detailed_description="0-3 seconds: The actor waves.",
+        overall_soundscape="Audio 1 controls delivery.", non_diegetic_music="None.",
+    )
+    normalized = normalize_reference_tag_delimiters(sections)
+    assert normalized.retention_analysis == sections.retention_analysis
+    with pytest.raises(ValueError, match="unsubmitted Picture"):
+        validate_h3_prompt(normalized.as_ordered_text(), [], audio_count=1,
+                           required_picture_indices=[1], submitted_picture_indices=[1])
+
+
 def test_reports_dialogue_audio_and_picture_errors_together():
     sections = PromptSections(
         subject_definitions="Person.", summary="A greeting.", retention_analysis="Same face.",

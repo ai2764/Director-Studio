@@ -38,14 +38,26 @@ def music_prompt_context(project: Project, shot: Shot) -> dict[str, object] | No
     if project.mode != ProjectMode.mv or shot.music_segment is None:
         return None
     segment = shot.music_segment
+    lyric_segments = []
+    if segment.use_as_audio_reference and project.music_master is not None:
+        document = load_segments(project.id)
+        if document and document.master_sha256 == project.music_master.content_sha256:
+            lyric_segments = [
+                {**item.model_dump(mode="json"),
+                 "clip_start_s": round(item.start_s - segment.submit_start_s, 6),
+                 "clip_end_s": round(item.end_s - segment.submit_start_s, 6)}
+                for item in document.segments
+                if item.start_s < segment.core_end_s and item.end_s > segment.core_start_s
+            ]
     return {
         "audio_tag": "<Audio 1>" if segment.use_as_audio_reference else None,
-        "master_filename": (
-            project.music_master.filename
-            if project.music_master and segment.use_as_audio_reference else None
-        ),
+        # Audio identity is its submitted slot; editorial titles are not model direction.
+        "master_filename": None,
         **segment.model_dump(mode="json"),
         "generation_duration_s": segment.submit_end_s - segment.submit_start_s,
+        "core_clip_start_s": round(segment.core_start_s - segment.submit_start_s, 6),
+        "core_clip_end_s": round(segment.core_end_s - segment.submit_start_s, 6),
+        "lyric_segments": lyric_segments,
         "timing_origin": (
             "Generation second 0 is submit_start_s; core timestamps identify "
             "the edit content inside this submitted excerpt."
@@ -96,6 +108,7 @@ def music_prompt_signature(project: Project, shot: Shot) -> str:
             else None
         ),
         "segment": shot.music_segment.model_dump(mode="json"),
+        **({"lyric_segments": context["lyric_segments"]} if context["lyric_segments"] else {}),
     }
     canonical = json.dumps(
         payload,

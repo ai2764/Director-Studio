@@ -38,7 +38,7 @@ def on_pipeline_job_terminal(job: JobRecord) -> None:
     """Hook after a pipeline job reaches succeeded/failed/cancelled."""
     if job.status not in _TERMINAL:
         return
-    if job.pipeline_id in {"ref_frame", "gpt_ref_frame"}:
+    if job.pipeline_id in {"ref_frame", "qwen21_layout", "gpt_ref_frame"}:
         _sync_ref_frame(job)
     elif job.pipeline_id == "h3_ref2va":
         _sync_h3_ref2va(job)

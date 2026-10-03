@@ -87,3 +87,26 @@ def test_selected_context_uses_saved_rows_and_current_song() -> None:
         context_for_selection(project, revision=1, ids=["missing"])
     with pytest.raises(ValueError, match="source order"):
         context_for_selection(project, revision=1, ids=["seg_b", "seg_a"])
+
+
+def test_harness_chat_keeps_song_map_out_of_durable_user_message(monkeypatch) -> None:
+    from app.api.projects import _chat_message_with_segments
+    from app.agents.director.chat_context import project_context_blob
+    from app.config import settings
+    from app.api.projects import SegmentSelection
+    import json
+
+    project = _mv_with_song()
+    saved = save_segments(project, expected_revision=0, raw_input="source", segments=[
+        SongSegment(id="seg_a", start_s=1, end_s=2, text="First lyric"),
+        SongSegment(id="seg_b", start_s=2, end_s=3, text="Second lyric"),
+    ])
+    monkeypatch.setattr(settings, "director_agent_runtime", "harness")
+    message = _chat_message_with_segments(
+        project.id, "Discuss this line", SegmentSelection(revision=saved.revision, ids=["seg_b"]),
+    )
+    assert "First lyric" not in message
+    assert "Second lyric" not in message
+    assert "seg_b" in message
+    state = json.loads(project_context_blob(project, [], message=message, focused=True))
+    assert [row["text"] for row in state["song_segments"]] == ["First lyric", "Second lyric"]

@@ -12,7 +12,7 @@ from typing import Any
 
 from ...config import settings
 from ...core.jobs import create_job, load_job, start_pipeline_job
-from ...core.library.store import load_asset
+from ...core.library.store import list_assets, load_asset
 from ...core.media.music_segments import (
     music_prompt_context,
     music_prompt_signature,
@@ -81,6 +81,7 @@ from .asset_catalog import (
     _asset_index,
     _default_file_key,
     _inventory,
+    _imported_layout_inventory,
     _read_asset_image_bytes,
     _repair_unique_file_key_typo,
     _script_hash,
@@ -262,9 +263,9 @@ def _apply_source_audio_contract(
 def _normalize_unambiguous_dialogue_language_tag(
     sections: PromptSections,
 ) -> PromptSections:
-    """Repair the local model's exact ``<d>English words</d>`` omission."""
+    """Canonicalize an explicit English language prefix missing its brackets."""
     detail = re.sub(
-        r"(<d>\s*)English(?=\s+\S)",
+        r"(<d>\s*)(?:English|EN)(?=\s+\S)",
         r"\1[English]",
         sections.detailed_description,
         flags=re.IGNORECASE,
@@ -429,13 +430,14 @@ class DirectorService:
         tail = project.shot_ids[-1] if project.shot_ids else None
         if validated.expected_last_shot_id != tail:
             raise ValueError("Storyboard tail changed; inspect the last Shot before appending again.")
-        inventory, index = _inventory(project_id), _asset_index(project_id)
+        inventory = [*_inventory(project_id), *_imported_layout_inventory(project_id)]
+        index = _asset_index(project_id)
         if validated.shot.music_segment is not None and project.mode != ProjectMode.mv:
             raise ValueError("music_segment is available only for Music Video projects")
         _validate_mv_append_timing(project, validated.shot)
         _validate_storyboard_bindings([validated.shot], inventory=inventory, index=index)
         shot = _shot_from_draft(project_id, validated.shot, inventory=inventory, index=index,
-                                script_text=project.script_text or "")
+                                script_text=project.script_text or "", complete_missing_refs=False)
         if dialogue_authoring is not None:
             from ...core.projects.dialogue import revision_digest
             shot.meta["dialogue_authoring"] = {**dialogue_authoring,
@@ -697,6 +699,7 @@ class DirectorService:
                 if ref_identity(ref) in previous_by_identity
                 and previous_by_identity[ref_identity(ref)].notes != ref.notes]
             meta = dict(original.meta or {})
+            meta["asset_binding_policy"] = "explicit"
             if added or removed or reordered or notes_changed:
                 meta["prompt_picture_signature"] = ""
                 meta["prompt_layout_signature"] = ""
@@ -712,16 +715,16 @@ class DirectorService:
                 update={"refs": refs, "meta": meta}
             )
 
-        candidate = [replacements.get(shot.id, shot) for shot in current]
+        # A local binding edit must not be blocked by unrelated historical
+        # shots whose generated assets have since become unavailable.
         _validate_materialized_storyboard_bindings(
-            candidate,
+            list(replacements.values()),
             inventory=inventory,
             index=index,
         )
 
-        for shot in candidate:
-            if shot.id in replacements:
-                save_shot(shot)
+        for shot in replacements.values():
+            save_shot(shot)
         _claim_storyboard_assets(project_id, list(replacements.values()), index=index)
         persisted = list_shots(project_id)
         save_agent_context(
@@ -1250,7 +1253,7 @@ class DirectorService:
 
         compatibility_request = brief is None
         requested_brief = brief or LayoutBrief()
-        uses_default_pack = not requested_brief.source_refs
+        uses_default_pack = brief is None
         if uses_default_pack:
             shot = self._ensure_ref_frame_refs(project, shot)
             missing = self._ref_frame_missing_requirements(shot)
@@ -1271,8 +1274,8 @@ class DirectorService:
             effective_brief = requested_brief
 
         images = packed["images"]
-        if not 1 <= len(images) <= 3:
-            raise ValueError("Qwen Layout generation requires 1 to 3 source images")
+        if len(images) > 3:
+            raise ValueError("Qwen Layout generation accepts at most 3 source images")
         ref_labels = list(packed["labels"])
         vision_captions = list(packed.get("image_labels") or [])
         if not vision_captions:
@@ -1298,7 +1301,7 @@ class DirectorService:
         save_agent_context(project.id, ctx)
 
         review_image: tuple[str, bytes] | None = None
-        if uses_default_pack and (shot.feedback or "").strip() and shot.layout_asset_id:
+        if (uses_default_pack or force) and (shot.feedback or "").strip() and shot.layout_asset_id:
             previous_layout = load_asset("layouts", shot.layout_asset_id)
             if previous_layout is not None:
                 review_image = _read_asset_image_bytes(
@@ -1319,7 +1322,7 @@ class DirectorService:
             and effective_brief.source_refs[0].role == RefRole.layout_ref_frame
         )
         direction_feedback = ""
-        if review_image is not None or tail_frame_redraw:
+        if review_image is not None or tail_frame_redraw or force:
             direction_feedback = shot.feedback or ""
 
         runtime_provider = getattr(self.orchestrator, "provider", None)
@@ -1360,7 +1363,7 @@ class DirectorService:
             source.model_dump(mode="json") for source in effective_brief.source_refs
         ]
         job = create_job(
-            pipeline_id="ref_frame",
+            pipeline_id="qwen21_layout",
             asset_kind="layouts",
             name=f"layout:{shot.title}",
             notes=shot.script_beat,
@@ -1392,6 +1395,7 @@ class DirectorService:
                 "image_keys": list(images),
                 "ref_labels": ref_labels,
                 "aspect_ratio": _reference_frame_aspect_ratio(project),
+                "comfy_base_url": settings.qwen_image_21_comfy_base_url,
                 "output_prefix": (
                     f"director-studio/{project.id}/{shot.id}/ref_frame/{layout_ref_id}"
                 ),
@@ -1598,8 +1602,8 @@ class DirectorService:
         return {"images": images, "resolved_sources": resolved_sources}
 
     def _collect_layout_brief_refs(self, brief: LayoutBrief) -> dict[str, Any]:
-        if not 1 <= len(brief.source_refs) <= 3:
-            raise ValueError("Qwen Layout generation requires 1 to 3 source images")
+        if len(brief.source_refs) > 3:
+            raise ValueError("Qwen Layout generation accepts at most 3 source images")
         images: dict[str, tuple[str, bytes]] = {}
         labels: list[str] = []
         for index, source in enumerate(brief.source_refs, start=1):
@@ -1701,10 +1705,13 @@ class DirectorService:
         Agent casting: auto-attach scene + actor from library when missing
         (name match or unambiguous project inventory). Pin three-view / plate keys.
         """
+        if shot.meta.get("asset_binding_policy") == "explicit":
+            return shot
         # Full recast when missing critical roles
         has_actor = any(r.role == RefRole.actor for r in shot.refs)
         has_scene = any(r.role == RefRole.scene for r in shot.refs)
-        if not has_actor or not has_scene:
+        actor_required = shot.meta.get("actor_presence") != "none"
+        if (actor_required and not has_actor) or not has_scene:
             recast = recast_shot_assets(
                 project.id,
                 shot,
@@ -1749,7 +1756,7 @@ class DirectorService:
                 changed = True
 
         has_actor = any(r.role == RefRole.actor for r in refs)
-        if not has_actor:
+        if not has_actor and actor_required:
             actor_asset = _match_library_actor(project, shot)
             if actor_asset is not None:
                 _append_ref(
@@ -1775,11 +1782,12 @@ class DirectorService:
         return shot
 
     def _ref_frame_missing_requirements(self, shot: Shot) -> list[str]:
-        """Hard requirements: at least one actor three-view; scene strongly preferred."""
+        """Validate available image references for a legacy reference-frame job."""
         missing: list[str] = []
         actors = [r for r in shot.refs if r.role == RefRole.actor]
         scenes = [r for r in shot.refs if r.role == RefRole.scene]
-        if not actors:
+        require_default_pack = shot.meta.get("asset_binding_policy") != "explicit"
+        if not actors and require_default_pack and shot.meta.get("actor_presence") != "none":
             missing.append("ref_frame requires at least one actor ref (three-view)")
         else:
             for r in actors:
@@ -1795,7 +1803,7 @@ class DirectorService:
                     missing.append(
                         f"actor {r.asset_id} has no usable three-view/master image"
                     )
-        if not scenes:
+        if not scenes and require_default_pack:
             missing.append(
                 "ref_frame requires a scene library ref (generate Set Design plate first)"
             )
@@ -2006,9 +2014,16 @@ class DirectorService:
         from .material_review import capture_asset_image, observe_reference
         item = next((item for item in _inventory(project_id) if item["id"] == asset_id), None)
         if item is None:
+            layout = next((asset for asset in list_assets(
+                "layouts", project_id=project_id, include_unassigned=True
+            ) if asset.id == asset_id), None)
+            if layout is not None:
+                item = {"id": layout.id, "kind": "layouts"}
+        if item is None:
             raise ValueError("Asset is not in this project's inventory")
         asset = load_asset(item["kind"], asset_id)
-        role = {"actors": "actor", "scenes": "scene", "costumes": "costume", "props": "prop"}.get(item["kind"])
+        role = {"actors": "actor", "scenes": "scene", "costumes": "costume", "props": "prop",
+                "layouts": "layout_ref_frame"}.get(item["kind"])
         if asset is None or role is None:
             raise ValueError("Asset does not provide an inspectable Picture")
         record, image = capture_asset_image(asset, role, file_key)
@@ -2394,7 +2409,7 @@ class DirectorService:
             if prompt_only_retry_active():
                 writer_instructions += PROMPT_ONLY_INSTRUCTIONS
             dialogue_draft = None
-            preserve_prompt = bool(decision and not decision["rewrite_prompt"]
+            preserve_prompt = bool(not revision_request.strip() and decision and not decision["rewrite_prompt"]
                                    and decision["brief"] is None and not needs_handoff_review
                                    and dialogue_contract_current(project, shot))
             if preserve_prompt:
@@ -2419,7 +2434,7 @@ class DirectorService:
                 async with report_phase(on_progress, "prompt_writing", f"Writing H3 prompt for {shot.title}"):
                     raw = await self.plan_provider.complete(
                         writer_instructions,
-                        repair_request(user, previous_repair) if previous_repair else user,
+                        repair_request(user, previous_repair, dialogue_bindings=bool(dialogue_lines)) if previous_repair else user,
                         guides=("h3-prompt-writing",),
                     )
             if previous_repair:
@@ -2442,6 +2457,9 @@ class DirectorService:
                         submitted_picture_indices=[r.picture_index for r in shot.refs]):
                     dialogue_draft = parse_dialogue_draft(value) if dialogue_lines else None
                     parsed = dialogue_draft.prompt_sections if dialogue_draft else PromptSections(**parse_prompt_sections_json(value))
+                    from ...core.h3.prompt import normalize_reference_tag_delimiters
+                    parsed = normalize_reference_tag_delimiters(parsed)
+                    parsed = _normalize_unambiguous_dialogue_language_tag(parsed)
                     parsed = _apply_source_audio_contract(parsed, shot)
                     if dialogue_draft:
                         dialogue_draft = dialogue_draft.model_copy(update={"prompt_sections": parsed})
@@ -2470,7 +2488,8 @@ class DirectorService:
                 check_current()
                 require_repair_progress(previous_repair, raw, first_err)
                 repair = repair_request(user, {"error": str(first_err), "rejected_candidate": raw,
-                    "issues": [issue.model_dump(mode="json") for issue in getattr(first_err, "issues", [])]})
+                    "issues": [issue.model_dump(mode="json") for issue in getattr(first_err, "issues", [])]},
+                    dialogue_bindings=bool(dialogue_lines))
                 raw2 = None
                 try:
                     async with report_phase(on_progress, "prompt_repair", f"Repairing H3 prompt for {shot.title}"):

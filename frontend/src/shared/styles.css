@@ -3795,27 +3795,45 @@ select {
 }
 
 .mobile-director-page {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
   overflow-x: hidden;
-  overflow-y: auto;
+  overflow-y: hidden;
   overscroll-behavior-y: contain;
 }
 
 .mobile-director-layout {
   display: flex;
-  min-height: 100%;
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.35rem;
   padding: 0.35rem;
+  overflow: hidden;
+}
+
+.director-chat-layout.chat-only.mobile-director-layout {
+  display: flex;
+  flex-direction: column;
 }
 
 .mobile-director-layout .director-chat-panel {
   display: flex;
-  height: auto;
-  min-height: 64dvh;
-  overflow: visible;
+  flex: 1 1 0;
+  height: 0;
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
   flex-direction: column;
   padding: 0.65rem;
   border-radius: 0.85rem;
+}
+
+.director-chat-layout.chat-only.mobile-director-layout .director-chat-panel {
+  min-height: 0;
+  max-height: none;
 }
 
 .mobile-director-layout .project-scope-hint {
@@ -4107,10 +4125,11 @@ select {
 }
 
 .mobile-director-layout .chat-log {
-  flex: 0 1 48dvh;
-  min-height: 14rem;
-  max-height: 48dvh;
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: none;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .mobile-director-layout .chat-chips {
@@ -4124,7 +4143,6 @@ select {
 }
 
 .mobile-director-layout .chat-composer {
-  position: relative;
   flex: 0 0 auto;
   padding: 0.5rem 0 env(safe-area-inset-bottom);
   background: var(--panel);
@@ -4143,21 +4161,12 @@ select {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .director-chat-layout.chat-only .chat-log,
-  .mobile-director-layout .chat-log {
-    min-height: 45dvh;
-  }
-
   .director-chat-layout.chat-only .chat-composer {
     position: sticky;
     bottom: calc(4.8rem + env(safe-area-inset-bottom));
     background: var(--panel);
   }
 
-  .director-chat-layout.chat-only.mobile-director-layout .chat-composer {
-    position: relative;
-    bottom: auto;
-  }
 }
 .refs-section-head {
   display: flex;
@@ -6977,13 +6986,34 @@ select {
 .mv-transport-error { margin: 0.5rem 0 0; font-size: 0.8rem; color: var(--muted); }
 .mv-song-transport :is(button, select, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 780px) {
-  .mv-transport-controls { flex-wrap: wrap; gap: 0.4rem; }
-  .mv-song-name { max-width: 100%; flex-basis: 100%; }
-  .mv-transport-controls select { flex-basis: 45%; }
+  .director-chat-layout.chat-only.mobile-director-layout .chat-composer {
+    position: relative;
+    bottom: auto;
+  }
+
+  .mv-song-transport { padding: 0.45rem 0.6rem; margin-bottom: 0; }
+  .mv-transport-controls {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: 0.3rem;
+  }
+  .mv-song-name { grid-column: 1 / -1; max-width: 100%; }
+  .mv-transport-controls .btn { padding: 0.25rem 0.45rem; font-size: 0.68rem; }
+  .mv-song-time { font-size: 0.62rem; }
+  .mv-transport-controls select { width: 100%; min-height: 30px; padding: 0.2rem; font-size: 0.65rem; }
+  .mv-song-timeline { margin: 0.2rem 0 0.35rem; }
+  .mv-song-timeline input { height: 14px; }
+  .mv-song-anchors { height: 7px; }
+  .mv-song-anchors button { height: 9px; }
+  .mv-song-anchors.mobile-pan { height: 16px; }
+  .mv-song-anchors.mobile-pan button { height: 16px; }
+  .mv-pan-hint { font-size: 0.55rem; }
   .mv-lyric-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .mv-discussion-focus { grid-column: 1 / -1; flex-direction: row; justify-content: space-between; }
-  .mv-lyric-card { padding: 0.35rem; }
-  .mv-lyric-card small { font-size: 0.58rem; }
+  .mv-lyric-card { min-height: 2.7rem; padding: 0.25rem; }
+  .mv-lyric-card small { font-size: 0.54rem; }
+  .mv-lyric-select span { font-size: 0.72rem; }
+  .mv-audition { padding: 0.2rem; }
 }
 .music-workspace { flex: 1; min-width: 0; padding: 1.25rem 1.4rem 1.6rem; }
 .music-workspace-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 2rem; margin-bottom: 1.2rem; border-bottom: 1px solid var(--border-strong); padding-bottom: 1rem; }

@@ -2,6 +2,7 @@
 
 from . import actor as _actor  # noqa: F401
 from . import ref_frame as _ref_frame  # noqa: F401
+from . import qwen21_layout as _qwen21_layout  # noqa: F401
 from . import gpt_ref_frame as _gpt_ref_frame  # noqa: F401
 from . import gpt_actor as _gpt_actor  # noqa: F401
 from . import h3_ref2va as _h3_ref2va  # noqa: F401

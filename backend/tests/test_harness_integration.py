@@ -19,6 +19,14 @@ from app.core.projects.store import create_project, load_shot, save_project, sav
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_provider_token_limit_error_is_context_overflow():
+    from app.agents.director.harness_client import is_context_overflow_error
+
+    assert is_context_overflow_error(
+        "request (87160 tokens) exceeds the available context size (65536 tokens), try increasing it"
+    )
+
+
 @pytest.fixture(scope="module")
 def real_sidecar(tmp_path_factory):
     node = shutil.which("node")
@@ -271,6 +279,48 @@ async def test_real_harness_repairs_tool_then_edits_one_shot(real_sidecar, tmp_p
     assert load_shot(project.id, shots[1].id).model_dump() == neighbor
     assert len(result.actions) == 1 and len(calls) == 3
     assert orch.active == 0 and orch.released == 3
+
+
+@pytest.mark.asyncio
+async def test_real_harness_large_review_cache_does_not_fill_tool_reply(
+    real_sidecar, tmp_projects_dir, monkeypatch,
+):
+    from app.api.projects import _make_chat_fn
+    from app.agents.director.harness_runtime import handle_harness_chat
+    from app.core import vram
+
+    project = create_project("bounded tool reply", "A wall rises.")
+    shot = Shot(
+        id="sht_large_review", project_id=project.id, scene_id="sc01",
+        title="Hallway", script_beat="A wall rises.", duration_s=5,
+        meta={"material_review": {"references": [{"sources": [{"text": "archive " * 16000}]}]}},
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    calls = 0
+
+    class Provider:
+        async def chat_response(self, model, *, messages, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return {"content": "", "tool_calls": [
+                    {"name": "get_status", "arguments": {"shot_id": shot.id}},
+                ]}
+            results = [m["content"] for m in messages if m["role"] == "tool"]
+            assert len(results) == 1 and len(results[0]) < 12000
+            assert json.loads(results[0])["shot"]["title"] == "Hallway"
+            return {"content": "Status read.", "tool_calls": []}
+
+    monkeypatch.setattr(vram, "get_orchestrator", lambda: LeaseOrchestrator(Provider()))
+    monkeypatch.setattr(settings, "harness_base_url", real_sidecar[0])
+    monkeypatch.setattr(settings, "harness_internal_token", real_sidecar[1])
+    result = await handle_harness_chat(
+        project_id=project.id, message="Read the hallway status", svc=None,
+        chat_fn=await _make_chat_fn(),
+    )
+    assert result.reply == "Status read."
+    assert calls == 2
 
 
 @pytest.mark.asyncio

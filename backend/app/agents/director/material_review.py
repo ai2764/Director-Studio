@@ -184,7 +184,11 @@ async def observe_reference(provider, record: dict, image: str, *, brief: str = 
             structure_repairs += 1
             previous_failure = failure
             correction = (f"\nRepair only these observation structure/source evidence issues: {exc}"
-                "\nCopy an exact quote from the supplied source in its original language, never translate or paraphrase. "
+                "\nfacts[].source_quote must be copied verbatim from the cited supplied source, never translated or paraphrased. "
+                "conflicts[].quote must be copied verbatim from your CURRENT description, "
+                "not from concerns, source metadata, or the previous response. "
+                "If the description already resolves the disputed label, remove that conflict. "
+                "Keep unresolved uncertainty in concerns; do not invent a description claim just to match a quote. "
                 "For a purely visual observation with no applicable source, omit source_id/source_quote and keep "
                 "source_kind=model_observation. Do not change the source text or invent authority."
                 f"\nPrevious response (untrusted candidate): {raw}")

@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 from pydantic import ValidationError
 
-from ...core.h3.prompt import validate_required_picture_bindings
+from ...core.h3.prompt import validate_required_picture_bindings, normalize_reference_tag_delimiters
 from ...core.prompt_errors import PromptFailureError
 from ...core.projects.models import ProjectMode, PromptSections
 from ...core.projects.dialogue import (DialogueLine, DialogueContractError, DialogueIssue,
@@ -62,7 +62,8 @@ def collect_prompt_contract_errors(raw: str, *, required_picture_indices=(),
         payload = _extract_json_payload(raw)
         section_payload = payload.get("prompt_sections", payload) if isinstance(payload, dict) else None
         sections = parse_prompt_sections_json(json.dumps(section_payload))
-        text = "\n".join(sections.values())
+        normalized = normalize_reference_tag_delimiters(PromptSections(**sections))
+        text = normalized.as_ordered_text()
     except (ValueError, TypeError):
         text = None
     if text is not None:
@@ -97,10 +98,17 @@ def collect_prompt_contract_errors(raw: str, *, required_picture_indices=(),
     raise error from original
 
 
+def uses_dialogue_bindings(project, shot):
+    # MV shots with authored attribution can use the same source compiler.
+    # Legacy MV lyrics lack speaker provenance; keep their existing H3 path.
+    return (project.mode == ProjectMode.director or
+            (project.mode == ProjectMode.mv and shot.dialogue_lines is not None))
+
+
 async def prepare_dialogue(project, shot, provider, *, revision_request=""):
     from .dialogue_metadata import (complete_dialogue_metadata, verify_prepared_dialogue,
         DialogueMetadataError, DialogueClarificationRequired, PreparedDialogue)
-    if project.mode != ProjectMode.director:
+    if not uses_dialogue_bindings(project, shot):
         return None
     if not revision_request and shot.dialogue and dialogue_contract_current(project, shot):
         record = shot.meta["prompt_dialogue_contract"]
@@ -120,7 +128,7 @@ async def prepare_dialogue(project, shot, provider, *, revision_request=""):
 
 
 async def _prepare_attribution(project, shot, provider):
-    if project.mode != ProjectMode.director:
+    if not uses_dialogue_bindings(project, shot):
         return None
     if shot.dialogue_lines is not None:
         return await ground_dialogue(project, shot, provider)
@@ -156,7 +164,11 @@ def parse_dialogue_draft(raw: str) -> DialoguePromptDraft:
     payload = _extract_json_payload(raw)
     if isinstance(payload, dict) and "prompt_sections" not in payload:
         # Report malformed section data before the missing binding envelope.
-        parse_prompt_sections_json(raw)
+        sections = parse_prompt_sections_json(raw)
+        # Flat six-section output is equivalent when it includes explicit
+        # source references. The compiler still validates IDs and coverage.
+        if "{{speech" in sections["detailed_description"]:
+            payload = {"prompt_sections": sections}
     section_payload = payload.get("prompt_sections") if isinstance(payload, dict) else None
     detail = section_payload.get("detailed_description", "") if isinstance(section_payload, dict) else ""
     detail = detail if isinstance(detail, str) else ""
@@ -184,7 +196,7 @@ def prompt_dialogue_record(project, shot, lines, draft):
 
 def dialogue_contract_current(project, shot) -> bool:
     from .dialogue_metadata import verify_prepared_dialogue, PreparedDialogue, metadata_input_signature
-    if project.mode != ProjectMode.director:
+    if not uses_dialogue_bindings(project, shot):
         return True
     if not shot.dialogue:
         return not speech_blocks(shot.prompt_sections.detailed_description)

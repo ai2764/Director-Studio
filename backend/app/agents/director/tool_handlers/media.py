@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ....core.media.clip_generations import (
@@ -12,6 +13,20 @@ from ....core.media import tail_frame
 from ....core.projects.models import Project, Shot
 from ....core.projects.store import load_shot
 from ..intent import material_review_target_shot_id
+
+
+def _shot_status_payload(shot: Shot) -> dict[str, Any]:
+    """Expose authored shot fields without replaying cached review evidence."""
+    payload = shot.model_dump(mode="json", exclude={"meta"})
+    meta = shot.meta or {}
+    changes = meta.get("material_changes")
+    if changes is not None and len(json.dumps(changes, ensure_ascii=False)) > 2000:
+        changes = {"omitted": "Large cached change record; current Shot refs are authoritative."}
+    payload["meta"] = {
+        "material_review_pending": bool(meta.get("material_review_pending")),
+        "material_changes": changes,
+    }
+    return payload
 
 
 async def handle_media_tool(
@@ -37,7 +52,7 @@ async def handle_media_tool(
                 result_payloads.append(
                     {
                         "ok": True,
-                        "shot": selected.model_dump(mode="json"),
+                        "shot": _shot_status_payload(selected),
                         "h3_generations": [
                             {
                                 "version": f"v{index}",

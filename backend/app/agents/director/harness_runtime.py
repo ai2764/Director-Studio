@@ -32,6 +32,7 @@ from .tool_schema import TASK_CONTEXT_TOOL_NAMES
 # Vision bytes stay in Python, outside the native text meter. Reserve a labelled
 # conservative allowance, not a claim about the model's exact image tokenizer.
 IMAGE_TOKEN_RESERVE = 2048
+MAX_HARNESS_SEED_MESSAGES = 24
 
 
 def harness_input_budget(context_capacity: int, image_count: int = 0) -> int:
@@ -49,7 +50,10 @@ class BackendTurn:
         from .turn_identity import current_user_message_id
         self.user_message_id = current_user_message_id(project_id, message)
         self.compact_only = compact_only
-        self.seed_history = list(history or [])
+        # Project facts come from current state; old chat is only near-term
+        # conversational context. A bounded seed avoids replaying a long,
+        # partly obsolete transcript into a new native session.
+        self.seed_history = list(history or [])[-MAX_HARNESS_SEED_MESSAGES:]
         self.svc, self.chat_fn, self.on_progress = svc, chat_fn, on_progress
         self.images = list(images or [])
         self.captions = list(captions or [])
@@ -58,6 +62,7 @@ class BackendTurn:
             for i, data in enumerate(self.images, 1)
         ]
         self.actions: list[str] = []
+        self.tool_exposed_job_ids: set[str] = set()
         self.result_images = []
         self.touched: set[str] = set()
         self.notes: list[str] = []
@@ -339,6 +344,15 @@ class BackendTurn:
         if errors:
             return {"ok": False, "error": errors[0].message}
         project, shots, version = self.snapshot()
+        previous_job_ids = {
+            job_id
+            for shot in shots
+            for job_id in (
+                shot.ref_frame_job_id, shot.h3_job_id,
+                *(layout.job_id for layout in shot.layout_refs),
+            )
+            if job_id
+        }
         if name == "start_h3_video":
             from ...core.managed_runs.store import active_run_for_project
 
@@ -393,6 +407,21 @@ class BackendTurn:
         result = {"ok": True, "notes": notes}
         for payload in payloads:
             result.update(payload)
+        current_job_ids = {
+            job_id
+            for shot in list_shots(self.project_id)
+            for job_id in (
+                shot.ref_frame_job_id, shot.h3_job_id,
+                *(layout.job_id for layout in shot.layout_refs),
+            )
+            if job_id
+        }
+        new_job_ids = current_job_ids - previous_job_ids
+        if new_job_ids:
+            result["created_job_ids"] = sorted(new_job_ids)
+        self.tool_exposed_job_ids.update(
+            re.findall(r"\bjob_[a-z0-9]+\b", json.dumps(result, ensure_ascii=False), re.I)
+        )
         if result["ok"] and len(self.actions) == before and not payloads:
             result.update(ok=False, error="No successful operation confirmed. " + " ".join(notes))
         if name == "save_storyboard":
@@ -446,11 +475,20 @@ class BackendTurn:
             reply = f"Storyboard saved: {len(shots)} shots.\n\n" + reply
         elif "append_shot" in self.actions:
             count = self.actions.count("append_shot")
-            reply = f"Appended {count} new shot{'s' if count != 1 else ''} at the end."
+            reply = (f"Appended {count} new shot{'s' if count != 1 else ''} at the end."
+                     + (f"\n\n{reply}" if reply else ""))
         elif self.storyboard_failed and "append_shot" not in self.actions:
             reply = "Storyboard was not saved. " + (" ".join(self.notes) or "No successful storyboard operation was confirmed.")
         elif _claims_completed_storyboard(reply):
             reply = "No storyboard save was confirmed in this turn."
+        referenced_jobs = set(re.findall(r"\bjob_[a-z0-9]+\b", reply, re.I))
+        if referenced_jobs:
+            from ...core.jobs.store import load_job
+            if any((job := load_job(job_id)) is None or job.project_id != project.id
+                   for job_id in referenced_jobs):
+                reply = "回复引用了不存在的项目 Job。本轮没有可核实的任务回执；请重新读取状态或调用生成工具。"
+            elif not referenced_jobs <= self.tool_exposed_job_ids:
+                reply = "回复引用了未经本轮工具核实的 Job。请先读取状态或调用生成工具。"
         images = self.result_images + _layout_images(shots, only_shot_ids=self.touched) if self.touched else self.result_images
         return ChatResult(reply=reply, project=project, shots=shots, actions=self.actions,
                           failure_code=self.terminal_failure_code if self.terminal_failure else "",
@@ -489,6 +527,17 @@ async def handle_harness_chat(*, project_id, message, svc, chat_fn=None, history
             turn.dispatch, on_progress,
         )
     except HarnessError as exc:
+        if (exc.code == "CAPABILITY_ERROR" and "GPU busy" in str(exc)
+                and turn.actions):
+            # The image job can claim the GPU between a successful tool call
+            # and the model's next reply. Return the confirmed receipt rather
+            # than turning an already queued operation into HTTP 503.
+            result = {
+                "reply": turn.local_generation_receipt or " ".join(turn.notes[-2:])
+                         or "Confirmed tool actions completed; inspect project jobs.",
+                "thinking": "",
+            }
+            return turn.finish(result)
         if exc.code != "MAX_STEPS":
             raise
         confirmed = " ".join(turn.notes[-3:]).strip()
@@ -516,7 +565,8 @@ def _needs_fresh_storyboard(project, shots) -> bool:
 
 def harness_session_id(project_id: str) -> str:
     """Stable execution identity; separate data roots never share a transcript."""
-    return hashlib.sha256(f"{settings.projects_dir.resolve().as_posix()}\n{project_id}".encode()).hexdigest()
+    # v6 reseeds with bounded recent conversation and current project state.
+    return hashlib.sha256(f"{settings.projects_dir.resolve().as_posix()}\n{project_id}\nchat-envelope-v6-recent-history".encode()).hexdigest()
 
 
 async def compact_harness_chat(*, project_id, chat_fn, history=None, on_progress=None,

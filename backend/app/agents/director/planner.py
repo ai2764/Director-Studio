@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from typing import Any, Iterable, Protocol, runtime_checkable
+from typing import Any, Iterable, Literal, Protocol, runtime_checkable
 
 from pydantic import (
     BaseModel,
@@ -132,6 +132,13 @@ class ShotDraft(BaseModel):
             "use true when the song must condition generation."
         ),
     )
+    actor_presence: Literal["auto", "none"] = Field(
+        default="auto",
+        description=(
+            "Set none for an intentionally unoccupied shot. This prevents automatic "
+            "actor casting; use auto when a person should appear or casting is undecided."
+        ),
+    )
     asset_matches: list[AssetMatchDraft] = Field(default_factory=list)
     voice_matches: list[VoiceMatchDraft] = Field(default_factory=list)
 
@@ -166,6 +173,10 @@ class ShotDraft(BaseModel):
     def _validate_picture_order(self) -> "ShotDraft":
         validate_authored_dialogue(self.dialogue, self.dialogue_lines)
         matches = list(self.asset_matches)
+        if self.actor_presence == "none" and any(
+            role_to_ref_role(match.role) == RefRole.actor for match in matches
+        ):
+            raise ValueError("actor_presence=none cannot include an actor asset match")
         if len(matches) > 9:
             raise ValueError("H3 supports at most 9 asset matches")
         specified = [m.picture_index for m in matches if m.picture_index is not None]

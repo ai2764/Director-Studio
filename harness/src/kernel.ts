@@ -275,6 +275,16 @@ export async function runTurn(
         const after = ctx.tokenMeter.measure(args[0].session).totalTokens;
         const noFurtherReduction = error instanceof Error
           && error.message.startsWith("summary is not smaller than the shadowed content");
+        // Proactive pressure compaction is an optimization. If the summary
+        // cannot shrink history but the complete request still fits the hard
+        // host budget, keep the original surface and let the turn continue.
+        // A provider-confirmed overflow must still fail closed without a
+        // useful replacement, even when our token estimate is below budget.
+        if (!args[2]?.aborted && args[1] === "pressure" && noFurtherReduction
+          && after < input.context_window) {
+          compactionFailure = undefined;
+          return null;
+        }
         if (!args[2]?.aborted && this.committed
           && (!this.regionFailed || noFurtherReduction)
           && after < input.context_window)

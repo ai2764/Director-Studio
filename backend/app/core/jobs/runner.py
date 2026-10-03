@@ -49,7 +49,13 @@ def _comfy_runtime() -> ComfyExecutionRuntime:
         finish=finish_comfy,
         update_phase=update_generation_phase,
         save_completed_outputs=_save_completed_outputs,
+        client_factory_for_job=_comfy_client_for_job,
     )
+
+
+def _comfy_client_for_job(job: JobRecord) -> ComfyClient:
+    base_url = (job.params or {}).get("comfy_base_url")
+    return ComfyClient(base_url=base_url) if base_url else ComfyClient()
 
 
 def _h3_api_runtime() -> H3ApiExecutionRuntime:
@@ -405,7 +411,10 @@ async def cancel_job(job_id: str) -> JobRecord | None:
     if job.status in (JobStatus.running, JobStatus.uploading, JobStatus.queued):
         previous_status = job.status
         if adapter.interrupt_on_cancel:
-            await adapter.cancel(_runtime_for(adapter))
+            try:
+                await adapter.cancel(_runtime_for(adapter), job)
+            except TypeError:
+                await adapter.cancel(_runtime_for(adapter))
         job.status = JobStatus.cancelled
         if adapter.id == "h3_api":
             if job.external_task_id:

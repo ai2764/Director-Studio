@@ -5,6 +5,7 @@ from app.agents.director.chat import _run_tools
 from app.agents.director.service import DirectorService, _script_hash
 from app.agents.director.planner import ShotDraft
 from app.core.projects.chat_history import append_chat_message
+from app.core.projects.models import RefRole, ShotRef
 from app.core.projects.store import load_project, list_shots, save_project, save_shot
 from test_storyboard_replacement_confirmation import _existing_project, _replacement_submission
 from test_director_agent import FakePlanProvider, RecordingOrchestrator
@@ -114,6 +115,27 @@ async def test_reference_purpose_survives_patch_and_reaches_writer(material_shot
     saved = svc.patch_shot_refs(project.id, patch())[0]
     assert saved.refs[0].notes == ""
     assert saved.meta["material_review_pending"] is True
+
+
+def test_patch_refs_ignores_unrelated_shot_with_missing_old_layout(material_shot):
+    from app.agents.director.planner import ShotRefsPatch
+
+    project, shot, _, _ = material_shot
+    stale = shot.model_copy(update={
+        "id": "sht_unrelated_stale",
+        "refs": [ShotRef(role=RefRole.layout_ref_frame, asset_id="lay_missing",
+                         file_key="layout", picture_index=1)],
+    })
+    save_shot(stale)
+    save_project(project.model_copy(update={"shot_ids": [shot.id, stale.id]}))
+
+    patch = ShotRefsPatch(
+        shot_id=shot.id,
+        refs=[ref.model_dump(mode="json") for ref in shot.refs],
+    )
+    saved = service().patch_shot_refs(project.id, [patch])
+    assert saved[0].refs == shot.refs
+    assert saved[-1].refs == stale.refs
 
 
 @pytest.mark.asyncio
