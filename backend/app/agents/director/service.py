@@ -1158,6 +1158,7 @@ class DirectorService:
         shot_ids: list[str] | None = None,
         *,
         force: bool = False,
+        directing_request: str = "",
     ) -> list[Shot]:
         """Compatibility wrapper that queues one default Layout per target shot."""
         project = load_project(project_id)
@@ -1230,7 +1231,8 @@ class DirectorService:
         updated: list[Shot] = []
         for shot in targets:
             updated.append(
-                await self.queue_reference_frame(shot.id, brief=None, force=force)
+                await self.queue_reference_frame(shot.id, brief=None, force=force,
+                                                 directing_request=directing_request)
             )
         return updated
 
@@ -1240,6 +1242,7 @@ class DirectorService:
         *,
         brief: LayoutBrief | None = None,
         force: bool = False,
+        directing_request: str = "",
     ) -> Shot:
         """Queue one Layout whose activation mode is applied after success."""
         shot = _find_shot(shot_id)
@@ -1346,6 +1349,8 @@ class DirectorService:
                     layout_brief=effective_brief,
                     review_image=review_image,
                     feedback=direction_feedback,
+                    project_script=project.script_text,
+                    directing_request=directing_request,
                     model=model,
                     ollama=vision_client,
                 )
@@ -1372,6 +1377,9 @@ class DirectorService:
                 "compiled_prompt": direction.compiled_prompt,
                 "visual_director_model": model,
                 "visual_brief": direction.brief.model_dump(),
+                "visual_project_script": project.script_text,
+                "visual_project_script_hash": _script_hash(project.script_text),
+                "visual_directing_request": directing_request,
                 "selected_refs": direction.selected_refs,
                 "vision_input_captions": direction.vision_input_captions,
                 "review_image_used": direction.review_image_used,
@@ -2059,6 +2067,7 @@ class DirectorService:
             current_project = load_project(project.id)
             if (current is None or current.model_dump(mode="json") != original_shot
                     or current_project is None or current_project.script_text != project.script_text
+                    or current_project.shot_ids != project.shot_ids
                     or current_project.asset_coverage_review != project.asset_coverage_review
                     or directing_requests(current_project) != directing_snapshot
                     or str(getattr(self.plan_provider, "model", "")) != model):
@@ -2188,6 +2197,7 @@ class DirectorService:
             if (current is None or current.model_dump(mode="json") != original_shot
                     or current_project is None or current_project.script_text != project.script_text
                     or current_project.asset_coverage_review != project.asset_coverage_review
+                    or current_project.shot_ids != project.shot_ids
                     or directing_requests(current_project) != directing_snapshot):
                 raise ValueError("Shot or script changed during material review/prompt writing; review again")
             if review_signature is not None:
@@ -2214,6 +2224,7 @@ class DirectorService:
                 or not (review.get("decision") or {}).get("tail_frame_handoff")
             ))
             if (was_pending or not review or review.get("signature") != review_signature
+                    or (revision_request.strip() and review.get("revision_request") != revision_request)
                     or needs_handoff_review or not reference_review_current(project, shot, records)):
                 keep = bool(getattr(settings, "llm_keep_loaded", True))
                 async with self.orchestrator.llm_session(release_on_exit=not keep):
@@ -2222,7 +2233,7 @@ class DirectorService:
                         self.plan_provider, project, shot, records, images, review_signature, check_current,
                         revision_request=revision_request, on_progress=on_progress,
                     )
-                decision = review["decision"]
+            decision = review["decision"]
             shot = shot.model_copy(update={"meta": {**shot.meta, "material_review": review}})
 
         ctx = load_agent_context(shot.project_id) if task_packet is None else None
@@ -2401,6 +2412,9 @@ class DirectorService:
                 context_json=context_json,
             )
             user += "\nShot execution intent (intent; text_ref links above resolve here):\n" + json.dumps(intent, ensure_ascii=False)
+            if review:
+                user += ("\nReviewed reference suitability (current inputs; not story authoring):\n"
+                         + json.dumps(review.get("decision"), ensure_ascii=False))
             if dialogue_lines:
                 user += "\nSource dialogue lines:\n" + json.dumps([line.model_dump(mode="json") for line in dialogue_lines], ensure_ascii=False)
                 user += "\nExisting prompt, if present: preserve valid creative choices while repairing attribution or applying the current requested revision:\n" + shot.prompt_sections.model_dump_json()

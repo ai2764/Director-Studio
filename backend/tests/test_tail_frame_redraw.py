@@ -75,7 +75,7 @@ class _CaptureService:
         self.project_id = project_id
         self.briefs: list[LayoutBrief] = []
 
-    async def queue_reference_frame(self, shot_id: str, *, brief, force=False):
+    async def queue_reference_frame(self, shot_id: str, *, brief, force=False, directing_request=""):
         self.briefs.append(brief)
         current = load_shot(self.project_id, shot_id)
         assert current is not None

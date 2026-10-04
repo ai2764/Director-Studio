@@ -403,7 +403,7 @@ async def test_material_review_layout_execution_rejects_a_different_shot(
     class Service:
         calls: list[str] = []
 
-        async def queue_reference_frame(self, shot_id, *, brief, force=False):
+        async def queue_reference_frame(self, shot_id, *, brief, force=False, directing_request=""):
             self.calls.append(shot_id)
             return load_shot(project.id, shot_id)
 
@@ -535,7 +535,7 @@ async def test_successful_local_layout_queue_returns_receipt_when_comfy_blocks_w
     )
 
     class Service:
-        async def queue_reference_frame(self, shot_id, *, brief=None, force=False):
+        async def queue_reference_frame(self, shot_id, *, brief=None, force=False, directing_request=""):
             assert shot_id == shot.id
             return queued
 

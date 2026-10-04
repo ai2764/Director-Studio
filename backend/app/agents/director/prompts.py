@@ -248,7 +248,8 @@ PROMPT_SECTIONS_USER_TEMPLATE = """Shot:
 - voice refs (audio order): {voice_refs_json}
 - MV song segment (null when absent): {music_segment_json}
 - layout_asset_id: {layout_asset_id}
-- human feedback: {feedback}
+- saved Shot feedback (may precede the current Layout or directing revision;
+  resolve against current intent and reference review before applying): {feedback}
 
 Agent context snapshot:
 {context_json}

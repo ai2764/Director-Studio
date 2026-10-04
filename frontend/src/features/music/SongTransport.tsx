@@ -12,7 +12,7 @@ export function SongTransport({ active, onSelectionChange }: {
   const master = project?.music_master;
   const audio = useRef<HTMLAudioElement>(null);
   const bounds = useRef<SongSegment | null>(null);
-  const panDrag = useRef<{ x: number; y: number; start: number; moved: boolean } | null>(null);
+  const panDrag = useRef<{ pointerId: number; x: number; y: number; start: number; moved: boolean } | null>(null);
   const suppressAnchorClick = useRef(false);
   const selectionCallback = useRef(onSelectionChange);
   selectionCallback.current = onSelectionChange;
@@ -91,8 +91,11 @@ export function SongTransport({ active, onSelectionChange }: {
   const duration = master?.duration_s || 0;
   const defaultViewStart = current ? Math.max(0, current.start_s - 10) : 0;
   const zoomSpan = current ? Math.min(duration || 30, Math.max(30, current.end_s - defaultViewStart)) : 30;
+  // Keep the playhead visible unless the user is deliberately browsing another window.
+  const autoViewStart = position < defaultViewStart ? Math.max(0, position - 10)
+    : position >= defaultViewStart + zoomSpan ? Math.max(0, position - 10) : defaultViewStart;
   const viewStart = zoom && current
-    ? Math.max(0, Math.min(panStart ?? defaultViewStart, Math.max(0, duration - zoomSpan)))
+    ? Math.max(0, Math.min(panStart ?? autoViewStart, Math.max(0, duration - zoomSpan)))
     : 0;
   const viewEnd = zoom && current ? Math.min(duration, viewStart + zoomSpan) : duration;
   const span = Math.max(1, viewEnd - viewStart);
@@ -124,6 +127,7 @@ export function SongTransport({ active, onSelectionChange }: {
   async function play(clip: SongSegment | null) {
     const player = audio.current;
     if (!player) return;
+    setPanStart(null);
     bounds.current = clip;
     if (clip) player.currentTime = clip.start_s;
     try { await player.play(); } catch (cause) { setError(`Could not play song: ${String(cause)}`); }
@@ -149,28 +153,35 @@ export function SongTransport({ active, onSelectionChange }: {
       <div className={`mv-song-anchors${mobileViewport && zoom ? " mobile-pan" : ""}`}
         onPointerDown={(event) => {
           if (!mobileViewport || !zoom || event.button !== 0) return;
-          panDrag.current = { x: event.clientX, y: event.clientY, start: viewStart, moved: false };
+          suppressAnchorClick.current = false;
+          panDrag.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, start: viewStart, moved: false };
         }}
         onPointerMove={(event) => {
           const drag = panDrag.current;
-          if (!drag || !mobileViewport || !zoom) return;
+          if (!drag || drag.pointerId !== event.pointerId || !mobileViewport || !zoom) return;
           const delta = event.clientX - drag.x;
           const deltaY = event.clientY - drag.y;
-          if (Math.abs(deltaY) > 4 && Math.abs(deltaY) > Math.abs(delta)) {
+          if (!drag.moved && Math.abs(deltaY) > 4 && Math.abs(deltaY) > Math.abs(delta)) {
             panDrag.current = null;
             return;
           }
-          if (Math.abs(delta) > 4) drag.moved = true;
+          if (!drag.moved && Math.abs(delta) > 4) {
+            drag.moved = true;
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }
           if (!drag.moved) return;
           const width = event.currentTarget.getBoundingClientRect().width;
           const maxStart = Math.max(0, duration - zoomSpan);
           setPanStart(Math.max(0, Math.min(maxStart, drag.start - delta / Math.max(1, width) * zoomSpan)));
         }}
-        onPointerUp={() => {
+        onPointerUp={(event) => {
+          if (panDrag.current?.pointerId !== event.pointerId) return;
           if (panDrag.current?.moved) suppressAnchorClick.current = true;
           panDrag.current = null;
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
         }}
         onPointerCancel={() => { panDrag.current = null; }}
+        onLostPointerCapture={() => { panDrag.current = null; }}
         onClickCapture={(event) => {
           if (!suppressAnchorClick.current) return;
           event.preventDefault();

@@ -90,6 +90,56 @@ def test_analysis_prompt_uses_planned_camera_brief_as_authoritative_direction():
     assert "Treat this planned camera brief as authoritative" in prompt
 
 
+@pytest.mark.asyncio
+async def test_visual_writer_receives_current_request_separately_from_revision_feedback():
+    from app.core.projects.layouts import LayoutBrief
+    calls = []
+    class Client:
+        async def chat(self, model, prompt, **kwargs):
+            calls.append(prompt)
+            return json.dumps({"shot_type": "wide", "camera": "eye level",
+                "scene_lock": ["grounded landscape"], "characters": [], "forbidden": ["collage"],
+                "generation_prompt": "A grounded dawn landscape."})
+    request = "This batch is dawn, even though the old brief and style image show night."
+    await analyze_ref_frame(_shot(), images={}, captions=[],
+        layout_brief=LayoutBrief(),
+        feedback="Earlier review: move the chair left.", directing_request=request,
+        model="test", ollama=Client())
+    assert request in calls[0]
+    assert "Earlier review: move the chair left." in calls[0]
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_reference", [False, True])
+async def test_visual_writer_receives_each_project_source_without_cross_project_style(with_reference):
+    sources = ["真人加纸景；人物皮肤真实，山河为水彩折纸。", "炭黑棉衣与实景山路；土褐胶片摄影。"]
+    requests = []
+    class Client:
+        async def chat(self, model, prompt, **kwargs):
+            requests.append(prompt)
+            return json.dumps({"shot_type": "wide", "camera": "eye level",
+                               "visual_style": "current project direction",
+                               "scene_lock": ["a road"], "characters": [],
+                               "forbidden": ["collage"],
+                               "generation_prompt": "Image1 defines material only." if with_reference else "A road."})
+    for source in sources:
+        await analyze_ref_frame(_shot(), images={"ref_0": ("road.png", _image_bytes(64, 64, "grey"))} if with_reference else {},
+                                captions=["Image1 SCENE style material only"] if with_reference else [],
+                                project_script=source, feedback="Keep the current framing.", model="test", ollama=Client())
+    assert sources[0] in requests[0] and sources[1] not in requests[0]
+    assert sources[1] in requests[1] and sources[0] not in requests[1]
+
+
+def test_fallback_image_prompt_preserves_resolved_style_instead_of_forcing_photoreal():
+    payload = _brief_payload()
+    payload["characters"] = []
+    payload["visual_style"] = "Watercolour paper scenery with a real human performer."
+    prompt = compile_visual_prompt(_shot(), parse_visual_brief(json.dumps(payload)), captions=[])
+    assert payload["visual_style"] in prompt
+    assert "photoreal cinematic production still" not in prompt
+
+
 @pytest.mark.parametrize("captions,expected", [
     (["Image1 ACTOR Mia", "Image2 costume Alpine", "Image3 scene Room"], ["Image1"]),
     (["Image1 = actor Mia", "Image2 scene Room", "Image3 CHARACTER Puppet"], ["Image1", "Image3"]),

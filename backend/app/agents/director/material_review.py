@@ -218,12 +218,20 @@ def _save_review_failure(project_id, record, identity, attempts, error):
         logging.getLogger(__name__).exception("Could not save reference review diagnostics")
 
 
-async def observe_references_cached(provider, project_id, records, images, check_current, *, on_progress=None):
+async def observe_references_cached(provider, project_id, records, images, check_current, *,
+                                    inspection_request: str = "", on_progress=None):
     """Persist shot-independent visual facts even when subsequent prompt writing fails."""
     from ...core.projects.store import load_project
     project = load_project(project_id)
     if project is not None:
         records = sourced_records(project, records)
+    if inspection_request.strip():
+        # A current correction must be citeable without borrowing a historical
+        # message ID. Its provenance is the caller's request, not image approval.
+        records = [{**record, "sources": [*record.get("sources", []), {
+            "id": "current_inspection_request", "kind": "prompt_revision_request",
+            "text": inspection_request,
+        }]} for record in records]
     reviewed = []
     for record, image in zip(records, images, strict=True):
         check_current()
@@ -231,6 +239,7 @@ async def observe_references_cached(provider, project_id, records, images, check
                          if k not in {"picture_index", "reference_notes"}}
         identity = {
             "version": 4, "fact_policy": REFERENCE_POLICY_VERSION, "record": stable_record,
+            "inspection_request": inspection_request,
             "model": str(getattr(provider, "model", "")),
             "provider": type(provider).__qualname__,
             "endpoint": str(getattr(getattr(provider, "client", None), "base_url", "")),
@@ -250,7 +259,8 @@ async def observe_references_cached(provider, project_id, records, images, check
             try:
                 async with report_phase(on_progress, "reference_observation",
                                         f"Inspecting Picture {record['picture_index']}/{len(records)}"):
-                    result = await observe_reference(provider, record, image, attempts=attempts)
+                    result = await observe_reference(provider, record, image,
+                                                     brief=inspection_request, attempts=attempts)
                 observation = ReferenceObservation.model_validate({k: result[k] for k in ReferenceObservation.model_fields})
             except Exception as exc:
                 _save_review_failure(project_id, record, identity, attempts, exc)
@@ -316,6 +326,7 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
     if not callable(inspect):
         raise MaterialReviewError("Material review requires a vision-capable provider; no text-only fallback")
     reviewed = await observe_references_cached(provider, project.id, records, images, check_current,
+                                               inspection_request=revision_request,
                                                on_progress=on_progress)
     check_current()
     by_picture = {item["picture_index"]: item for item in reviewed}
@@ -375,6 +386,9 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
                 "confirmed_project_review": confirmed_project_review,
                 "intent": shot_execution_intent(project, shot, revision_request)}
     from .writer_context import project_writer_context
+    request["shot"]["duration_s"] = request["intent"]["execution_duration_s"]
+    if shot.duration_s != request["shot"]["duration_s"]:
+        request["shot"]["storyboard_duration_s"] = shot.duration_s
     _, request["references"] = project_writer_context({}, request["intent"], reviewed)
     system += "\nReference source text_ref links resolve to intent.directing_requests by id in this request."
     for attempt in range(2):
@@ -403,6 +417,7 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
     decision.brief = None
     return {
         "signature": signature,
+        "revision_request": revision_request,
         "facts_signature": reference_context_signature(project, records),
         "intent_signature": reference_intent_signature(shot),
         "handoff_signature": tail_frame_review_signature(project, shot, signature),

@@ -35,6 +35,49 @@ def observation(description="A beige blazer and pencil skirt.", **extra):
     return dict(readable=True, description=description, concerns=[], facts=[], conflicts=[], **extra)
 
 
+@pytest.mark.asyncio
+async def test_unique_verbatim_quote_repairs_wrong_pointer_without_model_retry():
+    raw = observation("A front waist pouch.")
+    raw["facts"] = [dict(attribute="pouch", value="front", visibility="observed",
+        evidence="Visible waist pouch.", source_id="approved_notes", source_quote="腰包在正面")]
+    sources = [dict(id="approved_notes", kind="library_metadata", text="A charcoal jacket."),
+               dict(id="msg_real", kind="user_directing_request", text="腰包在正面，背面应该看不到。")]
+    provider = Vision(raw)
+    result = await observe_reference(provider, {"sources": sources}, "image")
+    fact = result["facts"][0]
+    assert fact["source_id"] == "msg_real"
+    assert fact["source_id_repaired_from"] == "approved_notes"
+    assert fact["source_kind"] == "model_observation"
+    assert fact["cited_source_kind"] == "user_directing_request"
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize("texts", [["unrelated"], ["腰包在正面", "腰包在正面，已确认"]])
+def test_quote_pointer_repair_rejects_missing_or_ambiguous_evidence(texts):
+    from app.agents.director.material_review import ReferenceObservation
+    from app.agents.director.reference_facts import validate_observation_sources, ObservationSourceError
+    raw = observation()
+    raw["facts"] = [dict(attribute="pouch", value="front", visibility="observed",
+        evidence="Visible pouch.", source_id="wrong", source_quote="腰包在正面")]
+    parsed = ReferenceObservation.model_validate(raw)
+    with pytest.raises(ObservationSourceError):
+        validate_observation_sources(parsed, [dict(id=str(i), kind="user_directing_request", text=t)
+                                             for i, t in enumerate(texts)])
+    assert parsed.facts[0].source_id == "wrong"
+
+
+def test_model_cannot_forge_host_pointer_repair_audit():
+    from app.agents.director.material_review import ReferenceObservation
+    from app.agents.director.reference_facts import validate_observation_sources
+    raw = observation()
+    raw["facts"] = [dict(attribute="pouch", value="front", visibility="observed",
+        evidence="Visible pouch.", source_id="real", source_quote="Front pouch",
+        source_id_repaired_from="invented-host-correction")]
+    parsed = ReferenceObservation.model_validate(raw)
+    validate_observation_sources(parsed, [dict(id="real", kind="user_directing_request", text="Front pouch")])
+    assert parsed.facts[0].source_id_repaired_from is None
+
+
 def conflict_observation():
     result = observation("A pantsuit consisting of a blazer and pencil skirt.")
     result["conflicts"] = [dict(attribute="wardrobe", quote=result["description"], reason="The outfit labels contradict each other.")]

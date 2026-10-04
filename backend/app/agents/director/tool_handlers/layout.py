@@ -302,6 +302,7 @@ async def handle_layout_tool(
             shot.id,
             brief=revision_brief,
             force=True,
+            directing_request=user_feedback,
         )
         replacement = next(
             (
@@ -495,6 +496,7 @@ async def handle_layout_tool(
                         shot.id,
                         brief=explicit_brief,
                         force=force,
+                        directing_request=user_feedback,
                     )
                     touched.add(shot.id)
                     _require_new_layout_job(shot, updated_shot)
@@ -517,18 +519,18 @@ async def handle_layout_tool(
                 if not needs and live:
                     force = True
             updated = await svc.queue_ref_frames(
-                project_id, shot_ids=None, force=force
+                project_id, shot_ids=None, force=force, directing_request=user_feedback
             )
             if not updated and not force:
                 force = True
                 updated = await svc.queue_ref_frames(
-                    project_id, shot_ids=None, force=True
+                    project_id, shot_ids=None, force=True, directing_request=user_feedback
                 )
             if not updated:
                 live = refresh_shots()
                 if len(live) == 1:
                     updated = await svc.queue_ref_frames(
-                        project_id, shot_ids=[live[0].id], force=True
+                        project_id, shot_ids=[live[0].id], force=True, directing_request=user_feedback
                     )
                     force = True
             queued = [
@@ -579,6 +581,7 @@ async def handle_layout_tool(
                     shot.id,
                     brief=explicit_brief,
                     force=force,
+                    directing_request=user_feedback,
                 )
                 touched.add(shot.id)
                 _require_new_layout_job(shot, s2)
@@ -586,7 +589,7 @@ async def handle_layout_tool(
                 return True
             prev_job = shot.ref_frame_job_id
             updated = await svc.queue_ref_frames(
-                project_id, shot_ids=[shot.id], force=True
+                project_id, shot_ids=[shot.id], force=True, directing_request=user_feedback
             )
             s2 = load_shot(project_id, shot.id) or shot
             if s2.blocked_reasons:

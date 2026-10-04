@@ -77,6 +77,8 @@ intent.authoring_request is the verified user request associated with this shot'
 not an instruction to undo later saved edits. intent.directing_requests are ordered historical
 requirements: apply only those relevant to this shot, respecting later replacements and scope.
 intent.current_request is this prompt-writing request, not blanket permission to edit the story.
+intent.current_shot and intent.shot_order give the application's saved one-based Shot numbering.
+Resolve numbered requests through that map; do not apply another Shot's requirement to this Shot.
 Apply the latest explicit shot-specific directing requirement when an older saved camera or
 composition field contradicts it. Do not silently let a stale descriptive field cancel a newer
 action in script_beat or the current request. Keep all six prompt sections consistent with the
@@ -101,7 +103,19 @@ def shot_execution_intent(project, shot, current_request: str = "") -> dict:
                         and m.content == evidence.get("user_message")), None)
         if message is not None:
             authoring_request = {"source_message_id": message.id, "text": message.content}
+    from ...core.projects.store import list_shots
+    shot_order = [{"id": item.id, "index": index, "title": item.title}
+                  for index, item in enumerate(list_shots(project.id), 1)]
+    current_shot = next((item for item in shot_order if item["id"] == shot.id),
+                        {"id": shot.id, "index": None, "title": shot.title})
+    from ...core.media.music_segments import music_prompt_context
+    music = music_prompt_context(project, shot)
+    execution_duration = float(music["generation_duration_s"]) if music else shot.duration_s
     return {"authoring_request": authoring_request,
+            "current_shot": current_shot, "shot_order": shot_order,
+            "execution_duration_s": execution_duration,
+            "timing_authority": "execution_duration_s is the submitted clip interval. Fit every timed action within it. "
+                                "storyboard_duration_s, if present, is earlier planning metadata.",
             "directing_requests": directing_request_sources(project),
             "current_request": current_request}
 

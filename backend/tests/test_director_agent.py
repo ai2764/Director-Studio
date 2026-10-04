@@ -1528,6 +1528,54 @@ async def test_queue_two_layout_briefs_for_one_shot(director_dirs, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source_names,force", [((), False), (("scene",), False), (("scene",), True)])
+async def test_layout_queue_propagates_current_project_bible_to_writer_and_job(director_dirs, monkeypatch, source_names, force):
+    import app.agents.director.service as service_module
+    from app.agents.director.service import _script_hash
+    svc, project, shot, sources = _make_layout_queue_fixture(director_dirs)
+    project.script_text = "完整项目圣经：真人与纸世界；人物不可变成纸人。"
+    save_project(project)
+    requests, jobs = [], []
+    async def analyze(*args, **kwargs):
+        requests.append(kwargs)
+        return _visual_result()
+    async def start(job, **kwargs):
+        jobs.append(job)
+        return job
+    monkeypatch.setattr(service_module, "analyze_ref_frame", analyze)
+    monkeypatch.setattr(service_module, "start_pipeline_job", start)
+    monkeypatch.setattr(service_module, "get_director_model", lambda: "test")
+    await svc.queue_reference_frame(shot.id, brief=LayoutBrief(source_refs=[sources[n] for n in source_names]), force=force)
+    assert requests[0].get("project_script") == project.script_text
+    assert jobs[0].params.get("visual_project_script") == project.script_text
+    assert jobs[0].params.get("visual_project_script_hash") == _script_hash(project.script_text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compatibility", [False, True])
+async def test_layout_writer_receives_original_directing_request(director_dirs, monkeypatch, compatibility):
+    import app.agents.director.service as module
+    svc, project, shot, sources = _make_layout_queue_fixture(director_dirs)
+    request = "这一轮所有画面改成清晨；参考图的夜色不能沿用。人物包在腰前。"
+    requests, jobs = [], []
+    async def analyze(*args, **kwargs):
+        requests.append(kwargs)
+        return _visual_result()
+    async def start(job, **kwargs):
+        jobs.append(job)
+        return job
+    monkeypatch.setattr(module, "analyze_ref_frame", analyze)
+    monkeypatch.setattr(module, "start_pipeline_job", start)
+    monkeypatch.setattr(module, "get_director_model", lambda: "test")
+    if compatibility:
+        await svc.queue_ref_frames(project.id, shot_ids=[shot.id], directing_request=request)
+    else:
+        await svc.queue_reference_frame(shot.id, brief=LayoutBrief(source_refs=[]), directing_request=request)
+    assert requests[0].get("directing_request") == request
+    assert jobs[0].params.get("visual_directing_request") == request
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "source_names",
     [

@@ -862,6 +862,30 @@ async def _async_value(value):
     return value
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("all_shots", [False, True])
+async def test_layout_tool_forwards_current_human_request_not_only_agent_brief(tmp_projects_dir, all_shots):
+    project = create_project("Current direction", "Night in the old script.")
+    shot = Shot(id="sht_directing", project_id=project.id, scene_id="sc01",
+                title="Road", script_beat="Old night direction", duration_s=5)
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    captured = []
+    class Service:
+        async def queue_reference_frame(self, shot_id, **kwargs):
+            captured.append(kwargs)
+            updated = shot.model_copy(update={"layout_refs": [LayoutReference(
+                id="lref_directing", job_id="job_directing", purpose="new composition")]})
+            save_shot(updated)
+            return updated
+    request = "这批改用晨光；风格图只取材质，不取夜色。"
+    args = {"purpose": "Road", "state_description": "Old moonlight description", "source_refs": []}
+    args.update({"all": True} if all_shots else {"shot_id": shot.id})
+    await _run_tools(project_id=project.id, tools=[{"name": "queue_ref_frame", "args": args}],
+        svc=Service(), actions=[], user_feedback=request)
+    assert captured[0].get("directing_request") == request
+
+
 def test_revise_ref_frame_tool_requires_exact_layout_and_feedback():
     tool = next(
         item
@@ -3481,7 +3505,7 @@ async def test_queue_ref_frame_tool_queues_explicit_layout_brief_and_reports_ide
     class _Service:
         brief = None
 
-        async def queue_reference_frame(self, shot_id: str, *, brief, force=False):
+        async def queue_reference_frame(self, shot_id: str, *, brief, force=False, directing_request=""):
             assert shot_id == shot.id
             self.brief = brief
             layout = LayoutReference(
@@ -3614,7 +3638,7 @@ async def test_agent_can_append_a_two_person_layout_to_the_same_shot(
     class _Service:
         brief = None
 
-        async def queue_reference_frame(self, shot_id: str, *, brief, force=False):
+        async def queue_reference_frame(self, shot_id: str, *, brief, force=False, directing_request=""):
             assert shot_id == shot.id
             self.brief = brief
             added = LayoutReference(
@@ -3704,7 +3728,7 @@ async def test_revise_ref_frame_records_chat_feedback_and_links_new_layout(
     save_project(project.model_copy(update={"shot_ids": [neighbor.id, shot.id]}))
 
     class _Service:
-        async def queue_reference_frame(self, shot_id: str, *, brief, force=False):
+        async def queue_reference_frame(self, shot_id: str, *, brief, force=False, directing_request=""):
             current = load_shot(project.id, shot_id)
             assert current is not None
             revised = LayoutReference(
@@ -3988,7 +4012,7 @@ async def test_queue_ref_frame_tool_applies_explicit_brief_to_all_selected_shots
     class _Service:
         calls = []
 
-        async def queue_reference_frame(self, shot_id: str, *, brief, force=False):
+        async def queue_reference_frame(self, shot_id: str, *, brief, force=False, directing_request=""):
             self.calls.append((shot_id, brief, force))
             shot = load_shot(project.id, shot_id)
             assert shot is not None

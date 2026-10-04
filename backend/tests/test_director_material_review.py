@@ -346,7 +346,8 @@ def material_shot(tmp_path, monkeypatch):
     neighbor = shot.model_copy(update={"id": "sht_neighbor", "title": "Untouched"}, deep=True)
     save_shot(shot)
     save_shot(neighbor)
-    save_project(project.model_copy(update={"shot_ids": [shot.id, neighbor.id]}))
+    project = project.model_copy(update={"shot_ids": [shot.id, neighbor.id]})
+    save_project(project)
     return project, shot, neighbor, files
 
 

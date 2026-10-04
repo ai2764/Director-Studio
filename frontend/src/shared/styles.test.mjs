@@ -14,6 +14,46 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+function mobileDirector() {
+  const style = document.createElement("style");
+  style.textContent = styles;
+  document.head.append(style);
+  document.body.innerHTML = `<div class="mobile-app">
+    <header class="mobile-topbar"></header>
+    <div class="mobile-page mobile-director-page">
+      <main class="workspace director-chat-layout chat-only mobile-director-layout">
+        <section class="mv-song-transport"></section>
+        <section class="panel director-chat-panel">
+          <div class="chat-log"></div><form class="chat-composer"></form>
+        </section>
+      </main>
+    </div>
+  </div>`;
+  return {
+    page: document.querySelector(".mobile-director-page"),
+    layout: document.querySelector(".mobile-director-layout"),
+    panel: document.querySelector(".director-chat-panel"),
+    log: document.querySelector(".chat-log"),
+  };
+}
+
+it("allows vertical swipes outside the chat log to scroll the mobile Director page", () => {
+  const { page, layout, log } = mobileDirector();
+  expect(getComputedStyle(page).overflowY).toBe("auto");
+  expect(getComputedStyle(layout).overflow).toBe("visible");
+  // At the ends of the chat history, swipes can continue into the outer page.
+  expect(getComputedStyle(log).overscrollBehavior).toBe("auto");
+});
+
+it("keeps mobile chat usable when the song player makes the page taller than the viewport", () => {
+  const { layout, panel } = mobileDirector();
+  expect(getComputedStyle(layout).height).toBe("auto");
+  expect(getComputedStyle(layout).flexShrink).toBe("0");
+  expect(getComputedStyle(panel).flexShrink).toBe("0");
+  expect(getComputedStyle(panel).minHeight).toBe("20rem");
+  expect(getComputedStyle(panel).height).not.toBe("0px");
+});
+
 it("renders Director errors with readable dark-red text on the light canvas", () => {
   const style = document.createElement("style");
   style.textContent = styles;

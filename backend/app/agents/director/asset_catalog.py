@@ -99,6 +99,15 @@ def _default_file_key(
     role: RefRole,
     asset: LibraryAsset | None = None,
 ) -> str | None:
+    if role == RefRole.layout_ref_frame:
+        if asset and asset.files:
+            for key in ("layout", "master", "image"):
+                if asset.files.get(key):
+                    return key
+            for key in sorted(asset.files):
+                if asset.files.get(key) and not str(key).startswith("input_"):
+                    return key
+        return "layout"
     if role == RefRole.actor:
         if asset and asset.files:
             for key in (

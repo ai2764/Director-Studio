@@ -18,4 +18,18 @@ def project_writer_context(context, intent, references):
             result["text_ref"] = f"intent.directing_requests[id={source['id']}].text"
         return result
 
-    return project(deepcopy(context)), project(deepcopy(references))
+    projected = project(deepcopy(context))
+    target_id = intent.get("current_shot", {}).get("id")
+    duration = intent.get("execution_duration_s")
+    if target_id and duration is not None:
+        # Only current target records, never historical quotes or neighboring shots.
+        targets = list(projected.get("shot_summaries", []))
+        canonical = projected.get("facts", {}).get("target")
+        if isinstance(canonical, dict):
+            targets.append(canonical)
+        for target in targets:
+            if isinstance(target, dict) and target.get("id") == target_id:
+                if target.get("duration_s") != duration:
+                    target["storyboard_duration_s"] = target.get("duration_s")
+                target["duration_s"] = duration
+    return projected, project(deepcopy(references))

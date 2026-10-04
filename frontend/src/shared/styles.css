@@ -3799,19 +3799,20 @@ select {
   flex: 1 1 0;
   flex-direction: column;
   overflow-x: hidden;
-  overflow-y: hidden;
+  overflow-y: auto;
   overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .mobile-director-layout {
   display: flex;
-  flex: 1 1 0;
-  min-height: 0;
-  height: 100%;
+  flex: 1 0 auto;
+  min-height: 100%;
+  height: auto;
   flex-direction: column;
   gap: 0.35rem;
   padding: 0.35rem;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .director-chat-layout.chat-only.mobile-director-layout {
@@ -3821,9 +3822,10 @@ select {
 
 .mobile-director-layout .director-chat-panel {
   display: flex;
-  flex: 1 1 0;
-  height: 0;
-  min-height: 0;
+  flex: 1 0 auto;
+  /* The player can scroll above a usable chat panel instead of squeezing it. */
+  height: calc(100dvh - 8rem);
+  min-height: 20rem;
   max-height: none;
   overflow: hidden;
   flex-direction: column;
@@ -3832,7 +3834,7 @@ select {
 }
 
 .director-chat-layout.chat-only.mobile-director-layout .director-chat-panel {
-  min-height: 0;
+  min-height: 20rem;
   max-height: none;
 }
 
@@ -4129,7 +4131,7 @@ select {
   min-height: 0;
   max-height: none;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior: auto;
 }
 
 .mobile-director-layout .chat-chips {

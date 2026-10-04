@@ -754,7 +754,11 @@ async def _make_chat_fn(
         async with orch.llm_session(
             release_on_exit=not keep,
             on_status=_runtime,
-            fail_if_generation_pending=True,
+            # A tool in this turn may already have queued a Layout. Internal
+            # history compaction must wait for its GPU, rather than aborting
+            # the turn after successful mutations. New chat admission stays
+            # blocked while generation is pending.
+            fail_if_generation_pending=_kwargs.get("inference_purpose") != "compaction",
         ):
             # Always (re)load / verify GPU residency after Comfy may have unloaded it
             await orch.ensure_llm_ready(on_status=_runtime)
