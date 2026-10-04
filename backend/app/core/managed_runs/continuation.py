@@ -81,14 +81,21 @@ def _clear_unplanned_managed_tails(run: ManagedRun, step: RunStep) -> None:
 
 def _replace_managed_tail_selection(target: Any, layout_id: str) -> Any:
     """Activate one managed tail while retaining prior tails as inactive history."""
+    replacement = next(
+        (layout for layout in target.layout_refs if layout.id == layout_id),
+        None,
+    )
+    replacement_origin = replacement.origin if replacement is not None else None
     updated_layouts = [
         layout.model_copy(update={"selected_for_h3": False})
         if (
             layout.id != layout_id
             and layout.selected_for_h3
-            and layout.feedback_source == "managed_run"
+            and replacement_origin is not None
+            and replacement_origin.kind == "clip_tail_frame"
             and layout.origin is not None
             and layout.origin.kind == "clip_tail_frame"
+            and layout.origin.source_shot_id == replacement_origin.source_shot_id
         )
         else layout
         for layout in target.layout_refs
