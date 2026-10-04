@@ -58,6 +58,32 @@ def test_harness_never_reports_uncreated_layout_job(tmp_projects_dir):
     assert real.id in with_receipt.finish({"reply": f"{real.id} 可以看了。"}).reply
 
 
+@pytest.mark.asyncio
+async def test_already_running_h3_receipt_is_valid_for_the_final_reply(tmp_projects_dir, monkeypatch):
+    from types import SimpleNamespace
+    from app.agents.director.harness_runtime import BackendTurn
+    from app.core.jobs.store import create_job
+    project = create_project("Existing H3", "A road.")
+    shot = Shot(id="sht_existing", project_id=project.id, scene_id="road",
+                title="Road", script_beat="A road.", duration_s=4)
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    job = create_job(pipeline_id="h3_ref2va", asset_kind="productions", name="Road",
+                     project_id=project.id)
+    run = SimpleNamespace(current_index=0, steps=[SimpleNamespace(shot_id=shot.id)],
+                          current_job_id=job.id)
+    monkeypatch.setattr("app.core.managed_runs.store.active_run_for_project", lambda _: run)
+    turn = BackendTurn(project.id, "Start this Shot", None, None)
+    monkeypatch.setattr(turn, "context", lambda: {"tools": [{"function": {
+        "name": "start_h3_video", "parameters": {"type": "object", "properties": {
+            "shot_id": {"type": "string"}}, "required": ["shot_id"]},
+    }}]})
+    result = await turn.dispatch("tool", {"name": "start_h3_video",
+        "arguments": {"shot_id": shot.id}, "call_id": "existing-job"})
+    assert result["already_started"]
+    assert job.id in turn.finish({"reply": f"Existing job: {job.id}."}).reply
+
+
 def test_agent_history_does_not_reseed_phantom_job_claims(tmp_projects_dir):
     from app.core.projects.chat_history import agent_history, append_chat_message, load_chat_history
 

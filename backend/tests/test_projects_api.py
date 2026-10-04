@@ -2234,10 +2234,10 @@ def test_approve_shot_and_submit_h3(client, api_env, monkeypatch, edit_during_st
     )
     shot = shot.model_copy(update={"meta": _fresh_layout_prompt_meta(shot)})
     from test_director_dialogue_attribution import certify_test_shot
-    shot = certify_test_shot(project, shot, "Actor")
-    save_shot(shot)
     project.shot_ids = [shot.id]
     save_project(project)
+    shot = certify_test_shot(project, shot, "Actor")
+    save_shot(shot)
 
     r = client.post(f"/api/shots/{shot.id}/approve")
     assert r.status_code == 200
@@ -2344,9 +2344,10 @@ def test_submit_rejects_prompt_picture_tag_without_a_matching_shot_ref(
         ),
     )
     from test_reference_facts import certify_reference_test_shot
+    project.shot_ids = [shot.id]
+    save_project(project)
     shot = certify_reference_test_shot(project, shot)
     save_shot(shot)
-    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
 
     async def fail_if_started(job, *, images=None):
         raise AssertionError("an invalid Picture tag must fail before job start")
@@ -2391,10 +2392,10 @@ def test_submit_h3_rejects_locked_source_audio_for_official_providers(
     )
     shot = shot.model_copy(update={"meta": _fresh_layout_prompt_meta(shot)})
     from test_reference_facts import certify_reference_test_shot
-    shot = certify_reference_test_shot(project, shot)
-    save_shot(shot)
     project.shot_ids = [shot.id]
     save_project(project)
+    shot = certify_reference_test_shot(project, shot)
+    save_shot(shot)
 
     started: list[dict] = []
 

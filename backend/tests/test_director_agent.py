@@ -1576,6 +1576,7 @@ async def test_layout_writer_receives_original_directing_request(director_dirs, 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("qwen_endpoint", ["", "http://localhost:8190"])
 @pytest.mark.parametrize(
     "source_names",
     [
@@ -1586,11 +1587,13 @@ async def test_layout_writer_receives_original_directing_request(director_dirs, 
     ],
 )
 async def test_explicit_layout_pack_preserves_zero_to_three_sources_in_order(
-    director_dirs, monkeypatch, source_names
+    director_dirs, monkeypatch, source_names, qwen_endpoint
 ):
     import app.agents.director.service as service_module
 
     svc, _project, shot, sources = _make_layout_queue_fixture(director_dirs)
+    monkeypatch.setattr(settings, "comfy_base_url", "http://localhost:8118")
+    monkeypatch.setattr(settings, "qwen_image_21_comfy_base_url", qwen_endpoint)
     started: list[tuple[JobRecord, dict]] = []
 
     async def fake_start(job, *, images=None):
@@ -1613,7 +1616,7 @@ async def test_explicit_layout_pack_preserves_zero_to_three_sources_in_order(
     assert len(started) == 1
     job, images = started[0]
     assert job.pipeline_id == "qwen21_layout"
-    assert job.params["comfy_base_url"] == settings.qwen_image_21_comfy_base_url
+    assert job.params["comfy_base_url"] == (qwen_endpoint or settings.comfy_base_url)
     assert list(images) == [f"ref_{index}" for index in range(len(source_names))]
     assert [item["asset_id"] for item in job.params["layout_source_refs"]] == [
         source.asset_id for source in ordered_sources
@@ -2108,8 +2111,9 @@ async def test_compatibility_regeneration_projects_its_job_and_terminal_asset(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("pipeline_id", ["ref_frame", "qwen21_layout"])
 async def test_queue_ref_frame_does_not_replace_active_job(
-    director_dirs, monkeypatch
+    director_dirs, monkeypatch, pipeline_id
 ):
     """A second click must not orphan the first in-flight layout result."""
     from app.agents.director import service as service_mod
@@ -2120,7 +2124,7 @@ async def test_queue_ref_frame_does_not_replace_active_job(
 
     project = create_project("No duplicate layout", "actor enters hallway")
     active_job = create_job(
-        pipeline_id="ref_frame",
+        pipeline_id=pipeline_id,
         asset_kind="layouts",
         name="layout:entrance",
         params={"shot_id": "sht_no_duplicate", "project_id": project.id},

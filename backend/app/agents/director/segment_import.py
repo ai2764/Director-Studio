@@ -73,7 +73,6 @@ async def parse_segment_text(
     ):
         return _rows_from_payload(supplied)
 
-    model = provider or DirectorLLMPlanProvider()
     system = (
         "Convert the user's externally prepared song notes into JSON only: "
         '{"segments":[{"start_s":number|null,"end_s":number|null,"text":string}],'
@@ -82,7 +81,15 @@ async def parse_segment_text(
         "inside the source text. Missing times must be null and listed as unresolved."
     )
     user = json.dumps({"source_text": raw_input}, ensure_ascii=False)
-    response = await model.complete_bounded(system, user, max_tokens=8192)
+    from ...config import settings
+    from ...core.vram import get_orchestrator
+
+    orch = get_orchestrator()
+    async with orch.llm_session(release_on_exit=not settings.llm_keep_loaded,
+                               fail_if_generation_pending=True):
+        await orch.ensure_llm_ready()
+        model = provider or DirectorLLMPlanProvider()
+        response = await model.complete_bounded(system, user, max_tokens=8192)
     try:
         return _rows_from_payload(json.loads(response))
     except (json.JSONDecodeError, ValueError, TypeError) as exc:

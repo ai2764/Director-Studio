@@ -18,6 +18,7 @@ from ..core.projects.song_segments import (
     save_segments,
 )
 from ..core.projects.store import load_project
+from ..core.vram import GenerationActiveError
 
 
 router = APIRouter()
@@ -60,6 +61,12 @@ async def preview_song_segments(project_id: str, body: SegmentSourceBody) -> Seg
     _mv_project(project_id)
     try:
         return await parse_segment_text(body.raw_input)
+    except GenerationActiveError as exc:
+        raise HTTPException(409, detail={
+            "code": exc.code,
+            "message": "Local image or video generation is using the GPU.",
+            "generation_count": len(exc.reservations),
+        }) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 

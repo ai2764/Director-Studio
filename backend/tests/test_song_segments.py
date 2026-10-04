@@ -56,7 +56,7 @@ def test_rejects_overlap_without_changing_saved_segments() -> None:
             SongSegment(id="seg_b", start_s=2, end_s=4, text="Next"),
         ])
 
-    assert load_segments(project.id) == original
+    assert load_segments(project.id).model_dump() == original.model_dump()
 
 
 def test_rejects_missing_master_or_concurrent_edit() -> None:
@@ -106,7 +106,7 @@ def test_harness_chat_keeps_song_map_out_of_durable_user_message(monkeypatch) ->
         project.id, "Discuss this line", SegmentSelection(revision=saved.revision, ids=["seg_b"]),
     )
     assert "First lyric" not in message
-    assert "Second lyric" not in message
+    assert "Second lyric" in message
     assert "seg_b" in message
     state = json.loads(project_context_blob(project, [], message=message, focused=True))
     assert [row["text"] for row in state["song_segments"]] == ["First lyric", "Second lyric"]

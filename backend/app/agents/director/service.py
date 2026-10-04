@@ -1220,7 +1220,7 @@ class DirectorService:
                 } | ({shot.ref_frame_job_id} if shot.ref_frame_job_id else set()))
                 and any(
                     (existing_job := load_job(job_id)) is not None
-                    and existing_job.pipeline_id == "ref_frame"
+                    and existing_job.pipeline_id in {"ref_frame", "qwen21_layout"}
                     and existing_job.status in active_ref_frame_statuses
                     for job_id in layout_job_ids
                 )
@@ -1403,7 +1403,7 @@ class DirectorService:
                 "image_keys": list(images),
                 "ref_labels": ref_labels,
                 "aspect_ratio": _reference_frame_aspect_ratio(project),
-                "comfy_base_url": settings.qwen_image_21_comfy_base_url,
+                "comfy_base_url": settings.qwen_image_21_comfy_base_url or settings.comfy_base_url,
                 "output_prefix": (
                     f"director-studio/{project.id}/{shot.id}/ref_frame/{layout_ref_id}"
                 ),
@@ -1418,6 +1418,7 @@ class DirectorService:
             state_description=effective_brief.state_description,
             time_hint=effective_brief.time_hint,
             source_refs=list(effective_brief.source_refs),
+            source_refs_explicit=True,
             activation_mode=effective_brief.activation_mode,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -1517,6 +1518,7 @@ class DirectorService:
             state_description=brief.state_description,
             time_hint=brief.time_hint,
             source_refs=list(brief.source_refs),
+            source_refs_explicit=True,
             activation_mode=brief.activation_mode,
             created_at=datetime.now(timezone.utc).isoformat(),
         )

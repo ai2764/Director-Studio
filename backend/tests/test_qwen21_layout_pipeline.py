@@ -72,4 +72,3 @@ def test_qwen21_layout_pipeline_is_enabled_from_its_api_workflow():
     assert pipeline.id == "qwen21_layout"
     assert pipeline.execution_adapter_id == "comfy"
     assert pipeline.enabled
-

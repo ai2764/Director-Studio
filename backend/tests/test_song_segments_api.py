@@ -128,6 +128,22 @@ def test_song_audio_and_invalid_save():
         assert invalid.status_code == 422
 
 
+def test_free_text_preview_reports_generation_busy_without_a_server_error(monkeypatch):
+    from app.api import song_segments as segments_api
+    from app.core.vram import GenerationActiveError
+    project = _project_with_song()
+
+    async def busy_parse(_):
+        raise GenerationActiveError([])
+
+    monkeypatch.setattr(segments_api, "parse_segment_text", busy_parse)
+    with TestClient(create_app(), raise_server_exceptions=False) as client:
+        result = client.post(f"/api/projects/{project.id}/song-segments/preview",
+                             json={"raw_input": "0-3 First lyric"})
+    assert result.status_code == 409
+    assert result.json()["detail"]["code"] == "GPU_GENERATION_ACTIVE"
+
+
 @pytest.mark.parametrize("runtime", ["legacy", "harness"])
 @pytest.mark.asyncio
 async def test_selected_context_is_request_scoped_not_saved_as_chat_text(monkeypatch, runtime):

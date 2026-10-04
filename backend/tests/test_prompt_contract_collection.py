@@ -20,6 +20,8 @@ def validate(raw, **bindings):
 def test_malformed_binding_and_picture_syntax_reach_one_repair():
     candidate = {"prompt_sections": draft("The visitor (Picture 1) turns. {{speech:l1}}").prompt_sections.model_dump(),
                  "dialogue_uses": [dict(line_id="l1", speaker_id="p1", block_indexes=[0])]}
+    candidate["prompt_sections"]["subject_definitions"] = "The visitor."
+    candidate["prompt_sections"]["detailed_description"] = "The visitor turns. {{speech:l1}}"
     raw = json.dumps(candidate)
     with pytest.raises(PromptFailureError) as caught:
         validate(raw, required_picture_indices=[1], submitted_picture_indices=[1])
@@ -83,7 +85,7 @@ async def test_ordinary_writer_repairs_metadata_and_picture_tags_in_its_single_r
             payload = sections()
             payload["detailed_description"] = "Camera arcs slowly. {{speech:l1}} Hold the empty doorway."
             if len(self.writer_requests) == 1 or "missing required Picture binding: <Picture 1>" not in user:
-                payload["subject_definitions"] = payload["subject_definitions"].replace("<", "(").replace(">", ")")
+                payload["subject_definitions"] = "The watchmaker."
             response = {"prompt_sections": payload}
             if len(self.writer_requests) == 1:
                 response["dialogue_uses"] = [dict(line_id="l1", speaker_id="char_1", block_indexes=[0])]

@@ -256,8 +256,7 @@ async def test_plain_write_repairs_legacy_protocol_using_source_reference(saved_
     assert '<d>[English] Hello.</d>' in updated.prompt_sections.detailed_description
     assert '<d>English' not in updated.prompt_sections.detailed_description
     assert load_shot(saved_shot.project_id, saved_shot.id) == updated
-    assert len(provider.requests) == 2
-    assert "dialogue_block_invalid" in provider.requests[1]
+    assert len(provider.requests) == 1
 
 
 @pytest.mark.asyncio

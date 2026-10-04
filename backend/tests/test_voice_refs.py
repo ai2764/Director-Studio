@@ -258,10 +258,10 @@ def test_submit_stages_voice_reference_in_audio_order(
         }
     )
     from test_director_dialogue_attribution import certify_test_shot
-    shot = certify_test_shot(project, shot, "Mia")
-    save_shot(shot)
     project.shot_ids = [shot.id]
     save_project(project)
+    shot = certify_test_shot(project, shot, "Mia")
+    save_shot(shot)
     started: list[dict] = []
 
     async def capture_start(job, *, images=None):
@@ -310,10 +310,10 @@ def test_submit_rejects_native_audio_instead_of_using_private_lock(
         }
     )
     from test_director_dialogue_attribution import certify_test_shot
-    shot = certify_test_shot(project, shot, "Mia")
-    save_shot(shot)
     project.shot_ids = [shot.id]
     save_project(project)
+    shot = certify_test_shot(project, shot, "Mia")
+    save_shot(shot)
     started: list[dict] = []
 
     async def capture_start(job, *, images=None):

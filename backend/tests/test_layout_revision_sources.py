@@ -17,6 +17,17 @@ def test_revision_keeps_original_actor_and_scene_sources_across_redraws():
     assert _revision_source_refs([original, first_redraw], first_redraw) == original.source_refs
 
 
+def test_text_only_revision_keeps_an_explicit_empty_source_pack_after_reload():
+    original = LayoutReference(id="lref_original", source_refs=[
+        LayoutSourceRef(role="actor", asset_id="act_mia")])
+    text_only = LayoutReference.model_validate({
+        "id": "lref_text_only", "revision_of": original.id,
+        "source_refs": [], "source_refs_explicit": True,
+    })
+    reloaded = LayoutReference.model_validate_json(text_only.model_dump_json())
+    assert _revision_source_refs([original, reloaded], reloaded) == []
+
+
 def test_layout_target_resolution_keeps_explicit_shot_choice_and_rejects_ambiguity():
     target = Shot(id="sht_target", project_id="prj_one", scene_id="one", title="One",
                   script_beat="One", duration_s=3,

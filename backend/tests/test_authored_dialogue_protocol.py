@@ -110,4 +110,4 @@ def test_repair_request_includes_structured_dialogue_issue_without_rewriting_pro
     assert "dialogue_speaker_mismatch" in request
     assert "l1" in request
     assert "Bind the speech block to Kira." in request
-    assert "Keep all valid content" in request
+    assert "Preserve its creative prose only where consistent with those requirements" in request

@@ -360,6 +360,7 @@ class BackendTurn:
             if (run is not None and run.current_index < len(run.steps)
                     and run.steps[run.current_index].shot_id == args.get("shot_id")
                     and run.current_job_id):
+                self.tool_exposed_job_ids.add(run.current_job_id)
                 return {"ok": True, "already_started": True,
                         "shot_id": args["shot_id"], "job_id": run.current_job_id,
                         "notes": [f"H3 Job {run.current_job_id} is already running for this Shot."]}

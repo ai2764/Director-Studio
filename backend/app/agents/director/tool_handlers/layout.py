@@ -70,7 +70,7 @@ def _revision_source_refs(layouts: list[Any], target: Any) -> list[LayoutSourceR
     current = target
     while current is not None and current.id not in seen:
         seen.add(current.id)
-        if current.source_refs:
+        if current.source_refs or current.source_refs_explicit:
             return list(current.source_refs)
         current = by_id.get(current.revision_of)
     return []

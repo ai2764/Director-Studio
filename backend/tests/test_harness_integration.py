@@ -154,7 +154,7 @@ async def test_real_harness_preserves_usage_from_compaction_and_truncated_turn(r
     monkeypatch.setattr(settings, "harness_base_url", real_sidecar[0])
     monkeypatch.setattr(settings, "harness_internal_token", real_sidecar[1])
     project = create_project("usage during incomplete turn", "A cat waits.")
-    history = [{"role": "user" if i % 2 == 0 else "assistant", "content": "resolved discussion " * 50} for i in range(162)]
+    history = [{"role": "user" if i % 2 == 0 else "assistant", "content": "resolved discussion " * 500} for i in range(162)]
     with pytest.raises(HarnessError, match="INCOMPLETE_TURN"):
         await handle_harness_chat(project_id=project.id, message="hello", history=history, svc=None,
                                   chat_fn=await _make_chat_fn(on_progress=progress), on_progress=progress,

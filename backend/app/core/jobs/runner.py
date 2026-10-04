@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from ...config import settings
 from ...integrations.comfy_mcp import ComfyMcpClient
 from ...integrations.minimax_h3 import MiniMaxH3Client
 from ...pipelines.base import ExternalPipeline
@@ -125,6 +126,14 @@ async def finish_comfy(job: JobRecord) -> None:
     """Clear Comfy GPU ownership after a terminal job status."""
     if not _uses_exclusive_vram(job.pipeline_id):
         return
+    endpoint = (job.params or {}).get("comfy_base_url")
+    if endpoint and endpoint.rstrip("/") != settings.comfy_base_url.rstrip("/"):
+        # Unload the server that actually ran this job while we still own the GPU.
+        # The orchestrator also frees the default server when ownership is released.
+        try:
+            await _comfy_client_for_job(job).free_memory(unload_models=True, free_memory=True)
+        except Exception:
+            logger.exception("Comfy endpoint cleanup failed for job=%s endpoint=%s", job.id, endpoint)
     await get_orchestrator().after_comfy_job(job.pipeline_id, job.status.value)
 
 

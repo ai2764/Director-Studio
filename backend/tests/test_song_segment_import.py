@@ -1,10 +1,35 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 
 import pytest
 
 from app.agents.director.segment_import import parse_segment_text
+
+
+@pytest.fixture(autouse=True)
+def import_gpu_session(monkeypatch):
+    class Orchestrator:
+        locked = False
+        ready = False
+
+        @asynccontextmanager
+        async def llm_session(self, **kwargs):
+            assert kwargs["fail_if_generation_pending"] is True
+            self.locked = True
+            try:
+                yield
+            finally:
+                self.locked = False
+
+        async def ensure_llm_ready(self):
+            assert self.locked
+            self.ready = True
+
+    orch = Orchestrator()
+    monkeypatch.setattr("app.core.vram.get_orchestrator", lambda: orch)
+    return orch
 
 
 class FakePlanProvider:
@@ -47,6 +72,24 @@ async def test_free_text_uses_configured_model_and_leaves_unknown_time_unresolve
         "Later line has no time", "Segment 2 needs a start and end time",
     ]
     assert "0-3.5 First line" in provider.calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_free_text_inference_owns_gpu_and_prepares_model(import_gpu_session):
+    class CheckedProvider(FakePlanProvider):
+        async def complete_bounded(self, *args, **kwargs):
+            assert import_gpu_session.locked
+            assert import_gpu_session.ready
+            return await super().complete_bounded(*args, **kwargs)
+    provider = CheckedProvider('{"segments":[{"start_s":0,"end_s":3,"text":"First"}]}')
+    await parse_segment_text("0-3 First", provider=provider)
+    assert not import_gpu_session.locked
+
+
+@pytest.mark.asyncio
+async def test_structured_import_does_not_acquire_gpu(import_gpu_session):
+    await parse_segment_text('[{"start":0,"end":3,"text":"First"}]')
+    assert not import_gpu_session.ready
 
 
 @pytest.mark.asyncio
