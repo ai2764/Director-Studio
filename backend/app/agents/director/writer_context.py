@@ -50,6 +50,9 @@ def video_context_writer_view(shot):
         "picture_slots": [],
         "audio_slots": [],
     }
+    from ...core.projects.video_context import video_context_status
+    status = video_context_status(shot)
+    view.update(context_frames=status["context_frames"], carry_audio=status["carry_audio"])
     try:
         png, source_job_id = _context_tail_png(shot)
         view["tail_frame_png"] = png

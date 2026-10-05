@@ -115,6 +115,24 @@ async def test_configure_off_clears_a_saved_source(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_configure_rejects_unsupported_runtime_without_saving(monkeypatch, tmp_path):
+    project, first, second = _board(monkeypatch, tmp_path)
+    job = _succeed(project.id, first.id)
+    save_shot(first.model_copy(update={"h3_job_id": job.id}))
+    def unsupported(config):
+        raise ValueError("Only a single Ref2AV Motion Context variation is certified")
+    monkeypatch.setattr("app.core.projects.video_context._runtime_options", unsupported)
+    _, payloads, actions, _ = await _call(
+        "configure_video_context", project.id,
+        {"shot_id": second.id, "mode": "previous_shot"}, "Continue the second shot",
+    )
+    assert payloads[-1]["ok"] is False
+    assert payloads[-1]["blocked_reasons"]
+    assert actions == []
+    assert load_shot(project.id, second.id).video_context is None
+
+
+@pytest.mark.asyncio
 async def test_rejected_source_returns_failure_and_keeps_the_shot(monkeypatch, tmp_path):
     project, _first, second = _board(monkeypatch, tmp_path)
     before = load_shot(project.id, second.id)
@@ -150,6 +168,10 @@ async def test_disabled_flag_does_not_save(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_start_returns_the_created_job_and_a_missing_id_is_not_invented(monkeypatch, tmp_path):
+    import app.agents.director.tool_handlers.video as video_tools
+    async def authorize(*args):
+        return True
+    monkeypatch.setattr(video_tools, "_authorize_one_off_video", authorize)
     from app.api import projects as projects_api
 
     project, _first, second = _board(monkeypatch, tmp_path)
@@ -252,6 +274,35 @@ async def test_writer_stores_the_video_context_signature(authored_shot):
     ).write_prompts_after_layout(shot.id)
     assert updated.meta["prompt_video_context_signature"] == video_context_prompt_signature(updated)
     assert video_context_prompt_is_stale(updated) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_change", ["rerun", "bytes"])
+async def test_tail_writer_rejects_source_changes_during_review(monkeypatch, tmp_path, source_change):
+    from app.core.jobs.store import save_output_file
+    project, first, second = _board(monkeypatch, tmp_path)
+    job = _succeed(project.id, first.id)
+    save_shot(first.model_copy(update={"h3_job_id": job.id}))
+    configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
+    target = load_shot(project.id, second.id)
+    async def draft(provider, project, shot, *args, **kwargs):
+        if source_change == "rerun":
+            newer = _succeed(project.id, first.id, b"new-source")
+            save_shot(load_shot(project.id, first.id).model_copy(update={"h3_job_id": newer.id}))
+        else:
+            save_output_file(job.id, "video", "video.mp4", b"changed-source", project_id=project.id)
+        return shot
+    monkeypatch.setattr("app.agents.director.tail_prompt_review.draft_and_review", draft)
+    monkeypatch.setattr("app.agents.director.material_review.capture_references", lambda *args: ([], [], "unchanged-pictures"))
+    monkeypatch.setattr("app.agents.director.reference_facts.certify_reference_prompt", lambda *args: {})
+    def publish(candidate, *, check_current):
+        check_current()
+        save_shot(candidate)
+    monkeypatch.setattr("app.core.managed_runs.prompt_commit.save_reviewed_tail_prompt", publish)
+    svc = DirectorService(plan_provider=object(), orchestrator=Orchestrator())
+    with pytest.raises(ValueError, match="Video context source changed"):
+        await svc._write_tail_prompt(target, project, target.model_dump(mode="json"), "")
+    assert "prompt_video_context_signature" not in load_shot(project.id, target.id).meta
 
 
 def test_writer_observation_uses_the_real_tail_and_hides_names(monkeypatch, tmp_path):

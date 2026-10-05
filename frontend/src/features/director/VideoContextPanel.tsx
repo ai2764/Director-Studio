@@ -154,7 +154,7 @@ export function VideoContextPanel({
     : "";
   const resolvedKey = context?.mode === "previous_shot" ? (context.source_output_key || "") : "";
   const blocks = sourceBlocks(context, previous, jobs);
-  const preview = previewUrl(shot, versions, uploadFile);
+  const preview = previewUrl(shot, versions, uploadFile, previous?.h3_job_id);
   const selectedValue = versions.some((version) => (
     version.jobId === resolvedJobId && version.outputKey === resolvedKey
   ))
@@ -312,6 +312,11 @@ export function VideoContextPanel({
                       ...(context.source_job_id ? { source_job_id: context.source_job_id } : {}),
                       ...(context.source_output_key ? { source_output_key: context.source_output_key } : {}),
                     }, frames, next));
+                  } else if (context.mode === "external_upload" && context.upload_id) {
+                    void commit(payload({
+                      mode: "external_upload",
+                      upload_id: context.upload_id,
+                    }, frames, next));
                   }
                 }}
               />
@@ -368,6 +373,7 @@ function previewUrl(
   shot: Shot,
   versions: Version[],
   uploadFile: { id: string; filename: string } | null,
+  currentSourceJobId?: string | null,
 ): string {
   const context = shot.video_context;
   if (
@@ -378,7 +384,7 @@ function previewUrl(
     return `/api/files/projects/${shot.project_id}/video_context_uploads/${uploadFile.filename}`;
   }
   if (context?.mode !== "previous_shot") return "";
-  const jobId = context.source_job_id || "";
+  const jobId = context.source_job_id || currentSourceJobId || "";
   const match = versions.find((version) => (
     version.jobId === jobId && version.outputKey === (context.source_output_key || version.outputKey) && version.url
   ));

@@ -310,6 +310,17 @@ CHAT_IMAGE_CLASSIFICATION_TOOL = function_tool(
     required=["image_index", "kind", "name", "notes", "confidence"],
 )
 
+def _storyboard_schema(model) -> dict[str, Any]:
+    schema = model.model_json_schema()
+    role = schema["$defs"]["AssetMatchDraft"]["properties"]["role"]
+    role["enum"] = [value for value in role["enum"] if value not in {"layout", "layout_ref_frame"}]
+    role["description"] += (
+        " Bind user-imported Layout images as other, preserving their exact asset_id and file_key. "
+        "Generated Layout selection is managed separately after storyboarding."
+    )
+    return schema
+
+
 DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     ACTOR_DESIGN_TOOL,
     ACTOR_CONFIRM_TOOL,
@@ -344,7 +355,7 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "existing Shot's PROJECT_STATE id in shot_id, and omit shot_id only "
                 "for a genuinely new Shot. For adding one Shot at the end, use append_shot instead."
             ),
-            "parameters": StoryboardSubmission.model_json_schema(),
+            "parameters": _storyboard_schema(StoryboardSubmission),
         },
     },
     function_tool(
@@ -368,7 +379,7 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "Otherwise include exact words and speaker cues in script_beat; attribution is "
                 "resolved before saving, using the current user request or authored beat, not a stale script."
             ),
-            "parameters": AppendShotSubmission.model_json_schema(),
+            "parameters": _storyboard_schema(AppendShotSubmission),
         },
     },
     {

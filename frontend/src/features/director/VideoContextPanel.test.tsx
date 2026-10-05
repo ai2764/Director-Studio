@@ -140,13 +140,13 @@ describe("VideoContextPanel", () => {
     expect(screen.queryByRole("button", { name: /generate|submit/i })).toBeNull();
   });
 
-  it("shows the builtin window, source job, and a paused preview", async () => {
+  it.each(["job_real", null])("shows the builtin window and preview for source %s", async (sourceJobId) => {
     const previous = makeShot("s1", "Arrival", { h3_job_id: "job_real" });
     const current = makeShot("s2", "Continue", {
       video_context: {
         mode: "previous_shot",
         source_shot_id: "s1",
-        source_job_id: "job_real",
+        source_job_id: sourceJobId,
         source_output_key: "video",
         context_frames: 22,
         carry_audio: false,
@@ -271,6 +271,19 @@ describe("VideoContextPanel", () => {
       expect(panel.textContent).toContain("Off");
       expect(panel.textContent).not.toContain("Configured");
     });
+  });
+
+  it.each([false, true])("persists external audio when its prior value is %s", async (carryAudio) => {
+    const context: ShotVideoContext = { mode: "external_upload", upload_id: "vup_saved", context_frames: 22, carry_audio: carryAudio };
+    const current = makeShot("s1", "External", { video_context: context });
+    vi.mocked(saveVideoContext).mockResolvedValue({shot_id:current.id,video_context:{...context,carry_audio:!carryAudio}});
+    vi.mocked(getShot).mockResolvedValue({...current,video_context:{...context,carry_audio:!carryAudio}});
+    render(<PanelHarness initial={current} shots={[current]} expanded />);
+    fireEvent.click(await screen.findByLabelText("Carry source audio"));
+    await waitFor(() => expect(saveVideoContext).toHaveBeenCalledWith(current.id, {
+      mode:"external_upload",upload_id:"vup_saved",context_frames:22,carry_audio:!carryAudio,
+    }));
+    await waitFor(() => expect((screen.getByLabelText("Carry source audio") as HTMLInputElement).checked).toBe(!carryAudio));
   });
 
   it("uploads an external video and shows the saved upload", async () => {

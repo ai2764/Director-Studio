@@ -414,6 +414,7 @@ async def validate_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
                 "width": 864,
                 "height": 480,
                 "seed": 42,
+                **({"context_video": "contract-context.mp4"} if mapping.context_video is not None else {}),
                 "output_prefix": "director-studio/h3/contract-validation",
             },
         )
@@ -495,6 +496,19 @@ async def test_h3_import(
                 {"import_id": import_id},
             )
         context_file = (str(record["filename"]), video_bytes)
+        runtime = {"carry_audio": False}
+        workflow = store.load_import_workflow(import_id)
+        if any(node.get("class_type") == "MiniMaxH3MotionContext" for node in workflow.values()):
+            from types import SimpleNamespace
+            from ..core.projects.models import ShotVideoContext
+            from ..pipelines.h3_ref2va.video_context import context_runtime_options
+            try:
+                runtime = context_runtime_options(
+                    ShotVideoContext(mode="external_upload"),
+                    SimpleNamespace(source="custom", workflow=workflow),
+                )
+            except ValueError as exc:
+                return _error(422, "context_video_unsupported", str(exc), {"import_id": import_id})
         context_params = {
             "context_video_key": "context_video",
             "video_context_source": {
@@ -502,7 +516,7 @@ async def test_h3_import(
                 "upload_id": record.get("upload_id"),
                 "sha256": record.get("sha256"),
                 "media": record.get("media"),
-                "carry_audio": False,
+                **runtime,
             },
         }
     elif body.context_upload_id or body.context_project_id:

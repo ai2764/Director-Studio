@@ -29,6 +29,7 @@ import {
 } from "./api";
 import { listLibraryAssets, type LibraryAsset } from "../library/api";
 import { ShotMaterialEditor } from "../director/ShotMaterialEditor";
+import { VideoContextPanel } from "../director/VideoContextPanel";
 import { ManagedRunControls } from "./ManagedRunControls";
 import { fetchH3Profiles } from "../../shared/api/client";
 import type { H3ActiveProfile } from "../../shared/api/types";
@@ -655,6 +656,7 @@ export function ProductionPage({
                 </div>
               ) : null}
               {providerPicker}
+              {h3Provider === "local" ? <VideoContextPanel shot={selected} shots={shots} onShotUpdated={replaceShot} /> : null}
               {h3Provider === "local" ? resolutionPicker : null}
               <button
                 type="button"
@@ -1100,6 +1102,7 @@ export function ProductionPage({
 
                 {tab === "run" ? (
                   <div className="tab-panel">
+                    {h3Provider === "local" ? <VideoContextPanel shot={selected} shots={shots} onShotUpdated={replaceShot} /> : null}
                     {h3Provider === "local" ? resolutionPicker : null}
                     <ol className="run-steps">
                       <li className={(selected.refs?.length ?? 0) > 0 ? "done" : ""}>

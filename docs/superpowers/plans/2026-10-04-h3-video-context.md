@@ -42,7 +42,7 @@ Set-Location C:/Users/AIBOX/.codex/worktrees/h3-video-context/Director-Studio/ba
 python -m pytest tests/test_h3_workflow_inspector.py tests/test_h3_workflow_validator.py tests/test_h3_profile_runtime.py -q --basetemp=.pytest-video-context-baseline
 ```
 
-当前只有设计和计划。实验服务还没有启动，也没有实现外接视频功能。frontend/harness 的 npm dependencies 由 Task 1 安装并验证。
+实现及实跑已完成；Codex 接手后的修复和验收见 `docs/superpowers/reports/2026-10-04-h3-video-context-verification.md`。实验服务已启动，frontend/harness dependencies 已安装并验证。
 
 本机 A/B 输出：`C:/Users/AIBOX/dev/Director-Studio/.run/latent-ab-20261004/`。
 正式源视频 `source2.mp4` 的 Job 为 `job_bf31b0fb9347`；重编码首段 `pixelsB1.mp4` 为 `job_a3a49e1eedc9`。对应 `.executed.api.json` 是 Comfy 实际运行图。不要拿三视图预检 `source.mp4` 作为正式样本。
@@ -183,14 +183,14 @@ def attach_video_context(graph: dict, *, uploaded_video: str, delivered_frames: 
 
 **Files:** 新 `docs/superpowers/reports/2026-10-04-h3-video-context-verification.md`。视频/截图/完整运行输入放 ignored `.run/video-context/`，文档只引用路径和必要诊断。
 
-- [ ] 验证所有 durable paths 在实验 worktree；5174 的 `/api/health` 是实验身份，8793 Harness 可用；主实例 profile/hash 与项目文件未被写入。停止/重启实验实例后配置仍存在。
-- [ ] 测试时主实例不发 Agent/GPU 工作；确认其 generation_count/owner 和 Comfy queue 空闲。复用同一 Comfy，不重启/卸载它。若不空闲等待用户结束主实例任务；不要直接抢占。
-- [ ] 新建专用小项目，只导入需要的安全参考和 source2.mp4，不写入用户原项目。用 Agent 自己调用工具完成 source → target 的配置、提示词与真实 Job 提交；测试者不给假 Job/暗中代交。
-- [ ] 固定同一 source、提示词、seed、分辨率、steps，分别跑不衔接与视频衔接；同时保留已有 raw latent 样本作参考。记录实际生成图、source hash、Job/Comfy IDs、交付帧数。
-- [ ] 连续三次续接，审核接缝前后帧、人物/道具、运镜方向、色调/细节与成品时长。检测 GPU 运行失败、Agent 漏工具/误选源、窗口只改 UI、MCP 不支持 MP4 等错误，修复后重跑对应失败用例。
-- [ ] 至少测试一次外部上传和一次导入 Ref2AV + Motion Context 变体的文件 mapping；并验证关闭衔接后普通生成。声音测试与 MV 原曲 ref 单独核对，不凭画面通过就声称音频无缝。
-- [ ] 文档交付：实际成功/失败项、真实 Job IDs、可播放视频路径、模型/窗口/参数、已知限制、bug/问题清单、启动/停止命令、测试 URL 和 commit 列表。未跑的项标“未执行”，不写成通过。
-- [ ] 每次 commit 前检查暂存内容，只提交实现/测试/文档；不提交 `.env`、token、会话、模型、用户 media/data。最后停留在本实验分支，服务已启动并说明状态，不 merge/publish。
+- [x] 验证 durable paths、实验身份、Harness；profile 初始 hash 和收尾 2243 文件隔离检查通过，主项目初始 snapshot 期间独立活动差异如实写入报告。停止/重启配置保留。
+- [x] 生成前检查主实例 generation_count/owner 和 Comfy queue，串行复用共享服务；实验停止仅停止自己的三个进程。
+- [x] 专用项目、安全参考/source2；Agent 亲自完成来源→目标配置、提示词和真实 Job，无假 ID 或暗中代交。
+- [x] 导入 profile 技术 A/B 固定 source、提示词、seed、分辨率、steps；与真实 Agent 测试分开记录，旧 raw latent 样本仅作历史参考。
+- [x] 三次真实续接，审核首/中/尾和三处接缝；源 hash、输入字节、交付帧数及实际执行图核对。问题修复后对应重跑。
+- [x] 外部上传、导入 Motion Context 映射、off 后普通生成通过；MV 原曲 Audio1 PCM 与原曲区间一致，context audio 单独核对。未声称听感无缝。
+- [x] 验收报告含真实失败/成功、Job/Comfy IDs、本地视频、参数、限制及问题清单；明确实体手机、人工听感等未执行项。
+- [x] 每次 commit 前检查暂存内容，只提交实现/测试/文档；不提交 `.env`、token、会话、模型、用户 media/data。最后停留在本实验分支，服务已启动并说明状态，不 merge/publish。
 
 ## 给 Grok 的起始指令
 

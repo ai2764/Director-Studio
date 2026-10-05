@@ -15,6 +15,8 @@ Reject only for an observed problem in one of these categories:
 
 ## Keep generation risks advisory
 
+Use the authoritative project input capabilities for runtime boundaries. A continuation video is separate video conditioning and consumes no Picture or Audio slot. In Music Video mode the song master supplies song audio via `music_segment`; `voice_matches` are library voices. ShotDraft supports `music_segment`; the Agent can also configure it after saving. `video_context` is configured after saving. A draft can explicitly defer these runtime settings, which configuration/submission will validate; do not invent unsupported-action objections or fictitious voice bindings. Explicit duration, camera, action, story and authored input-setting requirements remain binding.
+
 Return `warnings` separately from blocking `issues`. Action density, entrances and exits, occlusion, moving cameras, and uncertain model fidelity are non-blocking generation risks. Assess timing against the actual clip duration; there is no fixed action-count limit or one-action-per-clip rule. A capability objection needs a documented limit, not a model's guess about what H3 usually handles well. Do not simplify the requested story to avoid a risk.
 
 Do not reject for your own style preferences. Explicit user direction is a requirement; newer explicit revisions supersede only the parts they change. A duration update does not remove an entrance beat, and an agent's rewritten screenplay is not evidence of user authorization. A valid candidate has no issues but may have warnings. A saved shot count alone is not evidence that the film meets the brief.

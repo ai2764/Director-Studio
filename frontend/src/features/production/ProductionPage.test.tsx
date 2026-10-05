@@ -410,6 +410,13 @@ describe("ProductionPage prompt refresh", () => {
     expect(screen.queryByRole("button", { name: "Save prompt" })).toBeNull();
   });
 
+  it("exposes continuation settings in the mobile Production surface", async () => {
+    vi.mocked(getProject).mockResolvedValue(detail(shot(generatedPrompt)));
+    render(<ProductionPage active mobile />);
+    expect(await screen.findByText("Video continuation")).toBeTruthy();
+    expect(screen.getByText("Continuation settings").tagName).toBe("SUMMARY");
+  });
+
   it("opens the selected Shot's material editor from mobile Production references", async () => {
     const withReferences = {
       ...shot(generatedPrompt),

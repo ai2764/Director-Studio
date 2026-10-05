@@ -21,6 +21,7 @@ function Get-VideoContextLayout([string]$Root) {
 function Set-VideoContextEnvironment([string]$Root) {
     $layout = Get-VideoContextLayout $Root
     $env:DS_VIDEO_CONTEXT_ENABLED = 'true'
+    $env:DS_H3_BUILTIN_WORKFLOW = 'h3_ref2va_fast4.api.json'
     $env:DS_BACKEND_URL = $layout.BackendUrl
     $env:DS_DATA_DIR = $layout.DataDir
     $env:DS_JOBS_DIR = $layout.JobsDir
@@ -104,6 +105,7 @@ function Stop-VideoContextInstance([string]$Root) {
 
 function Invoke-DirectorStudioStart($Root, $Layout) {
     & (Join-Path $Root 'start.ps1') `
+        -NoReload `
         -BackendPort $Layout.BackendPort `
         -FrontendPort $Layout.FrontendPort `
         -HarnessPort $Layout.HarnessPort `

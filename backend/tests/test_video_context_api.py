@@ -36,6 +36,29 @@ def test_disabled_endpoints_reject_writes(monkeypatch):
     assert saved.value.detail == "Video context is disabled"
 
 
+@pytest.mark.asyncio
+async def test_minimax_rejects_active_video_context_before_a_job(monkeypatch, tmp_path):
+    from app.api import projects as api
+    from test_video_context_sources import _board, _succeed
+    from app.core.projects.models import ShotVideoContext
+    from app.core.projects.video_context import configure_video_context
+    from app.core.jobs.store import list_jobs
+    project, first, second = _board(monkeypatch, tmp_path)
+    job = _succeed(project.id, first.id)
+    save_shot(first.model_copy(update={"h3_job_id": job.id}))
+    configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
+    monkeypatch.setattr(settings, "h3_minimax_api_key", "fixture-key")
+    class Service:
+        async def write_prompts_after_layout(self, *args, **kwargs):
+            raise AssertionError("unsupported provider must fail before writing")
+    before = {job.id for job in list_jobs(project_id=project.id)}
+    with pytest.raises(HTTPException) as error:
+        await api.submit_shot_endpoint(second.id, svc=Service(), options=api.H3SubmitOptions(h3_provider="minimax"))
+    assert error.value.status_code == 400
+    assert "requires the local H3 provider" in error.value.detail
+    assert {job.id for job in list_jobs(project_id=project.id)} == before
+
+
 def test_upload_records_media_and_rejects_bad_files(monkeypatch, tmp_path):
     project = _isolate(monkeypatch, tmp_path)
     monkeypatch.setattr(
@@ -110,9 +133,14 @@ async def test_submit_puts_context_bytes_on_the_job_and_stops_when_unreadable(
         "app.core.projects.video_context.probe_video",
         lambda _path: _media(),
     )
-    from app.core.projects.video_context import configure_video_context
+    from app.core.projects.video_context import configure_video_context, video_context_prompt_signature
 
     configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
+    current = load_shot(project.id, second.id)
+    save_shot(current.model_copy(update={"meta": {
+        **current.meta,
+        "prompt_video_context_signature": video_context_prompt_signature(current),
+    }}))
 
     from app.api import projects as api
     from app.core.jobs.store import save_input_file

@@ -79,6 +79,53 @@ def test_limits_match_the_external_video_contract():
     assert MAX_DURATION_S == 60
 
 
+def test_prompt_freshness_tracks_followed_source_versions_and_bytes(monkeypatch, tmp_path):
+    from app.core.projects.video_context import video_context_prompt_signature, video_context_prompt_is_stale
+    project, first, second = _board(monkeypatch, tmp_path)
+    job = _succeed(project.id, first.id)
+    save_shot(first.model_copy(update={"h3_job_id": job.id}))
+    configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
+    target = load_shot(project.id, second.id)
+    signature = video_context_prompt_signature(target)
+    stamped = target.model_copy(update={"meta": {"prompt_video_context_signature": signature}})
+    assert not video_context_prompt_is_stale(stamped)
+    rerun = _succeed(project.id, first.id, b"new-video")
+    save_shot(first.model_copy(update={"h3_job_id": rerun.id}))
+    assert video_context_prompt_is_stale(stamped)
+    current_signature = video_context_prompt_signature(stamped)
+    save_output_file(rerun.id, "video", "video.mp4", b"replaced-video", project_id=project.id)
+    assert video_context_prompt_signature(stamped) != current_signature
+    pinned = stamped.model_copy(update={"video_context": ShotVideoContext(
+        mode="previous_shot", source_shot_id=first.id, source_job_id=job.id)})
+    pinned_signature = video_context_prompt_signature(pinned)
+    save_shot(first.model_copy(update={"h3_job_id": None}))
+    assert video_context_prompt_signature(pinned) == pinned_signature
+
+
+def test_custom_window_and_audio_are_inherited_during_normalization(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    project, first, second = _board(monkeypatch, tmp_path)
+    job = _succeed(project.id, first.id)
+    save_shot(first.model_copy(update={"h3_job_id": job.id}))
+    configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
+    from app.pipelines.h3_ref2va.video_context import attach_video_context
+    from app.pipelines.h3_ref2va.workflow import load_base_prompt
+    profile = SimpleNamespace(source="custom", workflow=attach_video_context(
+        load_base_prompt(), uploaded_video="source.mp4", delivered_frames=56,
+        context_frames=39, audio_context_frames=24, carry_audio=True))
+    monkeypatch.setattr("app.workflow_profiles.h3.store.resolve_active_h3_profile", lambda: profile)
+    monkeypatch.setattr("app.core.projects.video_context.probe_video", lambda _: _media(width=1728,height=960))
+    calls=[]
+    def transcode(data, **kwargs):
+        calls.append(kwargs)
+        return b"normalized"
+    monkeypatch.setattr("app.pipelines.h3_ref2va.video_context._transcode_context_video", transcode)
+    resolved = resolve_video_context(load_shot(project.id, second.id),width=864,height=480)
+    assert resolved.provenance["context_frames"] == 39
+    assert resolved.provenance["carry_audio"] is True
+    assert calls[0]["keep_audio"] is True
+
+
 def test_old_shot_without_the_field_stays_off(monkeypatch, tmp_path):
     project, first, _second = _board(monkeypatch, tmp_path)
     payload = first.model_dump()

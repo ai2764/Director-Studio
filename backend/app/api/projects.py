@@ -2071,6 +2071,11 @@ async def submit_shot_endpoint(
         raise HTTPException(404, "Project not found")
     if shot.music_segment is not None and project.mode != ProjectMode.mv:
         raise HTTPException(400, "Music segments require a Music Video project")
+    if settings.video_context_enabled:
+        from ..core.projects.video_context import video_context_status
+        context_blocks = video_context_status(shot)["blocked_reasons"]
+        if context_blocks:
+            raise HTTPException(400, "; ".join(context_blocks))
     music_active = (
         project.mode == ProjectMode.mv
         and shot.music_segment is not None
@@ -2123,6 +2128,9 @@ async def submit_shot_endpoint(
     ).strip().lower()
     if h3_provider not in {"local", "minimax"}:
         raise HTTPException(400, f"Unsupported H3 provider: {h3_provider}")
+    if (h3_provider != "local" and shot.video_context is not None
+            and shot.video_context.mode != "off"):
+        raise HTTPException(400, "Video continuation requires the local H3 provider")
     if h3_provider == "minimax" and not str(
         settings.h3_minimax_api_key or ""
     ).strip():
@@ -2352,6 +2360,8 @@ async def submit_shot_endpoint(
     latest_shot = load_shot(shot.project_id, shot.id)
     if latest_project is None or latest_shot != shot or latest_project.script_text != project.script_text:
         raise HTTPException(409, "Shot or script changed before submission; refresh before submitting")
+    if settings.video_context_enabled and video_context_prompt_is_stale(latest_shot):
+        raise HTTPException(409, "Video context source changed before submission; refresh the prompt")
     try:
         require_current_dialogue_contract(latest_project, latest_shot)
         require_current_reference_contract(latest_project, latest_shot)
@@ -2361,7 +2371,7 @@ async def submit_shot_endpoint(
 
     try:
         staged_context = submission_video_context(
-            latest_shot, width=width, height=height
+            latest_shot, width=width, height=height, delivered_frames=frames
         )
     except VideoContextError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -2421,7 +2431,7 @@ async def submit_shot_endpoint(
     except ValueError as e:
         raise _http_value_error(e) from e
 
-    submitted = shot.model_copy(update={"h3_job_id": job.id})
+    submitted = shot.model_copy(update={"h3_job_id": job.id, "blocked_reasons": []})
     # A user edit during reservation belongs to the user, not the older response.
     current = load_shot(shot.project_id, shot.id)
     if current != latest_shot:

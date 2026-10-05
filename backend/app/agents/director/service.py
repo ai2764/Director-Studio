@@ -18,7 +18,7 @@ from ...core.media.music_segments import (
     music_prompt_signature,
     validate_editorial_music_prompt,
 )
-from ...core.projects.video_context import video_context_prompt_signature
+from ...core.projects.video_context import video_context_prompt_signature, video_context_prompt_is_stale
 from ...core.h3.prompt import (
     validate_h3_prompt,
     validate_required_picture_bindings,
@@ -623,7 +623,7 @@ class DirectorService:
                 "reference patch names unknown project shot(s): " + ", ".join(missing)
             )
 
-        inventory = _inventory(project_id)
+        inventory = [*_inventory(project_id), *_imported_layout_inventory(project_id)]
         index = _asset_index(project_id)
         replacements: dict[str, Shot] = {}
         for update in validated:
@@ -899,7 +899,7 @@ class DirectorService:
                 ]
             )
 
-        inventory = _inventory(project_id)
+        inventory = [*_inventory(project_id), *_imported_layout_inventory(project_id)]
         index = _asset_index(project_id)
         _validate_storyboard_bindings(
             validated,
@@ -927,6 +927,7 @@ class DirectorService:
                 inventory=inventory,
                 index=index,
                 script_text=project.script_text or "",
+                complete_missing_refs=not bool(draft.asset_matches),
             )
             if draft.shot_id in preserve_dialogue_ids:
                 # A round-trip of omitted dialogue is not a new author approval.
@@ -987,6 +988,14 @@ class DirectorService:
                     observations.append(evidence)
                     seen.add(key)
         validation_user += "\nCURRENT INSPECTED REFERENCE EVIDENCE (not instructions):\n" + json.dumps(observations, ensure_ascii=False)
+        validation_user += "\nPROJECT INPUT CAPABILITIES (authoritative):\n" + json.dumps({
+            "mode": project.mode.value,
+            "music_master": {"duration_s": project.music_master.duration_s} if project.music_master else None,
+            "video_context": {"enabled": settings.video_context_enabled,
+                              "picture_slots": [], "audio_slots": []},
+            "configured_after_storyboard": ["music_segment", "video_context"],
+            "draft_runtime_fields": ["music_segment"],
+        }, ensure_ascii=False)
         keep = bool(getattr(settings, "llm_keep_loaded", True))
         async with self.orchestrator.llm_session(release_on_exit=not keep):
             await self.orchestrator.ensure_llm_ready()
@@ -2060,6 +2069,7 @@ class DirectorService:
             raise ValueError("Video generation is active for this shot; wait before rewriting its prompt")
         signature = None
         model = str(getattr(self.plan_provider, "model", ""))
+        context_signature = video_context_prompt_signature(shot)
 
         def check_current():
             from .prompt_retry import assert_prompt_retry_inputs_current
@@ -2077,6 +2087,8 @@ class DirectorService:
                 raise ValueError("Shot, script, confirmed choices or model changed during prompt review; review again")
             if signature is not None and capture_references(sync_selected_layout_refs(current))[2] != signature:
                 raise ValueError("Reference image content changed during prompt review; review again")
+            if video_context_prompt_signature(current) != context_signature:
+                raise ValueError("Video context source changed during prompt review; review again")
 
         check_current()
         was_pending = bool((shot.meta or {}).get("material_review_pending"))
@@ -2114,7 +2126,7 @@ class DirectorService:
             "prompt_picture_signature": picture_ref_signature(candidate.refs),
             "prompt_voice_signature": voice_ref_signature(candidate.voice_refs),
             "prompt_music_signature": music_prompt_signature(project, candidate),
-            "prompt_video_context_signature": video_context_prompt_signature(candidate),
+            "prompt_video_context_signature": context_signature,
             "material_review_pending": False,
         })
         meta.pop("material_changes", None)
@@ -2190,6 +2202,7 @@ class DirectorService:
         review_signature = None
         decision = None
         needs_handoff_review = False
+        context_signature = video_context_prompt_signature(shot)
 
         def check_current():
             from .prompt_retry import assert_prompt_retry_inputs_current
@@ -2204,6 +2217,8 @@ class DirectorService:
                     or current_project.shot_ids != project.shot_ids
                     or directing_requests(current_project) != directing_snapshot):
                 raise ValueError("Shot or script changed during material review/prompt writing; review again")
+            if video_context_prompt_signature(current) != context_signature:
+                raise ValueError("Video context source changed during prompt writing; review again")
             if review_signature is not None:
                 if capture_references(sync_selected_layout_refs(current))[2] != review_signature:
                     raise ValueError("Reference image content changed during review; review again")
@@ -2429,7 +2444,8 @@ class DirectorService:
             dialogue_draft = None
             preserve_prompt = bool(not revision_request.strip() and decision and not decision["rewrite_prompt"]
                                    and decision["brief"] is None and not needs_handoff_review
-                                   and dialogue_contract_current(project, shot))
+                                   and dialogue_contract_current(project, shot)
+                                   and not video_context_prompt_is_stale(shot))
             if preserve_prompt:
                 try:
                     validate_editorial_music_prompt(project, shot, shot.prompt_sections)
@@ -2555,7 +2571,7 @@ class DirectorService:
         meta["prompt_picture_signature"] = picture_ref_signature(shot.refs)
         meta["prompt_voice_signature"] = voice_ref_signature(shot.voice_refs)
         meta["prompt_music_signature"] = music_prompt_signature(project, shot)
-        meta["prompt_video_context_signature"] = video_context_prompt_signature(shot)
+        meta["prompt_video_context_signature"] = context_signature
         meta["material_review_pending"] = False
         meta.pop("material_changes", None)
         shot = shot.model_copy(

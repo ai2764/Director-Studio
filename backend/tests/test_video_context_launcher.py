@@ -209,3 +209,13 @@ def test_stop_script_leaves_shared_gpu_services_alone():
     assert "11435" not in text
     assert "start-llama-swap.ps1" not in text
     assert "llama-swap.pid" not in text
+
+
+@pytest.mark.skipif(not POWERSHELL, reason="PowerShell unavailable")
+def test_experiment_launcher_disables_development_reload(tmp_path):
+    (tmp_path / "start.ps1").write_text('''param([int]$BackendPort,[int]$FrontendPort,[int]$HarnessPort,[string]$RunDir,[switch]$NoReload)
+@{no_reload=[bool]$NoReload;backend=$BackendPort} | ConvertTo-Json -Compress
+''', encoding="utf8")
+    result = json.loads(run_ps(f". '{ps_path(LAUNCHER)}'; Invoke-DirectorStudioStart -Root '{ps_path(tmp_path)}' -Layout (Get-VideoContextLayout '{ps_path(tmp_path)}')"))
+    assert result["no_reload"] is True
+    assert result["backend"] == 8792

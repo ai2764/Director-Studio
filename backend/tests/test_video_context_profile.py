@@ -75,6 +75,54 @@ def _validated_import(store: H3ProfileStore, *, context_video: bool) -> str:
     return import_id
 
 
+def test_validation_endpoint_fills_the_video_boundary(test_env, monkeypatch):
+    from app.api import h3_workflow_profiles as api
+    captured = []
+    class Client:
+        async def validate_workflow(self, graph):
+            captured.append(graph)
+            return {"valid": True, "error_count": 0, "warnings": []}
+        async def aclose(self):
+            pass
+    monkeypatch.setattr(api, "ComfyMcpClient", Client)
+    import_id = _validated_import(H3ProfileStore(), context_video=True)
+    with TestClient(create_app()) as client:
+        result = client.post(f"/api/workflow-profiles/h3/imports/{import_id}/validate")
+    assert result.status_code == 200, result.text
+    assert captured[0]["50"]["inputs"]["file"] == "contract-context.mp4"
+
+
+def test_profile_test_records_uploaded_motion_audio_settings(test_env, monkeypatch):
+    from app.pipelines.h3_ref2va.video_context import attach_video_context
+    graph = json.loads((settings.workflows_dir / "h3_ref2va.api.json").read_text(encoding="utf8"))
+    graph = attach_video_context(graph, uploaded_video="old.mp4", delivered_frames=56,
+                                context_frames=39, audio_context_frames=24, carry_audio=True)
+    store = H3ProfileStore()
+    import_id = store.create_import(graph)
+    store.save_import_output(import_id, "92")
+    mapping = inspect_h3_workflow(graph, output_node_id="92").mapping
+    load_id = next(key for key, node in graph.items() if node["class_type"] == "LoadVideo")
+    mapping = mapping.model_copy(update={"context_video": H3ContextVideoInput(node_id=load_id, input_name="file")})
+    store.save_import_mapping(import_id, mapping)
+    workflow_hash, mapping_hash = store.import_identity(import_id)
+    store.record_validation_success(import_id, workflow_sha256=workflow_hash, mapping_sha256=mapping_hash,
+                                    report={"valid": True}, comfy_payload={"valid": True})
+    picture = create_external_asset(kind="actors", name="Actor", image_bytes=_picture_png(), image_filename="actor.png")
+    monkeypatch.setattr("app.core.projects.video_context.load_video_context_upload", lambda *args: (
+        {"filename": "source.mp4", "upload_id": "vup_test", "sha256": "source-hash", "media": {"has_audio": True}}, b"video"))
+    async def start(job, *, images):
+        return job
+    monkeypatch.setattr("app.api.h3_workflow_profiles.start_pipeline_job", start)
+    with TestClient(create_app()) as client:
+        response = client.post(f"/api/workflow-profiles/h3/imports/{import_id}/test", json={
+            "picture_asset_id": picture.id, "context_project_id": "prj_test", "context_upload_id": "vup_test"})
+    assert response.status_code == 202, response.text
+    source = load_job(response.json()["job_id"]).params["video_context_source"]
+    assert source["carry_audio"] is True
+    assert source["context_frames"] == 39
+    assert source["audio_context_frames"] == 24
+
+
 def test_context_mapping_requires_an_upload_and_records_contract_three(
     test_env: Path,
     monkeypatch: pytest.MonkeyPatch,

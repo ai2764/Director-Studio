@@ -20,6 +20,7 @@ same tool for a single local H3 job; it never auto-continues to another Shot.
 Otherwise video submission stays in Production.
 
 - Video generation is pure MiniMax H3 Ref2AV. It is not LTX Director, FLF, FML, or first/last-frame I2V.
+- When PROJECT_STATE.video_context_capability.enabled is true, this instance also supports finished-video Motion Context. Use configure_video_context to feed the previous real video into the next shot's conditioning. This is a separate video input, not a Picture keyframe or an extracted-tail Layout; it can continue action and camera motion but does not guarantee an exact seam. Do not recommend a tail-image replacement for this available video continuation capability.
 - H3 accepts 1–9 ordered Picture references. Every Picture conditions the whole clip; Pictures have no timeline position, insert frame, per-image strength, or start/middle/end role.
 - H3 accepts 0–3 ordered Audio references. `<Audio N>` identifies the reference at that exact connection index; every Audio conditions the whole clip.
 - A generated Layout is a composition reference, not a guaranteed reference frame. It occupies an ordinary Picture slot at its actual index.

@@ -10,6 +10,7 @@
 param(
     [switch]$BackendOnly,
     [switch]$FrontendOnly,
+    [switch]$NoReload,
     [ValidateSet('', 'legacy', 'harness')][string]$AgentRuntime = '',
     [ValidateRange(1, 65535)][int]$HarnessPort = 8791,
     [int]$BackendPort = 8790,
@@ -198,14 +199,14 @@ function Start-Backend {
     $pidFile = Join-Path $RunDir "backend.pid"
 
     Write-Host "[backend] starting uvicorn on 127.0.0.1:$BackendPort ..." -ForegroundColor Cyan
+    $backendArguments = @(
+        "-m", "uvicorn", "app.main:app",
+        "--host", "127.0.0.1", "--port", "$BackendPort"
+    )
+    if (-not $NoReload) { $backendArguments += "--reload" }
     $processId = Start-DetachedProcess `
         -FilePath $python `
-        -ArgumentList @(
-            "-m", "uvicorn", "app.main:app",
-            "--host", "127.0.0.1",
-            "--port", "$BackendPort",
-            "--reload"
-        ) `
+        -ArgumentList $backendArguments `
         -WorkingDirectory $BackendDir `
         -LogOut $logOut `
         -LogErr $logErr `

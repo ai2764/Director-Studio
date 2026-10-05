@@ -102,6 +102,10 @@ async def test_explicit_one_off_starts_only_named_shot(monkeypatch) -> None:
         return saved
 
     monkeypatch.setattr(projects_api, "submit_shot_endpoint", fake_submit)
+    from app.agents.director.tool_handlers import video
+    async def authorize(*args):
+        return True
+    monkeypatch.setattr(video, "_authorize_one_off_video", authorize)
     turn = BackendTurn(project.id, "Generate Shot 1's video with local H3 now", object(), None)
     result = await turn.dispatch("tool", {"name": "start_h3_video", "arguments": {
         "shot_id": shot.id, "resolution_preset": "landscape-768",
@@ -134,6 +138,10 @@ async def test_one_off_uses_immediate_shot_two_offer_for_run_h3(monkeypatch) -> 
         return saved
 
     monkeypatch.setattr(projects_api, "submit_shot_endpoint", fake_submit)
+    from app.agents.director.tool_handlers import video
+    async def authorize(*args):
+        return True
+    monkeypatch.setattr(video, "_authorize_one_off_video", authorize)
     turn = BackendTurn(
         project.id, "跑h3", object(), None,
         history=[{"role": "assistant", "content": "要现在启动 Shot 2 的 H3 生成吗？还是先继续拆 Shot 3/4？"}],

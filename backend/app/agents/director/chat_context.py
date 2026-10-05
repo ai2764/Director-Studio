@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from ...config import settings
 from typing import Any
 
 from ...core.projects.models import Project, RefRole, Shot
@@ -283,6 +284,13 @@ def project_context_blob(
                 project.music_master.model_dump(mode="json")
                 if project.music_master else None
             ),
+        },
+        "video_context_capability": {
+            "enabled": settings.video_context_enabled,
+            "tool": "configure_video_context",
+            "conditioning": "finished_video_motion_context",
+            "source_modes": ["previous_shot", "external_upload"],
+            "configuration_starts_job": False,
         },
         "script_chars": len(script),
         "directing_requests": directing_requests(project),

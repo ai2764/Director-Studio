@@ -106,6 +106,8 @@ Return only a valid JSON array of shots with asset_matches and voice_matches fil
 
 STORYBOARD_VALIDATION_SYSTEM = """You are a strict semantic acceptance gate for one complete H3 Ref2AV storyboard candidate.
 
+Use PROJECT INPUT CAPABILITIES for supported runtime inputs. Video continuation is a separate video-conditioning channel, never a Picture or Audio slot. A Music Video project's song master supplies its song Audio reference through music_segment; voice_matches bind library voices, not the song master. ShotDraft supports music_segment and the Agent can also configure it after saving; video_context is configured after saving. Submission validates the actual runtime bindings. A draft can explicitly defer those settings; do not demand fictitious image/voice bindings or reject deferral as an unsupported action. Still judge explicit story, action, camera, duration and authored input-setting contradictions.
+
 Return JSON only with exactly this shape:
 {"valid": true_or_false, "issues": ["observed hard conflict", "..."], "warnings": ["non-blocking generation risk", "..."]}
 

@@ -892,7 +892,7 @@ class H3ProfileStore:
 
         resolved = self.resolve_active()
         if resolved.source == "builtin":
-            workflow_path = Path(settings.workflows_dir) / "h3_ref2va.api.json"
+            workflow_path = Path(settings.workflows_dir) / settings.h3_builtin_workflow
             profile = H3WorkflowProfile(
                 id=resolved.profile_id,
                 workflow_sha256=resolved.workflow_sha256,
@@ -1074,7 +1074,7 @@ class H3ProfileStore:
         )
 
     def _resolve_builtin(self) -> ResolvedH3Profile:
-        path = Path(settings.workflows_dir) / "h3_ref2va.api.json"
+        path = Path(settings.workflows_dir) / settings.h3_builtin_workflow
         workflow, workflow_hash = self._read_workflow(path)
         return ResolvedH3Profile(
             profile_id=_BUILTIN_PROFILE_ID,
@@ -1082,7 +1082,9 @@ class H3ProfileStore:
             mapping=_OFFICIAL_MAPPING,
             workflow_sha256=workflow_hash,
             source="builtin",
-            display_name="Built-in H3 Turbo 8 (temporary test)",
+            display_name=("Built-in H3 Turbo 4 (video-context experiment)"
+                          if settings.h3_builtin_workflow == "h3_ref2va_fast4.api.json"
+                          else "Built-in H3 Turbo 8 (temporary test)"),
         )
 
     def _resolve_custom(self, profile_id: str) -> ResolvedH3Profile:

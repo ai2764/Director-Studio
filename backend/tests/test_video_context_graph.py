@@ -36,7 +36,7 @@ def _shaped_graph() -> dict:
     return {
         "119": {"class_type": "VAELoader", "inputs": {"vae_name": "video.safetensors"}},
         "120": {"class_type": "VAELoader", "inputs": {"vae_name": "audio.safetensors"}},
-        "125": {"class_type": "SamplerCustomAdvanced", "inputs": {"latent_image": ["136", 1]}},
+        "125": {"class_type": "SamplerCustomAdvanced", "inputs": {"latent_image": ["136", 1], "guider": ["126", 0]}},
         "126": {"class_type": "BasicGuider", "inputs": {"conditioning": ["136", 0], "model": ["134", 0]}},
         "121": {"class_type": "VAEDecodeAudio", "inputs": {"samples": ["125", 0], "vae": ["120", 0]}},
         "122": {"class_type": "VAEDecode", "inputs": {"samples": ["125", 0], "vae": ["119", 0]}},
@@ -264,6 +264,43 @@ def test_custom_mapping_writes_only_the_uploaded_filename():
     assert graph["50"]["inputs"]["file"] == "leftover.mp4"
 
 
+def test_mapped_motion_context_preserves_window_and_delivery_length():
+    original = attach_video_context(_shaped_graph(), uploaded_video="old.mp4",
+        delivered_frames=56, context_frames=39, audio_context_frames=24, carry_audio=True)
+    load_id, _ = _node(original, "LoadVideo")
+    profile = replace(_builtin(original), source="custom", mapping=_builtin(original).mapping.model_copy(update={
+        "context_video": H3ContextVideoInput(node_id=load_id, input_name="file"),
+    }))
+    graph = fill_profile_graph(profile, _job(context_video="new.mp4",frames=124))
+    assert graph["136"]["inputs"]["length"] == 175
+    motion = _node(graph, "MiniMaxH3MotionContext")[1]
+    assert motion["inputs"]["context_length"] == "39"
+    assert motion["inputs"]["audio_context_length"] == 24
+    assert "context_audio" in motion["inputs"]
+    assert _node(graph, "ImageFromBatch")[1]["inputs"]["length"] == 124
+    assert _node(graph, "TrimAudioDuration")[1]["inputs"]["duration"] == 124 / 24
+    assert _node(original, "ImageFromBatch")[1]["inputs"]["length"] == 56
+
+
+@pytest.mark.parametrize("bypass", ["conditioning", "video_decode", "audio_decode"])
+def test_imported_motion_context_rejects_bypassed_sampling_chain(bypass):
+    graph = attach_video_context(load_base_prompt(), uploaded_video="old.mp4",
+        delivered_frames=56, context_frames=22, audio_context_frames=24, carry_audio=False)
+    h3_id, _ = _node(graph, "MiniMaxH3ReferenceToVideo")
+    if bypass == "conditioning":
+        _node(graph, "BasicGuider")[1]["inputs"]["conditioning"] = [h3_id, 0]
+    else:
+        decode_class = "VAEDecode" if bypass == "video_decode" else "VAEDecodeAudio"
+        _node(graph, decode_class)[1]["inputs"]["samples"] = [h3_id, 1]
+    load_id, _ = _node(graph, "LoadVideo")
+    profile = replace(_builtin(graph), source="custom", mapping=_builtin(graph).mapping.model_copy(update={
+        "context_video": H3ContextVideoInput(node_id=load_id, input_name="file")}))
+    verdict = validate_h3_contract(graph, profile.mapping)
+    assert not verdict.valid
+    with pytest.raises(ValueError, match="continuation sampling chain"):
+        fill_profile_graph(profile, _job(context_video="actual.mp4"))
+
+
 def test_custom_without_a_video_or_mapping_is_rejected():
     graph = _shaped_graph()
     graph["50"] = {"class_type": "LoadVideo", "inputs": {"file": "leftover.mp4"}}
@@ -360,6 +397,15 @@ def test_prepare_copies_matching_media_and_normalizes_the_rest(monkeypatch):
             has_audio=False, width=864, height=480, context_frames=22, carry_audio=True,
         )
     assert len(calls) == 2
+
+
+def test_window_is_validated_at_the_normalized_frame_rate():
+    with pytest.raises(VideoContextError, match="shorter than the selected window"):
+        prepare_context_bytes(
+            b"fast-but-short", media_width=864, media_height=480,
+            media_fps=30, media_duration_s=0.8, has_audio=False,
+            width=864, height=480, context_frames=22, carry_audio=False,
+        )
 
 
 def test_fast_template_uses_verified_sampling_and_leaves_the_official_graph():

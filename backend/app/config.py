@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     projects_dir: Path = _DEFAULT_DATA_DIR / "projects"
     workflow_profiles_dir: Path = _DEFAULT_DATA_DIR / "workflow_profiles"
     workflows_dir: Path = Path(__file__).resolve().parents[1] / "workflows"
+    h3_builtin_workflow: Literal["h3_ref2va.api.json", "h3_ref2va_fast4.api.json"] = "h3_ref2va.api.json"
 
     # Legacy convenience path (actor pipeline)
     library_dir: Path = _DEFAULT_DATA_DIR / "library" / "actors"

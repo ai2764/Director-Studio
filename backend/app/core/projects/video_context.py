@@ -52,6 +52,11 @@ def configure_video_context(
     if project is None or shot is None or shot.project_id != project_id:
         raise VideoContextError("Shot not found")
     prepared = _prepare_config(project, shot, config)
+    if prepared.mode != "off":
+        try:
+            _runtime_options(prepared)
+        except ValueError as exc:
+            raise VideoContextError(str(exc)) from exc
     save_shot(shot.model_copy(update={"video_context": prepared}))
     return {"shot_id": shot.id, "video_context": prepared.model_dump()}
 
@@ -80,8 +85,13 @@ def resolve_video_context(
     media = probe_video(path)
     _require_compatible_frame(media, width=width, height=height)
     digest = hashlib.sha256(data).hexdigest()
-    carry_audio = False if config.carry_audio is None else bool(config.carry_audio)
-    from ...pipelines.h3_ref2va.video_context import prepare_context_bytes
+    from ...pipelines.h3_ref2va.video_context import prepare_context_bytes, context_runtime_options
+    from ...workflow_profiles.h3.store import resolve_active_h3_profile
+    try:
+        runtime = context_runtime_options(config, resolve_active_h3_profile())
+    except ValueError as exc:
+        raise VideoContextError(str(exc)) from exc
+    carry_audio = runtime["carry_audio"]
 
     data, conversion = prepare_context_bytes(
         data,
@@ -92,7 +102,7 @@ def resolve_video_context(
         has_audio=media.has_audio,
         width=width,
         height=height,
-        context_frames=config.context_frames or 22,
+        context_frames=runtime["context_frames"],
         carry_audio=carry_audio,
         filename=path.name,
     )
@@ -104,11 +114,8 @@ def resolve_video_context(
         "upload_id": None if record is None else record["upload_id"],
         "sha256": digest,
         "media": asdict(media),
-        "context_frames": config.context_frames or 22,
-        "audio_context_frames": (
-            config.audio_context_frames if config.audio_context_frames is not None
-            else (24 if carry_audio else None)
-        ),
+        "context_frames": runtime["context_frames"],
+        "audio_context_frames": runtime["audio_context_frames"] if carry_audio else None,
         "carry_audio": carry_audio,
         "conversion": conversion,
     }
@@ -116,7 +123,7 @@ def resolve_video_context(
 
 
 def submission_video_context(
-    shot: Shot, *, width: int, height: int
+    shot: Shot, *, width: int, height: int, delivered_frames: int | None = None
 ) -> dict | None:
     """Params and bytes for the canonical H3 submit. Disabled experiments add nothing."""
     if not settings.video_context_enabled:
@@ -124,6 +131,13 @@ def submission_video_context(
     resolved = resolve_video_context(shot, width=width, height=height)
     if resolved is None:
         return None
+    if delivered_frames is not None:
+        from ...pipelines.h3_ref2va.video_context import context_generation_frames
+        from ..h3.frames import MAX_FRAMES
+        try:
+            context_generation_frames(delivered_frames, resolved.provenance["context_frames"], max_frames=MAX_FRAMES)
+        except ValueError as exc:
+            raise VideoContextError(str(exc)) from exc
     return {
         "params": {
             "context_video_key": "context_video",
@@ -135,13 +149,33 @@ def submission_video_context(
 
 
 def video_context_prompt_signature(shot: Shot) -> str:
-    """Hash the continuation settings that should refresh an H3 prompt."""
+    """Hash settings and the actual source that the writer must observe."""
     config = shot.video_context
     payload = (
         {"mode": "off"}
         if config is None or config.mode == "off"
-        else config.model_dump(mode="json")
+        else dict(config.model_dump(mode="json"))
     )
+    if config is not None and config.mode != "off":
+        try:
+            if config.mode == "external_upload":
+                _record, path = _require_upload(shot.project_id, config.upload_id)
+                source_job_id = None
+                output_key = None
+            else:
+                project = load_project(shot.project_id)
+                if project is None:
+                    raise VideoContextError("Project not found")
+                _source, job, output_key, path = _require_previous_video(project, shot, config)
+                source_job_id = job.id
+            payload["resolved_source"] = {
+                "job_id": source_job_id, "output_key": output_key,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+            payload["runtime"] = _runtime_options(config)
+        except (ValueError, OSError) as exc:
+            # Missing/running sources must invalidate an earlier prompt stamp.
+            payload["source_error"] = str(exc)
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()[:16]
 
@@ -170,6 +204,11 @@ def video_context_status(shot: Shot) -> dict:
         }
     blocked: list[str] = []
     source_job_id = config.source_job_id
+    runtime = {"context_frames": config.context_frames or 22, "carry_audio": bool(config.carry_audio)}
+    try:
+        runtime = _runtime_options(config)
+    except ValueError as exc:
+        blocked.append(str(exc))
     if config.mode == "previous_shot":
         project = load_project(shot.project_id)
         try:
@@ -187,10 +226,16 @@ def video_context_status(shot: Shot) -> dict:
     return {
         "mode": config.mode,
         "source_job_id": source_job_id,
-        "context_frames": config.context_frames or 22,
-        "carry_audio": bool(config.carry_audio),
+        "context_frames": runtime["context_frames"],
+        "carry_audio": runtime["carry_audio"],
         "blocked_reasons": blocked,
     }
+
+
+def _runtime_options(config):
+    from ...pipelines.h3_ref2va.video_context import context_runtime_options
+    from ...workflow_profiles.h3.store import resolve_active_h3_profile
+    return context_runtime_options(config, resolve_active_h3_profile())
 
 
 def upload_video_context(project_id: str, filename: str, data: bytes) -> dict:

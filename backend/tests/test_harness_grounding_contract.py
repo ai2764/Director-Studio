@@ -28,6 +28,35 @@ class Orchestrator:
         pass
 
 
+@pytest.mark.asyncio
+async def test_storyboard_validator_receives_separate_runtime_input_capabilities(tmp_projects_dir, monkeypatch):
+    import json
+    from app.config import settings
+    from app.core.projects.models import ProjectMusicMaster
+    from app.core.projects.store import save_project
+    monkeypatch.setattr(settings, "video_context_enabled", True)
+    project = create_project("MV channels", "Play the original song and continue the uploaded video.", mode="mv")
+    project = project.model_copy(update={"music_master": ProjectMusicMaster(
+        filename="song.wav", relative_path="music/master.wav", duration_s=8,
+        content_sha256="a" * 64, source_format="wav")})
+    save_project(project)
+    class Provider:
+        async def complete(self, system, user, **kwargs):
+            packet = json.loads(user.split("PROJECT INPUT CAPABILITIES (authoritative):\n", 1)[1])
+            assert packet["mode"] == "mv"
+            assert packet["music_master"]["duration_s"] == 8
+            assert packet["video_context"]["enabled"] is True
+            assert packet["video_context"]["picture_slots"] == []
+            assert packet["video_context"]["audio_slots"] == []
+            assert packet["draft_runtime_fields"] == ["music_segment"]
+            assert set(packet["configured_after_storyboard"]) == {"music_segment", "video_context"}
+            return '{"valid": true, "issues": []}'
+    svc = DirectorService(plan_provider=Provider(), orchestrator=Orchestrator())
+    from app.agents.director.asset_catalog import _script_hash
+    shots = await svc.save_storyboard(project.id, [draft()], _script_hash(project.script_text))
+    assert len(shots) == 1
+
+
 def test_patch_schema_requires_indices_and_rejects_invented_roles(tmp_projects_dir):
     project = create_project("schema", "")
     schema = next(t["function"]["parameters"] for t in director_tool_schemas(project)
