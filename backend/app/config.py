@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     # the official Comfy MCP transport; ``minimax`` uses the official
     # asynchronous MiniMax H3 V2 API. ``mcp`` remains a legacy alias for local.
     h3_provider: str = "local"
+    # Experiment switch. The main instance leaves this false.
+    video_context_enabled: bool = False
     comfy_mcp_command: str = "comfy-mcp"
     comfy_mcp_args: str = ""
     comfy_mcp_comfy_bin: str = "comfy"

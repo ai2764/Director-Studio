@@ -69,12 +69,12 @@ python -m pytest tests/test_h3_workflow_inspector.py tests/test_h3_workflow_vali
 
 **Interfaces:** launcher 设置 `DS_VIDEO_CONTEXT_ENABLED=true`、`DS_BACKEND_URL=http://127.0.0.1:8792`；`GET /api/health` 增加可选 instance/capability 身份，不输出密钥。原实例默认行为不变。
 
-- [ ] 在 worktree 安装前端与 Harness 依赖：各自运行 `npm ci`。使用已有可导入 uvicorn/app 的 Python，不重装 Comfy。
-- [ ] 写失败测试：非默认 frontend 端口仍必须代理到指定 backend；独立 token/PID；占用端口属于其他进程时报错；停止脚本拒绝 PID 已复用且命令/工作目录身份不符的进程。
-- [ ] 实现 launcher，复用 `start.ps1 -BackendPort 8792 -FrontendPort 5174 -HarnessPort 8793`。代理读取 `DS_BACKEND_URL`，未设置仍默认 8790；启动时先设 env，再让 Python import/settings 初始化。
-- [ ] 设置 `DS_DATA_DIR=<worktree>/.run/video-context/data`；其余路径分别为 `DS_JOBS_DIR=<data>/jobs`、`DS_PROJECTS_DIR=<data>/projects`、`DS_LIBRARY_ROOT=<data>/library`、`DS_LIBRARY_DIR=<data>/library/actors`、`DS_WORKFLOW_PROFILES_DIR=<data>/workflow_profiles`，不能全部指向同一目录。保持 backend `.env` 本地且 ignored；只在本机配置所需 LLM/MCP 环境，禁止输出/提交 token 和 key。
-- [ ] 若现有 launcher 会复用/启动 llama-swap，使用健康检查复用；实验停止不关共享 LLM/Comfy。隐藏窗口、日志与 PID 分开记录，重复启动只复用已验证为本实例的进程。
-- [ ] 运行 launcher 单元测试和 Harness launcher 现有测试。实际验证 8792 health、8793 runtime 和 5174 `/api/health` 都是实验身份；8790 仍为主实例。记录结果后提交此 task。
+- [x] 在 worktree 安装前端与 Harness 依赖：各自运行 `npm ci`。使用已有可导入 uvicorn/app 的 Python，不重装 Comfy。
+- [x] 写失败测试：非默认 frontend 端口仍必须代理到指定 backend；独立 token/PID；占用端口属于其他进程时报错；停止脚本拒绝 PID 已复用且命令/工作目录身份不符的进程。
+- [x] 实现 launcher，复用 `start.ps1 -BackendPort 8792 -FrontendPort 5174 -HarnessPort 8793`。代理读取 `DS_BACKEND_URL`，未设置仍默认 8790；启动时先设 env，再让 Python import/settings 初始化。
+- [x] 设置 `DS_DATA_DIR=<worktree>/.run/video-context/data`；其余路径分别为 `DS_JOBS_DIR=<data>/jobs`、`DS_PROJECTS_DIR=<data>/projects`、`DS_LIBRARY_ROOT=<data>/library`、`DS_LIBRARY_DIR=<data>/library/actors`、`DS_WORKFLOW_PROFILES_DIR=<data>/workflow_profiles`，不能全部指向同一目录。保持 backend `.env` 本地且 ignored；只在本机配置所需 LLM/MCP 环境，禁止输出/提交 token 和 key。
+- [x] 若现有 launcher 会复用/启动 llama-swap，使用健康检查复用；实验停止不关共享 LLM/Comfy。隐藏窗口、日志与 PID 分开记录，重复启动只复用已验证为本实例的进程。
+- [x] 运行 launcher 单元测试和 Harness launcher 现有测试。实际验证 8792 health、8793 runtime 和 5174 `/api/health` 都是实验身份；8790 仍为主实例。记录结果后提交此 task。
 
 完成后的目标启动命令：
 

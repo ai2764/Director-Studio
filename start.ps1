@@ -13,12 +13,13 @@ param(
     [ValidateSet('', 'legacy', 'harness')][string]$AgentRuntime = '',
     [ValidateRange(1, 65535)][int]$HarnessPort = 8791,
     [int]$BackendPort = 8790,
-    [int]$FrontendPort = 5173
+    [int]$FrontendPort = 5173,
+    [string]$RunDir = ''
 )
 
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
-$RunDir = Join-Path $Root ".run"
+if (-not $RunDir) { $RunDir = Join-Path $Root ".run" }
 $BackendDir = Join-Path $Root "backend"
 $FrontendDir = Join-Path $Root "frontend"
 . (Join-Path $Root 'scripts/harness-launcher.ps1')
