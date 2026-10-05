@@ -81,6 +81,21 @@ def resolve_video_context(
     _require_compatible_frame(media, width=width, height=height)
     digest = hashlib.sha256(data).hexdigest()
     carry_audio = False if config.carry_audio is None else bool(config.carry_audio)
+    from ...pipelines.h3_ref2va.video_context import prepare_context_bytes
+
+    data, conversion = prepare_context_bytes(
+        data,
+        media_width=media.width,
+        media_height=media.height,
+        media_fps=media.fps,
+        media_duration_s=media.duration_s,
+        has_audio=media.has_audio,
+        width=width,
+        height=height,
+        context_frames=config.context_frames or 22,
+        carry_audio=carry_audio,
+        filename=path.name,
+    )
     provenance = {
         "mode": config.mode,
         "source_shot_id": source_shot_id,
@@ -95,6 +110,7 @@ def resolve_video_context(
             else (24 if carry_audio else None)
         ),
         "carry_audio": carry_audio,
+        "conversion": conversion,
     }
     return ResolvedVideoContext(filename=path.name, data=data, provenance=provenance)
 
@@ -152,6 +168,12 @@ def upload_video_context(project_id: str, filename: str, data: bytes) -> dict:
         json.dumps(record), encoding="utf-8"
     )
     return record
+
+
+def load_video_context_upload(project_id: str, upload_id: str) -> tuple[dict, bytes]:
+    """Read one project upload record and its bytes. The record has no host path."""
+    record, path = _require_upload(project_id, upload_id)
+    return record, path.read_bytes()
 
 
 def ensure_video_context_order(shots: list[Shot]) -> None:

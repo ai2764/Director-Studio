@@ -46,6 +46,7 @@ let selectedOutput = false;
 let lifecycleStatus = "draft";
 let jobOutputs: Record<string, { url: string }> = {};
 let requests: { url: string; init?: RequestInit }[] = [];
+let contextCandidates: { node_id: string; input_name: string; display_name: string; class_type: string }[] = [];
 
 function analysis() {
   return {
@@ -60,6 +61,7 @@ function analysis() {
     ],
     h3_candidates: selectedOutput ? [candidate("136", "Main H3 Generator", "MiniMaxH3ReferenceToVideo")] : [],
     seed_candidates: selectedOutput ? [candidate("129", "Generation Seed", "RandomNoise")] : [],
+    context_video_candidates: contextCandidates,
     fixed_dependencies: [],
     issues: [],
     lifecycle: {
@@ -78,6 +80,7 @@ beforeEach(() => {
   lifecycleStatus = "draft";
   jobOutputs = {};
   requests = [];
+  contextCandidates = [];
   vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     requests.push({ url, init });
@@ -133,6 +136,27 @@ it("sends the nested confirmed boundary without an agent proposal", async () => 
   await waitFor(() => expect(requests.some((request) => request.url.endsWith("/mapping"))).toBe(true));
   const request = requests.find((item) => item.url.endsWith("/mapping"));
   expect(JSON.parse(String(request?.init?.body))).toEqual(mapping);
+});
+
+it("sends the selected context video file mapping", async () => {
+  selectedOutput = true;
+  lifecycleStatus = "mapped";
+  contextCandidates = [{
+    node_id: "50",
+    input_name: "file",
+    display_name: "Previous clip",
+    class_type: "LoadVideo",
+  }];
+  localStorage.setItem("director-studio.h3-setup", JSON.stringify({ importId: "imp-1" }));
+  render(<H3WorkflowSetup />);
+  fireEvent.change(await screen.findByLabelText("Context video file"), { target: { value: "50:file" } });
+  fireEvent.click(screen.getByRole("button", { name: "Confirm input nodes" }));
+  await waitFor(() => expect(requests.some((request) => request.url.endsWith("/mapping"))).toBe(true));
+  const request = requests.find((item) => item.url.endsWith("/mapping"));
+  expect(JSON.parse(String(request?.init?.body)).context_video).toEqual({
+    node_id: "50",
+    input_name: "file",
+  });
 });
 
 it("previews all observed output videos and selects one without another test run", async () => {

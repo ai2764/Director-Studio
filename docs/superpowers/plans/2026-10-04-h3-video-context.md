@@ -143,14 +143,14 @@ def attach_video_context(graph: dict, *, uploaded_video: str, delivered_frames: 
 
 返回新图，不修改输入模板。Builtin 默认 22/24；custom 的未映射窗口/音频参数保持上传值，不调用 builtin graph surgery。
 
-- [ ] 写失败测试：MP4 使用 `context_video` key，不能进入 image/audio refs；无 context 的图不新增节点；旧 v2 profile 字节/hash/状态保持；不支持的 custom profile 明确报错。
-- [ ] 加入时长测试：`context_generation_frames(124,22,max_frames=362)==158`；采样 158、去头 22、去尾 12，交付 124 帧；362+22 超限抛异常。测试 audio 也按 124/24 秒裁切，MV music_segment 保持原值。
-- [ ] 补 Comfy 与 Comfy MCP 的 MP4 上传测试。现有 MCP 使用 `upload_file(paths=...)`，不能因为 HTTP 试跑成功就跳过 MCP 验证。传输返回的 subfolder/filename 必须完整保存；每 Job 独立名字，无共享可覆盖上一镜输入。
-- [ ] 内置适配器按实际图发现/验证角色，不绑定试跑的 901/903 这些 node IDs：LoadVideo → GetVideoComponents → Motion Context(context_frames、可选 context_audio+audio VAE)，BasicGuider 使用新增 conditioning，decode 后 Trim 重叠，再截尾至 F，SaveVideo 接裁切后输出。缺少任一必要节点类/角色时阻止提交。
-- [ ] 基线 builtin 是已提交版本，并非当前主目录的 4-step 草稿。实验配置可以用已成功的 `source2.executed.api.json` 对照建立本分支的独立 fast 4-step 模板：保留 model/LoRA/scheduler/attention 参数，删除试跑 SaveLatent 与固定 Picture 绑定。检验 live 节点/模型文件后再使用；不批量复制主目录未提交代码。
-- [ ] custom profile 用户选视频文件节点+输入字段；校验该字段为现有文件输入、节点可达选定输出。提供视频时只写上传 filename；没有视频时明确要求来源，不使用残留默认文件。profile v3 验证/试跑接口允许指定测试 upload ID，输出选择继续沿用已有逻辑。
-- [ ] 视频同 24fps/目标尺寸时按字节复制；需要改 FPS/分辨率时使用已有 ffmpeg 能力归一化，保留宽高比并记录转换。新增测试：30fps、较大同宽高比、不同宽高比拒绝、窗口帧数不足、缺音频但用户要求带声音。
-- [ ] 运行新增测试和原 `test_h3_ref2va_graph.py`、`test_h3_profile_runtime.py`、`test_h3_workflow_validator.py`、`test_comfy_mcp_client.py`。通过后提交。
+- [x] 写失败测试：MP4 使用 `context_video` key，不能进入 image/audio refs；无 context 的图不新增节点；旧 v2 profile 字节/hash/状态保持；不支持的 custom profile 明确报错。
+- [x] 加入时长测试：`context_generation_frames(124,22,max_frames=362)==158`；采样 158、去头 22、去尾 12，交付 124 帧；362+22 超限抛异常。测试 audio 也按 124/24 秒裁切，MV music_segment 保持原值。
+- [x] 补 Comfy 与 Comfy MCP 的 MP4 上传测试。现有 MCP 使用 `upload_file(paths=...)`，不能因为 HTTP 试跑成功就跳过 MCP 验证。传输返回的 subfolder/filename 必须完整保存；每 Job 独立名字，无共享可覆盖上一镜输入。
+- [x] 内置适配器按实际图发现/验证角色，不绑定试跑的 901/903 这些 node IDs：LoadVideo → GetVideoComponents → Motion Context(context_frames、可选 context_audio+audio VAE)，BasicGuider 使用新增 conditioning，decode 后 Trim 重叠，再截尾至 F，SaveVideo 接裁切后输出。缺少任一必要节点类/角色时阻止提交。
+- [x] 基线 builtin 是已提交版本，并非当前主目录的 4-step 草稿。实验配置可以用已成功的 `source2.executed.api.json` 对照建立本分支的独立 fast 4-step 模板：保留 model/LoRA/scheduler/attention 参数，删除试跑 SaveLatent 与固定 Picture 绑定。检验 live 节点/模型文件后再使用；不批量复制主目录未提交代码。
+- [x] custom profile 用户选视频文件节点+输入字段；校验该字段为现有文件输入、节点可达选定输出。提供视频时只写上传 filename；没有视频时明确要求来源，不使用残留默认文件。profile v3 验证/试跑接口允许指定测试 upload ID，输出选择继续沿用已有逻辑。
+- [x] 视频同 24fps/目标尺寸时按字节复制；需要改 FPS/分辨率时使用已有 ffmpeg 能力归一化，保留宽高比并记录转换。新增测试：30fps、较大同宽高比、不同宽高比拒绝、窗口帧数不足、缺音频但用户要求带声音。
+- [x] 运行新增测试和原 `test_h3_ref2va_graph.py`、`test_h3_profile_runtime.py`、`test_h3_workflow_validator.py`、`test_comfy_mcp_client.py`。通过后提交。
 
 图的两个声音通道必须独立：已有 `ref_audios` 是当前镜头歌曲/音色；`context_audio` 是源视频的可选连续声音。默认关掉后者不应删除前者。
 

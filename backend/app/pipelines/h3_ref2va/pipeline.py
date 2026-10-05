@@ -19,6 +19,7 @@ from ...core.schemas import ComfyImageRef, JobRecord
 from ...workflow_profiles.h3 import (
     H3ProfileStore,
     ResolvedH3Profile,
+    contract_version_for,
     load_job_profile_snapshot,
     resolve_active_h3_profile,
     snapshot_profile_for_job,
@@ -103,7 +104,7 @@ class H3Ref2VaPipeline(Pipeline):
             or profile.workflow_sha256 != expected_hash
         ):
             raise ValueError("H3 job profile snapshot does not match its job record")
-        if expected_contract != 2:
+        if expected_contract != contract_version_for(profile.mapping):
             raise ValueError("H3 job profile snapshot contract version is unsupported")
         return profile
 
@@ -176,11 +177,18 @@ class H3Ref2VaPipeline(Pipeline):
         frames = int(frames)
 
         image_keys = p.get("image_keys")
+        declared_image_keys = (
+            [str(key) for key in image_keys] if isinstance(image_keys, list) else []
+        )
+        if "context_video" in declared_image_keys:
+            raise ValueError("context_video cannot be used as a picture reference")
         if isinstance(image_keys, list) and image_keys:
-            ordered_keys = [str(k) for k in image_keys]
+            ordered_keys = [key for key in declared_image_keys if key != "context_video"]
         else:
             # Fall back to upload order as dict iteration (stable in Py3.7+)
-            ordered_keys = list(uploaded_images.keys())
+            ordered_keys = [
+                key for key in uploaded_images if key != "context_video"
+            ]
 
         image_names: list[str] = []
         for key in ordered_keys:
@@ -189,8 +197,14 @@ class H3Ref2VaPipeline(Pipeline):
                 image_names.append(name)
 
         if not image_names and uploaded_images:
-            # If keys mismatched, use all uploads in stable order
-            image_names = list(uploaded_images.values())
+            # If keys mismatched, use picture uploads in stable order.
+            image_names = [
+                name
+                for key, name in uploaded_images.items()
+                if key != "context_video"
+                and key not in {str(item) for item in (p.get("audio_keys") or [])}
+                and key != str(p.get("native_audio_key") or "")
+            ]
 
         if not image_names:
             raise ValueError("at least one reference image is required")
@@ -206,6 +220,8 @@ class H3Ref2VaPipeline(Pipeline):
             dialogue = []
 
         audio_keys = p.get("audio_keys") or []
+        if isinstance(audio_keys, list) and "context_video" in {str(key) for key in audio_keys}:
+            raise ValueError("context_video cannot be used as an audio reference")
         if isinstance(audio_keys, list) and audio_keys:
             audio_names = [
                 uploaded_images[str(key)]
@@ -223,6 +239,13 @@ class H3Ref2VaPipeline(Pipeline):
 
         output_prefix = p.get("output_prefix")
         profile = self._profile_for_job(job)
+        context_key = str(p.get("context_video_key") or "").strip()
+        context_name = None
+        if context_key:
+            context_name = uploaded_images.get(context_key)
+            if not context_name:
+                raise ValueError("Context video was not uploaded")
+        source = p.get("video_context_source")
         return workflow.build_ref2va_prompt(
             prompt=prompt_text,
             dialogue=[str(x) for x in dialogue],
@@ -236,6 +259,8 @@ class H3Ref2VaPipeline(Pipeline):
             output_prefix=output_prefix,
             job_id=job.id,
             profile=profile,
+            context_video=context_name,
+            video_context_source=source if isinstance(source, dict) else None,
         )
 
     def build_api_payload(

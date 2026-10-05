@@ -56,7 +56,18 @@ export const fetchH3ImportAnalysis = (id: string) => profileRequest<H3Analysis>(
 export const selectH3ImportOutput = (id: string, nodeId: string) => profileRequest<H3Analysis>(importPath(id, "output"), "PUT", { node_id: nodeId });
 export const saveH3Mapping = (id: string, mapping: H3Mapping) => profileRequest<{ import_id: string; mapping: H3Mapping }>(importPath(id, "mapping"), "PUT", mapping);
 export const validateH3Import = (id: string) => profileRequest<H3Validation>(importPath(id, "validate"), "POST");
-export const testH3Import = (id: string, pictureAssetId: string, audioAssetId: string | null) => profileRequest<H3TestRun>(importPath(id, "test"), "POST", { picture_asset_id: pictureAssetId, audio_asset_id: audioAssetId });
+export const testH3Import = (
+  id: string,
+  pictureAssetId: string,
+  audioAssetId: string | null,
+  contextUpload?: { projectId: string; uploadId: string } | null,
+) => profileRequest<H3TestRun>(importPath(id, "test"), "POST", {
+  picture_asset_id: pictureAssetId,
+  audio_asset_id: audioAssetId,
+  ...(contextUpload
+    ? { context_project_id: contextUpload.projectId, context_upload_id: contextUpload.uploadId }
+    : {}),
+});
 export const selectH3TestOutput = (id: string, artifactIndex: number) => profileRequest<{ import_id: string; artifact_index: number; job_id: string; status: "succeeded" }>(importPath(id, "test-output"), "PUT", { artifact_index: artifactIndex });
 export const activateH3Import = (id: string) => profileRequest<{ import_id: string; profile_id: string; active: H3ActiveProfile }>(importPath(id, "activate"), "POST");
 export const selectH3Profile = (profileId: string) => profileRequest<{ active: H3ActiveProfile }>("/select", "POST", { profile_id: profileId });

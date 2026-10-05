@@ -173,6 +173,40 @@ def validate_h3_contract(
                     )
                 )
 
+    context_video = mapping.context_video
+    if context_video is not None:
+        video_id = context_video.node_id
+        video_input = context_video.input_name
+        video_node = normalized.get(video_id)
+        video_inputs = video_node.get("inputs") if isinstance(video_node, Mapping) else None
+        expected_input = {
+            "LoadVideo": "file",
+            "VHS_LoadVideo": "video",
+        }.get(str(video_node.get("class_type")) if isinstance(video_node, Mapping) else "")
+        if video_id not in upstream:
+            issues.append(
+                _issue(
+                    "unreachable_mapping",
+                    f"mapped context video node {video_id} is not upstream of output {output_id}",
+                    node_id=video_id,
+                    input_name=video_input,
+                )
+            )
+        elif (
+            expected_input != video_input
+            or not isinstance(video_inputs, Mapping)
+            or not isinstance(video_inputs.get(video_input), str)
+            or not str(video_inputs.get(video_input))
+        ):
+            issues.append(
+                _issue(
+                    "invalid_context_video",
+                    f"context video mapping {video_id}.{video_input} is not a video file input",
+                    node_id=video_id,
+                    input_name=video_input,
+                )
+            )
+
     if inputs_mapping.seed_node_id is not None:
         seed_id = inputs_mapping.seed_node_id
         seed_input = inputs_mapping.seed_input
@@ -216,6 +250,17 @@ def validate_h3_contract(
         try:
             from app.pipelines.h3_ref2va.workflow import fill_profile_graph
 
+            synthetic_params: dict[str, Any] = {
+                "prompt": "Neutral H3 workflow contract test",
+                "images": ["contract-picture.png"],
+                "audios": [],
+                "frames": 56,
+                "width": 864,
+                "height": 480,
+                "seed": 42,
+            }
+            if mapping.context_video is not None:
+                synthetic_params["context_video"] = "contract-context.mp4"
             fill_profile_graph(
                 ResolvedH3Profile(
                     profile_id="contract-validation",
@@ -224,15 +269,7 @@ def validate_h3_contract(
                     workflow_sha256="",
                     source="custom",
                 ),
-                {
-                    "prompt": "Neutral H3 workflow contract test",
-                    "images": ["contract-picture.png"],
-                    "audios": [],
-                    "frames": 56,
-                    "width": 864,
-                    "height": 480,
-                    "seed": 42,
-                },
+                synthetic_params,
             )
         except (KeyError, TypeError, ValueError, RuntimeError) as exc:
             issues.append(_issue("synthetic_fill_failed", str(exc)))

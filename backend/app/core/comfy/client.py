@@ -212,5 +212,8 @@ def _guess_mime(filename: str) -> str:
         ".jpeg": "image/jpeg",
         ".webp": "image/webp",
         ".gif": "image/gif",
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".webm": "video/webm",
     }.get(ext, "application/octet-stream")
 

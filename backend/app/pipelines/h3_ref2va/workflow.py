@@ -19,6 +19,7 @@ from ...workflow_profiles.h3 import (
     ResolvedH3Profile,
     resolve_active_h3_profile,
 )
+from .video_context import attach_video_context
 
 H3_REF_NODE = "MiniMaxH3ReferenceToVideo"
 H3_I2V_NODE = "MiniMaxH3ImageToVideo"
@@ -267,6 +268,36 @@ def fill_profile_graph(
             "filename_prefix"
         ] = str(job_params["output_prefix"])
 
+    context_name = str(job_params.get("context_video") or "").strip()
+    context_mapping = profile.mapping.context_video
+    if context_mapping is not None:
+        if not context_name:
+            raise ValueError("A context video source is required for this workflow")
+        target = filled.get(context_mapping.node_id)
+        if not isinstance(target, dict):
+            raise ValueError(
+                f"mapped context video node {context_mapping.node_id} does not exist"
+            )
+        target.setdefault("inputs", {})[context_mapping.input_name] = context_name
+        return filled
+    if context_name:
+        if profile.source != "builtin":
+            raise ValueError("This custom workflow has no context video file mapping")
+        source = job_params.get("video_context_source") or {}
+        if not isinstance(source, dict):
+            raise ValueError("video context source is invalid")
+        carry_audio = bool(source.get("carry_audio"))
+        audio_frames = source.get("audio_context_frames")
+        filled = attach_video_context(
+            filled,
+            uploaded_video=context_name,
+            delivered_frames=frames,
+            context_frames=int(source.get("context_frames") or 22),
+            audio_context_frames=(
+                int(audio_frames) if audio_frames is not None else (24 if carry_audio else 0)
+            ),
+            carry_audio=carry_audio,
+        )
     return filled
 
 
@@ -316,6 +347,8 @@ def build_ref2va_prompt(
     output_prefix: str | None = None,
     job_id: str | None = None,
     profile: ResolvedH3Profile | None = None,
+    context_video: str | None = None,
+    video_context_source: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Fill a resolved profile graph and return it with the job's concrete seed."""
     resolved_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
@@ -341,6 +374,8 @@ def build_ref2va_prompt(
             "height": height,
             "seed": resolved_seed,
             "output_prefix": output_prefix,
+            "context_video": context_video,
+            "video_context_source": video_context_source,
         },
     )
     return filled, resolved_seed

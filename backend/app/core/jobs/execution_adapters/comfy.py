@@ -15,6 +15,12 @@ from .. import store
 logger = logging.getLogger("director_studio.jobs.execution.comfy")
 
 
+def comfy_input_name(job_id: str, kind: str, filename: str) -> str:
+    """One job-scoped Comfy input name. Video keys keep their own suffix."""
+    extension = Path(filename).suffix or ".png"
+    return f"ds_{job_id}_{kind}{extension}"
+
+
 @dataclass(frozen=True)
 class ComfyExecutionRuntime:
     client_factory: Callable[[], Any]
@@ -51,10 +57,9 @@ class ComfyExecutionAdapter:
             for kind, (filename, data) in inputs.items():
                 if cancel_event.is_set():
                     raise ComfyError("Job cancelled")
-                extension = Path(filename).suffix or ".png"
                 uploaded[kind] = await client.upload_image(
                     data,
-                    f"ds_{job.id}_{kind}{extension}",
+                    comfy_input_name(job.id, kind, filename),
                 )
 
             prompt, resolved_seed = pipeline.build_prompt(

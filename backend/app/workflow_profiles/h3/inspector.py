@@ -11,6 +11,7 @@ from typing import Any
 from .models import (
     H3AnalysisIssue,
     H3BoundaryMapping,
+    H3ContextVideoCandidate,
     H3FixedDependency,
     H3InputMapping,
     H3NodeCandidate,
@@ -180,6 +181,13 @@ def _candidate(
     )
 
 
+def _node_id_sort_key(node_id: str) -> tuple[int, int | str]:
+    try:
+        return (0, int(node_id))
+    except ValueError:
+        return (1, node_id)
+
+
 def _numeric_node_key(candidate: H3NodeCandidate) -> tuple[int, int | str]:
     try:
         return (0, int(candidate.node_id))
@@ -230,6 +238,35 @@ def _structural_issues(graph: Mapping[str, Any]) -> list[H3AnalysisIssue]:
                 )
             )
     return issues
+
+
+def _context_video_candidates(
+    graph: Mapping[str, Any], upstream: set[str]
+) -> tuple[H3ContextVideoCandidate, ...]:
+    fields = {"LoadVideo": "file", "VHS_LoadVideo": "video"}
+    result: list[H3ContextVideoCandidate] = []
+    for node_id in sorted(upstream, key=_node_id_sort_key):
+        node = graph.get(node_id)
+        if not isinstance(node, Mapping):
+            continue
+        input_name = fields.get(str(node.get("class_type") or ""))
+        inputs = node.get("inputs")
+        if (
+            input_name is None
+            or not isinstance(inputs, Mapping)
+            or not isinstance(inputs.get(input_name), str)
+            or not str(inputs.get(input_name))
+        ):
+            continue
+        result.append(
+            H3ContextVideoCandidate(
+                node_id=node_id,
+                class_type=str(node.get("class_type")),
+                input_name=input_name,
+                display_name=f"Context video (Node {node_id})",
+            )
+        )
+    return tuple(result)
 
 
 def _fixed_dependencies(
@@ -415,6 +452,7 @@ def _inspect_h3_workflow(
         output_candidates=tuple(output_candidates),
         h3_candidates=tuple(h3_candidates),
         seed_candidates=tuple(seed_candidates),
+        context_video_candidates=_context_video_candidates(normalized, upstream),
         fixed_dependencies=_fixed_dependencies(normalized, upstream),
         issues=tuple(issues),
     )

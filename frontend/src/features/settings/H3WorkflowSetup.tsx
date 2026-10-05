@@ -18,6 +18,7 @@ import { getH3Job, type H3JobRecord } from "../production/api";
 import type {
   H3Analysis,
   H3Candidate,
+  H3ContextVideoInput,
   H3LifecycleStatus,
   H3Mapping,
   H3TestRun,
@@ -54,10 +55,15 @@ function nodeLabel(candidate: H3Candidate): string {
   return `${candidate.display_name} — ${candidate.class_type} (Node ${candidate.node_id})`;
 }
 
-function mappingFor(analysis: H3Analysis, h3NodeId: string, seedNodeId: string): H3Mapping | null {
+function mappingFor(
+  analysis: H3Analysis,
+  h3NodeId: string,
+  seedNodeId: string,
+  contextVideo?: H3ContextVideoInput | null,
+): H3Mapping | null {
   const outputNodeId = analysis.selected_output_node_id || analysis.mapping?.output.node_id;
   if (!outputNodeId || !h3NodeId) return null;
-  return {
+  const mapping: H3Mapping = {
     inputs: {
       h3_node_id: h3NodeId,
       prompt_input: "prompt",
@@ -71,6 +77,8 @@ function mappingFor(analysis: H3Analysis, h3NodeId: string, seedNodeId: string):
     },
     output: { node_id: outputNodeId, artifact_index: null },
   };
+  if (contextVideo) mapping.context_video = contextVideo;
+  return mapping;
 }
 
 export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
@@ -86,6 +94,7 @@ export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
   const [voices, setVoices] = useState<LibraryAsset[]>([]);
   const [picture, setPicture] = useState("");
   const [voice, setVoice] = useState("");
+  const [contextUploadId, setContextUploadId] = useState("");
   const [test, setTest] = useState<H3TestRun | null>(null);
   const [job, setJob] = useState<H3JobRecord | null>(null);
   const [assetRefresh, setAssetRefresh] = useState(0);
@@ -218,13 +227,15 @@ export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
   const selectedOutput = analysis?.selected_output_node_id || mapping?.output.node_id || "";
   const h3Candidates = analysis?.h3_candidates || [];
   const seedCandidates = analysis?.seed_candidates || [];
+  const contextCandidates = analysis?.context_video_candidates || [];
   const testCandidates = job
     ? Object.entries(job.outputs)
         .filter(([key, slot]) => key.startsWith("video_candidate_") && slot.url)
         .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
     : [];
   const canValidate = Boolean(mapping && analysis && stage === "mapped" && !busy);
-  const canTest = Boolean(mapping && picture && ["validated", "tested"].includes(stage) && !busy);
+  const contextReady = !mapping?.context_video || Boolean(projectId && contextUploadId.trim());
+  const canTest = Boolean(mapping && picture && contextReady && ["validated", "tested"].includes(stage) && !busy);
   const canActivate = Boolean(analysis && stage === "tested" && !busy);
 
   return (
@@ -284,7 +295,7 @@ export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
           <p className="field-hint">After output selection, upstream H3 and optional seed nodes are discovered by reverse traversal.</p>
           {analysis && selectedOutput ? <>
             <label className="field"><span>H3 generation node</span><select aria-label="H3 generation node" value={mapping?.inputs.h3_node_id || ""} disabled={busy} onChange={(event) => {
-              const next = mappingFor(analysis, event.target.value, mapping?.inputs.seed_node_id || "");
+              const next = mappingFor(analysis, event.target.value, mapping?.inputs.seed_node_id || "", mapping?.context_video);
               setMapping(next); setStage("mapped");
             }}><option value="">Choose the H3 node…</option>{h3Candidates.map((candidate) => <option key={candidate.node_id} value={candidate.node_id}>{nodeLabel(candidate)}</option>)}</select></label>
             <label className="field"><span>Seed node (optional)</span><select aria-label="Seed node (optional)" value={mapping?.inputs.seed_node_id || ""} disabled={busy || !mapping} onChange={(event) => {
@@ -292,7 +303,17 @@ export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
               setMapping({ ...mapping, inputs: { ...mapping.inputs, seed_node_id: event.target.value || null, seed_input: event.target.value ? "noise_seed" : null } });
               setStage("mapped");
             }}><option value="">Use workflow seed settings</option>{seedCandidates.map((candidate) => <option key={candidate.node_id} value={candidate.node_id}>{nodeLabel(candidate)}</option>)}</select></label>
-            {mapping ? <div className="workflow-dependencies"><strong>Connected inputs</strong><p>Prompt, width, height, frames · Picture 1–9 · Audio 1–3 · optional seed</p></div> : null}
+            {contextCandidates.length ? <label className="field"><span>Context video file (optional)</span><select aria-label="Context video file" value={mapping?.context_video ? `${mapping.context_video.node_id}:${mapping.context_video.input_name}` : ""} disabled={busy || !mapping} onChange={(event) => {
+              if (!mapping) return;
+              const [nodeId, inputName] = event.target.value.split(":");
+              const contextVideo = nodeId && inputName ? { node_id: nodeId, input_name: inputName } : null;
+              const next = { ...mapping, inputs: { ...mapping.inputs }, output: { ...mapping.output } };
+              if (contextVideo) next.context_video = contextVideo;
+              else delete next.context_video;
+              setMapping(next);
+              setStage("mapped");
+            }}><option value="">No context video</option>{contextCandidates.map((candidate) => <option key={`${candidate.node_id}:${candidate.input_name}`} value={`${candidate.node_id}:${candidate.input_name}`}>{candidate.display_name} — {candidate.class_type}.{candidate.input_name}</option>)}</select></label> : null}
+            {mapping ? <div className="workflow-dependencies"><strong>Connected inputs</strong><p>Prompt, width, height, frames · Picture 1–9 · Audio 1–3 · optional seed{mapping.context_video ? " · context video" : ""}</p></div> : null}
             <button type="button" className="btn secondary" disabled={busy || !mapping} onClick={() => void perform("saving", async () => {
               await saveH3Mapping(analysis.import_id, mapping!);
               applyAnalysis(await fetchH3ImportAnalysis(analysis.import_id));
@@ -311,12 +332,20 @@ export function H3WorkflowSetup({ active = true }: { active?: boolean }) {
           <div className="workflow-test-assets">
             <label className="field"><span>Picture for test</span><select value={picture} disabled={busy} onChange={(event) => setPicture(event.target.value)}><option value="">Choose one Picture…</option>{pictures.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select></label>
             <label className="field"><span>Voice for test (optional standalone Audio)</span><select value={voice} disabled={busy || !mapping?.inputs.audio_input_pattern} onChange={(event) => setVoice(event.target.value)}><option value="">No Audio reference</option>{voices.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select></label>
+            {mapping?.context_video ? <label className="field"><span>Context video upload ID</span><input aria-label="Context video upload ID" value={contextUploadId} disabled={busy} onChange={(event) => setContextUploadId(event.target.value)} placeholder="vup_…" /></label> : null}
           </div>
           <div className="actions">
             <button type="button" className="btn secondary" disabled={!projectId || busy} onClick={() => setAssetRefresh((value) => value + 1)}>Refresh assets</button>
             <button type="button" className="btn secondary" disabled={!canTest} onClick={() => analysis && void perform("testing", async () => {
               setJob(null);
-              const run = await testH3Import(analysis.import_id, picture, voice || null);
+              const run = await testH3Import(
+                analysis.import_id,
+                picture,
+                voice || null,
+                mapping?.context_video && projectId && contextUploadId.trim()
+                  ? { projectId, uploadId: contextUploadId.trim() }
+                  : null,
+              );
               remember(analysis.import_id, run); setTest(run); setStage("validated");
             })}>Run 56-frame test</button>
           </div>
