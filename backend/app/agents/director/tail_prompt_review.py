@@ -256,7 +256,8 @@ async def draft_and_review(provider, project, shot, records, images, signature,
         try:
             raw = await complete_bounded(provider, draft_instructions,
                 json.dumps({**request, "repair": repair}, ensure_ascii=False),
-                max_tokens=6144, guides=("h3-prompt-writing",), schema=candidate_schema())
+                max_tokens=6144, guides=("h3-prompt-writing",), schema=candidate_schema(),
+                observation=context_view)
             if repair:
                 raw = merge_repair(raw, repair["rejected_candidate"], envelope=True)
             check_current()
@@ -341,7 +342,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                                      original_shot=request["original_shot"])
             audit_raw = await complete_bounded(provider, REVIEW_INSTRUCTIONS,
                 json.dumps(audit_request, ensure_ascii=False), max_tokens=1024,
-                schema=PromptVerdict.model_json_schema())
+                schema=PromptVerdict.model_json_schema(), observation=context_view)
             check_current()
             verdict = PromptVerdict.model_validate(_extract_json_payload(audit_raw))
             if verdict.blocking_question:
@@ -416,7 +417,18 @@ def candidate_schema():
     return schema
 
 
-async def complete_bounded(provider, system, user, *, max_tokens, guides=(), schema=None):
+async def complete_bounded(provider, system, user, *, max_tokens, guides=(), schema=None, observation=None):
+    import base64
+    from .writer_context import video_context_prompt_input
+
+    active = isinstance(observation, dict) and observation.get("mode") in {"previous_shot", "external_upload"}
+    png = observation.get("tail_frame_png") if active else None
+    visual = getattr(provider, "complete_bounded_with_images", None)
+    attached = isinstance(png, (bytes, bytearray)) and bool(png) and callable(visual)
+    system, user = video_context_prompt_input(system, user, observation, image_attached=attached)
+    if attached:
+        return await visual(system, user, images=[base64.b64encode(png).decode("ascii")],
+                            max_tokens=max_tokens, guides=guides, schema=schema)
     bounded = getattr(provider, "complete_bounded", None)
     if callable(bounded):
         return await bounded(system, user, max_tokens=max_tokens, guides=guides, schema=schema)

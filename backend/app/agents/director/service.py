@@ -2188,7 +2188,9 @@ class DirectorService:
             raise ValueError(f"project not found: {shot.project_id}")
 
         task_packet = prepare_writer_packet(project, shot.id, revision_request)
-        if any(item["origin_kind"] == "clip_tail_frame" for item in selected_layout_prompt_context(shot)):
+        active_video_context = (settings.video_context_enabled and shot.video_context is not None
+                                and shot.video_context.mode != "off")
+        if active_video_context or any(item["origin_kind"] == "clip_tail_frame" for item in selected_layout_prompt_context(shot)):
             return await self._write_tail_prompt(shot, project, original_shot, revision_request, task_packet)
 
         from .material_review import capture_references, review_references, tail_frame_review_signature

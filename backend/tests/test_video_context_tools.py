@@ -392,7 +392,7 @@ async def test_writer_completion_attaches_the_tail_frame_without_a_filename():
 
     text_only.complete_with_images = None
     assert await complete_writer_prompt(text_only, "system", user, observation) == "text"
-    assert text_only.user == user
+    assert json.loads(text_only.user)["video_context_observation"]["tail_frame_status"] == "not_attached"
 
 
 @pytest.mark.asyncio

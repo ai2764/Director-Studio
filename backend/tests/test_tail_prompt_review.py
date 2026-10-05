@@ -60,6 +60,82 @@ class Provider:
 
 
 @pytest.mark.asyncio
+async def test_tail_draft_and_independent_audit_receive_labelled_video_image(tail_handoff_shot, monkeypatch):
+    import base64
+    from app.agents.director import writer_context
+    project, shot = tail_handoff_shot
+    png = b"\x89PNG\r\n\x1a\nsource-ending"
+    monkeypatch.setattr(writer_context, "video_context_writer_view", lambda _shot: {
+        "mode": "previous_shot", "context_frames": 22, "carry_audio": False,
+        "role": "observation_only", "tail_frame_png": png,
+    })
+
+    class VisualBoundedProvider(Provider):
+        async def complete_bounded_with_images(self, system, user, *, images, max_tokens,
+                                               guides=(), schema=None):
+            self.text.append((system, user, images, max_tokens, schema))
+            return json.dumps(self.responses.pop(0))
+
+    provider = VisualBoundedProvider([candidate(), verdict()])
+    await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+    assert len(provider.text) == 2
+    for system, user, images, limit, schema in provider.text:
+        packet = json.loads(user)["video_context_observation"]
+        assert packet["tail_frame_image_index"] == 1
+        assert packet["tail_frame_role"] == "source_video_ending_observation"
+        assert packet["picture_slots"] == packet["audio_slots"] == []
+        assert images == [base64.b64encode(png).decode()]
+        assert schema and limit in {6144, 1024}
+        assert "camera path" in system
+    assert load_shot(project.id, shot.id).refs == shot.refs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("valid", [True, False])
+async def test_video_only_handoff_cannot_publish_a_rejected_opening(tail_handoff_shot, monkeypatch, valid):
+    from app.agents.director import writer_context
+    from app.config import settings
+    from app.core.projects.models import ShotVideoContext, RefRole
+    from app.core.projects.store import save_project
+    from app.core.projects.video_context import configure_video_context
+    from app.core.jobs import list_jobs
+    from test_video_context_sources import _succeed
+    project, shot = tail_handoff_shot
+    monkeypatch.setattr(settings, "video_context_enabled", True)
+    first = shot.model_copy(update={"id": "sht_source", "refs": [], "layout_refs": []})
+    source_job = _succeed(project.id, first.id)
+    save_shot(first.model_copy(update={"h3_job_id": source_job.id}))
+    shot = shot.model_copy(update={"layout_refs": [], "refs": [
+        ref.model_copy(update={"role": RefRole.other}) for ref in shot.refs]})
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [first.id, shot.id]}))
+    configure_video_context(project.id, shot.id, ShotVideoContext(mode="previous_shot"))
+    monkeypatch.setattr(writer_context, "video_context_writer_view", lambda _shot: {
+        "mode": "previous_shot", "context_frames": 22, "carry_audio": False,
+        "tail_frame_png": b"\x89PNG\r\n\x1a\nsource-ending",
+    })
+
+    class VisualBoundedProvider(Provider):
+        async def complete_bounded_with_images(self, system, user, **kwargs):
+            self.text.append((system, user))
+            return json.dumps(self.responses.pop(0))
+
+    provider = VisualBoundedProvider([candidate(), verdict(valid)] * (1 if valid else 2))
+    svc = DirectorService(plan_provider=provider, orchestrator=Orchestrator())
+    before_jobs = {job.id for job in list_jobs(project_id=project.id)}
+    if valid:
+        result = await svc.write_prompts_after_layout(shot.id)
+        assert result.meta["material_review"]["prompt_review"]["valid"]
+    else:
+        with pytest.raises(ValueError, match="continuity review"):
+            await svc.write_prompts_after_layout(shot.id)
+        assert load_shot(project.id, shot.id).prompt_sections == shot.prompt_sections
+    assert not load_shot(project.id, shot.id).layout_refs
+    assert load_shot(project.id, shot.id).refs == shot.refs
+    assert {job.id for job in list_jobs(project_id=project.id)} == before_jobs
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["keep", "drop_optional", "needs_decision"])
 async def test_managed_tail_checks_actual_evidence_before_drafting(tail_handoff_shot, action):
     from app.agents.director.brief import remember_directing_request
