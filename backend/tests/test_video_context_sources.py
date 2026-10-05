@@ -114,7 +114,7 @@ def test_custom_window_and_audio_are_inherited_during_normalization(monkeypatch,
         load_base_prompt(), uploaded_video="source.mp4", delivered_frames=56,
         context_frames=39, audio_context_frames=24, carry_audio=True))
     monkeypatch.setattr("app.workflow_profiles.h3.store.resolve_active_h3_profile", lambda: profile)
-    monkeypatch.setattr("app.core.projects.video_context.probe_video", lambda _: _media(width=1728,height=960))
+    monkeypatch.setattr("app.core.projects.video_context.probe_video", lambda _: _media(fps=30))
     calls=[]
     def transcode(data, **kwargs):
         calls.append(kwargs)
@@ -305,7 +305,7 @@ def test_aspect_mismatch_is_rejected_without_rewriting_configuration(monkeypatch
         "app.core.projects.video_context.probe_video",
         lambda _path: _media(width=480, height=864),
     )
-    with pytest.raises(VideoContextError, match="aspect ratio"):
+    with pytest.raises(VideoContextError, match="resolution"):
         resolve_video_context(before, width=864, height=480)
     assert load_shot(project.id, second.id) == before
 

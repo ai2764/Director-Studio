@@ -129,6 +129,8 @@ export function MobileShotDrawer({
               </nav>
 
               <article className="mobile-shot-document" aria-label={`${selected.title} shot design document`}>
+                  <VideoContextPanel key={selected.id} shot={selected} shots={shots}
+                    expanded={focusShotId === selected.id} onShotUpdated={onShotUpdated} />
                   <dl className="mobile-shot-meta">
                     <div><dt>Duration</dt><dd>{selected.duration_s}s</dd></div>
                     <div><dt>Status</dt><dd>{shotWorkflowStatus(selected).label}</dd></div>
@@ -196,12 +198,6 @@ export function MobileShotDrawer({
                   <section id="mobile-shot-production" className="mobile-shot-document-section">
                     <span className="mobile-document-section-label">04 / Record</span>
                     <h4>Production record</h4>
-                    <VideoContextPanel
-                      shot={selected}
-                      shots={shots}
-                      expanded={focusShotId === selected.id}
-                      onShotUpdated={onShotUpdated}
-                    />
                   </section>
               </article>
             </div>

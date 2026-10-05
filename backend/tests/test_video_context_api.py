@@ -105,8 +105,9 @@ def test_upload_records_media_and_rejects_bad_files(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source_size", [(864, 480), (480, 864)])
 async def test_submit_puts_context_bytes_on_the_job_and_stops_when_unreadable(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, source_size
 ):
     project = _isolate(monkeypatch, tmp_path)
     first = Shot(
@@ -131,7 +132,7 @@ async def test_submit_puts_context_bytes_on_the_job_and_stops_when_unreadable(
     save_shot(first.model_copy(update={"h3_job_id": job.id}))
     monkeypatch.setattr(
         "app.core.projects.video_context.probe_video",
-        lambda _path: _media(),
+        lambda _path: _media(width=source_size[0], height=source_size[1]),
     )
     from app.core.projects.video_context import configure_video_context, video_context_prompt_signature
 
@@ -181,6 +182,7 @@ async def test_submit_puts_context_bytes_on_the_job_and_stops_when_unreadable(
 
     submitted = await api.submit_shot_endpoint(second.id, svc=_Service(), options=None)
     stored = load_job(submitted.h3_job_id)
+    assert (stored.params["width"], stored.params["height"]) == source_size
     assert stored.params["video_context_source"]["sha256"]
     copied = (
         tmp_path / "projects" / project.id / "jobs" / stored.id / "inputs" / "context_video.mp4"

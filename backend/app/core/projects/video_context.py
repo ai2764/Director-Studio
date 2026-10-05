@@ -83,6 +83,10 @@ def resolve_video_context(
         source_shot_id = source_shot.id
     data = path.read_bytes()
     media = probe_video(path)
+    if config.mode == "previous_shot" and (width, height) != (media.width, media.height):
+        raise VideoContextError(
+            f"Previous-shot continuation requires the source resolution {media.width}×{media.height}"
+        )
     _require_compatible_frame(media, width=width, height=height)
     digest = hashlib.sha256(data).hexdigest()
     from ...pipelines.h3_ref2va.video_context import prepare_context_bytes, context_runtime_options
@@ -231,6 +235,19 @@ def video_context_status(shot: Shot) -> dict:
         "carry_audio": runtime["carry_audio"],
         "blocked_reasons": blocked,
     }
+
+
+def video_context_resolution(shot: Shot) -> dict | None:
+    """Only previous-shot handoffs lock size, using actual selected video bytes."""
+    config = shot.video_context
+    if config is None or config.mode != "previous_shot":
+        return None
+    project = load_project(shot.project_id)
+    if project is None:
+        raise VideoContextError("Project not found")
+    _source, _job, _key, path = _require_previous_video(project, shot, config)
+    media = probe_video(path)
+    return {"width": media.width, "height": media.height}
 
 
 def _runtime_options(config):

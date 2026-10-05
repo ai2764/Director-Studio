@@ -612,6 +612,8 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "configure_video_context",
         "Save how this shot continues from a finished source video. "
         "The backend chooses the immediately previous shot. "
+        "Use mode=previous_shot when the user asks to continue its action or camera motion; "
+        "its actual video resolution is inherited and cannot be overridden. "
         "This does not start generation. Do not pass a file path.",
         {
             "shot_id": {"type": "string"},
@@ -619,7 +621,9 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "source_job_id": {"type": "string"},
             "source_output_key": {"type": "string"},
             "upload_id": {"type": "string"},
-            "context_frames": {"type": "integer", "enum": [5, 22, 39, 56]},
+            "context_frames": {"type": "integer", "enum": [5, 22, 39, 56],
+                "description": "Built-in workflow window at 24 fps; defaults to 22. Choose from available motion evidence. "
+                               "For a custom workflow, omit this field to inherit its uploaded window."},
             "audio_context_frames": {"type": "integer"},
             "carry_audio": {"type": "boolean"},
         },

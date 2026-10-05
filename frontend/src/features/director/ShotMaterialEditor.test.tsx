@@ -84,6 +84,19 @@ describe("ShotMaterialEditor", () => {
     replaceShotMaterialsMock.mockResolvedValue(selectedShot());
   });
 
+  it("shows the saved video dependency while selecting Pictures", () => {
+    render(<ShotMaterialEditor shot={{ ...selectedShot(), video_context: {
+      mode: "previous_shot", source_shot_id: "sht_prev", context_frames: 22,
+    } }} shotNumber={2} onClose={vi.fn()} onOpenImage={vi.fn()} />);
+    expect(screen.getByRole("note", { name: "Video dependency" }).textContent).toContain("Continues Shot 1");
+    expect(screen.getByText("Pictures 2 / 9")).toBeTruthy();
+  });
+
+  it("does not show video dependency on an ordinary shot", () => {
+    render(<ShotMaterialEditor shot={selectedShot()} shotNumber={2} onClose={vi.fn()} onOpenImage={vi.fn()} />);
+    expect(screen.queryByRole("note", { name: "Video dependency" })).toBeNull();
+  });
+
   it("removes a selected Picture, adds a Library asset, and saves the new inventory", async () => {
     render(
       <ShotMaterialEditor

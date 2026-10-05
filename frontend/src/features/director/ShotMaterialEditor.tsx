@@ -6,6 +6,7 @@ import {
   type LibraryKind,
 } from "../library/api";
 import { replaceShotMaterials, type ShotMaterialSelection } from "./api";
+import { VideoDependencyIndicator } from "./VideoDependencyIndicator";
 
 type PictureKind = Exclude<LibraryKind, "voices">;
 
@@ -177,6 +178,7 @@ export function ShotMaterialEditor({
           </div>
           <button type="button" aria-label="Close material editor" onClick={onClose}>×</button>
         </header>
+        <VideoDependencyIndicator shot={shot} shotNumber={shotNumber} />
         {confirming ? (
           <div className="shot-material-save-review">
             <div>

@@ -6838,6 +6838,59 @@ select {
   color: var(--muted);
 }
 
+.video-dependency-indicator {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-elev);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.video-dependency-indicator span {
+  color: var(--muted);
+}
+
+.shot-material-editor > .video-dependency-indicator {
+  margin: 0 1rem 0.6rem;
+}
+
+.video-context-window {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.video-context-window label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.video-context-window input {
+  width: 5rem;
+  min-height: 2.25rem;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+}
+
+.video-context-window input[readonly] {
+  width: 8rem;
+}
+
+.video-context-window small {
+  color: var(--muted);
+}
+
 .shot-document .layout-reference-list {
   margin-top: 0;
 }

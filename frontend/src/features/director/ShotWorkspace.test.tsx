@@ -211,16 +211,13 @@ describe("ShotWorkspace", () => {
     expect(screen.queryByText(/^\d+ versions?$/)).toBeNull();
     expect(screen.getByText("Reveal subject")).toBeTruthy();
     expect(screen.getByText("Reveal beat")).toBeTruthy();
-    const continuation = screen.getByRole("region", { name: "Video continuation" });
-    expect(continuation.closest("#shot-production")).toBeTruthy();
-    expect(continuation.textContent).toContain("Off");
-    expect(continuation.textContent).not.toContain("Configured");
+    expect(screen.queryByRole("region", { name: "Video continuation" })).toBeNull();
   });
 
   it("selects the shot named by a saved continuation and expands its settings", () => {
     render(
       <ShotWorkspace
-        shots={[shot("s1", "Arrival"), shot("s2", "Reveal")]}
+        shots={[shot("s1", "Arrival"), { ...shot("s2", "Reveal"), video_context: { mode: "previous_shot" } }]}
         busy={false}
         focusShotId="s2"
         onSend={vi.fn()}
@@ -231,7 +228,7 @@ describe("ShotWorkspace", () => {
     expect(screen.getByRole("heading", { name: "2. Reveal" })).toBeTruthy();
     const settings = screen.getByText("Continuation settings").closest("details") as HTMLDetailsElement;
     expect(settings.open).toBe(true);
-    expect(screen.getByRole("region", { name: "Video continuation" }).textContent).toContain("Off");
+    expect(screen.getByRole("note", { name: "Video dependency" }).textContent).toContain("Continues Shot 1");
   });
 
   it("shows the mobile Shot design fields in the desktop creative brief", () => {

@@ -2022,6 +2022,23 @@ async def approve_shot_endpoint(shot_id: str) -> Shot:
     return shot
 
 
+@router.get("/shots/{shot_id}/video-context")
+def get_shot_video_context(shot_id: str) -> dict:
+    """Expose saved continuation and its source-size constraint without host paths."""
+    if not settings.video_context_enabled:
+        raise HTTPException(403, "Video context is disabled")
+    from ..core.projects.video_context import VideoContextError, video_context_status, video_context_resolution
+    shot = _find_shot(shot_id)
+    status = video_context_status(shot)
+    status["resolution"] = None
+    if not status["blocked_reasons"]:
+        try:
+            status["resolution"] = video_context_resolution(shot)
+        except VideoContextError as exc:
+            status["blocked_reasons"].append(str(exc))
+    return status
+
+
 @router.put("/shots/{shot_id}/video-context")
 def put_shot_video_context(shot_id: str, config: ShotVideoContext) -> dict:
     """Save continuation settings. Disabled instances reject the write."""
@@ -2131,6 +2148,19 @@ async def submit_shot_endpoint(
     if (h3_provider != "local" and shot.video_context is not None
             and shot.video_context.mode != "off"):
         raise HTTPException(400, "Video continuation requires the local H3 provider")
+    inherited_resolution = None
+    if settings.video_context_enabled:
+        from ..core.projects.video_context import video_context_resolution, VideoContextError
+        try:
+            inherited_resolution = video_context_resolution(shot)
+        except VideoContextError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if inherited_resolution is not None and options is not None:
+            if any(value is not None and value != inherited_resolution[key]
+                   for key, value in (("width", options.width), ("height", options.height))):
+                raise HTTPException(400,
+                    "Previous-shot continuation requires the source resolution "
+                    f"{inherited_resolution['width']}×{inherited_resolution['height']}")
     if h3_provider == "minimax" and not str(
         settings.h3_minimax_api_key or ""
     ).strip():
@@ -2331,12 +2361,12 @@ async def submit_shot_endpoint(
     width = (
         int(options.width)
         if options is not None and options.width is not None
-        else (480 if portrait else 864)
+        else (inherited_resolution["width"] if inherited_resolution else (480 if portrait else 864))
     )
     height = (
         int(options.height)
         if options is not None and options.height is not None
-        else (864 if portrait else 480)
+        else (inherited_resolution["height"] if inherited_resolution else (864 if portrait else 480))
     )
     native_audio_key: str | None = None
     if shot.source_audio_path:

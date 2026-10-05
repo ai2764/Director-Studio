@@ -1281,7 +1281,7 @@ describe("Director shot actions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByRole("heading", { name: "2. Doorway reveal" })).toBeTruthy();
-    expect(screen.getByText("Configured")).toBeTruthy();
+    expect(screen.getByRole("note", { name: "Video dependency" }).textContent).toContain("Continues Shot 1");
     expect(screen.getByLabelText("Resolved job").textContent).toBe("job_real");
     expect(await screen.findByText("22 frames · 0.92 s")).toBeTruthy();
     const settings = screen.getByText("Continuation settings").closest("details") as HTMLDetailsElement;

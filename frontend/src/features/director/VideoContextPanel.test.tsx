@@ -125,18 +125,17 @@ describe("VideoContextPanel", () => {
     }));
   });
 
-  it("shows an old shot as off", () => {
+  it.each([undefined, { mode: "off" as const }])("hides continuation controls on an ordinary shot: %s", (video_context) => {
     render(
       <VideoContextPanel
-        shot={makeShot("s1", "Arrival")}
+        shot={makeShot("s1", "Arrival", { video_context })}
         shots={[makeShot("s1", "Arrival")]}
         onShotUpdated={vi.fn()}
       />,
     );
 
-    const panel = screen.getByRole("region", { name: "Video continuation" });
-    expect(panel.textContent).toContain("Off");
-    expect(panel.textContent).not.toContain("Configured");
+    expect(screen.queryByRole("region", { name: "Video continuation" })).toBeNull();
+    expect(screen.queryByText("Continuation settings")).toBeNull();
     expect(screen.queryByRole("button", { name: /generate|submit/i })).toBeNull();
   });
 
@@ -161,13 +160,14 @@ describe("VideoContextPanel", () => {
       />,
     );
 
-    expect(screen.getByRole("region", { name: "Video continuation" }).textContent).toContain("Configured");
+    expect(screen.getByRole("note", { name: "Video dependency" }).textContent).toContain("Continues Shot 1");
     expect(screen.getByLabelText("Resolved job").textContent).toBe("job_real");
-    expect(screen.getByText("Arrival")).toBeTruthy();
+    expect(screen.getByRole("note", { name: "Video dependency" }).textContent).toContain("Arrival");
     expect(await screen.findByText("22 frames · 0.92 s")).toBeTruthy();
-    const window = screen.getByLabelText("Context window") as HTMLSelectElement;
+    const window = screen.getByLabelText("Context window") as HTMLInputElement;
+    expect(window.type).toBe("number");
     expect(window.value).toBe("22");
-    expect(Array.from(window.options).map((option) => option.value)).toEqual(["5", "22", "39", "56"]);
+    expect(screen.getByText(/Continues Shot 1/)).toBeTruthy();
     await waitFor(() => {
       expect(document.querySelector("video")?.getAttribute("src")).toBe(
         "/api/files/jobs/job_real/outputs/video.mp4",
@@ -182,6 +182,35 @@ describe("VideoContextPanel", () => {
     const settings = screen.getByText("Continuation settings").closest("details") as HTMLDetailsElement;
     expect(settings.open).toBe(true);
     expect(screen.queryByRole("button", { name: /generate|submit/i })).toBeNull();
+  });
+
+  it("saves an entered supported window without changing the source version", async () => {
+    const previous = makeShot("s1", "Arrival", { h3_job_id: "job_new" });
+    const current = makeShot("s2", "Continue", { video_context: {
+      mode: "previous_shot", source_job_id: "job_old", source_output_key: "video", context_frames: 22,
+    } });
+    vi.mocked(saveVideoContext).mockResolvedValue({ shot_id: current.id, video_context: {
+      ...current.video_context!, context_frames: 39,
+    } });
+    vi.mocked(getShot).mockResolvedValue({ ...current, video_context: { ...current.video_context!, context_frames: 39 } });
+    render(<PanelHarness initial={current} shots={[previous, current]} />);
+    const input = await screen.findByLabelText("Context window");
+    fireEvent.change(input, { target: { value: "39" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(saveVideoContext).toHaveBeenCalledWith(current.id, {
+      mode: "previous_shot", source_job_id: "job_old", source_output_key: "video", context_frames: 39, carry_audio: false,
+    }));
+    expect(await screen.findByText("39 frames · 1.63 s")).toBeTruthy();
+  });
+
+  it("rejects an unsupported entered window without silently choosing 22", async () => {
+    const current = makeShot("s2", "Continue", { video_context: { mode: "previous_shot", context_frames: 22 } });
+    render(<PanelHarness initial={current} shots={[makeShot("s1", "Arrival"), current]} />);
+    const input = await screen.findByLabelText("Context window");
+    fireEvent.change(input, { target: { value: "21" } });
+    fireEvent.blur(input);
+    expect(await screen.findByText(/Use 5, 22, 39 or 56 frames/)).toBeTruthy();
+    expect(saveVideoContext).not.toHaveBeenCalled();
   });
 
   it("keeps a custom workflow window read-only", async () => {
@@ -267,9 +296,7 @@ describe("VideoContextPanel", () => {
 
     await waitFor(() => expect(saveVideoContext).toHaveBeenCalledWith("s2", { mode: "off" }));
     await waitFor(() => {
-      const panel = screen.getByRole("region", { name: "Video continuation" });
-      expect(panel.textContent).toContain("Off");
-      expect(panel.textContent).not.toContain("Configured");
+      expect(screen.queryByRole("region", { name: "Video continuation" })).toBeNull();
     });
   });
 
@@ -287,7 +314,7 @@ describe("VideoContextPanel", () => {
   });
 
   it("uploads an external video and shows the saved upload", async () => {
-    const current = makeShot("s2", "Continue");
+    const current = makeShot("s2", "Continue", { video_context: { mode: "external_upload", upload_id: "vup_old" } });
     const file = new File(["mp4"], "take.mp4", { type: "video/mp4" });
     vi.mocked(uploadVideoContext).mockResolvedValue({
       upload_id: "vup_1",
@@ -318,12 +345,12 @@ describe("VideoContextPanel", () => {
     await waitFor(() => expect(screen.getByLabelText("Resolved upload").textContent).toBe("vup_1"));
     const video = document.querySelector("video") as HTMLVideoElement;
     expect(video.getAttribute("src")).toBe("/api/files/projects/prj_1/video_context_uploads/vup_1.mp4");
-    expect(screen.getByRole("region", { name: "Video continuation" }).textContent).toContain("Configured");
+    expect(screen.getByRole("note", { name: "Video dependency" }).textContent).toContain("Continues uploaded video");
   });
 
-  it("keeps the shot off when saving a version fails", async () => {
+  it("keeps the saved source when changing a version fails", async () => {
     const previous = makeShot("s1", "Arrival", { h3_job_id: "job_real" });
-    const current = makeShot("s2", "Continue");
+    const current = makeShot("s2", "Continue", { video_context: { mode: "previous_shot", source_job_id: "job_old" } });
     vi.mocked(saveVideoContext).mockRejectedValue(new Error("Previous shot job is running"));
 
     render(<PanelHarness initial={current} shots={[previous, current]} expanded />);
@@ -333,7 +360,7 @@ describe("VideoContextPanel", () => {
     });
 
     expect(await screen.findByText("Previous shot job is running")).toBeTruthy();
-    expect(screen.getByRole("region", { name: "Video continuation" }).textContent).not.toContain("Configured");
+    expect(screen.getByLabelText("Resolved job").textContent).toBe("job_old");
     expect(getShot).not.toHaveBeenCalled();
   });
 

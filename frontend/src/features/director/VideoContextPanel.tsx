@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchH3Profiles } from "../../shared/api/client";
 import type { Shot, ShotVideoContext } from "../../shared/api/types";
+import { VideoDependencyIndicator } from "./VideoDependencyIndicator";
 import {
   getShot,
   getVideoJob,
@@ -82,7 +83,7 @@ export function VideoContextPanel({
   const previous = previousOf(shots, shot);
   const [open, setOpen] = useState(expanded);
   const [profile, setProfile] = useState<"builtin" | "custom" | null>(null);
-  const [frames, setFrames] = useState<WindowFrames>(legalWindow(context?.context_frames));
+  const [frames, setFrames] = useState(String(legalWindow(context?.context_frames)));
   const [carry, setCarry] = useState(Boolean(context?.carry_audio));
   const [jobs, setJobs] = useState<VideoJobRecord[]>([]);
   const [versions, setVersions] = useState<Version[]>([]);
@@ -95,12 +96,12 @@ export function VideoContextPanel({
   }, [expanded, shot.id]);
 
   useEffect(() => {
-    setFrames(legalWindow(shot.video_context?.context_frames));
+    setFrames(String(legalWindow(shot.video_context?.context_frames)));
     setCarry(Boolean(shot.video_context?.carry_audio));
   }, [shot]);
 
   useEffect(() => {
-    if (!open && !active) return;
+    if (!active) return;
     let cancelled = false;
     fetchH3Profiles()
       .then((profiles) => {
@@ -115,7 +116,7 @@ export function VideoContextPanel({
   }, [open, active]);
 
   useEffect(() => {
-    if (!open && context?.mode !== "previous_shot") return;
+    if (!active || context?.mode !== "previous_shot") return;
     if (!previous) return;
     const ids = versionIds(previous);
     let cancelled = false;
@@ -147,7 +148,7 @@ export function VideoContextPanel({
     return () => {
       cancelled = true;
     };
-  }, [open, previous, context?.mode]);
+  }, [active, previous, context?.mode]);
 
   const resolvedJobId = context?.mode === "previous_shot"
     ? (context.source_job_id || previous?.h3_job_id || "")
@@ -161,7 +162,7 @@ export function VideoContextPanel({
     ? `${resolvedJobId}:${resolvedKey}`
     : "";
 
-  function payload(body: VideoContextSave, windowFrames = frames, audio = carry): VideoContextSave {
+  function payload(body: VideoContextSave, windowFrames = legalWindow(context?.context_frames), audio = carry): VideoContextSave {
     if (profile === "custom") return body;
     return { ...body, context_frames: windowFrames, carry_audio: audio };
   }
@@ -198,15 +199,52 @@ export function VideoContextPanel({
     }
   }
 
+  function updateWindow() {
+    const next = Number(frames);
+    if (!WINDOW_FRAMES.includes(next as WindowFrames)) {
+      setError("Use 5, 22, 39 or 56 frames.");
+      return;
+    }
+    setError(null);
+    if (!context || next === legalWindow(context.context_frames)) return;
+    const source: VideoContextSave = context.mode === "previous_shot" ? {
+      mode: "previous_shot",
+      ...(context.source_job_id ? { source_job_id: context.source_job_id } : {}),
+      ...(context.source_output_key ? { source_output_key: context.source_output_key } : {}),
+    } : { mode: "external_upload", ...(context.upload_id ? { upload_id: context.upload_id } : {}) };
+    void commit(payload(source, next as WindowFrames, carry));
+  }
+
+  if (!active) return null;
+
   return (
     <section className="video-context-panel" role="region" aria-label="Video continuation">
-      <div className="video-context-summary">
-        <span>Video continuation</span>
-        <strong>{active ? "Configured" : "Off"}</strong>
+      <VideoDependencyIndicator shot={shot} shotNumber={shots.findIndex((item) => item.id === shot.id) + 1}
+        sourceTitle={context?.mode === "previous_shot" ? previous?.title : undefined} />
+      <div className="video-context-window">
+        {profile === "builtin" ? <label>
+          Context window
+          <input type="number" aria-label="Context window" min={5} max={56} step={17}
+            value={frames} disabled={busy} onChange={(event) => setFrames(event.target.value)}
+            onBlur={updateWindow} onKeyDown={(event) => {
+              if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
+            }} />
+        </label> : null}
+        {profile === "custom" ? <label>
+          Context window
+          <input aria-label="Context window" readOnly value="工作流配置" />
+        </label> : null}
+        {profile === "builtin" ? <small>{contextWindowLabel(legalWindow(context?.context_frames))}</small> : null}
       </div>
-      {active && previous ? (
-        <p className="video-context-fact"><span>Source shot</span><strong>{previous.title}</strong></p>
-      ) : null}
+      {blocks.map((reason) => <p key={reason} className="video-context-blocked">{reason}</p>)}
+      {error ? <p className="video-context-blocked" role="alert">{error}</p> : null}
+      <details
+        className="video-context-settings"
+        open={open}
+        onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+      >
+        <summary>Continuation settings</summary>
+        {open ? <div className="video-context-fields">
       {resolvedJobId ? (
         <p className="video-context-fact">
           <span>Job</span>
@@ -222,20 +260,10 @@ export function VideoContextPanel({
           <strong aria-label="Resolved upload">{context.upload_id}</strong>
         </p>
       ) : null}
-      {profile === "builtin" && active ? <p className="video-context-fact">{contextWindowLabel(legalWindow(context?.context_frames))}</p> : null}
       {preview ? (
         <video controls playsInline preload="metadata" src={preview} />
       ) : null}
-      {blocks.map((reason) => <p key={reason} className="video-context-blocked">{reason}</p>)}
-      {error ? <p className="video-context-blocked">{error}</p> : null}
-      <details
-        className="video-context-settings"
-        open={open}
-        onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
-      >
-        <summary>Continuation settings</summary>
-        {open ? <div className="video-context-fields">
-          {!previous ? <p className="video-context-blocked">This shot has no previous shot</p> : null}
+          {!previous && context?.mode === "previous_shot" ? <p className="video-context-blocked">This shot has no previous shot</p> : null}
           <label>
             Previous video version
             <select
@@ -260,41 +288,6 @@ export function VideoContextPanel({
               ))}
             </select>
           </label>
-          {profile === "custom" ? (
-            <label>
-              Context window
-              <input aria-label="Context window" readOnly value="工作流配置" />
-            </label>
-          ) : null}
-          {profile === "builtin" ? (
-            <label>
-              Context window
-              <select
-                aria-label="Context window"
-                value={String(frames)}
-                disabled={busy}
-                onChange={(event) => {
-                  const next = legalWindow(Number(event.target.value));
-                  setFrames(next);
-                  if (!active || !context) return;
-                  if (context.mode === "previous_shot") {
-                    void commit(payload({
-                      mode: "previous_shot",
-                      ...(context.source_job_id ? { source_job_id: context.source_job_id } : {}),
-                      ...(context.source_output_key ? { source_output_key: context.source_output_key } : {}),
-                    }, next, carry));
-                  } else if (context.mode === "external_upload" && context.upload_id) {
-                    void commit(payload({
-                      mode: "external_upload",
-                      upload_id: context.upload_id,
-                    }, next, carry));
-                  }
-                }}
-              >
-                {WINDOW_FRAMES.map((value) => <option key={value} value={String(value)}>{value}</option>)}
-              </select>
-            </label>
-          ) : null}
           {profile === "builtin" ? (
             <label>
               <input
@@ -311,12 +304,12 @@ export function VideoContextPanel({
                       mode: "previous_shot",
                       ...(context.source_job_id ? { source_job_id: context.source_job_id } : {}),
                       ...(context.source_output_key ? { source_output_key: context.source_output_key } : {}),
-                    }, frames, next));
+                    }, legalWindow(context.context_frames), next));
                   } else if (context.mode === "external_upload" && context.upload_id) {
                     void commit(payload({
                       mode: "external_upload",
                       upload_id: context.upload_id,
-                    }, frames, next));
+                    }, legalWindow(context.context_frames), next));
                   }
                 }}
               />

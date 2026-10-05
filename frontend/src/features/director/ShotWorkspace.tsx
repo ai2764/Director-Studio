@@ -178,6 +178,9 @@ export function ShotWorkspace({
                   </div>
                 </header>
 
+                <VideoContextPanel key={selected.id} shot={selected} shots={shots}
+                  expanded={focusShotId === selected.id} onShotUpdated={onShotUpdated} />
+
                 <nav className="shot-document-nav" aria-label="Shot document sections">
                   {DOCUMENT_SECTIONS.map((section) => (
                     <a key={section.id} href={`#${section.id}`}>
@@ -324,12 +327,6 @@ export function ShotWorkspace({
                     <div><span>Video job</span><strong>{selected.h3_job_id || "Not queued"}</strong></div>
                     <div><span>Status</span><strong>{shotWorkflowStatus(selected).label}</strong></div>
                   </div>
-                  <VideoContextPanel
-                    shot={selected}
-                    shots={shots}
-                    expanded={focusShotId === selected.id}
-                    onShotUpdated={onShotUpdated}
-                  />
                 </section>
               </article>
             </div>

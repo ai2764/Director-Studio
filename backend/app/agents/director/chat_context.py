@@ -291,6 +291,10 @@ def project_context_blob(
             "conditioning": "finished_video_motion_context",
             "source_modes": ["previous_shot", "external_upload"],
             "configuration_starts_job": False,
+            "usage": "When the user requests continuity from the previous shot, call configure_video_context "
+                     "with mode=previous_shot. Prompt prose alone does not configure it. "
+                     "Only saved active continuation exposes its UI indicator and frame window.",
+            "resolution_policy": "Previous-shot continuation inherits the selected source video's actual width and height.",
         },
         "script_chars": len(script),
         "directing_requests": directing_requests(project),

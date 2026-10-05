@@ -474,6 +474,21 @@ export interface VideoJobRecord {
   }>;
 }
 
+export interface VideoContextStatus {
+  mode: ShotVideoContext["mode"];
+  source_job_id: string | null;
+  context_frames: number | null;
+  carry_audio: boolean;
+  blocked_reasons: string[];
+  resolution: { width: number; height: number } | null;
+}
+
+export async function getVideoContextStatus(shotId: string): Promise<VideoContextStatus> {
+  const res = await fetch(`/api/shots/${shotId}/video-context`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
 export async function saveVideoContext(
   shotId: string,
   body: VideoContextSave,
