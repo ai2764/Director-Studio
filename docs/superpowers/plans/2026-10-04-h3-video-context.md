@@ -173,11 +173,11 @@ def attach_video_context(graph: dict, *, uploaded_video: str, delivered_frames: 
 
 **Interfaces:** UI 读取同一个 `Shot.video_context`。`configure_video_context:{shot_id}` action 选中真实 target Shot 并展开设置；保存依 Task 2 PUT，上传依项目上传 API。
 
-- [ ] 写测试：旧 Shot 显示 off；成功 tool action 选中 target 并展开；失败 action 不显示 configured；选择之前视频版本、关闭和上传均刷新后端保存状态。
-- [ ] 在现有 Production 区增加紧凑面板，展示来源镜头、真实 Job/artifact、视频预览和实际窗口。builtin 显示默认 22 帧约 0.92 秒，可选合法窗口；custom 显示“工作流配置”，未映射参数只读。
-- [ ] 连续性控制和“生成”按钮分开；阻塞来源的原因就近显示。视频默认 paused、`controls playsInline preload=metadata`，不自动全屏。
-- [ ] 不新增 Music tab/第三列或修改全宽歌曲播放器。手机复用当前 drawer/scroll 容器，保证上下滚动、输入框和返回操作。
-- [ ] 在 `frontend` 跑 `npm test -- --run` 与 `npm run build`；检查 5174 桌面和手机宽度下 UI。通过后提交。
+- [x] 写测试：旧 Shot 显示 off；成功 tool action 选中 target 并展开；失败 action 不显示 configured；选择之前视频版本、关闭和上传均刷新后端保存状态。
+- [x] 在现有 Production 区增加紧凑面板，展示来源镜头、真实 Job/artifact、视频预览和实际窗口。builtin 显示默认 22 帧约 0.92 秒，可选合法窗口；custom 显示“工作流配置”，未映射参数只读。
+- [x] 连续性控制和“生成”按钮分开；阻塞来源的原因就近显示。视频默认 paused、`controls playsInline preload=metadata`，不自动全屏。
+- [x] 不新增 Music tab/第三列或修改全宽歌曲播放器。手机复用当前 drawer/scroll 容器，保证上下滚动、输入框和返回操作。
+- [x] 在 `frontend` 跑 `npm test -- --run`（289 passed）与 `npm run build`。5174 桌面和手机宽度的目视检查本会话没有浏览器工具，留到 Task 6 服务起来后补。通过后提交。
 
 ## Task 6 — 串行实测与 Grok 交付
 

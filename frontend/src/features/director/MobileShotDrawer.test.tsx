@@ -89,4 +89,26 @@ describe("MobileShotDrawer", () => {
     expect(screen.queryByText("failed framing")).toBeNull();
     expect(screen.getByText("No Layouts generated for this Shot.")).toBeTruthy();
   });
+
+  it("keeps continuation inside the shot drawer", () => {
+    render(<MobileShotDrawer shots={shots} onOpenImage={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Shots, 2 planned" }));
+
+    const panel = screen.getByRole("region", { name: "Video continuation" });
+    expect(panel.closest(".mobile-shot-drawer-body")).toBeTruthy();
+    expect(panel.closest("#mobile-shot-production")).toBeTruthy();
+    expect(panel.textContent).toContain("Off");
+    expect(screen.queryByRole("heading", { name: "Music" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Music" })).toBeNull();
+  });
+
+  it("opens the drawer on the shot selected by a saved continuation", () => {
+    render(<MobileShotDrawer shots={shots} focusShotId="s2" onOpenImage={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Shots, 2 planned" }).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("heading", { name: "Reveal" })).toBeTruthy();
+    const settings = screen.getByText("Continuation settings").closest("details") as HTMLDetailsElement;
+    expect(settings.open).toBe(true);
+    expect(screen.getByRole("region", { name: "Video continuation" }).closest(".mobile-shot-document")).toBeTruthy();
+  });
 });

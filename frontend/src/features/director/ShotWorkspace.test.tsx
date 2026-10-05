@@ -211,6 +211,27 @@ describe("ShotWorkspace", () => {
     expect(screen.queryByText(/^\d+ versions?$/)).toBeNull();
     expect(screen.getByText("Reveal subject")).toBeTruthy();
     expect(screen.getByText("Reveal beat")).toBeTruthy();
+    const continuation = screen.getByRole("region", { name: "Video continuation" });
+    expect(continuation.closest("#shot-production")).toBeTruthy();
+    expect(continuation.textContent).toContain("Off");
+    expect(continuation.textContent).not.toContain("Configured");
+  });
+
+  it("selects the shot named by a saved continuation and expands its settings", () => {
+    render(
+      <ShotWorkspace
+        shots={[shot("s1", "Arrival"), shot("s2", "Reveal")]}
+        busy={false}
+        focusShotId="s2"
+        onSend={vi.fn()}
+        onOpenImage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "2. Reveal" })).toBeTruthy();
+    const settings = screen.getByText("Continuation settings").closest("details") as HTMLDetailsElement;
+    expect(settings.open).toBe(true);
+    expect(screen.getByRole("region", { name: "Video continuation" }).textContent).toContain("Off");
   });
 
   it("shows the mobile Shot design fields in the desktop creative brief", () => {

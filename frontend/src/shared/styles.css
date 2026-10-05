@@ -6789,6 +6789,55 @@ select {
   text-align: right;
 }
 
+.video-context-panel {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.video-context-summary,
+.video-context-fact {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.video-context-summary span,
+.video-context-fact span {
+  color: var(--muted);
+}
+
+.video-context-panel video {
+  display: block;
+  width: 100%;
+  max-height: 9rem;
+  background: #161616;
+}
+
+.video-context-fields {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+}
+
+.video-context-fields label {
+  display: grid;
+  gap: 0.2rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.video-context-blocked {
+  margin: 0;
+  color: var(--danger, #8a3d32);
+  font-size: 0.78rem;
+}
+
+.video-context-panel input[readonly] {
+  color: var(--muted);
+}
+
 .shot-document .layout-reference-list {
   margin-top: 0;
 }

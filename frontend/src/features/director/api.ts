@@ -7,6 +7,7 @@ import type {
   ProjectMode,
   Shot,
   ShotRef,
+  ShotVideoContext,
 } from "../../shared/api/types";
 import type { DirectorVramStatus } from "./generationStatus";
 import type { SegmentSelection } from "../music/api";
@@ -432,6 +433,76 @@ export async function rejectLayout(shotId: string, feedback: string): Promise<Sh
 
 export async function getShot(shotId: string): Promise<Shot> {
   const res = await fetch(`/api/shots/${shotId}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export interface VideoContextSave {
+  mode: "off" | "previous_shot" | "external_upload";
+  source_job_id?: string;
+  source_output_key?: string;
+  upload_id?: string;
+  context_frames?: 5 | 22 | 39 | 56;
+  audio_context_frames?: number;
+  carry_audio?: boolean;
+}
+
+export interface VideoContextUploadRecord {
+  upload_id: string;
+  filename: string;
+  sha256: string;
+  media: {
+    width: number;
+    height: number;
+    fps: number;
+    duration_s: number;
+    has_audio: boolean;
+    has_video: boolean;
+  };
+  size_bytes: number;
+}
+
+export interface VideoJobRecord {
+  id: string;
+  status: string;
+  outputs: Record<string, {
+    key?: string;
+    label?: string;
+    filename?: string | null;
+    url?: string | null;
+    path?: string | null;
+  }>;
+}
+
+export async function saveVideoContext(
+  shotId: string,
+  body: VideoContextSave,
+): Promise<{ shot_id: string; video_context: ShotVideoContext }> {
+  const res = await fetch(`/api/shots/${shotId}/video-context`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function uploadVideoContext(
+  projectId: string,
+  file: File,
+): Promise<VideoContextUploadRecord> {
+  const body = new FormData();
+  body.append("file", file);
+  const res = await fetch(`/api/projects/${projectId}/video-context/uploads`, {
+    method: "POST",
+    body,
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function getVideoJob(jobId: string): Promise<VideoJobRecord> {
+  const res = await fetch(`/api/h3-ref2va/jobs/${jobId}`);
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
 }
