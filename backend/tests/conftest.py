@@ -42,6 +42,9 @@ def enable_reference_review(monkeypatch):
             if "Review a Director Studio tail-frame prompt candidate" in system:
                 return json.dumps({"tail_opening": "Inherited view.", "candidate_opening": "Inherited view.",
                                    "camera_path": "Continuous camera movement.",
+                                   "field_checks": {key: {"compatible": True, "evidence": "Fixture field agrees with the evidence."} for key in ("script_beat", "shot_type", "camera_angle", "camera_motion", "composition", "subject_definitions", "summary", "retention_analysis", "detailed_description", "overall_soundscape", "non_diegetic_music")},
+            "checks": {key: {"compatible": True, "evidence": "Fixture evidence agrees."}
+                                              for key in ("opening_alignment", "transition_path", "reference_roles", "section_consistency")},
                                    "valid": True, "issues": [], "blocking_question": None})
             if "For this tail-frame continuation return a candidate envelope" in system:
                 sections = json.loads(await complete(system, user, guides=guides))

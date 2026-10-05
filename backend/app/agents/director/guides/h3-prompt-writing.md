@@ -8,6 +8,10 @@ When backend `video_context_observation` is active, the finished source video is
 
 ## Write one feasible clip
 
+Resolve each reference's contribution before writing. An explicitly selected costume controls the worn outfit over incidental clothes on an identity sheet; use reference notes and user direction to determine that scope. A cropped view cannot establish unseen footwear. Preserve established design or omit unsupported nonessential details. Compare composition and script beat with all six sections at both the opening and ending; remove superseded pose and camera descriptions.
+
+For continuous video handoffs, inherit the observed time-zero crop and viewpoint. A requested wider view can be reached by a described camera or subject move; a locked camera and stationary subject cannot instantly produce that wider opening. Match pose and framing separately.
+
 Preserve scripted dialogue in order inside `detailed_description` using `<d>[Language] exact words</d>`. Keep speaker IDs, actions, and delivery outside `<d>`. Perform repetitions only when the script specifies them. Never quote the spoken lines in `summary`, `retention_analysis`, `subject_definitions`, `overall_soundscape`, or `non_diegetic_music`; those sections describe roles, ambience, and music without repeating dialogue. Visible scene text is not another vocal event.
 
 Keep every timing interval within `duration_s`, and state required non-appearance positively. Use approved metadata and describe motion directly without assigning Pictures to time windows.

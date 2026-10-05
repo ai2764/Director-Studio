@@ -35,6 +35,26 @@ IMAGE_TOKEN_RESERVE = 2048
 MAX_HARNESS_SEED_MESSAGES = 24
 
 
+def _context_job_ids(state: str) -> set[str]:
+    """Only structured Job fields, never IDs mentioned in script/chat prose."""
+    fields = {"job_id", "source_job_id", "h3_job_id", "ref_frame_job_id", "current_job_id"}
+    ids: set[str] = set()
+
+    def visit(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in fields and isinstance(item, str) and re.fullmatch(r"job_[a-z0-9]+", item):
+                    ids.add(item)
+                else:
+                    visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(json.loads(state))
+    return ids
+
+
 def harness_input_budget(context_capacity: int, image_count: int = 0) -> int:
     budget = context_capacity - settings.director_num_predict - image_count * IMAGE_TOKEN_RESERVE
     if budget < 256:
@@ -63,6 +83,7 @@ class BackendTurn:
         ]
         self.actions: list[str] = []
         self.tool_exposed_job_ids: set[str] = set()
+        self.context_exposed_job_ids: set[str] = set()
         self.result_images = []
         self.touched: set[str] = set()
         self.notes: list[str] = []
@@ -152,6 +173,8 @@ class BackendTurn:
             system += "\nDialogue metadata needs the user's clarification before prompt writing. Ask the confirmed question; do not guess or change the source."
         elif self.terminal_failure and self.terminal_failure_code in {"MATERIAL_INPUT_INVALID", "MATERIAL_REVIEW_INVALID"}:
             system += "\nReference preflight failed before prompt writing. Explain the exact affected binding or evidence issue and required next step. Do not claim a prompt retry can repair missing inputs, or silently substitute assets. The user can still edit or relink references in a subsequent turn."
+        elif self.terminal_failure_code == "STORYBOARD_REVIEW_INVALID" and self.terminal_failure:
+            system += "\nStoryboard review returned malformed verdicts after bounded format recovery. Explain this review-system failure and the unchanged board. It is not a creative rejection; do not change the candidate or screenplay to work around it."
         elif self.terminal_failure:
             system += (
                 "\nA derived prompt operation already failed after its bounded internal "
@@ -175,6 +198,7 @@ class BackendTurn:
                     image_count=len(self.images), context_capacity=self.context_capacity))
         self.offered_context = {"system": system, "state": state, "tools": tools}
         self.offered_version = version
+        self.context_exposed_job_ids.update(_context_job_ids(state))
         return self.offered_context
 
     async def dispatch(self, method: str, params: dict):
@@ -428,6 +452,9 @@ class BackendTurn:
             result.update(ok=False, error="No successful operation confirmed. " + " ".join(notes))
         if name == "save_storyboard":
             self.storyboard_failed = not result["ok"]
+        if result.get("code") == "STORYBOARD_REVIEW_INVALID":
+            self.terminal_failure_code = result["code"]
+            self.terminal_failure = result["error"]
         if name == "write_prompt" and not result["ok"] and result.get("code") != "CONTEXT_REQUIRED":
             self.prompt_failure_kind = result.get("failure_kind", "unknown")
             failure = str(result.get("error") or "Prompt generation failed.")
@@ -489,8 +516,8 @@ class BackendTurn:
             if any((job := load_job(job_id)) is None or job.project_id != project.id
                    for job_id in referenced_jobs):
                 reply = "回复引用了不存在的项目 Job。本轮没有可核实的任务回执；请重新读取状态或调用生成工具。"
-            elif not referenced_jobs <= self.tool_exposed_job_ids:
-                reply = "回复引用了未经本轮工具核实的 Job。请先读取状态或调用生成工具。"
+            elif not referenced_jobs <= (self.tool_exposed_job_ids | self.context_exposed_job_ids):
+                reply = "回复引用了未经本轮项目状态或工具核实的 Job。请先读取状态或调用生成工具。"
         images = self.result_images + _layout_images(shots, only_shot_ids=self.touched) if self.touched else self.result_images
         return ChatResult(reply=reply, project=project, shots=shots, actions=self.actions,
                           failure_code=self.terminal_failure_code if self.terminal_failure else "",

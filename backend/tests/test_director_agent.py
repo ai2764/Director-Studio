@@ -1346,9 +1346,13 @@ async def test_save_storyboard_runs_real_provider_and_storyboard_validation_guid
     prompts: list[str] = []
 
     class _Client:
-        async def generate(self, model: str, prompt: str) -> str:
-            prompts.append(prompt)
-            return json.dumps({"valid": True, "issues": []})
+        async def chat_response(self, model: str, *, messages, format, options):
+            prompts.append(messages[0]["content"])
+            from jsonschema import Draft202012Validator
+            verdict = {"valid": True, "issues": []}
+            Draft202012Validator(format).validate(verdict)
+            assert options["num_predict"] <= 4096
+            return {"content": json.dumps(verdict), "finish_reason": "stop"}
 
     provider = OllamaPlanProvider(model="qwen-test")
     provider.client = _Client()

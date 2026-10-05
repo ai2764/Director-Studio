@@ -69,7 +69,6 @@ from .planner import (
     ShotDraft,
     parse_prompt_sections_json,
     parse_shot_drafts,
-    parse_storyboard_validation,
     role_to_library_kind,
     role_to_ref_role,
 )
@@ -967,6 +966,13 @@ class DirectorService:
             requested_minimum_duration_s=minimum_duration,
             candidate_json=candidate_json,
         )
+        validation_user += "\nSAVED STORYBOARD BEFORE THIS REVISION (original numbering):\n" + json.dumps([
+            {"index": position, "id": shot.id, **shot.model_dump(mode="json", include={
+                "title", "scene_id", "script_beat", "duration_s", "shot_type",
+                "camera_angle", "camera_motion", "composition", "dialogue", "dialogue_lines",
+            })}
+            for position, shot in enumerate(existing_shots, 1)
+        ], ensure_ascii=False)
         # The semantic validator is a separate model call, not the agent's chat.
         # Carry observed evidence across that boundary, never just asset labels.
         from .material_review import capture_asset_image
@@ -999,17 +1005,8 @@ class DirectorService:
         keep = bool(getattr(settings, "llm_keep_loaded", True))
         async with self.orchestrator.llm_session(release_on_exit=not keep):
             await self.orchestrator.ensure_llm_ready()
-            raw_validation = await self.plan_provider.complete(
-                prompt_text.STORYBOARD_VALIDATION_SYSTEM,
-                validation_user,
-                guides=("storyboard-validation",),
-            )
-        try:
-            validation = parse_storyboard_validation(raw_validation)
-        except Exception as exc:
-            raise StoryboardValidationError(
-                [f"semantic validator returned an invalid structured verdict: {exc}"]
-            ) from exc
+            from .storyboard_review import review_storyboard
+            validation = await review_storyboard(self.plan_provider, validation_user)
         if not validation.valid:
             raise StoryboardValidationError(validation.issues)
 

@@ -87,7 +87,8 @@ async def test_bounded_tail_writer_attaches_video_observation_and_preserves_sche
     assert MARKER in call["messages"][0]["content"]
 
 
-def test_old_active_prompt_stamp_is_invalidated_but_off_stamp_is_unchanged(monkeypatch, tmp_path):
+@pytest.mark.parametrize("old_version", [None, 2])
+def test_old_active_prompt_stamp_is_invalidated_but_off_stamp_is_unchanged(monkeypatch, tmp_path, old_version):
     from app.core.projects import video_context as module
     from app.core.projects.models import ShotVideoContext
     from app.core.projects.store import load_shot, save_shot
@@ -101,6 +102,8 @@ def test_old_active_prompt_stamp_is_invalidated_but_off_stamp_is_unchanged(monke
     legacy["resolved_source"] = {"job_id": job.id, "output_key": "video",
                                   "sha256": hashlib.sha256(b"source-video").hexdigest()}
     legacy["runtime"] = module._runtime_options(shot.video_context)
+    if old_version is not None:
+        legacy["writer_contract_version"] = old_version
     stamp = hashlib.sha256(json.dumps(legacy, sort_keys=True, ensure_ascii=False,
                                     separators=(",", ":")).encode()).hexdigest()[:16]
     assert module.video_context_prompt_is_stale(shot.model_copy(update={

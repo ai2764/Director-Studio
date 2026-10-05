@@ -11,6 +11,10 @@ class PromptFailureError(ValueError):
         super().__init__(message)
 
 
+class PromptOutputTruncated(ValueError):
+    """The provider completed a response at its output limit, not a transport failure."""
+
+
 class PromptContextOverflow(PromptFailureError):
     code = "PROMPT_CONTEXT_OVERFLOW"
 

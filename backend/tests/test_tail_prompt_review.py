@@ -34,6 +34,10 @@ def verdict(valid=True):
     return {"tail_opening": "Eye-level waist-up standing view.",
             "candidate_opening": "Eye-level waist-up standing view." if valid else "Locked low wide view.",
             "camera_path": "Camera pulls back and lowers." if valid else "No move.",
+            "field_checks": {key: {"compatible": True, "evidence": "Fixture field agrees with the evidence."} for key in ("script_beat", "shot_type", "camera_angle", "camera_motion", "composition", "subject_definitions", "summary", "retention_analysis", "detailed_description", "overall_soundscape", "non_diegetic_music")},
+            "checks": {key: {"compatible": valid if key == "opening_alignment" else True,
+                             "evidence": "Inherited and candidate view agree." if valid else "Opening lacks a camera transition."}
+                       for key in ("opening_alignment", "transition_path", "reference_roles", "section_consistency")},
             "valid": valid, "issues": [] if valid else [
         "Opening is a low wide view although the inherited frame is waist-up; specify a camera transition."
     ], "blocking_question": None}
@@ -76,16 +80,25 @@ async def test_tail_draft_and_independent_audit_receive_labelled_video_image(tai
             self.text.append((system, user, images, max_tokens, schema))
             return json.dumps(self.responses.pop(0))
 
-    provider = VisualBoundedProvider([candidate(), verdict()])
+    provider = VisualBoundedProvider([{
+        "framing": "Waist-up", "viewpoint": "Eye-level", "pose": "Standing, frontal",
+        "visible_state": "Face and upper body visible", "not_visible": ["feet", "lower legs"]
+    }, candidate(), verdict()])
     await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
-    assert len(provider.text) == 2
+    assert len(provider.text) == 3
+    draft_packet = json.loads(provider.text[1][1])
+    audit_packet = json.loads(provider.text[2][1])
+    assert draft_packet["source_ending_observation"] == audit_packet["source_ending_observation"]
+    assert audit_packet["source_ending_observation"]["not_visible"] == ["feet", "lower legs"]
+    neutral_packet = json.loads(provider.text[0][1])
+    assert "candidate_prompt" not in neutral_packet and "references" not in neutral_packet
     for system, user, images, limit, schema in provider.text:
         packet = json.loads(user)["video_context_observation"]
         assert packet["tail_frame_image_index"] == 1
         assert packet["tail_frame_role"] == "source_video_ending_observation"
         assert packet["picture_slots"] == packet["audio_slots"] == []
         assert images == [base64.b64encode(png).decode()]
-        assert schema and limit in {6144, 1024}
+        assert schema and limit in {1024, 6144, 4096}
         assert "camera path" in system
     assert load_shot(project.id, shot.id).refs == shot.refs
 
@@ -120,7 +133,10 @@ async def test_video_only_handoff_cannot_publish_a_rejected_opening(tail_handoff
             self.text.append((system, user))
             return json.dumps(self.responses.pop(0))
 
-    provider = VisualBoundedProvider([candidate(), verdict(valid)] * (1 if valid else 2))
+    provider = VisualBoundedProvider([{
+        "framing": "Waist-up", "viewpoint": "Eye-level", "pose": "Standing, frontal",
+        "visible_state": "Face and upper body visible", "not_visible": ["feet", "lower legs"]
+    }, *([candidate(), verdict(valid)] * (1 if valid else 2))])
     svc = DirectorService(plan_provider=provider, orchestrator=Orchestrator())
     before_jobs = {job.id for job in list_jobs(project_id=project.id)}
     if valid:
@@ -217,7 +233,7 @@ async def test_request_and_candidate_reach_reviewer_before_atomic_save(tail_hand
     audit = json.loads(provider.text[1][1])
     assert "tail_observations" in audit
     assert "original_shot" not in audit
-    assert "references" not in audit
+    assert audit["references"][0]["description"].startswith("Eye-level waist-up")
     assert updated.camera_motion.startswith("Pull back")
     assert updated.prompt_sections.detailed_description.startswith("0-2 seconds")
     assert updated.h3_job_id is None

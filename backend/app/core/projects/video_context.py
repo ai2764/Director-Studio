@@ -161,7 +161,7 @@ def video_context_prompt_signature(shot: Shot) -> str:
         else dict(config.model_dump(mode="json"))
     )
     if config is not None and config.mode != "off":
-        payload["writer_contract_version"] = 2
+        payload["writer_contract_version"] = 3
         try:
             if config.mode == "external_upload":
                 _record, path = _require_upload(shot.project_id, config.upload_id)

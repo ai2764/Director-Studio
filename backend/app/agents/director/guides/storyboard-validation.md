@@ -4,6 +4,8 @@
 
 Judge the complete submitted storyboard against the immutable full screenplay, the exact current user feedback, and the requested minimum duration. Return only observed, evidence-based issues. Do not invent requirements or rewrite beats. Do not propose replacement shots or a replacement shot list.
 
+Use the saved storyboard's original one-based indices and stable IDs to resolve numbered references in the current revision request. Candidate positions are the proposed new order; merging, removing or reordering can change them. Match the actual action content and any supplied `shot_id` values across the two boards. A retained original shot becoming candidate Shot 3 does not make it the original Shot 3. Do not invent a conflict when original or historical numbering is unavailable.
+
 ## Use only the semantic acceptance categories
 
 Reject only for an observed problem in one of these categories:

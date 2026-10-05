@@ -176,7 +176,10 @@ class TailHandoffProvider(Provider):
                                "tail_opening": "Waist-up front view.",
                                "candidate_opening": "Waist-up front view.",
                                "camera_path": self.handoff or "Absent.",
-                               "issues": [] if self.handoff else ["Missing credible tail-frame handoff"],
+                               "field_checks": {key: {"compatible": True, "evidence": "Fixture field agrees with the evidence."} for key in ("script_beat", "shot_type", "camera_angle", "camera_motion", "composition", "subject_definitions", "summary", "retention_analysis", "detailed_description", "overall_soundscape", "non_diegetic_music")},
+            "checks": {key: {"compatible": True, "evidence": "Fixture evidence agrees."}
+                                              for key in ("opening_alignment", "transition_path", "reference_roles", "section_consistency")},
+                                   "issues": [] if self.handoff else ["Missing credible tail-frame handoff"],
                                "blocking_question": None})
         if "reference review decision" in system.lower():
             decision = {
