@@ -160,12 +160,12 @@ def attach_video_context(graph: dict, *, uploaded_video: str, delivered_frames: 
 
 **Interfaces:** 新 tool `configure_video_context` 参数与 Task 2 的 config 相同，加 `shot_id`。由工具后端推导上一镜，不让模型填宿主路径。返回 `{ok, shot_id, video_context, source_job_id, blocked_reasons, actions}`；成功 action 为 `configure_video_context:{shot_id}`。
 
-- [ ] 写失败测试：配置工具保存真实状态但不调用 start；关闭会清理配置；来源异常返回失败；start 返回真实 Job；失败的 start 没有 fabricated ID。重复相同配置幂等。
-- [ ] 把 handler 接入 legacy 和 Harness 共有的 `tool_execution`，更新 read_status；用结构化工具而不是在 chat_orchestrator/intent.py 添加“衔接”关键词判断。
-- [ ] Skill/tool description 写清：用户需要连续动作/运镜时先读 source 状态并配置 previous_shot；缺来源要说明；只设置不能说已生成；明确生成请求才调用现有 start_h3_video；关闭后回普通模式。
-- [ ] Writer 获得真实 source 的末帧预览和元信息；预览不替换真实视频输入、不新增虚构 Picture/Audio slot、不注入视频文件名/歌名作为创作指令。context 改变时提示词 freshness 和 managed fingerprint 反映它；off 的旧模式保留兼容。
-- [ ] 拿自然语言测试 Agent：“第二镜接着上一镜往前推”“继续刚才的动作”“不要衔接，独立生成”。检查工具轨迹，不靠期待文本包含某个关键词来通过。明显不要求衔接的“这两段歌词如何衔接”不得修改 Shot。
-- [ ] 测试 managed run 前一镜完成后下一镜能解析其真实视频，配置变更不会越过已有 coordinator/event/idempotency 约束。通过后提交。
+- [x] 写失败测试：配置工具保存真实状态但不调用 start；关闭会清理配置；来源异常返回失败；start 返回真实 Job；失败的 start 没有 fabricated ID。重复相同配置幂等。
+- [x] 把 handler 接入 legacy 和 Harness 共有的 `tool_execution`，更新 read_status；用结构化工具而不是在 chat_orchestrator/intent.py 添加“衔接”关键词判断。
+- [x] Skill/tool description 写清：用户需要连续动作/运镜时先读 source 状态并配置 previous_shot；缺来源要说明；只设置不能说已生成；明确生成请求才调用现有 start_h3_video；关闭后回普通模式。
+- [x] Writer 获得真实 source 的末帧预览和元信息；预览不替换真实视频输入、不新增虚构 Picture/Audio slot、不注入视频文件名/歌名作为创作指令。context 改变时提示词 freshness 和 managed fingerprint 反映它；off 的旧模式保留兼容。
+- [x] 拿自然语言测试 Agent：“第二镜接着上一镜往前推”“继续刚才的动作”“不要衔接，独立生成”。检查工具轨迹，不靠期待文本包含某个关键词来通过。明显不要求衔接的“这两段歌词如何衔接”不得修改 Shot。
+- [x] 测试 managed run 前一镜完成后下一镜能解析其真实视频，配置变更不会越过已有 coordinator/event/idempotency 约束。通过后提交。
 
 ## Task 5 — 当前镜头可见的视频窗口和手机版兼容
 

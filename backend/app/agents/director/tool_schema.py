@@ -597,6 +597,23 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
         required=["shot_id"],
     ),
+    function_tool(
+        "configure_video_context",
+        "Save how this shot continues from a finished source video. "
+        "The backend chooses the immediately previous shot. "
+        "This does not start generation. Do not pass a file path.",
+        {
+            "shot_id": {"type": "string"},
+            "mode": {"type": "string", "enum": ["off", "previous_shot", "external_upload"]},
+            "source_job_id": {"type": "string"},
+            "source_output_key": {"type": "string"},
+            "upload_id": {"type": "string"},
+            "context_frames": {"type": "integer", "enum": [5, 22, 39, 56]},
+            "audio_context_frames": {"type": "integer"},
+            "carry_audio": {"type": "boolean"},
+        },
+        required=["shot_id", "mode"],
+    ),
 ]
 
 

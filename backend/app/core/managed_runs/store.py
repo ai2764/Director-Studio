@@ -68,6 +68,9 @@ def _authored_shot_payload(shots, *, legacy: bool) -> list[dict]:
                 ),
                 "source_audio_path": shot.source_audio_path,
             })
+            context = shot.video_context
+            if context is not None and context.mode != "off":
+                item["video_context"] = context.model_dump(mode="json")
         authored.append(item)
     return authored
 
@@ -84,6 +87,7 @@ def _project_fingerprint(project_id: str, *, legacy: bool, version: int = 2) -> 
         for item in authored:
             item.pop("scene_id", None)
             item.pop("dialogue_lines", None)
+            item.pop("video_context", None)
     fingerprint_items = [project.script_text, project.shot_ids, authored]
     if not legacy and version >= 2:
         from ...agents.director.brief import directing_requests

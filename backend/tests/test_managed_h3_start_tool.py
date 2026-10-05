@@ -579,6 +579,57 @@ async def test_harness_tool_returns_bound_job_on_repeated_new_call_id(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_next_shot_resolves_the_finished_video_and_a_context_edit_pauses(
+    monkeypatch, tmp_path, authorize_managed_turn,
+) -> None:
+    """Configuring continuation is not a job, and a later edit still blocks submit."""
+    from app.agents.director.tool_handlers.video import start_h3_video
+    from app.api import projects as projects_api
+    from app.core.jobs import list_jobs
+    from app.core.managed_runs.store import run_selected
+    from app.core.projects.models import ShotVideoContext
+    from app.core.projects.video_context import configure_video_context, resolve_video_context
+    from test_video_context_sources import _board, _media, _succeed
+
+    project, first, second = _board(monkeypatch, tmp_path)
+    job = _succeed(project.id, first.id, b"source-video")
+    save_shot(load_shot(project.id, first.id).model_copy(update={"h3_job_id": job.id}))
+    monkeypatch.setattr("app.core.projects.video_context.probe_video", lambda path: _media())
+    configure_video_context(
+        project.id, second.id, ShotVideoContext(mode="previous_shot", context_frames=22),
+    )
+    resolved = resolve_video_context(
+        load_shot(project.id, second.id), width=864, height=480,
+    )
+    assert resolved is not None
+    assert resolved.data == b"source-video"
+    assert resolved.provenance["source_job_id"] == job.id
+    assert load_shot(project.id, second.id).video_context.source_job_id is None
+
+    draft = create_draft(project.id, [RunStep(shot_id=first.id), RunStep(shot_id=second.id)])
+    run = run_selected(project.id, draft.run_id, [second.id], "landscape-480")
+    authorize_managed_turn(run)
+    configure_video_context(
+        project.id, second.id, ShotVideoContext(mode="previous_shot", context_frames=5),
+    )
+    submitted = []
+
+    async def fake_submit(*args, **kwargs):
+        submitted.append(args)
+        raise AssertionError("a changed video context must not submit")
+
+    monkeypatch.setattr(projects_api, "submit_shot_endpoint", fake_submit)
+    with pytest.raises(ValueError, match="changed after managed plan review"):
+        await start_h3_video(project.id, second.id, svc=object())
+
+    assert submitted == []
+    saved = load_run(project.id, run.run_id)
+    assert saved.state == "paused"
+    assert saved.current_job_id is None
+    assert {item.id for item in list_jobs(limit=None, project_id=project.id)} == {job.id}
+
+
+@pytest.mark.asyncio
 async def test_stop_during_preflight_cancels_late_job(monkeypatch, authorize_managed_turn) -> None:
     from app.agents.director.tool_handlers import video
     from app.api import projects as projects_api

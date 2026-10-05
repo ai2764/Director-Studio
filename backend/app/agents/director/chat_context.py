@@ -41,6 +41,7 @@ def project_context_blob(
     from .service import _inventory, _script_hash
     from .tool_handlers.actor import _load_proposal
     from .tool_handlers.project import _load_storyboard_replacement
+    from ...core.projects.video_context import video_context_status
 
     inv = _inventory(project.id)
     from .brief import directing_requests, duration_issues
@@ -240,6 +241,7 @@ def project_context_blob(
                 shot.music_segment.model_dump(mode="json")
                 if shot.music_segment else None
             ),
+            "video_context_status": video_context_status(shot),
             "material_review_pending": bool(
                 (shot.meta or {}).get("material_review_pending")
             ),

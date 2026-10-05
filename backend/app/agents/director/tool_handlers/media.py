@@ -12,6 +12,7 @@ from ....core.media.clip_generations import (
 from ....core.media import tail_frame
 from ....core.projects.models import Project, Shot
 from ....core.projects.store import load_shot
+from ....core.projects.video_context import video_context_status
 from ..intent import material_review_target_shot_id
 
 
@@ -53,6 +54,7 @@ async def handle_media_tool(
                     {
                         "ok": True,
                         "shot": _shot_status_payload(selected),
+                        "video_context_status": video_context_status(selected),
                         "h3_generations": [
                             {
                                 "version": f"v{index}",

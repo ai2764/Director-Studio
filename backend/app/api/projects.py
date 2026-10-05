@@ -2202,6 +2202,7 @@ async def submit_shot_endpoint(
     )
     from ..agents.director.dialogue_preflight import dialogue_contract_current, require_current_dialogue_contract
     from ..agents.director.reference_facts import reference_contract_current, require_current_reference_contract
+    from ..core.projects.video_context import video_context_prompt_is_stale
     try:
         validate_editorial_music_prompt(project, shot, shot.prompt_sections)
         editorial_music_leaked = False
@@ -2226,6 +2227,7 @@ async def submit_shot_endpoint(
             (music_active or "prompt_music_signature" in (shot.meta or {}) or shot.music_segment is not None)
             and prompt_music_signature != current_music_signature
         )
+        or video_context_prompt_is_stale(shot)
     ):
         try:
             shot = await svc.write_prompts_after_layout(shot.id)

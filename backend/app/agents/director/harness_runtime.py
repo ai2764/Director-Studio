@@ -111,6 +111,7 @@ class BackendTurn:
         if managed_scope is not None and managed_scope.project_id == self.project_id:
             tools = [tool for tool in tools if tool["function"]["name"] in {
                 "get_status", "inspect_asset", "write_prompt", "start_h3_video",
+                "configure_video_context",
             }]
         if not pending and managed_scope is None and _needs_fresh_storyboard(project, shots):
             tools = [

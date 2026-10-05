@@ -124,11 +124,115 @@ async def start_h3_video(project_id: str, shot_id: str, *, svc: Any,
         return {"ok": True, "shot_id": shot_id, "job_id": job_id}
 
 
+_CONTEXT_FIELDS = (
+    "mode",
+    "source_job_id",
+    "source_output_key",
+    "upload_id",
+    "context_frames",
+    "audio_context_frames",
+    "carry_audio",
+)
+
+
+def _context_result(
+    shot_id: str,
+    *,
+    ok: bool,
+    video_context: dict | None,
+    source_job_id: str | None,
+    blocked: list[str],
+    taken: list[str],
+) -> dict[str, Any]:
+    return {
+        "ok": ok,
+        "shot_id": shot_id,
+        "video_context": video_context,
+        "source_job_id": source_job_id,
+        "blocked_reasons": blocked,
+        "actions": taken,
+    }
+
+
+async def _configure_video_context_tool(
+    *,
+    args: dict[str, Any],
+    project_id: str,
+    actions: list[str],
+    notes: list[str],
+    result_payloads: list[dict[str, Any]] | None,
+) -> None:
+    from pydantic import ValidationError
+
+    from ....config import settings
+    from ....core.projects.models import ShotVideoContext
+    from ....core.projects.store import load_shot
+    from ....core.projects.video_context import (
+        VideoContextError,
+        configure_video_context,
+        video_context_status,
+    )
+
+    shot_id = str(args.get("shot_id") or "").strip()
+
+    def publish(payload: dict[str, Any], note: str) -> None:
+        notes.append(note)
+        if result_payloads is not None:
+            result_payloads.append(payload)
+
+    if not settings.video_context_enabled:
+        publish(
+            _context_result(
+                shot_id, ok=False, video_context=None, source_job_id=None,
+                blocked=["Video context is disabled"], taken=[],
+            ),
+            "Video context is disabled",
+        )
+        return
+    provided = {
+        key: args[key]
+        for key in _CONTEXT_FIELDS
+        if key in args and args[key] is not None
+    }
+    try:
+        config = ShotVideoContext.model_validate(provided)
+        saved = configure_video_context(project_id, shot_id, config)
+    except (ValidationError, VideoContextError) as exc:
+        publish(
+            _context_result(
+                shot_id, ok=False, video_context=None, source_job_id=None,
+                blocked=[str(exc)], taken=[],
+            ),
+            str(exc),
+        )
+        return
+    shot = load_shot(project_id, shot_id)
+    status = video_context_status(shot) if shot is not None else {
+        "source_job_id": saved["video_context"].get("source_job_id"),
+    }
+    action = f"configure_video_context:{shot_id}"
+    actions.append(action)
+    publish(
+        _context_result(
+            shot_id, ok=True, video_context=saved["video_context"],
+            source_job_id=status.get("source_job_id"),
+            blocked=[], taken=[action],
+        ),
+        "Continuation was saved. No video job was started.",
+    )
+
+
 async def handle_video_tool(
     *, name: str, args: dict[str, Any], project_id: str, svc: Any,
     actions: list[str], notes: list[str], result_payloads: list[dict[str, Any]] | None,
     user_feedback: str, previous_assistant: str = "",
 ) -> bool:
+    if name == "configure_video_context":
+        await _configure_video_context_tool(
+            args=args, project_id=project_id, actions=actions, notes=notes,
+            result_payloads=result_payloads,
+        )
+        return True
     if name != "start_h3_video":
         return False
     shot_id = str(args["shot_id"])

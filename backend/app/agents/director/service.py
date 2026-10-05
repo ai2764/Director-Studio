@@ -18,6 +18,7 @@ from ...core.media.music_segments import (
     music_prompt_signature,
     validate_editorial_music_prompt,
 )
+from ...core.projects.video_context import video_context_prompt_signature
 from ...core.h3.prompt import (
     validate_h3_prompt,
     validate_required_picture_bindings,
@@ -2113,6 +2114,7 @@ class DirectorService:
             "prompt_picture_signature": picture_ref_signature(candidate.refs),
             "prompt_voice_signature": voice_ref_signature(candidate.voice_refs),
             "prompt_music_signature": music_prompt_signature(project, candidate),
+            "prompt_video_context_signature": video_context_prompt_signature(candidate),
             "material_review_pending": False,
         })
         meta.pop("material_changes", None)
@@ -2438,6 +2440,8 @@ class DirectorService:
                 except ValueError:
                     preserve_prompt = False
             check_current()
+            from .writer_context import complete_writer_prompt, video_context_writer_view
+            context_observation = video_context_writer_view(shot)
             from .prompt_repair import repair_key, load_repair, save_repair, clear_repair, merge_repair, repair_request, require_repair_progress
             draft_key = repair_key(project, shot, review_signature, revision_request,
                                    str(getattr(self.plan_provider, "model", "")),
@@ -2448,10 +2452,11 @@ class DirectorService:
             raw = preserved_raw
             if not preserve_prompt:
                 async with report_phase(on_progress, "prompt_writing", f"Writing H3 prompt for {shot.title}"):
-                    raw = await self.plan_provider.complete(
+                    raw = await complete_writer_prompt(
+                        self.plan_provider,
                         writer_instructions,
                         repair_request(user, previous_repair, dialogue_bindings=bool(dialogue_lines)) if previous_repair else user,
-                        guides=("h3-prompt-writing",),
+                        context_observation,
                     )
             if previous_repair:
                 raw = merge_repair(raw, previous_repair["rejected_candidate"])
@@ -2509,10 +2514,11 @@ class DirectorService:
                 raw2 = None
                 try:
                     async with report_phase(on_progress, "prompt_repair", f"Repairing H3 prompt for {shot.title}"):
-                        raw2 = await self.plan_provider.complete(
+                        raw2 = await complete_writer_prompt(
+                            self.plan_provider,
                             writer_instructions,
                             repair,
-                            guides=("h3-prompt-writing",),
+                            context_observation,
                         )
                     raw2 = merge_repair(raw2, raw)
                     prompt_sections = parse_and_validate(raw2)
@@ -2549,6 +2555,7 @@ class DirectorService:
         meta["prompt_picture_signature"] = picture_ref_signature(shot.refs)
         meta["prompt_voice_signature"] = voice_ref_signature(shot.voice_refs)
         meta["prompt_music_signature"] = music_prompt_signature(project, shot)
+        meta["prompt_video_context_signature"] = video_context_prompt_signature(shot)
         meta["material_review_pending"] = False
         meta.pop("material_changes", None)
         shot = shot.model_copy(

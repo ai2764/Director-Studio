@@ -273,6 +273,16 @@ def _status_summary(project: Project, shots: list[Shot]) -> str:
         )
         if s.blocked_reasons:
             lines.append(f"   ⚠ {'; '.join(s.blocked_reasons)}")
+        from ...core.projects.video_context import video_context_status
+        context_status = video_context_status(s)
+        if context_status["mode"] != "off":
+            lines.append(
+                f"   video context: {context_status['mode']} · "
+                f"source {context_status['source_job_id'] or 'unresolved'} · "
+                f"{context_status['context_frames']} frames"
+            )
+            if context_status["blocked_reasons"]:
+                lines.append(f"   ⚠ {'; '.join(context_status['blocked_reasons'])}")
     from .brief import duration_budget, duration_issues
     budget = duration_budget(project, shots)
     lines.append(f"Runtime: {budget['total_s']:g}s; requested minimum: {budget['required_minimum_s']:g}s; remaining deficit: {budget['deficit_s']:g}s.")
@@ -486,7 +496,7 @@ def sanitize_tools_for_pipeline(
     scope = managed_turn_scope.get()
     if scope is not None and scope.project_id == project.id:
         managed_tools = {"get_status", "inspect_asset", "write_prompt", "start_h3_video",
-                         "set_task_context", "read_task_context"}
+                         "configure_video_context", "set_task_context", "read_task_context"}
         allowed_tools = []
         for item in tools:
             name = _tool_name(item) if isinstance(item, dict) else ""
@@ -517,9 +527,9 @@ def sanitize_tools_for_pipeline(
     names = [_tool_name(t) for t in tools if isinstance(t, dict)]
     # Read-only tools must never implicitly replace a board (including before
     # or after an append on a stale board).
-    if names and set(names) <= {"get_status", "status", "inspect_asset", "set_task_context", "read_task_context"}:
+    if names and set(names) <= {"get_status", "status", "inspect_asset", "set_task_context", "read_task_context", "configure_video_context"}:
         return tools, notes
-    if names and set(names) <= {"start_h3_video", "get_status", "inspect_asset"}:
+    if names and set(names) <= {"start_h3_video", "get_status", "inspect_asset", "configure_video_context"}:
         return tools, notes
     if names and set(names) <= {"queue_actor_design", "confirm_actor_design", "accept_actor_design"}:
         return tools, notes
@@ -1271,7 +1281,8 @@ async def orchestrate_chat(
         from ...core.managed_runs.context import managed_turn_scope
         scope = managed_turn_scope.get()
         if scope is not None and scope.project_id == current_project.id:
-            managed_tools = {"get_status", "inspect_asset", "write_prompt", "start_h3_video"}
+            managed_tools = {"get_status", "inspect_asset", "write_prompt", "start_h3_video",
+                             "configure_video_context"}
             schemas = [schema for schema in schemas
                        if schema["function"]["name"] in managed_tools]
         state = current_task_context(current_project.id)

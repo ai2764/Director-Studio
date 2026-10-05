@@ -134,6 +134,65 @@ def submission_video_context(
     }
 
 
+def video_context_prompt_signature(shot: Shot) -> str:
+    """Hash the continuation settings that should refresh an H3 prompt."""
+    config = shot.video_context
+    payload = (
+        {"mode": "off"}
+        if config is None or config.mode == "off"
+        else config.model_dump(mode="json")
+    )
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()[:16]
+
+
+def video_context_prompt_is_stale(shot: Shot) -> bool:
+    """Active context, or a previously stamped shot, must match the stored signature."""
+    config = shot.video_context
+    active = config is not None and config.mode != "off"
+    meta = shot.meta or {}
+    if not active and "prompt_video_context_signature" not in meta:
+        return False
+    stored = str(meta.get("prompt_video_context_signature") or "")
+    return stored != video_context_prompt_signature(shot)
+
+
+def video_context_status(shot: Shot) -> dict:
+    """Resolved source and block reasons for status reads. Paths stay private."""
+    config = shot.video_context
+    if config is None or config.mode == "off":
+        return {
+            "mode": "off",
+            "source_job_id": None,
+            "context_frames": None,
+            "carry_audio": False,
+            "blocked_reasons": [],
+        }
+    blocked: list[str] = []
+    source_job_id = config.source_job_id
+    if config.mode == "previous_shot":
+        project = load_project(shot.project_id)
+        try:
+            if project is None:
+                raise VideoContextError("Project not found")
+            _source, job, _key, _path = _require_previous_video(project, shot, config)
+            source_job_id = job.id
+        except VideoContextError as exc:
+            blocked.append(str(exc))
+    else:
+        try:
+            _require_upload(shot.project_id, config.upload_id)
+        except VideoContextError as exc:
+            blocked.append(str(exc))
+    return {
+        "mode": config.mode,
+        "source_job_id": source_job_id,
+        "context_frames": config.context_frames or 22,
+        "carry_audio": bool(config.carry_audio),
+        "blocked_reasons": blocked,
+    }
+
+
 def upload_video_context(project_id: str, filename: str, data: bytes) -> dict:
     """Store one project video. A failed probe leaves no upload record."""
     if load_project(project_id) is None:

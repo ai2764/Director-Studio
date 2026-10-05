@@ -196,6 +196,12 @@ async def draft_and_review(provider, project, shot, records, images, signature,
         "music_segment": music_context,
         "confirmed_project_review": confirmed_data,
     }
+    from .writer_context import video_context_writer_view
+    context_view = video_context_writer_view(shot)
+    if context_view is not None:
+        request["video_context_observation"] = {
+            key: value for key, value in context_view.items() if key != "tail_frame_png"
+        }
     from ...core.managed_runs.context import managed_turn_scope
     from ...core.managed_runs.prompt_commit import CAMERA_REFINEMENT_FIELDS
     managed_scope = managed_turn_scope.get()

@@ -111,13 +111,20 @@ def shot_execution_intent(project, shot, current_request: str = "") -> dict:
     from ...core.media.music_segments import music_prompt_context
     music = music_prompt_context(project, shot)
     execution_duration = float(music["generation_duration_s"]) if music else shot.duration_s
-    return {"authoring_request": authoring_request,
-            "current_shot": current_shot, "shot_order": shot_order,
-            "execution_duration_s": execution_duration,
-            "timing_authority": "execution_duration_s is the submitted clip interval. Fit every timed action within it. "
-                                "storyboard_duration_s, if present, is earlier planning metadata.",
-            "directing_requests": directing_request_sources(project),
-            "current_request": current_request}
+    intent = {"authoring_request": authoring_request,
+              "current_shot": current_shot, "shot_order": shot_order,
+              "execution_duration_s": execution_duration,
+              "timing_authority": "execution_duration_s is the submitted clip interval. Fit every timed action within it. "
+                                  "storyboard_duration_s, if present, is earlier planning metadata.",
+              "directing_requests": directing_request_sources(project),
+              "current_request": current_request}
+    from .writer_context import video_context_writer_view
+    view = video_context_writer_view(shot)
+    if view is not None:
+        intent["video_context_observation"] = {
+            key: value for key, value in view.items() if key != "tail_frame_png"
+        }
+    return intent
 
 
 def remember_directing_request(project_id: str, message: str) -> None:

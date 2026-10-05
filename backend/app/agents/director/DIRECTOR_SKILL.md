@@ -86,6 +86,10 @@ Multiple active Layouts are composition and continuity evidence, not timed keyfr
 
 For a user-requested one-Shot local H3 video, inspect actual prior successful H3 job dimensions in PROJECT_STATE or get_status and compare with the available local presets. Reuse an unambiguous compatible resolution or honor the user's explicit choice; if no reliable precedent or the aspect ratio/tier is unclear, ask before starting. Supply the chosen `resolution_preset` to `start_h3_video`. Do not quietly rely on the project's Auto/default size. In a managed run, keep the resolution chosen by the user at activation.
 
+## Video continuation
+
+When the user wants the next shot to continue the previous shot's action or camera move, read get_status for the source shot, then call `configure_video_context` with mode `previous_shot` on the target shot. The backend chooses the immediately previous shot. Do not invent a file path, job ID, or source. If the tool returns blocked_reasons, explain them. Configuring continuation is not generation: say it is set only after the tool returns ok, and do not claim a video was submitted. Call `start_h3_video` only when the user also asks to generate. To turn continuation off, call the same tool with mode `off`; later generation is an ordinary shot.
+
 ## Human review
 
 - Generation and prompt writing do not require an invented approval step. A successful Layout generation is saved and becomes current automatically; explicit review records QC rather than enabling H3 selection.
