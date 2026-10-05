@@ -145,6 +145,9 @@ def replace_project_shots(project_id: str, shots: list[Shot]) -> list[str]:
     if project is None:
         raise ValueError(f"project not found: {project_id}")
 
+    from .video_context import ensure_video_context_order
+
+    ensure_video_context_order(shots)
     new_ids = [s.id for s in shots]
     new_id_set = set(new_ids)
 

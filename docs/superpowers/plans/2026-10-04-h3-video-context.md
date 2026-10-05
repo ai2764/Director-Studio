@@ -112,11 +112,11 @@ def resolve_video_context(shot: Shot, *, width: int, height: int) -> ResolvedVid
 
 API：`PUT /api/shots/{shot_id}/video-context`、`POST /api/projects/{project_id}/video-context/uploads`（multipart file）；读取沿用 GET Shot/read_status。feature flag 关闭时新增写入口返回清楚的 disabled 错误。
 
-- [ ] 写失败测试并运行：首镜、跨项目、非相邻来源、已删除来源、源当前 Job 执行中/失败、显式成功历史版本、多候选 artifact、没有输出文件；错误不改变现有配置。
-- [ ] 写外部上传测试：合法 video+audio、无音频、伪扩展名、超过 200 MiB/60 秒、无视频流、路径越界；文件名由后端 ID 生成，上传失败无可用记录。
-- [ ] 根据 spec 实现配置验证和 project 上传记录。`previous_shot` 保存实际 predecessor ID；解析默认跟随当前 `h3_job_id`，不从 `list_jobs` 任取“最新成功”。多 artifact 先完成选择。
-- [ ] 源字节读一次后计算 hash；provenance 记录 source shot/job/output 或 upload ID、SHA-256、实际媒体元信息。在 canonical submit 中调用它，并把来源信息写到当前 Job params，字节进入当前 Job 的输入集合。
-- [ ] 测试配置后 reorder 时拒绝错位来源；提交后源 rerun/替换不会改目标输入；重启后配置能读取；旧 Shot 不受影响。通过后提交此 task。
+- [x] 写失败测试并运行：首镜、跨项目、非相邻来源、已删除来源、源当前 Job 执行中/失败、显式成功历史版本、多候选 artifact、没有输出文件；错误不改变现有配置。
+- [x] 写外部上传测试：合法 video+audio、无音频、伪扩展名、超过 200 MiB/60 秒、无视频流、路径越界；文件名由后端 ID 生成，上传失败无可用记录。
+- [x] 根据 spec 实现配置验证和 project 上传记录。`previous_shot` 保存实际 predecessor ID；解析默认跟随当前 `h3_job_id`，不从 `list_jobs` 任取“最新成功”。多 artifact 先完成选择。
+- [x] 源字节读一次后计算 hash；provenance 记录 source shot/job/output 或 upload ID、SHA-256、实际媒体元信息。在 canonical submit 中调用它，并把来源信息写到当前 Job params，字节进入当前 Job 的输入集合。
+- [x] 测试配置后 reorder 时拒绝错位来源；提交后源 rerun/替换不会改目标输入；重启后配置能读取；旧 Shot 不受影响。通过后提交此 task。
 
 必须保留现有 Layout/提示词/音频 preflight。视频准备失败时不能返回成功提交，更不能让 Agent 报一个不存在的 Job。
 

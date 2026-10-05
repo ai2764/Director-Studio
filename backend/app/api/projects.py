@@ -59,6 +59,7 @@ from ..core.projects.models import (
     RefRole,
     Shot,
     ShotMusicSegment,
+    ShotVideoContext,
     ShotRef,
     ShotVoiceRef,
     ShotStatus,
@@ -2021,6 +2022,36 @@ async def approve_shot_endpoint(shot_id: str) -> Shot:
     return shot
 
 
+@router.put("/shots/{shot_id}/video-context")
+def put_shot_video_context(shot_id: str, config: ShotVideoContext) -> dict:
+    """Save continuation settings. Disabled instances reject the write."""
+    if not settings.video_context_enabled:
+        raise HTTPException(403, "Video context is disabled")
+    from ..core.projects.video_context import VideoContextError, configure_video_context
+
+    shot = _find_shot(shot_id)
+    try:
+        return configure_video_context(shot.project_id, shot.id, config)
+    except VideoContextError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/video-context/uploads")
+async def post_video_context_upload(
+    project_id: str, file: UploadFile = File(...)
+) -> dict:
+    """Store one finished video for a later external continuation."""
+    if not settings.video_context_enabled:
+        raise HTTPException(403, "Video context is disabled")
+    from ..core.projects.video_context import VideoContextError, upload_video_context
+
+    data = await file.read()
+    try:
+        return upload_video_context(project_id, file.filename or "", data)
+    except VideoContextError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @router.post("/shots/{shot_id}/submit", response_model=Shot)
 async def submit_shot_endpoint(
     shot_id: str,
@@ -2324,6 +2355,16 @@ async def submit_shot_endpoint(
         require_current_reference_contract(latest_project, latest_shot)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+    from ..core.projects.video_context import VideoContextError, submission_video_context
+
+    try:
+        staged_context = submission_video_context(
+            latest_shot, width=width, height=height
+        )
+    except VideoContextError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if staged_context is not None:
+        images["context_video"] = (staged_context["filename"], staged_context["data"])
     reference_evidence = (latest_shot.meta.get("material_review") or {}).get("references", [])
     if latest_project.mode == ProjectMode.director and latest_shot.refs:
         import hashlib
@@ -2362,6 +2403,7 @@ async def submit_shot_endpoint(
                 for r in sorted(shot.refs or [], key=lambda x: x.picture_index)
             ][: len(image_keys)],
             "output_prefix": f"director-studio/{shot.project_id}/{shot.id}/h3",
+            **({} if staged_context is None else staged_context["params"]),
         },
         project_id=shot.project_id,
     )
