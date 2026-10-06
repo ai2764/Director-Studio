@@ -2242,6 +2242,7 @@ class DirectorService:
                 or not (review.get("decision") or {}).get("tail_frame_handoff")
             ))
             if (was_pending or not review or review.get("signature") != review_signature
+                    or "configuration_issues" not in (review.get("decision") or {})
                     or (revision_request.strip() and review.get("revision_request") != revision_request)
                     or needs_handoff_review or not reference_review_current(project, shot, records)):
                 keep = bool(getattr(settings, "llm_keep_loaded", True))

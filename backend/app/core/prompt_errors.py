@@ -44,6 +44,16 @@ class MaterialInputError(MaterialReviewError):
     code = "MATERIAL_INPUT_INVALID"
 
 
+class ShotConfigurationConflict(PromptFailureError):
+    """An explicit directing request disagrees with saved authoring parameters."""
+    code = "SHOT_CONFIGURATION_CONFLICT"
+
+    def __init__(self, issues: list[dict]):
+        self.issues = issues
+        super().__init__("contract", "Saved shot parameters conflict with an explicit user request: "
+                         + "; ".join(f"{issue['field']}: {issue['reason']}" for issue in issues))
+
+
 def prompt_failure_kind(error: object) -> PromptFailureKind:
     kind = getattr(error, "failure_kind", "unknown")
     return kind if kind in get_args(PromptFailureKind) else "unknown"

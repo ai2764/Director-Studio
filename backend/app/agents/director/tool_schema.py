@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from typing import Any, Iterable
 
 from ...config import settings
-from ...core.projects.models import AssetCoverageReviewSubmission, Project, ProjectMode
+from ...core.projects.models import AssetCoverageReviewSubmission, Project, ProjectMode, Shot
 from ...pipelines.h3_ref2va.resolutions import LOCAL_H3_PRESETS
 from .intent import (
     actor_design_intent,
@@ -655,6 +656,7 @@ def director_tool_schemas(
     current_message: str = "",
     allow_save_storyboard: bool = True,
     include_chat_image_import: bool = False,
+    shots: list[Shot] | None = None,
 ) -> list[dict[str, Any]]:
     if include_chat_image_import:
         return [CHAT_IMAGE_CLASSIFICATION_TOOL]
@@ -679,6 +681,20 @@ def director_tool_schemas(
         for tool in DIRECTOR_TOOL_SCHEMAS
         if tool["function"]["name"] not in excluded
     ]
+    if shots is None:
+        from ...core.projects.store import list_shots
+        shots = list_shots(project.id)
+    acceptable_ids = sorted({layout.id for shot in shots for layout in shot.layout_refs
+                             if layout.asset_id})
+    grounded_tools = []
+    for tool in tools:
+        if tool["function"]["name"] == "accept_ref_frame":
+            if not acceptable_ids:
+                continue
+            tool = deepcopy(tool)
+            tool["function"]["parameters"]["properties"]["layout_ref_id"]["enum"] = acceptable_ids
+        grounded_tools.append(tool)
+    tools = grounded_tools
     if settings.gpt_bridge_configured:
         tools.append(GPT_REF_FRAME_TOOL)
     return tools

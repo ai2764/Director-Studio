@@ -5,7 +5,7 @@ import hashlib
 import json
 import logging
 import uuid
-from typing import Callable
+from typing import Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
@@ -13,7 +13,8 @@ from ...config import settings
 
 from ...core.library.images import resolve_asset_image
 from ...core.library.store import load_asset
-from ...core.prompt_errors import PromptFailureError, MaterialInputError, MaterialReviewError
+from ...core.prompt_errors import (PromptFailureError, MaterialInputError, MaterialReviewError,
+                                  ShotConfigurationConflict)
 from ...core.projects.models import Project, Shot
 from ...core.projects.layouts import selected_layout_prompt_context
 from .asset_catalog import LIBRARY_KINDS, _script_hash
@@ -44,6 +45,13 @@ class ReferenceObservation(BaseModel):
         return value
 
 
+class ConfigurationIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    field: Literal["duration_s", "voice_matches"]
+    requirement: str = Field(min_length=1, max_length=1000)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 class MaterialDecision(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     # Legacy response compatibility only; material review cannot author shot fields.
@@ -52,6 +60,7 @@ class MaterialDecision(BaseModel):
     reason: str = Field(min_length=1, max_length=1600)
     blocking_question: str | None = Field(max_length=1000)
     tail_frame_handoff: str | None = Field(default=None, max_length=1600)
+    configuration_issues: list[ConfigurationIssue] = Field(default_factory=list, max_length=2)
 
     @field_validator("brief", "blocking_question", "tail_frame_handoff")
     @classmethod
@@ -352,7 +361,18 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
         "visually inspected. This is reference suitability review, not story approval or authoring. "
         "Return only JSON with fields brief (always null; this review cannot rewrite the shot), "
         "rewrite_prompt (boolean), reason (concise), blocking_question (one "
-        "question or null), tail_frame_handoff (text or null). If tail_frames is nonempty, "
+        "question or null), tail_frame_handoff (text or null), configuration_issues (array, default []). "
+        "Check saved duration and audio_bindings against the latest explicit requirement for THIS shot. "
+        "If a saved duration_s or voice_matches binding contradicts an unambiguous user requirement, "
+        "report a configuration_issues item with field (duration_s or voice_matches), requirement "
+        "(an exact quote from intent.current_request, authoring_request.text or directing_requests.text), "
+        "and reason. This asks the authoring agent to revise the saved parameter; it grants this reviewer "
+        "no write authority. Do not ask the user to repeat a duration or removal of audio references "
+        "already explicitly specified. An empty dialogue list alone does not require removing voice "
+        "references: nonverbal sounds can still need them. Do not infer an exact duration from vague "
+        "pacing language. Music interval execution_duration_s is authoritative when present. "
+        "Uncertain or genuinely conflicting choices still use blocking_question. "
+        "If tail_frames is nonempty, "
         "write a concrete tail_frame_handoff grounded in its visible_observation: name the "
         "visible ending pose, framing and geography, then how action and camera/edit can reach "
         "this Shot's intended opening and movement. A wardrobe-only or generic 'continue' note "
@@ -381,6 +401,12 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
             "camera_angle": shot.camera_angle, "camera_motion": shot.camera_motion,
             "composition": shot.composition, "feedback": shot.feedback,
             "prompt_sections": shot.prompt_sections.model_dump(),
+            "audio_bindings": {
+                "voice_refs": [ref.model_dump(mode="json") for ref in shot.voice_refs],
+                "music_segment": shot.music_segment.model_dump(mode="json") if shot.music_segment else None,
+                "source_audio_path": shot.source_audio_path,
+                "video_context": shot.video_context.model_dump(mode="json") if shot.video_context else None,
+            },
             "material_changes": (shot.meta or {}).get("material_changes", {}),
             }, "references": reviewed, "tail_frames": tail_frames,
                 "confirmed_project_review": confirmed_project_review,
@@ -398,6 +424,13 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
         check_current()
         try:
             decision = MaterialDecision.model_validate(_extract_json_payload(raw))
+            intent = request["intent"]
+            sources = [intent["current_request"],
+                       (intent.get("authoring_request") or {}).get("text", ""),
+                       *(item["text"] for item in intent["directing_requests"])]
+            for issue in decision.configuration_issues:
+                if not any(issue.requirement in source for source in sources):
+                    raise ValueError("configuration_issues.requirement must quote a supplied user request")
         except ValueError as exc:
             if attempt:
                 raise PromptFailureError("candidate", f"material_decision_structure: {exc}") from exc
@@ -411,6 +444,8 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
             break
     if decision.blocking_question:
         raise ValueError(f"Material review needs your decision: {decision.blocking_question}")
+    if decision.configuration_issues:
+        raise ShotConfigurationConflict([issue.model_dump() for issue in decision.configuration_issues])
     if tail_frames and not decision.tail_frame_handoff:
         raise ValueError("Material review missing tail-frame handoff for selected clip tail")
     # Ignore unsolicited authoring proposals instead of granting this reviewer write authority.

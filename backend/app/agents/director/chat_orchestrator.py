@@ -1086,6 +1086,8 @@ async def orchestrate_chat(
     prompt_failure_message = ""
     prompt_failure_code = "PROMPT_GENERATION_FAILED"
     prompt_failure_kind = "unknown"
+    from .configuration_recovery import ConfigurationRecovery
+    configuration_recovery = ConfigurationRecovery()
 
     async def progress(type_: str, text: str) -> None:
         """Local helper — also forwards to external on_progress as event dict."""
@@ -1275,6 +1277,7 @@ async def orchestrate_chat(
             current_message=message,
             allow_save_storyboard=allow_save_storyboard,
             include_chat_image_import=pending_uploads,
+            shots=list_shots(current_project.id),
         )
         if storyboard_budget.repairing:
             schemas = [schema for schema in schemas if schema["function"]["name"] != "set_script"]
@@ -1536,20 +1539,29 @@ async def orchestrate_chat(
                 if tool["name"] == "save_storyboard":
                     storyboard_save_attempted = True
                 structured_results: list[dict[str, Any]] = []
-                tool_notes, touched = await run_tools(
-                    project_id=project_id,
-                    tools=[tool],
-                    svc=svc,
-                    actions=actions,
-                    on_progress=progress_event,
-                    result_payloads=structured_results,
-                    user_feedback=message,
-                    user_message_id=user_message_id,
-                    requested_minimum_duration_s=requested_minimum_duration_s,
-                    storyboard_budget=storyboard_budget,
-                    images=attached_images,
-                    user_uploads=user_uploads,
-                )
+                configuration_block = None
+                if tool["name"] == "write_prompt":
+                    current_shot = configuration_recovery.target(list_shots(project_id), tool.get("args") or {})
+                    if current_shot is not None:
+                        configuration_block = configuration_recovery.before_write(current_shot)
+                if configuration_block:
+                    tool_notes, touched = [configuration_block["error"]], set()
+                    structured_results.append(configuration_block)
+                else:
+                    tool_notes, touched = await run_tools(
+                        project_id=project_id,
+                        tools=[tool],
+                        svc=svc,
+                        actions=actions,
+                        on_progress=progress_event,
+                        result_payloads=structured_results,
+                        user_feedback=message,
+                        user_message_id=user_message_id,
+                        requested_minimum_duration_s=requested_minimum_duration_s,
+                        storyboard_budget=storyboard_budget,
+                        images=attached_images,
+                        user_uploads=user_uploads,
+                    )
                 image_ids |= touched
                 tool_payload: dict[str, Any] = {
                     "ok": True,
@@ -1557,12 +1569,23 @@ async def orchestrate_chat(
                 }
                 for structured_result in structured_results:
                     tool_payload.update(structured_result)
+                if tool_payload.get("code") == "SHOT_CONFIGURATION_CONFLICT" and not configuration_block:
+                    from ...core.managed_runs.context import managed_turn_scope
+                    current_shot = load_shot(project_id, tool_payload.get("shot_id"))
+                    may_revise = any(schema["function"]["name"] == "revise_shot" for schema in offered_tool_schemas)
+                    if managed_turn_scope.get() is not None or not may_revise:
+                        configuration_recovery.stop_for_scope(tool_payload)
+                    elif current_shot is None:
+                        tool_payload.update(retryable=False, concludes_turn=True)
+                    else:
+                        configuration_recovery.record(current_shot, tool_payload)
                 if tool["name"] == "write_prompt":
                     prompt_failure_kind = tool_payload.get("failure_kind", "unknown")
                     prompt_failure_code = tool_payload.get("code") or "PROMPT_GENERATION_FAILED"
                     prompt_failure_message = (
                         str(tool_payload.get("reply") or tool_payload.get("error") or "Prompt generation failed")
-                        if tool_payload.get("ok") is False and tool_payload.get("code") != "CONTEXT_REQUIRED" else ""
+                        if tool_payload.get("ok") is False and tool_payload.get("code") != "CONTEXT_REQUIRED"
+                        and tool_payload.get("concludes_turn") is not False else ""
                     )
                     if prompt_failure_message:
                         from ...core.managed_runs.context import managed_turn_scope

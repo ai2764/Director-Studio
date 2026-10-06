@@ -91,6 +91,8 @@ class BackendTurn:
         self.call_ids: set[str] = set()
         self.calls: set[tuple[str, str]] = set()
         self.successful_prompt_shot_ids: set[str] = set()
+        from .configuration_recovery import ConfigurationRecovery
+        self.configuration_recovery = ConfigurationRecovery()
         self.storyboard_failed = False
         self.terminal_failure: str | None = None
         self.terminal_failure_code = "PROMPT_GENERATION_FAILED"
@@ -124,6 +126,7 @@ class BackendTurn:
             project, current_message=self.message,
             allow_save_storyboard=not self.budget.exhausted,
             include_chat_image_import=pending,
+            shots=shots,
         )
         if self.budget.repairing:
             tools = [tool for tool in tools if tool["function"]["name"] != "set_script"]
@@ -327,7 +330,9 @@ class BackendTurn:
         if len(self.call_ids) >= settings.harness_max_tool_calls:
             return {"ok": False, "error": "Turn tool limit reached. No further tools can run in this turn; report completed and pending work without retrying."}
         self.call_ids.add(call_id)
-        prompt_shot_id = args.get("shot_id") if name == "write_prompt" else None
+        prompt_shot = (self.configuration_recovery.target(self.snapshot()[1], args)
+                       if name == "write_prompt" else None)
+        prompt_shot_id = prompt_shot.id if prompt_shot else None
         if (
             isinstance(prompt_shot_id, str)
             and prompt_shot_id in self.successful_prompt_shot_ids
@@ -341,6 +346,10 @@ class BackendTurn:
                     "the duplicate write_prompt call made no changes."
                 ],
             }
+        if prompt_shot is not None:
+            blocked = self.configuration_recovery.before_write(prompt_shot)
+            if blocked:
+                return blocked
         context = self.context()
         schema = next((s["function"] for s in context["tools"] if s["function"]["name"] == name), None)
         if schema is None:
@@ -455,11 +464,22 @@ class BackendTurn:
         if result.get("code") == "STORYBOARD_REVIEW_INVALID":
             self.terminal_failure_code = result["code"]
             self.terminal_failure = result["error"]
-        if name == "write_prompt" and not result["ok"] and result.get("code") != "CONTEXT_REQUIRED":
+        configuration_retry = False
+        if name == "write_prompt" and not result["ok"] and result.get("code") == "SHOT_CONFIGURATION_CONFLICT":
+            current_shot = next((shot for shot in list_shots(self.project_id)
+                                 if shot.id == result.get("shot_id", prompt_shot_id)), None)
+            may_revise = any(tool["function"]["name"] == "revise_shot" for tool in context["tools"])
+            configuration_retry = (scope is None and may_revise and current_shot is not None
+                                   and self.configuration_recovery.record(current_shot, result))
+            if not may_revise or scope is not None:
+                self.configuration_recovery.stop_for_scope(result)
+            if not configuration_retry:
+                result.update(retryable=False, concludes_turn=True)
+        if name == "write_prompt" and not result["ok"] and result.get("code") != "CONTEXT_REQUIRED" and not configuration_retry:
             self.prompt_failure_kind = result.get("failure_kind", "unknown")
             failure = str(result.get("error") or "Prompt generation failed.")
             if result.get("code") in {"DIALOGUE_CLARIFICATION_REQUIRED", "DIALOGUE_METADATA_INVALID",
-                                       "MATERIAL_INPUT_INVALID", "MATERIAL_REVIEW_INVALID"}:
+                                       "MATERIAL_INPUT_INVALID", "MATERIAL_REVIEW_INVALID", "SHOT_CONFIGURATION_CONFLICT"}:
                 self.terminal_failure_code = result["code"]
                 self.terminal_failure = str(result.get("reply") or failure)
             else:

@@ -9,7 +9,7 @@ from typing import Any, Callable
 from ....config import settings
 from ..task_context_builder import ContextRequired
 from ..dialogue_metadata import DialogueMetadataError, DialogueClarificationRequired
-from ....core.prompt_errors import MaterialReviewError, MaterialInputError
+from ....core.prompt_errors import MaterialReviewError, MaterialInputError, ShotConfigurationConflict
 from ....core.library.store import load_asset
 from ....core.projects.layouts import (
     GptLayoutBrief,
@@ -725,6 +725,15 @@ async def handle_layout_tool(
                                         "reviewed_picture_indices": [r["picture_index"] for r in review.get("references", [])],
                                         "review_reason": decision.get("reason", "")})
             touched.add(s2.id)
+        except ShotConfigurationConflict as e:
+            reply = (f"{e}. Use revise_shot to apply the existing explicit request, then write_prompt. "
+                     "Do not change dialogue, identity, continuity or other shots to bypass this conflict. "
+                     "Ask the user only if the requirement itself is ambiguous.")
+            notes.append(reply)
+            if result_payloads is not None:
+                result_payloads.append({"ok": False, "code": e.code, "shot_id": shot.id,
+                    "failure_kind": "contract", "retryable": True, "concludes_turn": False,
+                    "issues": e.issues, "error": str(e), "reply": reply})
         except MaterialReviewError as e:
             instruction = (
                 "Restore the missing material or explicitly relink the affected reference, then review it again. "

@@ -716,7 +716,7 @@ async def test_shot_status_omits_large_internal_material_review(tmp_projects_dir
     assert len(json.dumps(result, ensure_ascii=False)) < 12000
 
 
-def test_harness_does_not_preemptively_whitelist_layout_ids(tmp_projects_dir):
+def test_harness_refreshes_layout_acceptance_after_extraction(tmp_projects_dir):
     from app.agents.director.harness_runtime import BackendTurn
 
     project = create_project("tail acceptance", "")
@@ -729,7 +729,7 @@ def test_harness_does_not_preemptively_whitelist_layout_ids(tmp_projects_dir):
     turn = BackendTurn(project.id, "抽尾帧后直接 approve", None, None)
 
     before = {tool["function"]["name"] for tool in turn.context()["tools"]}
-    assert "accept_ref_frame" in before
+    assert "accept_ref_frame" not in before
 
     save_shot(shot.model_copy(update={
         "layout_refs": [LayoutReference(id="lref_real", asset_id="lay_real")],
@@ -740,7 +740,7 @@ def test_harness_does_not_preemptively_whitelist_layout_ids(tmp_projects_dir):
     )
     validator = Draft202012Validator(after["parameters"])
     assert not list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_real"}))
-    assert not list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_invented"}))
+    assert list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_invented"}))
 
 
 @pytest.mark.asyncio

@@ -509,6 +509,26 @@ async def test_first_prompt_reviews_refs_without_pending_flag_and_reuses_evidenc
 
 
 @pytest.mark.asyncio
+async def test_legacy_material_decision_rechecks_configuration_once(material_shot):
+    project, shot, _, _ = material_shot
+    orch = Orchestrator()
+    provider = Provider(orch, rewrite=False)
+    svc = DirectorService(plan_provider=provider, orchestrator=orch)
+    current = await svc.write_prompts_after_layout(shot.id)
+    current.meta["material_review"]["decision"].pop("configuration_issues")
+    save_shot(current)
+    def review_calls():
+        return sum("reference review decision" in system.lower() for system, _ in provider.text)
+    assert review_calls() == 1
+    refreshed = await svc.write_prompts_after_layout(shot.id)
+    assert refreshed.meta["material_review"]["decision"]["configuration_issues"] == []
+    assert review_calls() == 2
+    await svc.write_prompts_after_layout(shot.id)
+    assert review_calls() == 2
+    assert len(provider.visual) == 9
+
+
+@pytest.mark.asyncio
 async def test_inspect_library_asset_before_planning_is_read_only(material_shot):
     project, shot, _, _ = material_shot
     empty_project = create_project("No storyboard yet", "")
