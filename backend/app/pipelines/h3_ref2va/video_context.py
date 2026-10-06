@@ -20,14 +20,16 @@ VIDEO_FILE_FIELDS = {"LoadVideo": "file", "VHS_LoadVideo": "video"}
 def context_runtime_options(config, profile=None) -> dict[str, Any]:
     """Read custom Motion Context settings; the file mapping does not own them."""
     if profile is not None and profile.source == "custom":
+        mapping = getattr(profile, "mapping", None)
+        video_mapping = getattr(mapping, "context_video", None)
+        if video_mapping is None:
+            raise VideoContextGraphError("This custom workflow has no context video file mapping; reimport and confirm its video input")
         motions = [n for n in profile.workflow.values() if n.get("class_type") == "MiniMaxH3MotionContext"]
         if len(motions) != 1:
             raise VideoContextGraphError("Only a single Ref2AV Motion Context variation is certified for video continuation")
-        mapping = getattr(profile, "mapping", None)
-        video_mapping = getattr(mapping, "context_video", None)
         _validate_context_sampling_chain(profile.workflow,
-            h3_node_id=_require_role(profile.workflow, "MiniMaxH3ReferenceToVideo"),
-            context_node_id=video_mapping.node_id if video_mapping else None)
+            h3_node_id=mapping.inputs.h3_node_id,
+            context_node_id=video_mapping.node_id)
         inputs = motions[0]["inputs"]
         window = int(inputs.get("context_length", 22))
         if window not in LEGAL_CONTEXT_FRAMES:
@@ -91,15 +93,34 @@ def _validate_context_sampling_chain(graph, *, h3_node_id, context_node_id=None)
         decode_id = _require_role(graph, "VAEDecode")
         audio_decode_id = _require_role(graph, "VAEDecodeAudio")
         trim_id = _require_role(graph, "MiniMaxH3MotionContextTrim")
-        components_id = _require_role(graph, "GetVideoComponents")
         video_id = context_node_id or _require_role(graph, "LoadVideo")
-        if graph.get(video_id, {}).get("class_type") != "LoadVideo":
-            raise ValueError("certified input must be LoadVideo")
+        video_class = graph.get(video_id, {}).get("class_type")
+        if video_class == "LoadVideo":
+            components_id = _require_role(graph, "GetVideoComponents")
+            pixels = [components_id, 0]
+            audio = [components_id, 1]
+            video_path = [(components_id, "video", [video_id, 0])]
+        elif video_class == "VHS_LoadVideo":
+            loader = _inputs(graph, video_id)
+            if loader.get("vae") is not None:
+                raise ValueError("VHS_LoadVideo must output decoded images; disconnect its VAE for this continuation path")
+            if loader.get("meta_batch") is not None:
+                raise ValueError("VHS_LoadVideo must read the complete source video without a meta batch")
+            for field, default in (("frame_load_cap", 0), ("skip_first_frames", 0), ("select_every_nth", 1)):
+                if loader.get(field, default) != default:
+                    raise ValueError(f"VHS_LoadVideo.{field} changes the source tail; use {default} for continuation")
+            if loader.get("force_rate", 0) not in (0, TARGET_FPS):
+                raise ValueError("VHS_LoadVideo.force_rate must preserve the source rate or use 24 fps")
+            pixels = [video_id, 0]
+            audio = [video_id, 2]
+            video_path = []
+        else:
+            raise ValueError("certified input must be LoadVideo or VHS_LoadVideo")
         required = [
             (motion_id, "conditioning", [h3_node_id, 0]),
             (motion_id, "latent", [h3_node_id, 1]),
-            (motion_id, "context_frames", [components_id, 0]),
-            (components_id, "video", [video_id, 0]),
+            (motion_id, "context_frames", pixels),
+            *video_path,
             (guider_id, "conditioning", [motion_id, 0]),
             (sampler_id, "guider", [guider_id, 0]),
             (sampler_id, "latent_image", [h3_node_id, 1]),
@@ -109,6 +130,8 @@ def _validate_context_sampling_chain(graph, *, h3_node_id, context_node_id=None)
         for node_id, field, expected in required:
             if _inputs(graph, node_id).get(field) != expected:
                 raise ValueError(f"{node_id}.{field} bypasses the certified path")
+        if "context_audio" in _inputs(graph, motion_id) and _inputs(graph, motion_id)["context_audio"] != audio:
+            raise ValueError("Motion Context audio must come from the mapped context video")
         video_samples = _inputs(graph, decode_id).get("samples")
         audio_samples = _inputs(graph, audio_decode_id).get("samples")
         if video_samples not in ([sampler_id, 0], [sampler_id, 1]) or audio_samples != video_samples:

@@ -334,6 +334,7 @@ export function ShotWorkspace({
           {materialEditorOpen ? (
             <ShotMaterialEditor
               shot={selected}
+              shots={shots}
               shotNumber={selectedIndex + 1}
               onClose={() => setMaterialEditorOpen(false)}
               onOpenImage={onOpenImage}

@@ -180,6 +180,7 @@ def test_start_sets_env_before_the_shared_launcher(tmp_path):
                 library=$env:DS_LIBRARY_ROOT
                 actors=$env:DS_LIBRARY_DIR
                 profiles=$env:DS_WORKFLOW_PROFILES_DIR
+                directorSkill=$env:DS_DIRECTOR_SKILL_PATH
             }}
         }}
         Start-VideoContextInstance -Root '{ps_path(tmp_path)}' | Out-Null
@@ -193,6 +194,7 @@ def test_start_sets_env_before_the_shared_launcher(tmp_path):
     assert parsed["url"] == "http://127.0.0.1:8792"
     assert [parsed["backend"], parsed["frontend"], parsed["harness"]] == [8792, 5174, 8793]
     assert parsed["unique"] == 6
+    assert Path(parsed["directorSkill"]) == tmp_path / "backend/app/agents/director/DIRECTOR_SKILL.md"
     assert str(parsed["run"]).endswith(".run\\video-context") or str(parsed["run"]).endswith(".run/video-context")
 
 

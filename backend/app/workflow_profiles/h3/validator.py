@@ -196,7 +196,6 @@ def validate_h3_contract(
             expected_input != video_input
             or not isinstance(video_inputs, Mapping)
             or not isinstance(video_inputs.get(video_input), str)
-            or not str(video_inputs.get(video_input))
         ):
             issues.append(
                 _issue(

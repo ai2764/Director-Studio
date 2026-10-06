@@ -29,6 +29,7 @@ function Set-VideoContextEnvironment([string]$Root) {
     $env:DS_LIBRARY_ROOT = $layout.LibraryRoot
     $env:DS_LIBRARY_DIR = $layout.LibraryDir
     $env:DS_WORKFLOW_PROFILES_DIR = $layout.ProfilesDir
+    $env:DS_DIRECTOR_SKILL_PATH = Join-Path $Root 'backend\app\agents\director\DIRECTOR_SKILL.md'
     return $layout
 }
 

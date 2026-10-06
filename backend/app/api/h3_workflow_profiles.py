@@ -505,7 +505,7 @@ async def test_h3_import(
             try:
                 runtime = context_runtime_options(
                     ShotVideoContext(mode="external_upload"),
-                    SimpleNamespace(source="custom", workflow=workflow),
+                    SimpleNamespace(source="custom", workflow=workflow, mapping=mapping),
                 )
             except ValueError as exc:
                 return _error(422, "context_video_unsupported", str(exc), {"import_id": import_id})

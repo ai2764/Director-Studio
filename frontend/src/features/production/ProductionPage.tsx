@@ -751,6 +751,7 @@ export function ProductionPage({
         {selected && materialEditorOpen ? (
           <ShotMaterialEditor
             shot={selected}
+            shots={shots}
             shotNumber={selectedNumber}
             onClose={() => setMaterialEditorOpen(false)}
             onOpenImage={setPreviewUrl}

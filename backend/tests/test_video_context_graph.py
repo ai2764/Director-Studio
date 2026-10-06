@@ -12,6 +12,7 @@ from app.core.projects.video_context import VideoContextError
 from app.pipelines.h3_ref2va.video_context import (
     attach_video_context,
     context_generation_frames,
+    context_runtime_options,
     prepare_context_bytes,
 )
 from app.pipelines.h3_ref2va.workflow import fill_profile_graph, load_base_prompt
@@ -280,6 +281,75 @@ def test_mapped_motion_context_preserves_window_and_delivery_length():
     assert _node(graph, "ImageFromBatch")[1]["inputs"]["length"] == 124
     assert _node(graph, "TrimAudioDuration")[1]["inputs"]["duration"] == 124 / 24
     assert _node(original, "ImageFromBatch")[1]["inputs"]["length"] == 56
+
+
+@pytest.mark.parametrize("carry_audio", [False, True])
+def test_imported_vhs_video_conditions_samples_and_preserves_loader_settings(carry_audio):
+    from types import SimpleNamespace
+    from app.workflow_profiles.h3.inspector import inspect_h3_workflow
+
+    original = attach_video_context(load_base_prompt(), uploaded_video="old.mp4",
+        delivered_frames=56, context_frames=39, audio_context_frames=24, carry_audio=carry_audio)
+    load_id, _ = _node(original, "LoadVideo")
+    components_id, _ = _node(original, "GetVideoComponents")
+    original[load_id] = {"class_type": "VHS_LoadVideo", "inputs": {
+        "video": "", "force_rate": 24, "force_size": "Disabled", "frame_load_cap": 0,
+        "skip_first_frames": 0, "select_every_nth": 1}}
+    del original[components_id]
+    motion = _node(original, "MiniMaxH3MotionContext")[1]
+    motion["inputs"]["context_frames"] = [load_id, 0]
+    if carry_audio:
+        motion["inputs"]["context_audio"] = [load_id, 2]
+    mapping = inspect_h3_workflow(original, output_node_id="92").mapping
+    profile = replace(_builtin(original), source="custom", mapping=mapping)
+    assert validate_h3_contract(original, mapping).valid
+    options = context_runtime_options(SimpleNamespace(context_frames=None, carry_audio=None, audio_context_frames=None), profile)
+    assert options == {"context_frames": 39, "audio_context_frames": 24 if carry_audio else 0, "carry_audio": carry_audio}
+    graph = fill_profile_graph(profile, _job(context_video="new.mp4", frames=124))
+    assert graph[load_id]["inputs"] == {**original[load_id]["inputs"], "video": "new.mp4"}
+    assert graph["136"]["inputs"]["length"] == 175
+    assert _node(graph, "ImageFromBatch")[1]["inputs"]["length"] == 124
+    assert original[load_id]["inputs"]["video"] == ""
+
+
+def test_motion_context_cannot_silently_use_an_unmapped_uploaded_file():
+    from types import SimpleNamespace
+    graph = attach_video_context(load_base_prompt(), uploaded_video="old.mp4",
+        delivered_frames=56, context_frames=22, audio_context_frames=24, carry_audio=False)
+    profile = replace(_builtin(graph), source="custom")
+    with pytest.raises(ValueError, match="no context video file mapping"):
+        context_runtime_options(SimpleNamespace(context_frames=None, carry_audio=None, audio_context_frames=None), profile)
+
+
+def test_unmapped_motion_context_cannot_run_with_its_old_workflow_video():
+    graph = attach_video_context(load_base_prompt(), uploaded_video="old.mp4",
+        delivered_frames=56, context_frames=22, audio_context_frames=24, carry_audio=False)
+    profile = replace(_builtin(graph), source="custom")
+    verdict = validate_h3_contract(graph, profile.mapping)
+    assert not verdict.valid
+    with pytest.raises(ValueError, match="context video file mapping"):
+        fill_profile_graph(profile, _job())
+
+
+@pytest.mark.parametrize("loader_override", [
+    {"frame_load_cap": 22}, {"skip_first_frames": 22}, {"select_every_nth": 2}, {"force_rate": 30},
+    {"vae": ["119", 0]}, {"meta_batch": ["5000", 0]},
+])
+def test_vhs_continuation_rejects_loader_settings_that_change_the_source_tail(loader_override):
+    graph = attach_video_context(load_base_prompt(), uploaded_video="old.mp4",
+        delivered_frames=56, context_frames=22, audio_context_frames=24, carry_audio=False)
+    load_id, _ = _node(graph, "LoadVideo")
+    components_id, _ = _node(graph, "GetVideoComponents")
+    graph[load_id] = {"class_type": "VHS_LoadVideo", "inputs": {
+        "video": "old.mp4", "force_rate": 24, "frame_load_cap": 0,
+        "skip_first_frames": 0, "select_every_nth": 1, **loader_override}}
+    if "meta_batch" in loader_override:
+        graph["5000"] = {"class_type": "VHS_BatchManager", "inputs": {"frames_per_batch": 22}}
+    del graph[components_id]
+    _node(graph, "MiniMaxH3MotionContext")[1]["inputs"]["context_frames"] = [load_id, 0]
+    profile = replace(_builtin(graph), source="custom", mapping=_builtin(graph).mapping.model_copy(update={
+        "context_video": H3ContextVideoInput(node_id=load_id, input_name="video")}))
+    assert not validate_h3_contract(graph, profile.mapping).valid
 
 
 @pytest.mark.parametrize("bypass", ["conditioning", "video_decode", "audio_decode"])

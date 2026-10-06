@@ -270,6 +270,13 @@ def fill_profile_graph(
 
     context_name = str(job_params.get("context_video") or "").strip()
     context_mapping = profile.mapping.context_video
+    if profile.source == "custom" and context_mapping is None:
+        from ...workflow_profiles.h3.inspector import _ancestors, _graph_edges
+
+        _, incoming, _ = _graph_edges(filled)
+        upstream = _ancestors(profile.mapping.output.node_id, incoming)
+        if any(filled[node_id].get("class_type") == "MiniMaxH3MotionContext" for node_id in upstream):
+            raise ValueError("This custom workflow has no context video file mapping; reimport and confirm its video input")
     if context_mapping is not None:
         if not context_name:
             raise ValueError("A context video source is required for this workflow")

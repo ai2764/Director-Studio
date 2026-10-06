@@ -34,7 +34,10 @@ function contextWindowLabel(frames: number): string {
   return `${frames} frames · ${(frames / 24).toFixed(2)} s`;
 }
 
-function previousOf(shots: Shot[], shot: Shot): Shot | null {
+function sourceOf(shots: Shot[], shot: Shot): Shot | null {
+  if (shot.video_context?.source_shot_id) {
+    return shots.find((item) => item.id === shot.video_context?.source_shot_id) || null;
+  }
   const index = shots.findIndex((item) => item.id === shot.id);
   return index > 0 ? shots[index - 1] : null;
 }
@@ -80,7 +83,7 @@ export function VideoContextPanel({
 }) {
   const context = shot.video_context;
   const active = activeContext(context);
-  const previous = previousOf(shots, shot);
+  const previous = sourceOf(shots, shot);
   const [open, setOpen] = useState(expanded);
   const [profile, setProfile] = useState<"builtin" | "custom" | null>(null);
   const [frames, setFrames] = useState(String(legalWindow(context?.context_frames)));
@@ -116,9 +119,11 @@ export function VideoContextPanel({
   }, [open, active]);
 
   useEffect(() => {
+    setJobs([]);
+    setVersions([]);
     if (!active || context?.mode !== "previous_shot") return;
     if (!previous) return;
-    const ids = versionIds(previous);
+    const ids = [...new Set([...versionIds(previous), ...(context.source_job_id ? [context.source_job_id] : [])])];
     let cancelled = false;
     void (async () => {
       const loaded: VideoJobRecord[] = [];
@@ -148,7 +153,7 @@ export function VideoContextPanel({
     return () => {
       cancelled = true;
     };
-  }, [active, previous, context?.mode]);
+  }, [active, previous, context?.mode, context?.source_job_id]);
 
   const resolvedJobId = context?.mode === "previous_shot"
     ? (context.source_job_id || previous?.h3_job_id || "")
@@ -209,6 +214,7 @@ export function VideoContextPanel({
     if (!context || next === legalWindow(context.context_frames)) return;
     const source: VideoContextSave = context.mode === "previous_shot" ? {
       mode: "previous_shot",
+      ...(context.source_shot_id ? { source_shot_id: context.source_shot_id } : {}),
       ...(context.source_job_id ? { source_job_id: context.source_job_id } : {}),
       ...(context.source_output_key ? { source_output_key: context.source_output_key } : {}),
     } : { mode: "external_upload", ...(context.upload_id ? { upload_id: context.upload_id } : {}) };
@@ -219,8 +225,7 @@ export function VideoContextPanel({
 
   return (
     <section className="video-context-panel" role="region" aria-label="Video continuation">
-      <VideoDependencyIndicator shot={shot} shotNumber={shots.findIndex((item) => item.id === shot.id) + 1}
-        sourceTitle={context?.mode === "previous_shot" ? previous?.title : undefined} />
+      <VideoDependencyIndicator shot={shot} shots={shots} />
       <div className="video-context-window">
         {profile === "builtin" ? <label>
           Context window
@@ -263,11 +268,23 @@ export function VideoContextPanel({
       {preview ? (
         <video controls playsInline preload="metadata" src={preview} />
       ) : null}
-          {!previous && context?.mode === "previous_shot" ? <p className="video-context-blocked">This shot has no previous shot</p> : null}
+          {context.mode === "previous_shot" ? <label>
+            Source shot
+            <select aria-label="Source shot" value={previous?.id || ""} disabled={busy}
+              onChange={(event) => {
+                if (!event.target.value) return;
+                void commit(payload({ mode: "previous_shot", source_shot_id: event.target.value }));
+              }}>
+              {!previous ? <option value="">Source shot unavailable</option> : null}
+              {shots.slice(0, Math.max(0, shots.findIndex((item) => item.id === shot.id))).map((item, index) => (
+                <option key={item.id} value={item.id}>Shot {index + 1} · {item.title}</option>
+              ))}
+            </select>
+          </label> : null}
           <label>
-            Previous video version
+            Source video version
             <select
-              aria-label="Previous video version"
+              aria-label="Source video version"
               value={selectedValue}
               disabled={busy || versions.length === 0}
               onChange={(event) => {
@@ -275,6 +292,7 @@ export function VideoContextPanel({
                 if (!jobId || !outputKey) return;
                 void commit(payload({
                   mode: "previous_shot",
+                  ...(previous ? { source_shot_id: previous.id } : {}),
                   source_job_id: jobId,
                   source_output_key: outputKey,
                 }));
@@ -302,6 +320,7 @@ export function VideoContextPanel({
                   if (context.mode === "previous_shot") {
                     void commit(payload({
                       mode: "previous_shot",
+                      ...(context.source_shot_id ? { source_shot_id: context.source_shot_id } : {}),
                       ...(context.source_job_id ? { source_job_id: context.source_job_id } : {}),
                       ...(context.source_output_key ? { source_output_key: context.source_output_key } : {}),
                     }, legalWindow(context.context_frames), next));
@@ -347,17 +366,17 @@ function sourceBlocks(
   jobs: VideoJobRecord[],
 ): string[] {
   if (context?.mode !== "previous_shot") return [];
-  if (!previous) return ["This shot has no previous shot"];
+  if (!previous) return [context.source_shot_id ? "Selected source shot was not found" : "This shot has no previous shot"];
   const resolvedId = context.source_job_id || previous.h3_job_id || "";
-  if (!resolvedId) return ["Previous shot has no H3 job"];
+  if (!resolvedId) return ["Source shot has no H3 job"];
   if (jobs.length === 0) return [];
   const job = jobs.find((item) => item.id === resolvedId);
-  if (!job) return ["Context job does not belong to the previous shot"];
-  if (job.status !== "succeeded") return [`Previous shot job is ${job.status}`];
+  if (!job) return ["Context job does not belong to the source shot"];
+  if (job.status !== "succeeded") return [`Source shot job is ${job.status}`];
   const outputs = videoKeys(job);
-  if (outputs.length === 0) return ["Previous shot has no video artifact"];
+  if (outputs.length === 0) return ["Source shot has no video artifact"];
   if (outputs.length > 1 && !outputs.includes(context.source_output_key || "")) {
-    return ["Select one video artifact from the previous shot"];
+    return ["Select one video artifact from the source shot"];
   }
   return [];
 }

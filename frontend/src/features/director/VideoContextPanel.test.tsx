@@ -115,6 +115,46 @@ describe("continuationFocus", () => {
 });
 
 describe("VideoContextPanel", () => {
+  it("previews the explicitly selected earlier shot and preserves it when editing settings", async () => {
+    const first = makeShot("s1", "Original", { h3_job_id: "job_first" });
+    const second = makeShot("s2", "Middle", { h3_job_id: "job_middle" });
+    const third = makeShot("s3", "Independent", { h3_job_id: "job_adjacent" });
+    const target = makeShot("s4", "Return", { video_context: {
+      mode: "previous_shot", source_shot_id: first.id, context_frames: 22,
+      source_output_key: "video",
+    } });
+    vi.mocked(getVideoJob).mockImplementation(async (id) => succeededJob(id, { video: videoOutput(id) }));
+    vi.mocked(getShot).mockResolvedValue(target);
+    const { container } = render(<VideoContextPanel shot={target} shots={[first, second, third, target]} expanded />);
+    expect((await screen.findByLabelText("Resolved job")).textContent).toBe("job_first");
+    await waitFor(() => expect(container.querySelector("video")?.getAttribute("src"))
+      .toBe(videoOutput("job_first").url));
+    expect(screen.getByRole("note", { name: "Video dependency" }).textContent).toContain("Continues Shot 1");
+    expect(getVideoJob).not.toHaveBeenCalledWith("job_adjacent");
+    const framesInput = screen.getByLabelText("Context window");
+    fireEvent.change(framesInput, { target: { value: "39" } });
+    fireEvent.blur(framesInput);
+    await waitFor(() => expect(saveVideoContext).toHaveBeenCalledWith(target.id,
+      expect.objectContaining({ source_shot_id: first.id, context_frames: 39 })));
+    fireEvent.click(screen.getByLabelText("Carry source audio"));
+    await waitFor(() => expect(saveVideoContext).toHaveBeenCalledWith(target.id,
+      expect.objectContaining({ source_shot_id: first.id, carry_audio: true })));
+  });
+
+  it("changes to an earlier source without keeping the old source's job pin", async () => {
+    const first = makeShot("s1", "Original", { h3_job_id: "job_first" });
+    const second = makeShot("s2", "Independent", { h3_job_id: "job_middle" });
+    const target = makeShot("s3", "Return", { video_context: {
+      mode: "previous_shot", source_shot_id: second.id, source_job_id: "job_middle", context_frames: 22,
+    } });
+    vi.mocked(getVideoJob).mockImplementation(async (id) => succeededJob(id, { video: videoOutput(id) }));
+    render(<VideoContextPanel shot={target} shots={[first, second, target]} expanded />);
+    fireEvent.change(await screen.findByLabelText("Source shot"), { target: { value: first.id } });
+    await waitFor(() => expect(saveVideoContext).toHaveBeenCalledWith(target.id, {
+      mode: "previous_shot", source_shot_id: first.id, context_frames: 22, carry_audio: false,
+    }));
+  });
+
   afterEach(cleanup);
 
   beforeEach(() => {
@@ -264,12 +304,13 @@ describe("VideoContextPanel", () => {
     render(<PanelHarness initial={current} shots={[previous, current]} expanded />);
 
     await screen.findByRole("option", { name: "job_old · video" });
-    fireEvent.change(screen.getByLabelText("Previous video version"), {
+    fireEvent.change(screen.getByLabelText("Source video version"), {
       target: { value: "job_old:video" },
     });
 
     await waitFor(() => expect(saveVideoContext).toHaveBeenCalledWith("s2", {
       mode: "previous_shot",
+      source_shot_id: "s1",
       source_job_id: "job_old",
       source_output_key: "video",
       context_frames: 22,
@@ -355,7 +396,7 @@ describe("VideoContextPanel", () => {
 
     render(<PanelHarness initial={current} shots={[previous, current]} expanded />);
     await screen.findByRole("option", { name: "job_real · video" });
-    fireEvent.change(screen.getByLabelText("Previous video version"), {
+    fireEvent.change(screen.getByLabelText("Source video version"), {
       target: { value: "job_real:video" },
     });
 
@@ -377,6 +418,6 @@ describe("VideoContextPanel", () => {
       <VideoContextPanel shot={current} shots={[previous, current]} expanded onShotUpdated={vi.fn()} />,
     );
 
-    expect(await screen.findByText("Select one video artifact from the previous shot")).toBeTruthy();
+    expect(await screen.findByText("Select one video artifact from the source shot")).toBeTruthy();
   });
 });

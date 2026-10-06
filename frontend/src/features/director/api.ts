@@ -439,6 +439,7 @@ export async function getShot(shotId: string): Promise<Shot> {
 
 export interface VideoContextSave {
   mode: "off" | "previous_shot" | "external_upload";
+  source_shot_id?: string;
   source_job_id?: string;
   source_output_key?: string;
   upload_id?: string;

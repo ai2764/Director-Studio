@@ -163,6 +163,8 @@ class PromptSections(BaseModel):
 class ShotVideoContext(BaseModel):
     """How this shot continues from an earlier finished video.
 
+    ``previous_shot`` may select any earlier shot via ``source_shot_id``;
+    leaving that ID empty defaults to the adjacent predecessor when configured.
     ``source_job_id`` empty means follow the source shot's current ``h3_job_id``.
     ``carry_audio`` empty means the built-in adapter does not carry sound.
     """

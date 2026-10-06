@@ -106,8 +106,9 @@ def test_upload_records_media_and_rejects_bad_files(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source_size", [(864, 480), (480, 864)])
+@pytest.mark.parametrize("intermediate_count", [0, 2])
 async def test_submit_puts_context_bytes_on_the_job_and_stops_when_unreadable(
-    monkeypatch, tmp_path, source_size
+    monkeypatch, tmp_path, source_size, intermediate_count
 ):
     project = _isolate(monkeypatch, tmp_path)
     first = Shot(
@@ -120,7 +121,12 @@ async def test_submit_puts_context_bytes_on_the_job_and_stops_when_unreadable(
     )
     save_shot(first)
     save_shot(second)
-    save_project(project.model_copy(update={"shot_ids": [first.id, second.id]}))
+    intermediate_ids = []
+    for index in range(intermediate_count):
+        middle = first.model_copy(update={"id": f"sht_middle_{index}"})
+        save_shot(middle)
+        intermediate_ids.append(middle.id)
+    save_project(project.model_copy(update={"shot_ids": [first.id, *intermediate_ids, second.id]}))
     job = create_job(
         pipeline_id="h3_ref2va", asset_kind="productions", name="source",
         project_id=project.id, params={"shot_id": first.id},
@@ -136,7 +142,7 @@ async def test_submit_puts_context_bytes_on_the_job_and_stops_when_unreadable(
     )
     from app.core.projects.video_context import configure_video_context, video_context_prompt_signature
 
-    configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
+    configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot", source_shot_id=first.id))
     current = load_shot(project.id, second.id)
     save_shot(current.model_copy(update={"meta": {
         **current.meta,

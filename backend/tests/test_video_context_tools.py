@@ -50,6 +50,7 @@ def test_configure_tool_is_offered_for_ordinary_and_lyric_messages():
     assert schema["parameters"]["additionalProperties"] is False
     assert "path" not in schema["parameters"]["properties"]
     assert "filename" not in schema["parameters"]["properties"]
+    assert "source_shot_id" in schema["parameters"]["properties"]
     assert "does not start generation" in schema["description"].lower()
 
 

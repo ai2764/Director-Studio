@@ -85,9 +85,11 @@ describe("ShotMaterialEditor", () => {
   });
 
   it("shows the saved video dependency while selecting Pictures", () => {
-    render(<ShotMaterialEditor shot={{ ...selectedShot(), video_context: {
+    const current = { ...selectedShot(), video_context: {
       mode: "previous_shot", source_shot_id: "sht_prev", context_frames: 22,
-    } }} shotNumber={2} onClose={vi.fn()} onOpenImage={vi.fn()} />);
+    } as const };
+    render(<ShotMaterialEditor shot={current} shots={[{ ...selectedShot(), id: "sht_prev" }, current]}
+      shotNumber={2} onClose={vi.fn()} onOpenImage={vi.fn()} />);
     expect(screen.getByRole("note", { name: "Video dependency" }).textContent).toContain("Continues Shot 1");
     expect(screen.getByText("Pictures 2 / 9")).toBeTruthy();
   });

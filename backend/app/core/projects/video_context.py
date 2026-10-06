@@ -85,7 +85,7 @@ def resolve_video_context(
     media = probe_video(path)
     if config.mode == "previous_shot" and (width, height) != (media.width, media.height):
         raise VideoContextError(
-            f"Previous-shot continuation requires the source resolution {media.width}×{media.height}"
+            f"Shot continuation requires the source resolution {media.width}×{media.height}"
         )
     _require_compatible_frame(media, width=width, height=height)
     digest = hashlib.sha256(data).hexdigest()
@@ -299,16 +299,15 @@ def load_video_context_upload(project_id: str, upload_id: str) -> tuple[dict, by
 
 
 def ensure_video_context_order(shots: list[Shot]) -> None:
-    """Reject a new storyboard order that moves a pinned previous shot."""
+    """Keep every source earlier than its target; unrelated shots may move freely."""
     ids = [shot.id for shot in shots]
     for index, shot in enumerate(shots):
         config = shot.video_context
         if config is None or config.mode != "previous_shot":
             continue
-        predecessor = ids[index - 1] if index else None
-        if predecessor != config.source_shot_id:
+        if config.source_shot_id not in ids[:index]:
             raise VideoContextError(
-                f"Video context source for {shot.id} is no longer the previous shot"
+                f"Video context source for {shot.id} must remain an earlier shot on the storyboard"
             )
 
 
@@ -363,18 +362,21 @@ def _prepare_config(project: Project, shot: Shot, config: ShotVideoContext) -> S
 
 
 def _previous_shot(project: Project, shot: Shot, requested_id: str | None) -> Shot:
+    """Resolve a selected earlier shot, defaulting to the adjacent predecessor."""
     ids = list(project.shot_ids)
     if shot.id not in ids:
         raise VideoContextError("Shot is not on the storyboard")
     index = ids.index(shot.id)
     if index == 0:
         raise VideoContextError("This shot has no previous shot")
-    predecessor_id = ids[index - 1]
-    if requested_id and requested_id != predecessor_id:
-        raise VideoContextError("Video context must come from the immediately previous shot")
-    source = load_shot(project.id, predecessor_id)
+    source_id = requested_id or ids[index - 1]
+    if source_id not in ids:
+        raise VideoContextError("Video context source was not found on this project's storyboard")
+    if ids.index(source_id) >= index:
+        raise VideoContextError("Video context source must be an earlier shot; self and future dependencies are not allowed")
+    source = load_shot(project.id, source_id)
     if source is None or source.project_id != project.id:
-        raise VideoContextError("Previous shot was not found in this project")
+        raise VideoContextError("Source shot was not found in this project")
     return source
 
 
@@ -382,12 +384,12 @@ def _require_previous_video(project: Project, shot: Shot, config: ShotVideoConte
     source = _previous_shot(project, shot, config.source_shot_id)
     job_id = config.source_job_id or source.h3_job_id
     if not job_id:
-        raise VideoContextError("Previous shot has no H3 job")
+        raise VideoContextError("Source shot has no H3 job")
     job = load_job(job_id)
     if job is None or job.project_id != project.id or str((job.params or {}).get("shot_id") or "") != source.id:
-        raise VideoContextError("Context job does not belong to the previous shot")
+        raise VideoContextError("Context job does not belong to the source shot")
     if job.status != JobStatus.succeeded:
-        raise VideoContextError(f"Previous shot job is {job.status.value}")
+        raise VideoContextError(f"Source shot job is {job.status.value}")
     output_key = _selected_output_key(job, config)
     return source, job, output_key, _output_file(job, output_key)
 
@@ -398,10 +400,10 @@ def _selected_output_key(job, config: ShotVideoContext) -> str:
         if key in VIDEO_OUTPUT_KEYS or _slot_suffix(slot) in ALLOWED_SUFFIXES
     ]
     if not candidates:
-        raise VideoContextError("Previous shot has no video artifact")
+        raise VideoContextError("Source shot has no video artifact")
     explicit = "source_output_key" in config.model_fields_set
     if len(candidates) > 1 and not explicit:
-        raise VideoContextError("Select one video artifact from the previous shot")
+        raise VideoContextError("Select one video artifact from the source shot")
     chosen = config.source_output_key if explicit else candidates[0]
     if chosen not in candidates:
         raise VideoContextError("Selected video artifact was not found")
@@ -422,7 +424,7 @@ def _output_file(job, key: str) -> Path:
     except ValueError as exc:
         raise VideoContextError("Selected video artifact escapes the job output") from exc
     if not path.is_file():
-        raise VideoContextError("Previous shot video file is missing")
+        raise VideoContextError("Source shot video file is missing")
     return path
 
 

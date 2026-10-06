@@ -103,16 +103,22 @@ def test_prompt_freshness_tracks_followed_source_versions_and_bytes(monkeypatch,
 
 
 def test_custom_window_and_audio_are_inherited_during_normalization(monkeypatch, tmp_path):
-    from types import SimpleNamespace
+    from app.workflow_profiles.h3.models import ResolvedH3Profile
+    from app.workflow_profiles.h3.inspector import inspect_h3_workflow
     project, first, second = _board(monkeypatch, tmp_path)
     job = _succeed(project.id, first.id)
     save_shot(first.model_copy(update={"h3_job_id": job.id}))
     configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
     from app.pipelines.h3_ref2va.video_context import attach_video_context
     from app.pipelines.h3_ref2va.workflow import load_base_prompt
-    profile = SimpleNamespace(source="custom", workflow=attach_video_context(
+    workflow = attach_video_context(
         load_base_prompt(), uploaded_video="source.mp4", delivered_frames=56,
-        context_frames=39, audio_context_frames=24, carry_audio=True))
+        context_frames=39, audio_context_frames=24, carry_audio=True)
+    profile = ResolvedH3Profile(
+        profile_id="custom-motion-context", source="custom", workflow=workflow,
+        mapping=inspect_h3_workflow(workflow, output_node_id="92").mapping,
+        workflow_sha256="a" * 64,
+    )
     monkeypatch.setattr("app.workflow_profiles.h3.store.resolve_active_h3_profile", lambda: profile)
     monkeypatch.setattr("app.core.projects.video_context.probe_video", lambda _: _media(fps=30))
     calls=[]
@@ -153,8 +159,8 @@ def test_failed_binding_keeps_the_existing_configuration(monkeypatch, tmp_path):
     ("setup", "message"),
     [
         ("first", "no previous shot"),
-        ("cross", "immediately previous"),
-        ("skipped", "immediately previous"),
+        ("cross", "not found on this project's storyboard"),
+        ("future", "earlier shot"),
         ("deleted", "not found"),
         ("running", "running"),
         ("failed", "failed"),
@@ -173,14 +179,13 @@ def test_rejected_sources(monkeypatch, tmp_path, setup, message):
         foreign = _shot(other.id, "sht_foreign")
         save_shot(foreign)
         config = ShotVideoContext(mode="previous_shot", source_shot_id=foreign.id)
-    elif setup == "skipped":
+    elif setup == "future":
         third = _shot(project.id, "sht_c")
         save_shot(third)
         save_project(load_project(project.id).model_copy(
             update={"shot_ids": [first.id, second.id, third.id]}
         ))
-        target_id = third.id
-        config = ShotVideoContext(mode="previous_shot", source_shot_id=first.id)
+        config = ShotVideoContext(mode="previous_shot", source_shot_id=third.id)
     elif setup == "deleted":
         (tmp_path / "projects" / project.id / "shots" / f"{first.id}.json").unlink()
     else:
@@ -258,7 +263,7 @@ def test_reorder_that_breaks_the_pinned_source_is_rejected(monkeypatch, tmp_path
         load_shot(project.id, second.id),
         load_shot(project.id, first.id),
     ]
-    with pytest.raises(VideoContextError, match="no longer the previous"):
+    with pytest.raises(VideoContextError, match="must remain an earlier shot"):
         replace_project_shots(project.id, swapped)
     assert load_project(project.id).shot_ids == [first.id, second.id]
 

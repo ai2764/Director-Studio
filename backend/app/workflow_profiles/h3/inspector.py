@@ -12,6 +12,7 @@ from .models import (
     H3AnalysisIssue,
     H3BoundaryMapping,
     H3ContextVideoCandidate,
+    H3ContextVideoInput,
     H3FixedDependency,
     H3InputMapping,
     H3NodeCandidate,
@@ -255,7 +256,6 @@ def _context_video_candidates(
             input_name is None
             or not isinstance(inputs, Mapping)
             or not isinstance(inputs.get(input_name), str)
-            or not str(inputs.get(input_name))
         ):
             continue
         result.append(
@@ -263,7 +263,7 @@ def _context_video_candidates(
                 node_id=node_id,
                 class_type=str(node.get("class_type")),
                 input_name=input_name,
-                display_name=f"Context video (Node {node_id})",
+                display_name=f"{_title(node) or 'Context video'} (Node {node_id})",
             )
         )
     return tuple(result)
@@ -446,13 +446,26 @@ def _inspect_h3_workflow(
                 "needs_confirmation" if len(seed_candidates) > 1 else "auto_compatible"
             )
 
+    context_candidates = _context_video_candidates(normalized, upstream)
+    if mapping is not None and len(context_candidates) == 1:
+        candidate = context_candidates[0]
+        mapping = mapping.model_copy(update={"context_video": H3ContextVideoInput(
+            node_id=candidate.node_id, input_name=candidate.input_name,
+        )})
+    elif mapping is not None and len(context_candidates) > 1:
+        compatibility = "needs_confirmation"
+        issues.append(H3AnalysisIssue(
+            code="ambiguous_context_video",
+            message="Multiple video file inputs feed this output; choose the context video input explicitly",
+        ))
+
     return H3WorkflowAnalysis(
         compatibility=compatibility,
         mapping=mapping,
         output_candidates=tuple(output_candidates),
         h3_candidates=tuple(h3_candidates),
         seed_candidates=tuple(seed_candidates),
-        context_video_candidates=_context_video_candidates(normalized, upstream),
+        context_video_candidates=context_candidates,
         fixed_dependencies=_fixed_dependencies(normalized, upstream),
         issues=tuple(issues),
     )

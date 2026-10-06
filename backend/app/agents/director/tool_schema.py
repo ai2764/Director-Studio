@@ -611,13 +611,16 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     function_tool(
         "configure_video_context",
         "Save how this shot continues from a finished source video. "
-        "The backend chooses the immediately previous shot. "
+        "Pass source_shot_id to select any earlier shot on this project's storyboard; "
+        "omit it only when the user means the immediately previous shot. "
         "Use mode=previous_shot when the user asks to continue its action or camera motion; "
         "its actual video resolution is inherited and cannot be overridden. "
         "This does not start generation. Do not pass a file path.",
         {
             "shot_id": {"type": "string"},
             "mode": {"type": "string", "enum": ["off", "previous_shot", "external_upload"]},
+            "source_shot_id": {"type": "string", "description": "Exact ID of the selected earlier source shot. "
+                "Intermediate shots may be independent. Omit to use the adjacent previous shot."},
             "source_job_id": {"type": "string"},
             "source_output_key": {"type": "string"},
             "upload_id": {"type": "string"},

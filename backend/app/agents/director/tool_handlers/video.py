@@ -162,6 +162,7 @@ async def start_h3_video(project_id: str, shot_id: str, *, svc: Any,
 
 _CONTEXT_FIELDS = (
     "mode",
+    "source_shot_id",
     "source_job_id",
     "source_output_key",
     "upload_id",
