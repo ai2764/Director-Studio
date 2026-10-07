@@ -283,6 +283,48 @@ def test_mapped_motion_context_preserves_window_and_delivery_length():
     assert _node(original, "ImageFromBatch")[1]["inputs"]["length"] == 56
 
 
+def test_imported_video_context_rejects_latent_that_overrides_selected_pixels():
+    from types import SimpleNamespace
+    graph = attach_video_context(load_base_prompt(), uploaded_video="selected.mp4",
+        delivered_frames=56, context_frames=22, audio_context_frames=0, carry_audio=False)
+    graph["7000"] = {"class_type": "LoadLatent", "inputs": {"latent": "other.latent"}}
+    _node(graph, "MiniMaxH3MotionContext")[1]["inputs"]["context_latent"] = ["7000", 0]
+    load_id, _ = _node(graph, "LoadVideo")
+    profile = replace(_builtin(graph), source="custom", mapping=_builtin(graph).mapping.model_copy(update={
+        "context_video": H3ContextVideoInput(node_id=load_id, input_name="file")}))
+    assert not validate_h3_contract(graph, profile.mapping).valid
+    with pytest.raises(ValueError, match="context_latent"):
+        context_runtime_options(SimpleNamespace(context_frames=None, carry_audio=None, audio_context_frames=None), profile)
+    with pytest.raises(ValueError, match="context_latent"):
+        fill_profile_graph(profile, _job(context_video="new.mp4"))
+    assert _node(graph, "MiniMaxH3MotionContext")[1]["inputs"]["context_latent"] == ["7000", 0]
+
+
+@pytest.mark.parametrize("explicit_zero", [True, False])
+def test_connected_context_audio_with_zero_window_still_inherits_sound(explicit_zero):
+    from types import SimpleNamespace
+    graph = attach_video_context(load_base_prompt(), uploaded_video="selected.mp4",
+        delivered_frames=56, context_frames=22, audio_context_frames=0, carry_audio=True)
+    motion = _node(graph, "MiniMaxH3MotionContext")[1]
+    if not explicit_zero:
+        del motion["inputs"]["audio_context_length"]
+    load_id, _ = _node(graph, "LoadVideo")
+    profile = replace(_builtin(graph), source="custom", mapping=_builtin(graph).mapping.model_copy(update={
+        "context_video": H3ContextVideoInput(node_id=load_id, input_name="file")}))
+    if explicit_zero:
+        assert validate_h3_contract(graph, profile.mapping).valid
+    config = SimpleNamespace(context_frames=None, carry_audio=None, audio_context_frames=None)
+    assert context_runtime_options(config, profile) == {
+        "context_frames": 22, "audio_context_frames": 0 if explicit_zero else 24, "carry_audio": True}
+    config.carry_audio = False
+    with pytest.raises(ValueError, match="Custom workflow owns carry_audio"):
+        context_runtime_options(config, profile)
+    filled = fill_profile_graph(profile, _job(context_video="new.mp4"))
+    uploaded_motion = _node(filled, "MiniMaxH3MotionContext")[1]["inputs"]
+    assert uploaded_motion["context_audio"] == motion["inputs"]["context_audio"]
+    assert uploaded_motion.get("audio_context_length", 0) == 0
+
+
 @pytest.mark.parametrize("carry_audio", [False, True])
 def test_imported_vhs_video_conditions_samples_and_preserves_loader_settings(carry_audio):
     from types import SimpleNamespace

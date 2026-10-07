@@ -308,7 +308,8 @@ async def test_tail_writer_repairs_attribution_without_editing_dialogue(tail_han
     provider = Provider([bad, verdict(), good, verdict()])
     updated = await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
     assert updated.dialogue_lines == shot.dialogue_lines
-    assert "char_1" in updated.prompt_sections.detailed_description
+    assert "(S1) <d>" in updated.prompt_sections.detailed_description
+    assert "S1 is Visitor" in updated.prompt_sections.subject_definitions
     assert "dialogue_speaker_mismatch" in provider.text[2][1]
     assert updated.meta["prompt_dialogue_contract"]["lines"][0]["speaker_id"] == "char_1"
 

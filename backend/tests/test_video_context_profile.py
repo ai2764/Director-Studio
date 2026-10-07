@@ -92,11 +92,12 @@ def test_validation_endpoint_fills_the_video_boundary(test_env, monkeypatch):
     assert captured[0]["50"]["inputs"]["file"] == "contract-context.mp4"
 
 
-def test_profile_test_records_uploaded_motion_audio_settings(test_env, monkeypatch):
+@pytest.mark.parametrize("audio_window", [0, 24])
+def test_profile_test_records_uploaded_motion_audio_settings(test_env, monkeypatch, audio_window):
     from app.pipelines.h3_ref2va.video_context import attach_video_context
     graph = json.loads((settings.workflows_dir / "h3_ref2va.api.json").read_text(encoding="utf8"))
     graph = attach_video_context(graph, uploaded_video="old.mp4", delivered_frames=56,
-                                context_frames=39, audio_context_frames=24, carry_audio=True)
+                                context_frames=39, audio_context_frames=audio_window, carry_audio=True)
     store = H3ProfileStore()
     import_id = store.create_import(graph)
     store.save_import_output(import_id, "92")
@@ -120,7 +121,7 @@ def test_profile_test_records_uploaded_motion_audio_settings(test_env, monkeypat
     source = load_job(response.json()["job_id"]).params["video_context_source"]
     assert source["carry_audio"] is True
     assert source["context_frames"] == 39
-    assert source["audio_context_frames"] == 24
+    assert source["audio_context_frames"] == audio_window
 
 
 def test_context_mapping_requires_an_upload_and_records_contract_three(

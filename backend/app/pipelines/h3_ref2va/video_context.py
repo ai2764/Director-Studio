@@ -38,8 +38,10 @@ def context_runtime_options(config, profile=None) -> dict[str, Any]:
             if node.get("class_type") in {"CreateVideo", "MiniMaxH3MotionContextTrim"}:
                 if float(node["inputs"].get("fps", 24)) != TARGET_FPS:
                     raise VideoContextGraphError("Video continuation is certified only at 24 fps")
-        audio_window = int(inputs.get("audio_context_length", 0))
-        carry = "context_audio" in inputs and audio_window > 0
+        audio_window = int(inputs.get("audio_context_length", 24))
+        # Motion Context interprets zero as the video span, not audio-off.
+        # The connection owns whether sound is inherited in an uploaded graph.
+        carry = "context_audio" in inputs
         for field, actual in (("context_frames", window), ("carry_audio", carry), ("audio_context_frames", audio_window)):
             value = getattr(config, field, None)
             if value is not None and value != actual:
@@ -116,6 +118,8 @@ def _validate_context_sampling_chain(graph, *, h3_node_id, context_node_id=None)
             video_path = []
         else:
             raise ValueError("certified input must be LoadVideo or VHS_LoadVideo")
+        if _inputs(graph, motion_id).get("context_latent") is not None:
+            raise ValueError("context_latent overrides the mapped video; disconnect it for video continuation")
         required = [
             (motion_id, "conditioning", [h3_node_id, 0]),
             (motion_id, "latent", [h3_node_id, 1]),

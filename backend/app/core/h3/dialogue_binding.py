@@ -119,17 +119,42 @@ def validate_dialogue_uses(draft: DialoguePromptDraft, lines: list[DialogueLine]
 def annotate_speakers(draft: DialoguePromptDraft, lines: list[DialogueLine]) -> PromptSections:
     validate_dialogue_uses(draft, lines)
     by_id = {line.line_id: line for line in lines}
+    # Names immediately before speech can be rendered as extra spoken words.
+    # Keep source IDs in DialogueUse; H3 gets neutral speaker handles instead.
+    speakers = {line.speaker_id: line for line in reversed(lines)}
+    order = list(dict.fromkeys(line.speaker_id for line in lines))
+    aliases = {speaker_id: f"S{index + 1}" for index, speaker_id in enumerate(order)}
     labels = {}
+    legacy_labels = {}
     for use in draft.dialogue_uses:
         line = by_id[use.line_ids[0]]
-        label = f"({html.escape(line.speaker_id)}: {html.escape(line.speaker_name)}) "
+        label = f"({aliases[line.speaker_id]}) "
         labels.update({index: label for index in use.block_indexes})
+        legacy = f"({html.escape(line.speaker_id)}: {html.escape(line.speaker_name)}) "
+        legacy_labels.update({index: legacy for index in use.block_indexes})
     detail = draft.prompt_sections.detailed_description
     for index, block in reversed(list(enumerate(speech_blocks(detail)))):
         label = labels[index]
-        if not detail[:block.start()].endswith(label):
-            detail = detail[:block.start()] + label + detail[block.start():]
-    return draft.prompt_sections.model_copy(update={"detailed_description": detail})
+        prefix = detail[:block.start()]
+        legacy = legacy_labels[index]
+        if prefix.endswith(legacy):
+            prefix = prefix[:-len(legacy)]
+        # A revised dialogue can change speaker order and hence handle numbers.
+        # Replace the protocol cue rather than stacking the new handle after it.
+        prefix = re.sub(r"\(S[1-9][0-9]*\) $", "", prefix)
+        if not prefix.endswith(label):
+            prefix += label
+        detail = prefix + detail[block.start():]
+    subject = draft.prompt_sections.subject_definitions
+    if order:
+        binding_header = "\nSpeaker identities: "
+        # Replace our binding line without discarding subsequently added direction.
+        subject = re.sub(r"\nSpeaker identities: [^\r\n]*", "", subject)
+        subject += binding_header + "; ".join(
+            f"{aliases[speaker_id]} is {html.escape(speakers[speaker_id].speaker_name)}"
+            for speaker_id in order) + "."
+    return draft.prompt_sections.model_copy(update={
+        "detailed_description": detail, "subject_definitions": subject})
 
 
 _SPEECH_REFERENCE = re.compile(r"\{\{speech:([^{}:\r\n]+)(?::([0-9]+):([0-9]+))?\}\}")

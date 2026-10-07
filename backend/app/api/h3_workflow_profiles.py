@@ -166,17 +166,18 @@ def _active_payload(store: H3ProfileStore) -> dict[str, Any]:
 def list_h3_profiles() -> dict[str, Any]:
     store = H3ProfileStore()
     active = _active_payload(store)
+    builtin = store.resolve_builtin()
     profiles: list[dict[str, Any]] = [
         {
             "profile_id": "builtin-official-h3",
-            "display_name": "Built-in H3 Turbo 8 (temporary test)",
+            "display_name": builtin.display_name,
             "source": "builtin",
             "status": (
                 "active"
                 if active["profile_id"] == "builtin-official-h3"
                 else "available"
             ),
-            "workflow_sha256": store.resolve_builtin().workflow_sha256,
+            "workflow_sha256": builtin.workflow_sha256,
         }
     ]
     for profile in store.list_installed_profiles():

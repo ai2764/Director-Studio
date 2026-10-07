@@ -58,7 +58,7 @@ def test_valid_placeholder_candidate_compiles_without_rewriting_prose():
     result = validate(raw, required_picture_indices=[1], submitted_picture_indices=[1])
     assert result.prompt_sections.detailed_description == (
         "A reflection (Picture 1) fades beside <Picture 1>. "
-        "(p1: Visitor) <d>[Português] Olá… atenção: vem!</d> Hold.")
+        "(S1) <d>[Português] Olá… atenção: vem!</d> Hold.")
     assert result.dialogue_uses[0].speaker_id == "p1"
 
 
@@ -97,6 +97,6 @@ async def test_ordinary_writer_repairs_metadata_and_picture_tags_in_its_single_r
     assert "line_ids" in provider.writer_requests[1]
     assert "missing required Picture binding: <Picture 9>" in provider.writer_requests[1]
     assert saved.prompt_sections.detailed_description == (
-        "Camera arcs slowly. (char_1: watchmaker) <d>[English] Hello.</d> Hold the empty doorway.")
+        "Camera arcs slowly. (S1) <d>[English] Hello.</d> Hold the empty doorway.")
     assert saved.dialogue == shot.dialogue
     assert load_shot(project.id, shot.id).prompt_sections == saved.prompt_sections

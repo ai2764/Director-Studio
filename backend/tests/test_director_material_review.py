@@ -823,7 +823,8 @@ async def test_retry_repairs_saved_candidate_without_losing_other_sections(mater
     provider.complete = repair
     updated = await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
     assert len(seen) == 1
-    assert updated.prompt_sections.subject_definitions == broken["subject_definitions"]
+    assert updated.prompt_sections.subject_definitions == (
+        broken["subject_definitions"] + "\nSpeaker identities: S1 is watchmaker.")
     assert "the watchmaker examines the gear" in updated.prompt_sections.detailed_description
     assert updated.prompt_sections.detailed_description.endswith("<d>[English] Hello.</d>")
     assert load_shot(project.id, shot.id) == updated
