@@ -18,7 +18,7 @@ from .reference_facts import reference_context_signature, reference_intent_signa
 from .material_review import observe_references_cached, tail_frame_review_signature
 from .planner import _extract_json_payload
 from .prompts import H3_PROMPT_INSTRUCTIONS
-from .prompt_repair import repair_key, load_repair, save_repair, clear_repair, merge_repair, require_repair_progress
+from .prompt_repair import repair_key, load_repair, save_repair, clear_repair, merge_repair, require_repair_progress, repair_response_instructions
 
 
 class ShotPatch(BaseModel):
@@ -38,6 +38,9 @@ class PromptCandidate(BaseModel):
     blocking_question: str | None
     dialogue_uses: list[DialogueUse] | None = None
     dialogue_conflicts: list[DialogueConflict] = Field(default_factory=list)
+    # Optional when reading persisted legacy drafts. New generation requires
+    # an explicit contribution for every submitted reference via its schema.
+    picture_bindings: dict[str, Annotated[str, Field(min_length=1)]] | None = None
 
 
 class HandoffCheck(BaseModel):
@@ -69,11 +72,43 @@ class CandidateFieldChecks(BaseModel):
     non_diegetic_music: HandoffCheck
 
 
+class ViewpointMotion(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    camera_attached_to: Literal["viewer", "external", "uncertain"]
+    viewer_path: str = Field(min_length=1, max_length=400)
+    camera_path: str = Field(min_length=1, max_length=400)
+    compatible: StrictBool
+    evidence: str = Field(min_length=1, max_length=600)
+
+
+class MotionClaims(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    camera_attachment: Literal["viewer", "external", "uncertain"]
+    viewer_position_change: Literal["moving", "stationary", "unspecified"]
+    camera_position_change: Literal["moving", "stationary", "unspecified"]
+    viewer_quote: str = Field(min_length=1, max_length=2000)
+    camera_quote: str = Field(min_length=1, max_length=2000)
+
+
+MOTION_CLAIM_INSTRUCTIONS = """Extract movement CLAIMS independently, without reconciling
+contradictions. Return JSON using the schema. Determine camera_attachment from declared_viewpoint.
+Determine viewer_position_change ONLY from requested_action, quoting that source.
+Determine camera_position_change ONLY from explicit CAMERA movement in camera_motion_field,
+quoting that claim. Movement of a subject, her hands, or an actor does not establish camera
+movement. Do not change a stationary camera claim into moving to make it agree with the action.
+Do not change requested movement into stationary to make it agree with the camera.
+Classify positional travel, not framing or orientation. If displacement is unspecified,
+quote the supplied action or camera field establishing that evidence limit.
+Copy each quote verbatim from its designated field in the original language; never
+translate, paraphrase, or cite another field. This is extraction, not a compatibility verdict."""
+
+
 class PromptVerdict(BaseModel):
     model_config = ConfigDict(extra="forbid")
     tail_opening: str = Field(min_length=1, max_length=400)
     candidate_opening: str = Field(min_length=1, max_length=400)
     camera_path: str = Field(min_length=1, max_length=400)
+    viewpoint_motion: ViewpointMotion | None = None
     checks: HandoffChecks
     field_checks: CandidateFieldChecks
     valid: StrictBool
@@ -83,6 +118,8 @@ class PromptVerdict(BaseModel):
 
     @model_validator(mode="after")
     def consistent(self):
+        if self.valid and self.viewpoint_motion and not self.viewpoint_motion.compatible:
+            raise ValueError("Accepted prompt conflicts with viewpoint motion: " + self.viewpoint_motion.evidence)
         failed = [(key, getattr(self.checks, key).evidence)
                   for key in HandoffChecks.model_fields if not getattr(self.checks, key).compatible]
         if self.valid and failed:
@@ -104,7 +141,8 @@ class PromptVerdict(BaseModel):
 DRAFT_INSTRUCTIONS = H3_PROMPT_INSTRUCTIONS + """
 
 For this tail-frame continuation return a candidate envelope instead of the bare six sections:
-{"shot_patch": {}, "prompt_sections": {all six sections}, "reason": "...", "blocking_question": null}.
+{"shot_patch": {}, "prompt_sections": {all six sections}, "picture_bindings":
+{"<Picture N>": "what this reference contributes"}, "reason": "...", "blocking_question": null}.
 shot_patch may contain only script_beat, shot_type, camera_angle, camera_motion, composition.
 Unchanged fields must be omitted. No asset, dialogue, duration, identity, or other-shot edits.
 original_shot is the current plan; its presence does not mean the user explicitly locked every
@@ -145,12 +183,24 @@ styling or unshod feet as the final costume. Keep appearance claims within the d
 source responsibilities; do not add an unrequested change to an unseen wardrobe detail.
 After applying shot_patch, check script_beat and composition against the detailed action,
 including opening and ending orientation. Remove superseded descriptions from every field.
+required_picture_bindings lists the exact tags needed in the returned six sections.
+Return picture_bindings with exactly those keys, each describing that reference's declared
+responsibility. The backend compiles these bindings into subject_definitions before review.
+Do not invent new slots. The source-video observation is separate and has no Picture tag.
+Resolve the camera's physical position throughout the action. In first-person POV the camera
+is the viewer's body: if the viewer walks, is led, or sits, the camera travels with that body.
+A stationary source ending does not require a stationary next shot. Keep the opening
+viewpoint, then describe the requested movement consistently across the patch and sections.
 """
 
 
 REVIEW_INSTRUCTIONS = """Review a Director Studio tail-frame prompt candidate. Return JSON only:
 {"tail_opening": "observed crop, viewpoint and pose", "candidate_opening": "proposed crop,
 viewpoint and pose at time zero", "camera_path": "explicit path in the candidate, or absent",
+"viewpoint_motion": {"camera_attached_to": "viewer" | "external" | "uncertain",
+"viewer_path": "quote the viewer/body's displacement or state none",
+"camera_path": "quote the camera's displacement or fixed position",
+"compatible": true/false, "evidence": "compare these two paths using the declared viewpoint"},
 "checks": {"opening_alignment": {"compatible": true/false, "evidence": "..."},
 "transition_path": {"compatible": true/false, "evidence": "..."},
 "reference_roles": {"compatible": true/false, "evidence": "..."},
@@ -211,6 +261,17 @@ transfer; it is a repairable candidate claim, not a reason to reopen approved ca
 section_consistency includes action, orientation and appearance as well as camera:
 compare composition/script_beat with summary, retention and timed description at both
 opening and ending. Report stale descriptions that describe an incompatible state.
+For first-person POV, track the camera as the viewer's physical body throughout the action.
+Fill viewpoint_motion BEFORE deciding the checks: determine camera attachment from the
+declared viewpoint, then extract viewer and camera displacement separately. When the viewer
+is the camera, those paths must agree. For an external camera, the actor's movement need
+not match camera movement; a stationary external camera is valid. Do not infer a moving
+viewer from a still image; use the actual requested action and candidate prose.
+Compare the viewer's displacement with camera_motion and the timed description; a camera
+cannot remain fixed while that same viewpoint is led across the room or sits down.
+Quote any conflicting movement claims, rather than accepting the sequence solely because
+the actor's individual actions are plausible. Distinguish the actor approaching the viewer
+from the viewer following the actor toward a destination.
 For managed_execution, also compare original_shot, script and directing_requests:
 camera refinements must preserve the authored action and explicit user constraints.
 The coordinator message and an automatic tail reason do not override user direction.
@@ -316,6 +377,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
         "revision_request": shot.meta.get("prompt_revision_request", ""),
         "revision_history": shot.meta.get("prompt_revision_requests", []),
         "references": references, "selected_layouts": layouts,
+        "required_picture_bindings": [f"<Picture {r.picture_index}>" for r in shot.refs],
         "voice_refs": [v.model_dump(mode="json") for v in shot.voice_refs],
         "source_audio_active": bool(shot.source_audio_path),
         "music_segment": music_context,
@@ -385,11 +447,20 @@ async def draft_and_review(provider, project, shot, records, images, signature,
     for attempt in range(2):
         raw = None
         audit_raw = None
+        motion_raw = None
         check_current()
         try:
-            raw = await complete_bounded(provider, draft_instructions,
+            attempt_instructions = draft_instructions
+            if repair:
+                attempt_instructions += (
+                    "\nThe repair object contains a rejected draft and its validation errors, "
+                    "not an approved response. Use repair.error, repair.issues and repair.review "
+                    "to correct it, and check every required_picture_bindings tag.\n"
+                    + repair_response_instructions(dialogue_bindings=bool(dialogue_lines)))
+            raw = await complete_bounded(provider, attempt_instructions,
                 json.dumps({**request, "repair": repair}, ensure_ascii=False),
-                max_tokens=6144, guides=("h3-prompt-writing",), schema=candidate_schema(),
+                max_tokens=6144, guides=("h3-prompt-writing",),
+                schema=candidate_schema(required_picture_indices=[r.picture_index for r in shot.refs]),
                 observation=context_view)
             if repair:
                 raw = merge_repair(raw, repair["rejected_candidate"], envelope=True)
@@ -424,6 +495,13 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             )
             sections = PromptSections(**parse_prompt_sections_json(
                 json.dumps(candidate.prompt_sections)))
+            if candidate.picture_bindings is not None:
+                expected_bindings = {f"<Picture {r.picture_index}>" for r in shot.refs}
+                if set(candidate.picture_bindings) != expected_bindings:
+                    raise PromptFailureError("contract", "picture_bindings must cover exactly the submitted Pictures")
+                sections = sections.model_copy(update={"subject_definitions":
+                    sections.subject_definitions + "\n" + "\n".join(
+                        f"{tag} {candidate.picture_bindings[tag]}" for tag in request["required_picture_bindings"])})
             if not dialogue_lines:
                 sections = _normalize_unambiguous_dialogue_language_tag(sections)
             sections = _apply_source_audio_contract(sections, changed)
@@ -432,7 +510,12 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             contract_issues = []
             dialogue_draft = None
             try:
-                with collect_prompt_contract_errors(raw,
+                # Validate the compiled H3 sections, retaining the original
+                # dialogue envelope. Bindings are authored data, not spare
+                # metadata to count as tags in an uncompiled prompt.
+                validation_raw = json.dumps({**_extract_json_payload(raw),
+                    "prompt_sections": sections.model_dump()}, ensure_ascii=False)
+                with collect_prompt_contract_errors(validation_raw,
                         required_picture_indices=[r.picture_index for r in changed.refs],
                         submitted_picture_indices=[r.picture_index for r in changed.refs]):
                     if dialogue_lines:
@@ -479,9 +562,36 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                 audit_request["source_ending_observation"] = source_ending
             audit_raw = await complete_bounded(provider, REVIEW_INSTRUCTIONS,
                 json.dumps(audit_request, ensure_ascii=False), max_tokens=4096,
-                schema=PromptVerdict.model_json_schema(), observation=context_view)
+                schema=review_schema(), observation=context_view)
             check_current()
             verdict = PromptVerdict.model_validate(_extract_json_payload(audit_raw))
+            motion_review = None
+            motion_error = None
+            if verdict.viewpoint_motion is not None:
+                # Extract claims in a short, independent call. A broad review
+                # can otherwise reconcile conflicting prose by inventing a move.
+                motion_request = {
+                    "requested_action": request["original_shot"]["script_beat"],
+                    "declared_viewpoint": changed.camera_angle,
+                    "camera_motion_field": changed.camera_motion,
+                }
+                motion_raw = await complete_bounded(provider, MOTION_CLAIM_INSTRUCTIONS,
+                    json.dumps(motion_request, ensure_ascii=False), max_tokens=1024,
+                    schema=MotionClaims.model_json_schema())
+                check_current()
+                motion = MotionClaims.model_validate(_extract_json_payload(motion_raw))
+                for quote, source in ((motion.viewer_quote, motion_request["requested_action"]),
+                                      (motion.camera_quote, motion_request["camera_motion_field"])):
+                    if quote not in source:
+                        raise PromptFailureError("candidate", "Motion review quote must exist verbatim in its supplied field")
+                motion_review = motion.model_dump()
+                if (motion.camera_attachment == "viewer"
+                        and motion.viewer_position_change != "unspecified"
+                        and motion.camera_position_change != "unspecified"
+                        and motion.viewer_position_change != motion.camera_position_change):
+                    motion_error = ("The viewpoint owner moves differently from its attached camera: "
+                        f"requested body action '{motion.viewer_quote}'; camera claim '{motion.camera_quote}'. "
+                        "Reconcile the camera path with the authored POV action.")
             if verdict.blocking_question:
                 raise CreativeQuestion(f"Material review needs your decision: {verdict.blocking_question}")
             if managed_tail and not contract_error and not verdict.valid and verdict.failure_kind == "reference_conflict":
@@ -489,11 +599,12 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                 # not silently turn an explicit continuous shot into a cut.
                 raise CreativeQuestion("Material review needs your decision: conflicting tail reviews; "
                                        + "; ".join(verdict.issues))
-            if contract_error or not verdict.valid:
+            if contract_error or motion_error or not verdict.valid:
                 kind = ("contract" if contract_error else
                         "tail_incompatible" if verdict.failure_kind == "reference_conflict" else "candidate")
                 error = PromptFailureError(kind, "Prompt continuity review: " + "; ".join(
-                    ([contract_error] if contract_error else []) + verdict.issues))
+                    ([contract_error] if contract_error else [])
+                    + ([motion_error] if motion_error else []) + verdict.issues))
                 error.issues = contract_issues
                 raise error
             review = {
@@ -506,6 +617,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                              "rewrite_prompt": sections != shot.prompt_sections,
                              "reason": candidate.reason, "blocking_question": None},
                 "prompt_review": verdict.model_dump(),
+                **({"motion_claim_review": motion_review} if motion_review else {}),
             }
             if source_ending is not None:
                 review["source_ending_observation"] = source_ending
@@ -526,7 +638,8 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             # Edits from another request are not repairable by this stale candidate.
             check_current()
             attempts.append({"stage": "initial" if attempt == 0 else "repair",
-                             "raw": raw, "review_raw": audit_raw, "error": str(exc)})
+                             "raw": raw, "review_raw": audit_raw, "motion_raw": motion_raw,
+                             "error": str(exc)})
             if attempt:
                 save_repair(shot, draft_key, raw, exc, audit_raw)
                 save_diagnostics(shot, attempts)
@@ -542,7 +655,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
     raise AssertionError("unreachable")
 
 
-def candidate_schema():
+def candidate_schema(*, required_picture_indices=()):
     schema = PromptCandidate.model_json_schema()
     # New generation has one source-reference dialect; persisted legacy drafts
     # are still accepted by PromptCandidate and validated by the compiler.
@@ -553,6 +666,22 @@ def candidate_schema():
         "properties": {key: {"type": "string", "minLength": 1} for key in PromptSections.model_fields},
         "required": list(PromptSections.model_fields),
     }]}
+    tags = [f"<Picture {index}>" for index in required_picture_indices]
+    schema["properties"]["picture_bindings"] = {
+        "type": "object", "additionalProperties": False,
+        "properties": {tag: {"type": "string", "minLength": 1} for tag in tags},
+        "required": tags,
+    }
+    schema.setdefault("required", []).append("picture_bindings")
+    return schema
+
+
+def review_schema():
+    schema = PromptVerdict.model_json_schema()
+    # Existing persisted reviews can be read without this evidence. Every new
+    # model review must explicitly compare the body and camera paths.
+    schema["properties"]["viewpoint_motion"] = {"$ref": "#/$defs/ViewpointMotion"}
+    schema.setdefault("required", []).append("viewpoint_motion")
     return schema
 
 

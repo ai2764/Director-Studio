@@ -108,10 +108,8 @@ def merge_repair(raw, previous, *, envelope=False):
     return raw if merged == patch else json.dumps(merged, ensure_ascii=False)
 
 
-def repair_request(user, repair, *, dialogue_bindings=True):
-    issues = repair.get("issues") or []
-    issue_details = ("Structured validation issues:\n"
-                     + json.dumps(issues, ensure_ascii=False) + "\n") if issues else ""
+def repair_response_instructions(*, dialogue_bindings=True):
+    """Shared response contract for both ordinary and continuation Writers."""
     dialogue_instructions = (
         "For source-backed dialogue, return detailed_description with {{speech:line_id}} references "
         "and omit dialogue_uses; the backend compiles attribution. "
@@ -119,14 +117,21 @@ def repair_request(user, repair, *, dialogue_bindings=True):
         "Write exact scripted words in <d>[Language] words</d> blocks in detailed_description. "
         "Use the final H3 dialogue format; no internal speech placeholders are supported for this shot. "
     )
-    return (f"Original shot/context request:\n{user}\n\n"
-            f"Previous prompt JSON failed: {repair['error']}\n"
-            f"{issue_details}"
-            f"Rejected candidate:\n{repair['rejected_candidate']}\n"
-            "Return corrected fields in the same JSON envelope as the candidate. "
+    return ("Return corrected fields in the same JSON envelope as the candidate. "
             f"{dialogue_instructions}"
             "Repair the listed defects while applying the latest explicit shot-specific directing requirements. "
             "A rejected candidate is a draft, not authority to cancel a requested revision. "
             "Preserve its creative prose only where consistent with those requirements; reconcile conflicting "
             "camera/action descriptions across all six sections. Keep exact dialogue and reference bindings. "
             "The merged six sections will be revalidated.")
+
+
+def repair_request(user, repair, *, dialogue_bindings=True):
+    issues = repair.get("issues") or []
+    issue_details = ("Structured validation issues:\n"
+                     + json.dumps(issues, ensure_ascii=False) + "\n") if issues else ""
+    return (f"Original shot/context request:\n{user}\n\n"
+            f"Previous prompt JSON failed: {repair['error']}\n"
+            f"{issue_details}"
+            f"Rejected candidate:\n{repair['rejected_candidate']}\n"
+            + repair_response_instructions(dialogue_bindings=dialogue_bindings))

@@ -165,6 +165,12 @@ async def observe_reference(provider, record: dict, image: str, *, brief: str = 
         "consistent; if conflict cannot be resolved, report it rather than choose an unsupported label. "
         "A crop is not evidence of the hidden garment. Multi-view sheets depict views, not extra people. "
         "Latest applicable user requests guide intent, not what pixels visibly contain. "
+        "Do not require a single reference to depict the completed shot. "
+        "An empty scene reference need not contain the cast. Incidental clothing on an identity image "
+        "may differ from an explicitly selected costume; describe it honestly without treating that "
+        "difference alone as an unresolved conflict. Roles and reference_notes limit what the image "
+        "contributes. Selection and compatibility across the full reference pack are reviewed later; "
+        "do not invent missing people or rewrite visible clothing to match the script. "
         "Set readable=false only if the image itself cannot be inspected reliably."
     )
     user = f"{label}\nCurrent brief: {brief}\nReference: " + json.dumps(record, ensure_ascii=False)
@@ -247,7 +253,7 @@ async def observe_references_cached(provider, project_id, records, images, check
         stable_record = {k: v for k, v in record.items()
                          if k not in {"picture_index", "reference_notes"}}
         identity = {
-            "version": 4, "fact_policy": REFERENCE_POLICY_VERSION, "record": stable_record,
+            "version": 5, "fact_policy": REFERENCE_POLICY_VERSION, "record": stable_record,
             "inspection_request": inspection_request,
             "model": str(getattr(provider, "model", "")),
             "provider": type(provider).__qualname__,

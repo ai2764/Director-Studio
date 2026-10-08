@@ -204,6 +204,16 @@ async def test_conflict_quote_repair_targets_description_not_external_sources():
 
 
 @pytest.mark.asyncio
+async def test_single_image_observation_defers_casting_conflicts_to_pack_review():
+    provider = Vision(observation("An empty living room with a grey sofa."))
+    await observe_reference(provider, {"role": "scene", "sources": []}, "image")
+    system = provider.calls[0][0]
+    assert "Do not require a single reference to depict the completed shot" in system
+    assert "An empty scene reference need not contain the cast" in system
+    assert "Incidental clothing on an identity image" in system
+
+
+@pytest.mark.asyncio
 async def test_writer_carries_structured_evidence_and_unknowns(material_shot):
     from app.agents.director.service import DirectorService
     project, shot, _, _ = material_shot
