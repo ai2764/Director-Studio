@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 只在 `codex/h3-video-context` 和 `C:/Users/AIBOX/.codex/worktrees/h3-video-context/Director-Studio` 修改与提交。
+- 只在 `codex/h3-video-context` 和 `.` 修改与提交。
 - 基线 `8bf0b85fa3a7ae4d3500330851064a122be3acdc`；主目录未提交的 latent/4-step 实现不在新分支上，不要 switch、stash、commit 或修改主工作目录。
 - 端口固定：frontend 5174 / backend 8792 / Harness 8793；ComfyUI 8188 和本地 LLM复用，GPU 测试串行执行。
 - 数据、profiles、Harness token/session、日志/PID 独立；不能写入主实例 data，也不能修改其激活 workflow。
@@ -38,14 +38,14 @@
 已完成：新 worktree/branch；以下基线测试已运行，38 passed：
 
 ```powershell
-Set-Location C:/Users/AIBOX/.codex/worktrees/h3-video-context/Director-Studio/backend
+Set-Location ./backend
 python -m pytest tests/test_h3_workflow_inspector.py tests/test_h3_workflow_validator.py tests/test_h3_profile_runtime.py -q --basetemp=.pytest-video-context-baseline
 ```
 
 实现及实跑已完成；本地验证记录不作为仓库文档发布。
 
-本机 A/B 输出：`C:/Users/AIBOX/dev/Director-Studio/.run/latent-ab-20261004/`。
-正式源视频 `source2.mp4` 的 Job 为 `job_bf31b0fb9347`；重编码首段 `pixelsB1.mp4` 为 `job_a3a49e1eedc9`。对应 `.executed.api.json` 是 Comfy 实际运行图。不要拿三视图预检 `source.mp4` 作为正式样本。
+本机 A/B 输出：`.run/latent-ab/`。
+正式源视频和重编码首段的任务标识仅保留在本地验收记录中。对应 `.executed.api.json` 是 Comfy 实际运行图。不要拿三视图预检 `source.mp4` 作为正式样本。
 
 ## 文件与职责
 
@@ -79,10 +79,10 @@ python -m pytest tests/test_h3_workflow_inspector.py tests/test_h3_workflow_vali
 完成后的目标启动命令：
 
 ```powershell
-Set-Location C:/Users/AIBOX/.codex/worktrees/h3-video-context/Director-Studio
+Set-Location .
 .\scripts\start-video-context.ps1
 # 测试地址 http://127.0.0.1:5174
-# 手机局域网地址 http://192.168.50.110:5174（以机器当时 IP 为准）
+# 手机局域网地址 http://<LAN-IP>:5174（以机器当时 IP 为准）
 .\scripts\stop-video-context.ps1
 ```
 
@@ -194,4 +194,4 @@ def attach_video_context(graph: dict, *, uploaded_video: str, delivered_frames: 
 
 ## 给 Grok 的起始指令
 
-> 在 `C:/Users/AIBOX/.codex/worktrees/h3-video-context/Director-Studio` 的 `codex/h3-video-context` 上执行本计划，先读配套 spec。把视频 context 完整接进 DS 的真实提交路径，让 Director 根据用户语义用工具设置上一镜视频，在 UI 展开来源与窗口。服务用 5174/8792/8793，独立数据，Comfy 8188；保留主目录的 latent 实验。按任务验证并提交，完成后启动实验服务，提供测试地址、视频结果及 bug 清单。不要修改主工作目录或帮 Agent 暗中代交生成。
+> 在 `.` 的 `codex/h3-video-context` 上执行本计划，先读配套 spec。把视频 context 完整接进 DS 的真实提交路径，让 Director 根据用户语义用工具设置上一镜视频，在 UI 展开来源与窗口。服务用 5174/8792/8793，独立数据，Comfy 8188；保留主目录的 latent 实验。按任务验证并提交，完成后启动实验服务，提供测试地址、视频结果及 bug 清单。不要修改主工作目录或帮 Agent 暗中代交生成。

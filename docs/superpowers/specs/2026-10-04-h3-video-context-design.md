@@ -9,7 +9,7 @@
 ## 分支与实例
 
 - 分支：`codex/h3-video-context`。
-- 工作目录：`C:/Users/AIBOX/.codex/worktrees/h3-video-context/Director-Studio`。
+- 工作目录：`<repository-worktree>`。
 - 基线：`8bf0b85fa3a7ae4d3500330851064a122be3acdc`，已提交的 MV 改动。
 - 主目录的 `codex/mv-h3-fast-4step` 上有未提交的 4 步和原始 latent 改动；它们没有复制进本分支。Grok 可只读参考，不能假设这些实现已经在实验分支上。
 - 实验前端 `5174`、后端 `8792`、Harness `8793`，复用 ComfyUI `8188` 和现有本地 LLM。
@@ -37,7 +37,7 @@
 
 已有独立试跑共用一段起始视频，两条路径各续接 3 次：4 步、seed 42、864×480、24 fps、22 帧视频 context、24 帧音频 context。六个续接 Job 全部成功。MP4 重编码保持了人物、场景和推镜，累计后略暗，每段约 19 秒，原始 latent 约 16 秒。这只是短片、单 seed 的可行性证据；音频波形两条都有接缝幅度变化。
 
-本机试跑证据：`C:/Users/AIBOX/dev/Director-Studio/.run/latent-ab-20261004/`。正式源视频是 `source2.mp4`，实际执行图是 `source2.executed.api.json`、`latentA1.executed.api.json`、`pixelsB1.executed.api.json`。`source` 和 `latent1` 是三视图参考的预检，不能作为正式对照。
+本机试跑证据：`.run/latent-ab/`。正式源视频是 `source2.mp4`，实际执行图是 `source2.executed.api.json`、`latentA1.executed.api.json`、`pixelsB1.executed.api.json`。`source` 和 `latent1` 是三视图参考的预检，不能作为正式对照。
 
 ## 方案选择
 

@@ -333,7 +333,7 @@ if job.params.get("audio_keys") and self.execution_adapter_id_for_job(job) == "c
 **Interfaces:**
 - Uses Tasks 1–8 public HTTP and UI contracts; introduces no new runtime API.
 
-- [ ] **Step 1: Add acceptance tests using external fixtures without copying user media.** Build temporary 325.12-second Project master metadata. Test a small embedded Whisper-shaped JSON with optional `words`; when `C:\Users\AIBOX\dev\youtube-video-lab\tasks\anywhere_will_do_mv\audio\whisper.json` exists, also preview its 71 sentence rows. Assert boundaries validate and the master bytes/hash remain unchanged after text correction. Include human CSV-like prose through the same preview path and a non-MV API rejection.
+- [ ] **Step 1: Add acceptance tests using external fixtures without copying user media.** Build temporary 325.12-second Project master metadata. Test a small embedded Whisper-shaped JSON with optional `words`; when an external Whisper JSON fixture is supplied, also preview its sentence rows. Assert boundaries validate and the master bytes/hash remain unchanged after text correction. Include human CSV-like prose through the same preview path and a non-MV API rejection.
 
 ```python
 assert len(saved.segments) == len(fixture["segments"])
