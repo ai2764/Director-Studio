@@ -232,7 +232,7 @@ async def test_request_and_candidate_reach_reviewer_before_atomic_save(tail_hand
     assert "Pull back and lower" in provider.text[1][1]
     audit = json.loads(provider.text[1][1])
     assert "tail_observations" in audit
-    assert "original_shot" not in audit
+    assert audit["original_shot"]["script_beat"] == shot.script_beat
     assert audit["references"][0]["description"].startswith("Eye-level waist-up")
     assert updated.camera_motion.startswith("Pull back")
     assert updated.prompt_sections.detailed_description.startswith("0-2 seconds")
@@ -355,6 +355,66 @@ async def test_motion_claim_extraction_blocks_false_positive_full_review(tail_ha
     assert "follows the viewer" in updated.camera_motion
     assert "viewpoint owner moves" in provider.text[3][1]
     assert len(provider.text) == 6
+
+
+@pytest.mark.asyncio
+async def test_motion_quote_recovery_rechecks_evidence_without_rewriting_prompt(tail_handoff_shot):
+    project, shot = tail_handoff_shot
+    shot = shot.model_copy(update={"script_beat": "The viewer waits beside the display.",
+        "camera_angle": "First-person POV from the visitor."})
+    save_shot(shot)
+    draft = candidate("The camera remains stationary.")
+    review = verdict()
+    review["viewpoint_motion"] = {"camera_attached_to": "viewer", "viewer_path": "stationary",
+        "camera_path": "stationary", "compatible": True, "evidence": "Both positions are fixed."}
+    wrong = dict(camera_attachment="viewer", viewer_position_change="stationary",
+        camera_position_change="stationary", viewer_quote=shot.camera_angle,
+        camera_quote="camera remains stationary")
+    corrected = {**wrong, "viewer_quote": "viewer waits beside the display"}
+    provider = Provider([draft, review, wrong, corrected])
+
+    updated = await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+
+    assert len(provider.text) == 4
+    recovery = json.loads(provider.text[3][1])
+    assert recovery["requested_action"] == shot.script_beat
+    assert "viewer_quote" in recovery["review_repair"]["error"]
+    assert updated.meta["material_review"]["motion_claim_review"] == corrected
+    assert load_shot(project.id, shot.id) == updated
+
+
+@pytest.mark.asyncio
+async def test_exhausted_motion_quote_recovery_is_review_failure_not_prompt_repair(tail_handoff_shot):
+    from app.config import settings
+    project, shot = tail_handoff_shot
+    review = verdict()
+    review["viewpoint_motion"] = {"camera_attached_to": "external", "viewer_path": "unspecified",
+        "camera_path": "moving", "compatible": True, "evidence": "External camera follows the scene."}
+    wrong = dict(camera_attachment="external", viewer_position_change="unspecified",
+        camera_position_change="moving", viewer_quote="An invented action.",
+        camera_quote="Pull back and lower")
+    provider = Provider([candidate(), review, wrong, wrong])
+
+    with pytest.raises(ValueError) as error:
+        await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+
+    assert getattr(error.value, "code", None) == "MOTION_REVIEW_INVALID"
+    assert len(provider.text) == 4
+    assert load_shot(project.id, shot.id).prompt_sections == shot.prompt_sections
+    assert not (settings.projects_dir / project.id / "agent" / "prompt_drafts" / f"{shot.id}.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_ordinary_continuation_review_retains_authored_placement(tail_handoff_shot):
+    _, shot = tail_handoff_shot
+    shot = shot.model_copy(update={"script_beat": "A visitor sits beside the display."})
+    save_shot(shot)
+    provider = Provider([candidate(), verdict()])
+
+    await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+
+    audit = json.loads(provider.text[1][1])
+    assert audit["original_shot"]["script_beat"] == shot.script_beat
 
 
 @pytest.mark.asyncio
