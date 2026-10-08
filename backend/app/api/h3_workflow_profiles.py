@@ -49,6 +49,14 @@ class TestProfileRequest(_StrictModel):
         default=None,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
     )
+    context_upload_id: StrictStr | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+    )
+    context_project_id: StrictStr | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+    )
 
 
 class SelectTestOutputRequest(_StrictModel):
@@ -158,17 +166,18 @@ def _active_payload(store: H3ProfileStore) -> dict[str, Any]:
 def list_h3_profiles() -> dict[str, Any]:
     store = H3ProfileStore()
     active = _active_payload(store)
+    builtin = store.resolve_builtin()
     profiles: list[dict[str, Any]] = [
         {
             "profile_id": "builtin-official-h3",
-            "display_name": "Built-in H3 Turbo 8 (temporary test)",
+            "display_name": builtin.display_name,
             "source": "builtin",
             "status": (
                 "active"
                 if active["profile_id"] == "builtin-official-h3"
                 else "available"
             ),
-            "workflow_sha256": store.resolve_builtin().workflow_sha256,
+            "workflow_sha256": builtin.workflow_sha256,
         }
     ]
     for profile in store.list_installed_profiles():
@@ -406,6 +415,7 @@ async def validate_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
                 "width": 864,
                 "height": 480,
                 "seed": 42,
+                **({"context_video": "contract-context.mp4"} if mapping.context_video is not None else {}),
                 "output_prefix": "director-studio/h3/contract-validation",
             },
         )
@@ -462,6 +472,62 @@ async def test_h3_import(
     except ProfileStorageError as exc:
         return _store_error(exc)
 
+    context_params: dict[str, Any] = {}
+    context_file: tuple[str, bytes] | None = None
+    if mapping is not None and mapping.context_video is not None:
+        if not body.context_upload_id or not body.context_project_id:
+            return _error(
+                422,
+                "context_video_required",
+                "A context video upload is required for this workflow",
+                {"import_id": import_id},
+            )
+        from ..core.projects.video_context import VideoContextError, load_video_context_upload
+
+        try:
+            record, video_bytes = load_video_context_upload(
+                body.context_project_id,
+                body.context_upload_id,
+            )
+        except VideoContextError as exc:
+            return _error(
+                422,
+                "context_video_required",
+                str(exc),
+                {"import_id": import_id},
+            )
+        context_file = (str(record["filename"]), video_bytes)
+        runtime = {"carry_audio": False}
+        workflow = store.load_import_workflow(import_id)
+        if any(node.get("class_type") == "MiniMaxH3MotionContext" for node in workflow.values()):
+            from types import SimpleNamespace
+            from ..core.projects.models import ShotVideoContext
+            from ..pipelines.h3_ref2va.video_context import context_runtime_options
+            try:
+                runtime = context_runtime_options(
+                    ShotVideoContext(mode="external_upload"),
+                    SimpleNamespace(source="custom", workflow=workflow, mapping=mapping),
+                )
+            except ValueError as exc:
+                return _error(422, "context_video_unsupported", str(exc), {"import_id": import_id})
+        context_params = {
+            "context_video_key": "context_video",
+            "video_context_source": {
+                "mode": "external_upload",
+                "upload_id": record.get("upload_id"),
+                "sha256": record.get("sha256"),
+                "media": record.get("media"),
+                **runtime,
+            },
+        }
+    elif body.context_upload_id or body.context_project_id:
+        return _error(
+            422,
+            "context_video_unsupported",
+            "This custom workflow has no context video file mapping",
+            {"import_id": import_id},
+        )
+
     picture = _resolve_picture_asset(body.picture_asset_id)
     if picture is None:
         return _error(
@@ -493,6 +559,8 @@ async def test_h3_import(
         inputs["audio_1"] = audio
         audio_keys.append("audio_1")
         audio_binding = " <Audio 1> defines the optional voice reference."
+    if context_file is not None:
+        inputs["context_video"] = context_file
 
     job = create_job(
         pipeline_id="h3_ref2va",
@@ -513,6 +581,7 @@ async def test_h3_import(
             "height": 480,
             "image_keys": ["picture_1"],
             "audio_keys": audio_keys,
+            **context_params,
         },
         seed=42,
         fixed_seed=True,

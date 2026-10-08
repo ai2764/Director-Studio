@@ -11,6 +11,7 @@ import { ShotWorkspace } from "./ShotWorkspace";
 import { ContextUsagePanel } from "./ContextUsage";
 import { ContextCompaction } from "./ContextCompaction";
 import { MobileShotDrawer } from "./MobileShotDrawer";
+import { continuationFocus } from "./VideoContextPanel";
 import {
   cancelDirectorChatSession,
   DirectorChatError,
@@ -201,6 +202,7 @@ function DirectorAgentWorkspace({
   const [draft, setDraft] = useState("");
   const [pendingImages, setPendingImages] = useState<PendingChatImage[]>([]);
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null);
+  const [videoContextFocusId, setVideoContextFocusId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [vramPollError, setVramPollError] = useState<string | null>(null);
@@ -630,6 +632,11 @@ function DirectorAgentWorkspace({
         },
       ]);
       replaceShots(res.shots);
+      const focus = continuationFocus(res.actions || [], res.shots);
+      if (focus) {
+        setSelectedShotId(focus);
+        setVideoContextFocusId(focus);
+      }
       await refreshProjects();
     } catch (e) {
       if (
@@ -777,7 +784,12 @@ function DirectorAgentWorkspace({
         </div>
 
         {mobile && !chatOnly ? (
-          <MobileShotDrawer shots={shots} onOpenImage={setLightbox} />
+          <MobileShotDrawer
+            shots={shots}
+            onOpenImage={setLightbox}
+            focusShotId={videoContextFocusId}
+            onShotUpdated={updateShot}
+          />
         ) : null}
 
         {error ? <div className="banner error">{error}</div> : null}
@@ -989,6 +1001,7 @@ function DirectorAgentWorkspace({
       onSelectShot={(shot) => setSelectedShotId(shot.id)}
       onShotUpdated={updateShot}
       onOpenImage={setLightbox}
+      focusShotId={videoContextFocusId}
     />
   );
 

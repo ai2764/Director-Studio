@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   PROMPT_SECTION_KEYS,
   layoutPreviewUrl,
@@ -10,6 +10,7 @@ import { shotWorkflowStatus } from "../../shared/shotWorkflowStatus";
 import { LayoutReferenceList } from "./LayoutReferenceList";
 import { ShotMaterialEditor } from "./ShotMaterialEditor";
 import { materialReviewMessage } from "./materialReview";
+import { VideoContextPanel } from "./VideoContextPanel";
 
 const DOCUMENT_SECTIONS = [
   { id: "shot-brief", label: "Brief" },
@@ -87,6 +88,7 @@ export function ShotWorkspace({
   onSelectShot,
   onShotUpdated,
   onOpenImage,
+  focusShotId = null,
 }: {
   shots: Shot[];
   busy: boolean;
@@ -94,9 +96,11 @@ export function ShotWorkspace({
   onSelectShot?: (shot: Shot) => void;
   onShotUpdated?: (shot: Shot) => void;
   onOpenImage: (url: string) => void;
+  focusShotId?: string | null;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(shots[0]?.id ?? null);
   const [materialEditorOpen, setMaterialEditorOpen] = useState(false);
+  const appliedFocus = useRef<string | null>(null);
   const selectedIndex = Math.max(0, shots.findIndex((shot) => shot.id === selectedId));
   const selected = shots[selectedIndex] ?? null;
 
@@ -105,6 +109,13 @@ export function ShotWorkspace({
       setSelectedId(shots[0].id);
     }
   }, [selectedId, shots]);
+
+  useEffect(() => {
+    if (!focusShotId || appliedFocus.current === focusShotId) return;
+    if (!shots.some((shot) => shot.id === focusShotId)) return;
+    appliedFocus.current = focusShotId;
+    setSelectedId(focusShotId);
+  }, [focusShotId, shots]);
 
   const selectShot = (shot: Shot) => {
     setSelectedId(shot.id);
@@ -166,6 +177,9 @@ export function ShotWorkspace({
                     </span>
                   </div>
                 </header>
+
+                <VideoContextPanel key={selected.id} shot={selected} shots={shots}
+                  expanded={focusShotId === selected.id} onShotUpdated={onShotUpdated} />
 
                 <nav className="shot-document-nav" aria-label="Shot document sections">
                   {DOCUMENT_SECTIONS.map((section) => (
@@ -320,6 +334,7 @@ export function ShotWorkspace({
           {materialEditorOpen ? (
             <ShotMaterialEditor
               shot={selected}
+              shots={shots}
               shotNumber={selectedIndex + 1}
               onClose={() => setMaterialEditorOpen(false)}
               onOpenImage={onOpenImage}

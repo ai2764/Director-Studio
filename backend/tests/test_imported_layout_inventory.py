@@ -132,3 +132,43 @@ def test_append_rejects_inaccessible_or_invalid_layout_reference(invalid):
     with pytest.raises(ValueError, match="unknown library asset|invalid file_key"):
         svc.append_shot(project.id, append_request(project, "lay_invalid", key))
     assert list_shots(project.id) == []
+
+
+@pytest.mark.asyncio
+async def test_save_storyboard_can_bind_the_same_imported_identity_reference(tmp_projects_dir):
+    from app.agents.director.service import DirectorService
+    from test_harness_grounding_contract import ValidationProvider, Orchestrator
+    project = create_project("Imported reference storyboard", "Mia holds a light.")
+    asset = layout(project.id, "lay_storyboard_identity")
+    request = append_request(project, asset.id)
+    svc = DirectorService(plan_provider=ValidationProvider(), orchestrator=Orchestrator())
+    result = await svc.save_storyboard(project.id, [request["shot"]], request["expected_script_hash"])
+    assert result[0].refs[0].asset_id == asset.id
+    assert result[0].blocked_reasons == []
+    assert result[0].meta["asset_binding_policy"] == "explicit"
+
+
+def test_storyboard_tools_do_not_offer_reserved_generated_layout_roles():
+    from app.agents.director.tool_schema import director_tool_schemas
+    project = create_project("Schema", "A guitarist walks.")
+    for tool in director_tool_schemas(project):
+        if tool["function"]["name"] in {"save_storyboard", "append_shot"}:
+            role = tool["function"]["parameters"]["$defs"]["AssetMatchDraft"]["properties"]["role"]
+            assert "layout_ref_frame" not in role["enum"]
+            assert "layout" not in role["enum"]
+            assert "other" in role["enum"]
+
+
+def test_patch_refs_can_edit_an_imported_identity_reference():
+    from app.agents.director.service import DirectorService
+    project = create_project("Imported edit", "Mia holds a light.")
+    asset = layout(project.id, "lay_patch_identity")
+    svc = DirectorService(plan_provider=None, orchestrator=object())
+    shot = svc.append_shot(project.id, append_request(project, asset.id))
+    result = svc.patch_shot_refs(project.id, [{
+        "shot_id": shot.id,
+        "refs": [{"role": "other", "asset_id": asset.id, "file_key": "master",
+                  "picture_index": 1, "notes": "Preserve the microphone."}],
+    }])
+    assert result[0].refs[0].notes == "Preserve the microphone."
+    assert result[0].script_beat == shot.script_beat

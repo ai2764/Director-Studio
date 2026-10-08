@@ -119,6 +119,8 @@ class HealthResponse(BaseModel):
     comfy_reachable: bool
     comfy_error: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
+    instance: str | None = None
+    capabilities: dict[str, bool] | None = None
 
 
 class PipelineInfo(BaseModel):

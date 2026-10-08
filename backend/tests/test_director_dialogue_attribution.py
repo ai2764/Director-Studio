@@ -219,7 +219,8 @@ async def test_writer_repairs_wrong_speaker_and_keeps_directing_request(authored
                 {"line_ids": ["l1"], "speaker_id": "wrong" if len(self.requests) == 1 else "char_1", "block_indexes": [0]}]})
     provider = Provider()
     updated = await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
-    assert "char_1" in updated.prompt_sections.detailed_description
+    assert "(S1) <d>" in updated.prompt_sections.detailed_description
+    assert "S1 is Visitor" in updated.prompt_sections.subject_definitions
     assert len(provider.requests) == 2
     assert "dialogue_speaker_mismatch" in provider.requests[1]
     assert requirement in provider.requests[0]

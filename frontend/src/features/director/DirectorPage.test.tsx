@@ -13,6 +13,7 @@ import {
   compactDirectorContext,
   getDirectorVramStatus,
   getProject,
+  getVideoJob,
   queueRefFrame,
 } from "./api";
 
@@ -65,9 +66,13 @@ vi.mock("./api", () => ({
   getDirectorRuntime: vi.fn().mockResolvedValue({ runtime: "harness" }),
   compactDirectorContext: vi.fn().mockResolvedValue({ compacted: true, before_tokens: 12000, after_tokens: 3000, session_id: "native" }),
   getProject: vi.fn(),
+  getShot: vi.fn(),
+  getVideoJob: vi.fn(),
   queueRefFrame: vi.fn(),
   replaceShotMaterials: vi.fn(),
+  saveVideoContext: vi.fn(),
   setDirectorModel: vi.fn(),
+  uploadVideoContext: vi.fn(),
 }));
 
 function deferred<T>() {
@@ -1224,5 +1229,96 @@ describe("Director shot actions", () => {
 
     await act(async () => { vi.advanceTimersByTime(2500); await Promise.resolve(); await Promise.resolve(); });
     expect(screen.queryByText("Could not refresh Layout status: refresh offline")).toBeNull();
+  });
+
+  it("selects and expands a shot after continuation is saved", async () => {
+    const first = { ...testShot, h3_job_id: "job_real", title: "Corridor walk-in" };
+    const second = {
+      ...testShot,
+      id: "sht_2",
+      title: "Doorway reveal",
+      h3_job_id: null,
+      video_context: {
+        mode: "previous_shot" as const,
+        source_shot_id: "sht_1",
+        source_job_id: "job_real",
+        source_output_key: "video",
+        context_frames: 22 as const,
+        carry_audio: false,
+      },
+    };
+    vi.mocked(getProject).mockResolvedValue({
+      project: { ...projectState.project!, shot_ids: [first.id, second.id] },
+      shots: [first, { ...second, video_context: undefined }],
+    });
+    vi.mocked(getVideoJob).mockResolvedValue({
+      id: "job_real",
+      status: "succeeded",
+      outputs: {
+        video: {
+          key: "video",
+          label: "Video",
+          filename: "clip.mp4",
+          url: "/api/files/jobs/job_real/outputs/clip.mp4",
+        },
+      },
+    });
+    vi.mocked(chatWithDirectorStream).mockResolvedValue({
+      reply: "Continuation was saved. No video job was started.",
+      actions: ["configure_video_context:sht_2"],
+      project: projectState.project!,
+      shots: [first, second],
+      images: [],
+      thinking: "",
+      steps: [],
+    });
+
+    render(<DirectorPage />);
+    await screen.findByRole("heading", { name: "1. Corridor walk-in" });
+    fireEvent.change(screen.getByPlaceholderText(/Talk to the Director/), {
+      target: { value: "Continue from the previous shot" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByRole("heading", { name: "2. Doorway reveal" })).toBeTruthy();
+    expect(screen.getByRole("note", { name: "Video dependency" }).textContent).toContain("Continues Shot 1");
+    expect(screen.getByLabelText("Resolved job").textContent).toBe("job_real");
+    expect(await screen.findByText("22 frames · 0.92 s")).toBeTruthy();
+    const settings = screen.getByText("Continuation settings").closest("details") as HTMLDetailsElement;
+    expect(settings.open).toBe(true);
+    await waitFor(() => {
+      expect(document.querySelector(".video-context-panel video")?.getAttribute("src")).toBe(
+        "/api/files/jobs/job_real/outputs/clip.mp4",
+      );
+    });
+  });
+
+  it("does not show continuation as configured when the action did not save", async () => {
+    const first = { ...testShot, title: "Corridor walk-in" };
+    const second = { ...testShot, id: "sht_2", title: "Doorway reveal", video_context: { mode: "off" as const } };
+    vi.mocked(getProject).mockResolvedValue({
+      project: { ...projectState.project!, shot_ids: [first.id, second.id] },
+      shots: [first, second],
+    });
+    vi.mocked(chatWithDirectorStream).mockResolvedValue({
+      reply: "The previous shot has no finished video.",
+      actions: ["configure_video_context:sht_2"],
+      project: projectState.project!,
+      shots: [first, second],
+      images: [],
+      thinking: "",
+      steps: [],
+    });
+
+    render(<DirectorPage />);
+    await screen.findByRole("heading", { name: "1. Corridor walk-in" });
+    fireEvent.change(screen.getByPlaceholderText(/Talk to the Director/), {
+      target: { value: "Continue from the previous shot" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("The previous shot has no finished video.");
+
+    expect(screen.getByRole("heading", { name: "1. Corridor walk-in" })).toBeTruthy();
+    expect(screen.queryByText("Configured")).toBeNull();
   });
 });

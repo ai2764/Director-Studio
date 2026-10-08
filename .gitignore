@@ -28,6 +28,10 @@ data/**
 .run/
 .tmp/
 docs/evaluations/artifacts/
+# Local evaluation transcripts and temporary verification reports
+docs/evaluations/
+docs/superpowers/reports/
+backend/workflows/h3_ref2va_turbo8_sfw.api.json
 videos/
 .idea/
 .vscode/

@@ -56,7 +56,8 @@ async def test_tail_reference_compiles_before_review_and_persists_real_attributi
     response["prompt_sections"]["detailed_description"] += " She quietly says {{speech:line-1}}"
     provider = Provider([response, verdict(), response, verdict()])
     result = await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
-    assert "(visitor: Visitor) <d>[French] Bonjour.</d>" in result.prompt_sections.detailed_description
+    assert "(S1) <d>[French] Bonjour.</d>" in result.prompt_sections.detailed_description
+    assert "S1 is Visitor" in result.prompt_sections.subject_definitions
     assert len(provider.text) == 2
     audited = json.loads(provider.text[1][1])["candidate_prompt"]["detailed_description"]
     assert "<d>[French] Bonjour.</d>" in audited and "{{speech:" not in audited

@@ -4203,7 +4203,7 @@ async def test_legacy_failed_write_prompt_reports_recoverable_failure(tmp_projec
     assert not any(action.startswith("write_prompt:") for action in result.actions)
     assert calls == 1
     assert service.attempts == 1
-    assert offered_tools == {"get_status", "inspect_asset", "write_prompt", "start_h3_video"}
+    assert offered_tools == {"get_status", "inspect_asset", "write_prompt", "start_h3_video", "configure_video_context"}
 
 
 @pytest.mark.asyncio

@@ -59,6 +59,7 @@ from ..core.projects.models import (
     RefRole,
     Shot,
     ShotMusicSegment,
+    ShotVideoContext,
     ShotRef,
     ShotVoiceRef,
     ShotStatus,
@@ -2021,6 +2022,53 @@ async def approve_shot_endpoint(shot_id: str) -> Shot:
     return shot
 
 
+@router.get("/shots/{shot_id}/video-context")
+def get_shot_video_context(shot_id: str) -> dict:
+    """Expose saved continuation and its source-size constraint without host paths."""
+    if not settings.video_context_enabled:
+        raise HTTPException(403, "Video context is disabled")
+    from ..core.projects.video_context import VideoContextError, video_context_status, video_context_resolution
+    shot = _find_shot(shot_id)
+    status = video_context_status(shot)
+    status["resolution"] = None
+    if not status["blocked_reasons"]:
+        try:
+            status["resolution"] = video_context_resolution(shot)
+        except VideoContextError as exc:
+            status["blocked_reasons"].append(str(exc))
+    return status
+
+
+@router.put("/shots/{shot_id}/video-context")
+def put_shot_video_context(shot_id: str, config: ShotVideoContext) -> dict:
+    """Save continuation settings. Disabled instances reject the write."""
+    if not settings.video_context_enabled:
+        raise HTTPException(403, "Video context is disabled")
+    from ..core.projects.video_context import VideoContextError, configure_video_context
+
+    shot = _find_shot(shot_id)
+    try:
+        return configure_video_context(shot.project_id, shot.id, config)
+    except VideoContextError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/video-context/uploads")
+async def post_video_context_upload(
+    project_id: str, file: UploadFile = File(...)
+) -> dict:
+    """Store one finished video for a later external continuation."""
+    if not settings.video_context_enabled:
+        raise HTTPException(403, "Video context is disabled")
+    from ..core.projects.video_context import VideoContextError, upload_video_context
+
+    data = await file.read()
+    try:
+        return upload_video_context(project_id, file.filename or "", data)
+    except VideoContextError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @router.post("/shots/{shot_id}/submit", response_model=Shot)
 async def submit_shot_endpoint(
     shot_id: str,
@@ -2040,6 +2088,11 @@ async def submit_shot_endpoint(
         raise HTTPException(404, "Project not found")
     if shot.music_segment is not None and project.mode != ProjectMode.mv:
         raise HTTPException(400, "Music segments require a Music Video project")
+    if settings.video_context_enabled:
+        from ..core.projects.video_context import video_context_status
+        context_blocks = video_context_status(shot)["blocked_reasons"]
+        if context_blocks:
+            raise HTTPException(400, "; ".join(context_blocks))
     music_active = (
         project.mode == ProjectMode.mv
         and shot.music_segment is not None
@@ -2092,6 +2145,22 @@ async def submit_shot_endpoint(
     ).strip().lower()
     if h3_provider not in {"local", "minimax"}:
         raise HTTPException(400, f"Unsupported H3 provider: {h3_provider}")
+    if (h3_provider != "local" and shot.video_context is not None
+            and shot.video_context.mode != "off"):
+        raise HTTPException(400, "Video continuation requires the local H3 provider")
+    inherited_resolution = None
+    if settings.video_context_enabled:
+        from ..core.projects.video_context import video_context_resolution, VideoContextError
+        try:
+            inherited_resolution = video_context_resolution(shot)
+        except VideoContextError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if inherited_resolution is not None and options is not None:
+            if any(value is not None and value != inherited_resolution[key]
+                   for key, value in (("width", options.width), ("height", options.height))):
+                raise HTTPException(400,
+                    "Previous-shot continuation requires the source resolution "
+                    f"{inherited_resolution['width']}×{inherited_resolution['height']}")
     if h3_provider == "minimax" and not str(
         settings.h3_minimax_api_key or ""
     ).strip():
@@ -2171,6 +2240,7 @@ async def submit_shot_endpoint(
     )
     from ..agents.director.dialogue_preflight import dialogue_contract_current, require_current_dialogue_contract
     from ..agents.director.reference_facts import reference_contract_current, require_current_reference_contract
+    from ..core.projects.video_context import video_context_prompt_is_stale
     try:
         validate_editorial_music_prompt(project, shot, shot.prompt_sections)
         editorial_music_leaked = False
@@ -2195,6 +2265,7 @@ async def submit_shot_endpoint(
             (music_active or "prompt_music_signature" in (shot.meta or {}) or shot.music_segment is not None)
             and prompt_music_signature != current_music_signature
         )
+        or video_context_prompt_is_stale(shot)
     ):
         try:
             shot = await svc.write_prompts_after_layout(shot.id)
@@ -2290,12 +2361,12 @@ async def submit_shot_endpoint(
     width = (
         int(options.width)
         if options is not None and options.width is not None
-        else (480 if portrait else 864)
+        else (inherited_resolution["width"] if inherited_resolution else (480 if portrait else 864))
     )
     height = (
         int(options.height)
         if options is not None and options.height is not None
-        else (864 if portrait else 480)
+        else (inherited_resolution["height"] if inherited_resolution else (864 if portrait else 480))
     )
     native_audio_key: str | None = None
     if shot.source_audio_path:
@@ -2319,11 +2390,23 @@ async def submit_shot_endpoint(
     latest_shot = load_shot(shot.project_id, shot.id)
     if latest_project is None or latest_shot != shot or latest_project.script_text != project.script_text:
         raise HTTPException(409, "Shot or script changed before submission; refresh before submitting")
+    if settings.video_context_enabled and video_context_prompt_is_stale(latest_shot):
+        raise HTTPException(409, "Video context source changed before submission; refresh the prompt")
     try:
         require_current_dialogue_contract(latest_project, latest_shot)
         require_current_reference_contract(latest_project, latest_shot)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+    from ..core.projects.video_context import VideoContextError, submission_video_context
+
+    try:
+        staged_context = submission_video_context(
+            latest_shot, width=width, height=height, delivered_frames=frames
+        )
+    except VideoContextError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if staged_context is not None:
+        images["context_video"] = (staged_context["filename"], staged_context["data"])
     reference_evidence = (latest_shot.meta.get("material_review") or {}).get("references", [])
     if latest_project.mode == ProjectMode.director and latest_shot.refs:
         import hashlib
@@ -2362,6 +2445,7 @@ async def submit_shot_endpoint(
                 for r in sorted(shot.refs or [], key=lambda x: x.picture_index)
             ][: len(image_keys)],
             "output_prefix": f"director-studio/{shot.project_id}/{shot.id}/h3",
+            **({} if staged_context is None else staged_context["params"]),
         },
         project_id=shot.project_id,
     )
@@ -2377,7 +2461,7 @@ async def submit_shot_endpoint(
     except ValueError as e:
         raise _http_value_error(e) from e
 
-    submitted = shot.model_copy(update={"h3_job_id": job.id})
+    submitted = shot.model_copy(update={"h3_job_id": job.id, "blocked_reasons": []})
     # A user edit during reservation belongs to the user, not the older response.
     current = load_shot(shot.project_id, shot.id)
     if current != latest_shot:

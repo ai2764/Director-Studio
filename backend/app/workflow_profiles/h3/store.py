@@ -29,6 +29,7 @@ from .models import (
     H3OutputSelection,
     H3WorkflowProfile,
     ResolvedH3Profile,
+    contract_version_for,
 )
 
 if TYPE_CHECKING:
@@ -225,9 +226,10 @@ class H3ProfileStore:
             raise ProfileChangedError(
                 "Imported workflow or mapping changed during validation"
             )
+        mapping = self.load_import_mapping(import_id)
         record = {
             "valid": True,
-            "contract_version": 2,
+            "contract_version": contract_version_for(mapping) if mapping else 2,
             "workflow_sha256": workflow_sha256,
             "mapping_sha256": mapping_sha256,
             "validated_at": datetime.now(UTC).isoformat(),
@@ -278,9 +280,11 @@ class H3ProfileStore:
             raise ProfileChangedError(
                 "Imported workflow or mapping changed during test execution"
             )
-        boundary_sha256 = boundary_sha256 or self.boundary_sha256(
-            self.load_import_mapping(import_id)
+        stored_mapping = self.load_import_mapping(import_id)
+        contract_version = (
+            contract_version_for(stored_mapping) if stored_mapping is not None else 2
         )
+        boundary_sha256 = boundary_sha256 or self.boundary_sha256(stored_mapping)
         job = self._require_successful_test_job(
             import_id=import_id,
             workflow_sha256=workflow_sha256,
@@ -294,7 +298,7 @@ class H3ProfileStore:
         if artifact_index is None:
             record = {
                 "status": "awaiting_selection",
-                "contract_version": 2,
+                "contract_version": contract_version,
                 "workflow_sha256": workflow_sha256,
                 "mapping_sha256": mapping_sha256,
                 "boundary_sha256": boundary_sha256,
@@ -320,7 +324,7 @@ class H3ProfileStore:
             )
         record = {
             "status": "succeeded",
-            "contract_version": 2,
+            "contract_version": contract_version_for(selected_mapping),
             "workflow_sha256": workflow_sha256,
             "mapping_sha256": selected_mapping_sha256,
             "boundary_sha256": boundary_sha256,
@@ -377,7 +381,7 @@ class H3ProfileStore:
                 "A successful test for this workflow is required before activation",
                 details={"import_id": import_id},
             )
-        if test_record.get("contract_version") != 2:
+        if test_record.get("contract_version") != contract_version_for(mapping):
             raise ProfileStateError(
                 "unsupported_contract",
                 "The tested workflow contract version is unsupported",
@@ -430,6 +434,7 @@ class H3ProfileStore:
             id=profile_id,
             workflow_sha256=workflow_sha256,
             mapping=mapping,
+            contract_version=contract_version_for(mapping),
             status="active",
         )
         self.install_profile(
@@ -539,7 +544,7 @@ class H3ProfileStore:
             test = self._optional_record(directory / _TEST_FILE)
             if not test or (
                 test.get("status") != "succeeded"
-                or test.get("contract_version") != 2
+                or test.get("contract_version") != self._import_contract_version(import_id)
                 or test.get("workflow_sha256") != workflow_sha256
                 or test.get("mapping_sha256") != mapping_sha256
             ):
@@ -557,6 +562,12 @@ class H3ProfileStore:
             return result
         result.update(status="tested", test_job_id=test["job_id"])
         return result
+
+    def _import_contract_version(self, import_id: str) -> int:
+        mapping = self.load_import_mapping(import_id)
+        if mapping is None:
+            return 2
+        return contract_version_for(mapping)
 
     @classmethod
     def mapping_sha256(cls, mapping: H3BoundaryMapping) -> str:
@@ -594,7 +605,7 @@ class H3ProfileStore:
                 "Successful validation is required before testing or activation",
                 details={"import_id": import_id},
             )
-        if validation.get("contract_version") != 2:
+        if validation.get("contract_version") != self._import_contract_version(import_id):
             raise ProfileStateError(
                 "unsupported_contract",
                 "The validated workflow contract version is unsupported",
@@ -658,7 +669,7 @@ class H3ProfileStore:
             or job.pipeline_id != "h3_ref2va"
             or params.get("h3_profile_test") is not True
             or params.get("h3_profile_import_id") != import_id
-            or params.get("h3_contract_version") != 2
+            or params.get("h3_contract_version") != self._import_contract_version(import_id)
             or job.project_id is not None
             or job.library_asset_id is not None
             or "shot_id" in params
@@ -872,7 +883,7 @@ class H3ProfileStore:
             if (
                 params.get("h3_profile_id") != snapshot.profile_id
                 or params.get("h3_profile_sha256") != snapshot.workflow_sha256
-                or params.get("h3_contract_version") != 2
+                or params.get("h3_contract_version") != contract_version_for(snapshot.mapping)
             ):
                 raise ProfileChangedError(
                     "Job profile snapshot identity does not match its job record"
@@ -881,7 +892,7 @@ class H3ProfileStore:
 
         resolved = self.resolve_active()
         if resolved.source == "builtin":
-            workflow_path = Path(settings.workflows_dir) / "h3_ref2va.api.json"
+            workflow_path = Path(settings.workflows_dir) / settings.h3_builtin_workflow
             profile = H3WorkflowProfile(
                 id=resolved.profile_id,
                 workflow_sha256=resolved.workflow_sha256,
@@ -933,7 +944,7 @@ class H3ProfileStore:
             {
                 "h3_profile_id": resolved.profile_id,
                 "h3_profile_sha256": resolved.workflow_sha256,
-                "h3_contract_version": 2,
+                "h3_contract_version": contract_version_for(resolved.mapping),
             }
         )
         return resolved
@@ -964,7 +975,7 @@ class H3ProfileStore:
             if (
                 params.get("h3_profile_id") != import_id
                 or params.get("h3_profile_sha256") != expected_workflow_sha256
-                or params.get("h3_contract_version") != 2
+                or params.get("h3_contract_version") != contract_version_for(snapshot.mapping)
                 or snapshot.profile_id != import_id
                 or snapshot.workflow_sha256 != expected_workflow_sha256
                 or self.mapping_sha256(snapshot.mapping) != expected_mapping_sha256
@@ -1002,6 +1013,7 @@ class H3ProfileStore:
             id=import_id,
             workflow_sha256=workflow_sha256,
             mapping=mapping,
+            contract_version=contract_version_for(mapping),
             status="validated",
         )
 
@@ -1022,7 +1034,7 @@ class H3ProfileStore:
             {
                 "h3_profile_id": import_id,
                 "h3_profile_sha256": workflow_sha256,
-                "h3_contract_version": 2,
+                "h3_contract_version": contract_version_for(mapping),
             }
         )
         return ResolvedH3Profile(
@@ -1062,7 +1074,7 @@ class H3ProfileStore:
         )
 
     def _resolve_builtin(self) -> ResolvedH3Profile:
-        path = Path(settings.workflows_dir) / "h3_ref2va.api.json"
+        path = Path(settings.workflows_dir) / settings.h3_builtin_workflow
         workflow, workflow_hash = self._read_workflow(path)
         return ResolvedH3Profile(
             profile_id=_BUILTIN_PROFILE_ID,
@@ -1070,7 +1082,9 @@ class H3ProfileStore:
             mapping=_OFFICIAL_MAPPING,
             workflow_sha256=workflow_hash,
             source="builtin",
-            display_name="Built-in H3 Turbo 8 (temporary test)",
+            display_name=("Built-in H3 Turbo 4 (video-context experiment)"
+                          if settings.h3_builtin_workflow == "h3_ref2va_fast4.api.json"
+                          else "Built-in H3 Turbo 8 (temporary test)"),
         )
 
     def _resolve_custom(self, profile_id: str) -> ResolvedH3Profile:
@@ -1102,7 +1116,7 @@ class H3ProfileStore:
         test_record = evidence.get("test")
         if (
             evidence.get("valid") is not True
-            or evidence.get("contract_version") != 2
+            or evidence.get("contract_version") != contract_version_for(profile.mapping)
             or not isinstance(evidence.get("report"), dict)
             or evidence["report"].get("valid") is not True
             or not isinstance(evidence.get("comfy"), dict)

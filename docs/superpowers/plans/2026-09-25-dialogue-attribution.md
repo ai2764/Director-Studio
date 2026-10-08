@@ -264,7 +264,7 @@ Hook the shared preflight into `submit_shot_endpoint` and verify both `start_h3_
 
 ### Task 6: Demonstrate improvement and creative counterexamples
 
-**Files:** Extend the preceding tests and `frontend/src/features/production/ProductionPage.test.tsx`; create `backend/tests/fixtures/dialogue_attribution_cases.json` and `docs/superpowers/reports/2026-09-25-dialogue-attribution-verification.md`.
+**Files:** Extend the preceding tests and `frontend/src/features/production/ProductionPage.test.tsx`; create `backend/tests/fixtures/dialogue_attribution_cases.json`. Keep verification evidence locally.
 
 **Interfaces:** Fixture entries have `id`, `source_lines`, `candidate_uses`, `expected_issue_codes`, `directing_request`, `allowed_variants`. They are test data, not a production lookup table. The report separates deterministic checks, stubbed orchestration, actual-model evaluation and actual media QC.
 

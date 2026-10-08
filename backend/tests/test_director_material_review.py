@@ -176,7 +176,10 @@ class TailHandoffProvider(Provider):
                                "tail_opening": "Waist-up front view.",
                                "candidate_opening": "Waist-up front view.",
                                "camera_path": self.handoff or "Absent.",
-                               "issues": [] if self.handoff else ["Missing credible tail-frame handoff"],
+                               "field_checks": {key: {"compatible": True, "evidence": "Fixture field agrees with the evidence."} for key in ("script_beat", "shot_type", "camera_angle", "camera_motion", "composition", "subject_definitions", "summary", "retention_analysis", "detailed_description", "overall_soundscape", "non_diegetic_music")},
+            "checks": {key: {"compatible": True, "evidence": "Fixture evidence agrees."}
+                                              for key in ("opening_alignment", "transition_path", "reference_roles", "section_consistency")},
+                                   "issues": [] if self.handoff else ["Missing credible tail-frame handoff"],
                                "blocking_question": None})
         if "reference review decision" in system.lower():
             decision = {
@@ -502,6 +505,26 @@ async def test_first_prompt_reviews_refs_without_pending_flag_and_reuses_evidenc
     first = await svc.write_prompts_after_layout(shot.id)
     assert len(first.meta["material_review"]["references"]) == 9
     await svc.write_prompts_after_layout(shot.id)
+    assert len(provider.visual) == 9
+
+
+@pytest.mark.asyncio
+async def test_legacy_material_decision_rechecks_configuration_once(material_shot):
+    project, shot, _, _ = material_shot
+    orch = Orchestrator()
+    provider = Provider(orch, rewrite=False)
+    svc = DirectorService(plan_provider=provider, orchestrator=orch)
+    current = await svc.write_prompts_after_layout(shot.id)
+    current.meta["material_review"]["decision"].pop("configuration_issues")
+    save_shot(current)
+    def review_calls():
+        return sum("reference review decision" in system.lower() for system, _ in provider.text)
+    assert review_calls() == 1
+    refreshed = await svc.write_prompts_after_layout(shot.id)
+    assert refreshed.meta["material_review"]["decision"]["configuration_issues"] == []
+    assert review_calls() == 2
+    await svc.write_prompts_after_layout(shot.id)
+    assert review_calls() == 2
     assert len(provider.visual) == 9
 
 
@@ -896,7 +919,8 @@ async def test_retry_repairs_saved_candidate_without_losing_other_sections(mater
     provider.complete = repair
     updated = await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
     assert len(seen) == 1
-    assert updated.prompt_sections.subject_definitions == broken["subject_definitions"]
+    assert updated.prompt_sections.subject_definitions == (
+        broken["subject_definitions"] + "\nSpeaker identities: S1 is watchmaker.")
     assert "the watchmaker examines the gear" in updated.prompt_sections.detailed_description
     assert updated.prompt_sections.detailed_description.endswith("<d>[English] Hello.</d>")
     assert load_shot(project.id, shot.id) == updated

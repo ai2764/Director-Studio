@@ -35,6 +35,26 @@ IMAGE_TOKEN_RESERVE = 2048
 MAX_HARNESS_SEED_MESSAGES = 24
 
 
+def _context_job_ids(state: str) -> set[str]:
+    """Only structured Job fields, never IDs mentioned in script/chat prose."""
+    fields = {"job_id", "source_job_id", "h3_job_id", "ref_frame_job_id", "current_job_id"}
+    ids: set[str] = set()
+
+    def visit(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in fields and isinstance(item, str) and re.fullmatch(r"job_[a-z0-9]+", item):
+                    ids.add(item)
+                else:
+                    visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(json.loads(state))
+    return ids
+
+
 def harness_input_budget(context_capacity: int, image_count: int = 0) -> int:
     budget = context_capacity - settings.director_num_predict - image_count * IMAGE_TOKEN_RESERVE
     if budget < 256:
@@ -63,6 +83,7 @@ class BackendTurn:
         ]
         self.actions: list[str] = []
         self.tool_exposed_job_ids: set[str] = set()
+        self.context_exposed_job_ids: set[str] = set()
         self.result_images = []
         self.touched: set[str] = set()
         self.notes: list[str] = []
@@ -70,6 +91,8 @@ class BackendTurn:
         self.call_ids: set[str] = set()
         self.calls: set[tuple[str, str]] = set()
         self.successful_prompt_shot_ids: set[str] = set()
+        from .configuration_recovery import ConfigurationRecovery
+        self.configuration_recovery = ConfigurationRecovery()
         self.storyboard_failed = False
         self.terminal_failure: str | None = None
         self.terminal_failure_code = "PROMPT_GENERATION_FAILED"
@@ -103,6 +126,7 @@ class BackendTurn:
             project, current_message=self.message,
             allow_save_storyboard=not self.budget.exhausted,
             include_chat_image_import=pending,
+            shots=shots,
         )
         if self.budget.repairing:
             tools = [tool for tool in tools if tool["function"]["name"] != "set_script"]
@@ -111,6 +135,7 @@ class BackendTurn:
         if managed_scope is not None and managed_scope.project_id == self.project_id:
             tools = [tool for tool in tools if tool["function"]["name"] in {
                 "get_status", "inspect_asset", "write_prompt", "start_h3_video",
+                "configure_video_context",
             }]
         if not pending and managed_scope is None and _needs_fresh_storyboard(project, shots):
             tools = [
@@ -151,6 +176,8 @@ class BackendTurn:
             system += "\nDialogue metadata needs the user's clarification before prompt writing. Ask the confirmed question; do not guess or change the source."
         elif self.terminal_failure and self.terminal_failure_code in {"MATERIAL_INPUT_INVALID", "MATERIAL_REVIEW_INVALID"}:
             system += "\nReference preflight failed before prompt writing. Explain the exact affected binding or evidence issue and required next step. Do not claim a prompt retry can repair missing inputs, or silently substitute assets. The user can still edit or relink references in a subsequent turn."
+        elif self.terminal_failure_code == "STORYBOARD_REVIEW_INVALID" and self.terminal_failure:
+            system += "\nStoryboard review returned malformed verdicts after bounded format recovery. Explain this review-system failure and the unchanged board. It is not a creative rejection; do not change the candidate or screenplay to work around it."
         elif self.terminal_failure:
             system += (
                 "\nA derived prompt operation already failed after its bounded internal "
@@ -174,6 +201,7 @@ class BackendTurn:
                     image_count=len(self.images), context_capacity=self.context_capacity))
         self.offered_context = {"system": system, "state": state, "tools": tools}
         self.offered_version = version
+        self.context_exposed_job_ids.update(_context_job_ids(state))
         return self.offered_context
 
     async def dispatch(self, method: str, params: dict):
@@ -302,7 +330,9 @@ class BackendTurn:
         if len(self.call_ids) >= settings.harness_max_tool_calls:
             return {"ok": False, "error": "Turn tool limit reached. No further tools can run in this turn; report completed and pending work without retrying."}
         self.call_ids.add(call_id)
-        prompt_shot_id = args.get("shot_id") if name == "write_prompt" else None
+        prompt_shot = (self.configuration_recovery.target(self.snapshot()[1], args)
+                       if name == "write_prompt" else None)
+        prompt_shot_id = prompt_shot.id if prompt_shot else None
         if (
             isinstance(prompt_shot_id, str)
             and prompt_shot_id in self.successful_prompt_shot_ids
@@ -316,6 +346,10 @@ class BackendTurn:
                     "the duplicate write_prompt call made no changes."
                 ],
             }
+        if prompt_shot is not None:
+            blocked = self.configuration_recovery.before_write(prompt_shot)
+            if blocked:
+                return blocked
         context = self.context()
         schema = next((s["function"] for s in context["tools"] if s["function"]["name"] == name), None)
         if schema is None:
@@ -427,11 +461,25 @@ class BackendTurn:
             result.update(ok=False, error="No successful operation confirmed. " + " ".join(notes))
         if name == "save_storyboard":
             self.storyboard_failed = not result["ok"]
-        if name == "write_prompt" and not result["ok"] and result.get("code") != "CONTEXT_REQUIRED":
+        if result.get("code") == "STORYBOARD_REVIEW_INVALID":
+            self.terminal_failure_code = result["code"]
+            self.terminal_failure = result["error"]
+        configuration_retry = False
+        if name == "write_prompt" and not result["ok"] and result.get("code") == "SHOT_CONFIGURATION_CONFLICT":
+            current_shot = next((shot for shot in list_shots(self.project_id)
+                                 if shot.id == result.get("shot_id", prompt_shot_id)), None)
+            may_revise = any(tool["function"]["name"] == "revise_shot" for tool in context["tools"])
+            configuration_retry = (scope is None and may_revise and current_shot is not None
+                                   and self.configuration_recovery.record(current_shot, result))
+            if not may_revise or scope is not None:
+                self.configuration_recovery.stop_for_scope(result)
+            if not configuration_retry:
+                result.update(retryable=False, concludes_turn=True)
+        if name == "write_prompt" and not result["ok"] and result.get("code") != "CONTEXT_REQUIRED" and not configuration_retry:
             self.prompt_failure_kind = result.get("failure_kind", "unknown")
             failure = str(result.get("error") or "Prompt generation failed.")
             if result.get("code") in {"DIALOGUE_CLARIFICATION_REQUIRED", "DIALOGUE_METADATA_INVALID",
-                                       "MATERIAL_INPUT_INVALID", "MATERIAL_REVIEW_INVALID"}:
+                                       "MATERIAL_INPUT_INVALID", "MATERIAL_REVIEW_INVALID", "SHOT_CONFIGURATION_CONFLICT"}:
                 self.terminal_failure_code = result["code"]
                 self.terminal_failure = str(result.get("reply") or failure)
             else:
@@ -488,8 +536,8 @@ class BackendTurn:
             if any((job := load_job(job_id)) is None or job.project_id != project.id
                    for job_id in referenced_jobs):
                 reply = "回复引用了不存在的项目 Job。本轮没有可核实的任务回执；请重新读取状态或调用生成工具。"
-            elif not referenced_jobs <= self.tool_exposed_job_ids:
-                reply = "回复引用了未经本轮工具核实的 Job。请先读取状态或调用生成工具。"
+            elif not referenced_jobs <= (self.tool_exposed_job_ids | self.context_exposed_job_ids):
+                reply = "回复引用了未经本轮项目状态或工具核实的 Job。请先读取状态或调用生成工具。"
         images = self.result_images + _layout_images(shots, only_shot_ids=self.touched) if self.touched else self.result_images
         return ChatResult(reply=reply, project=project, shots=shots, actions=self.actions,
                           failure_code=self.terminal_failure_code if self.terminal_failure else "",

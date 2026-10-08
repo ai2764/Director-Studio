@@ -518,7 +518,7 @@ git commit -m "docs verify portable custom H3 workflows"
 
 Run: `git diff --check; git status --short; git log --format="%h %an <%ae> %s" main..HEAD`
 
-Expected: no whitespace errors, no uncommitted source changes, and every new commit uses `ai2764 <aibox2764@gmail.com>`.
+Expected: no whitespace errors, no uncommitted source changes, and every new commit uses the configured Git author identity.
 
 Inspect: `git diff --stat main...HEAD` and `git diff --name-only main...HEAD`.
 

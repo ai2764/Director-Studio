@@ -11,6 +11,8 @@ from typing import Any
 from .models import (
     H3AnalysisIssue,
     H3BoundaryMapping,
+    H3ContextVideoCandidate,
+    H3ContextVideoInput,
     H3FixedDependency,
     H3InputMapping,
     H3NodeCandidate,
@@ -180,6 +182,13 @@ def _candidate(
     )
 
 
+def _node_id_sort_key(node_id: str) -> tuple[int, int | str]:
+    try:
+        return (0, int(node_id))
+    except ValueError:
+        return (1, node_id)
+
+
 def _numeric_node_key(candidate: H3NodeCandidate) -> tuple[int, int | str]:
     try:
         return (0, int(candidate.node_id))
@@ -230,6 +239,34 @@ def _structural_issues(graph: Mapping[str, Any]) -> list[H3AnalysisIssue]:
                 )
             )
     return issues
+
+
+def _context_video_candidates(
+    graph: Mapping[str, Any], upstream: set[str]
+) -> tuple[H3ContextVideoCandidate, ...]:
+    fields = {"LoadVideo": "file", "VHS_LoadVideo": "video"}
+    result: list[H3ContextVideoCandidate] = []
+    for node_id in sorted(upstream, key=_node_id_sort_key):
+        node = graph.get(node_id)
+        if not isinstance(node, Mapping):
+            continue
+        input_name = fields.get(str(node.get("class_type") or ""))
+        inputs = node.get("inputs")
+        if (
+            input_name is None
+            or not isinstance(inputs, Mapping)
+            or not isinstance(inputs.get(input_name), str)
+        ):
+            continue
+        result.append(
+            H3ContextVideoCandidate(
+                node_id=node_id,
+                class_type=str(node.get("class_type")),
+                input_name=input_name,
+                display_name=f"{_title(node) or 'Context video'} (Node {node_id})",
+            )
+        )
+    return tuple(result)
 
 
 def _fixed_dependencies(
@@ -409,12 +446,26 @@ def _inspect_h3_workflow(
                 "needs_confirmation" if len(seed_candidates) > 1 else "auto_compatible"
             )
 
+    context_candidates = _context_video_candidates(normalized, upstream)
+    if mapping is not None and len(context_candidates) == 1:
+        candidate = context_candidates[0]
+        mapping = mapping.model_copy(update={"context_video": H3ContextVideoInput(
+            node_id=candidate.node_id, input_name=candidate.input_name,
+        )})
+    elif mapping is not None and len(context_candidates) > 1:
+        compatibility = "needs_confirmation"
+        issues.append(H3AnalysisIssue(
+            code="ambiguous_context_video",
+            message="Multiple video file inputs feed this output; choose the context video input explicitly",
+        ))
+
     return H3WorkflowAnalysis(
         compatibility=compatibility,
         mapping=mapping,
         output_candidates=tuple(output_candidates),
         h3_candidates=tuple(h3_candidates),
         seed_candidates=tuple(seed_candidates),
+        context_video_candidates=context_candidates,
         fixed_dependencies=_fixed_dependencies(normalized, upstream),
         issues=tuple(issues),
     )

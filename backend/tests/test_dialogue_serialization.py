@@ -33,7 +33,7 @@ def test_placeholders_preserve_creative_prose_and_exact_source_words():
     candidate = draft("Camera arcs. Softly: {{speech:l1}} Then hold the empty door.")
     result = compile_draft(candidate, [line()])
     assert result.prompt_sections.detailed_description == (
-        "Camera arcs. Softly: (p1: Visitor) <d>[Português] Olá… atenção: vem!</d> "
+        "Camera arcs. Softly: (S1) <d>[Português] Olá… atenção: vem!</d> "
         "Then hold the empty door.")
     assert result.dialogue_uses[0].line_ids == ["l1"]
     assert result.dialogue_uses[0].speaker_id == "p1"
@@ -73,7 +73,7 @@ def test_no_source_language_is_not_guessed():
 def test_unicode_character_spans_preserve_speech_across_cuts_and_metadata_roundtrip():
     source = line(text="こんにちは世界", language="日本語")
     result = compile_draft(draft("{{speech:l1:0:5}} Cut to the listener. {{speech:l1:5:7}}"), [source])
-    assert "<d>[日本語] こんにちは</d> Cut to the listener. (p1: Visitor) <d>[日本語] 世界</d>" in result.prompt_sections.detailed_description
+    assert "<d>[日本語] こんにちは</d> Cut to the listener. (S1) <d>[日本語] 世界</d>" in result.prompt_sections.detailed_description
     assert result.dialogue_uses[0].source_spans == [(0, 5), (5, 7)]
     restored = binding.DialoguePromptDraft.model_validate_json(result.model_dump_json())
     binding.validate_dialogue_uses(restored, [source])
@@ -98,7 +98,7 @@ def test_supplied_wrong_speaker_metadata_is_not_silently_overwritten():
 def test_legacy_valid_blocks_remain_supported_and_wrong_words_still_fail():
     uses = [dict(line_ids=["l1"], speaker_id="p1", block_indexes=[0])]
     good = compile_draft(draft("Whisper <d>[Português] Olá… atenção: vem!</d>", uses), [line()])
-    assert good.prompt_sections.detailed_description.startswith("Whisper (p1: Visitor)")
+    assert good.prompt_sections.detailed_description.startswith("Whisper (S1)")
     with pytest.raises(DialogueContractError, match="dialogue_block_mismatch"):
         compile_draft(draft("Whisper <d>[Português] Wrong.</d>", uses), [line()])
 

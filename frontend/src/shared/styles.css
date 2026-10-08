@@ -6789,6 +6789,108 @@ select {
   text-align: right;
 }
 
+.video-context-panel {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.video-context-summary,
+.video-context-fact {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.video-context-summary span,
+.video-context-fact span {
+  color: var(--muted);
+}
+
+.video-context-panel video {
+  display: block;
+  width: 100%;
+  max-height: 9rem;
+  background: #161616;
+}
+
+.video-context-fields {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+}
+
+.video-context-fields label {
+  display: grid;
+  gap: 0.2rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.video-context-blocked {
+  margin: 0;
+  color: var(--danger, #8a3d32);
+  font-size: 0.78rem;
+}
+
+.video-context-panel input[readonly] {
+  color: var(--muted);
+}
+
+.video-dependency-indicator {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-elev);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.video-dependency-indicator span {
+  color: var(--muted);
+}
+
+.shot-material-editor > .video-dependency-indicator {
+  margin: 0 1rem 0.6rem;
+}
+
+.video-context-window {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.video-context-window label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.video-context-window input {
+  width: 5rem;
+  min-height: 2.25rem;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+}
+
+.video-context-window input[readonly] {
+  width: 8rem;
+}
+
+.video-context-window small {
+  color: var(--muted);
+}
+
 .shot-document .layout-reference-list {
   margin-top: 0;
 }

@@ -13,9 +13,20 @@ export interface H3OutputSelection {
   node_id: string;
   artifact_index: number | null;
 }
+export interface H3ContextVideoInput {
+  node_id: string;
+  input_name: string;
+}
+export interface H3ContextVideoCandidate {
+  node_id: string;
+  class_type: string;
+  input_name: string;
+  display_name: string;
+}
 export interface H3Mapping {
   inputs: H3InputMapping;
   output: H3OutputSelection;
+  context_video?: H3ContextVideoInput | null;
 }
 export interface H3Issue {
   code: string;
@@ -62,6 +73,7 @@ export interface H3Analysis {
   output_candidates: H3Candidate[];
   h3_candidates: H3Candidate[];
   seed_candidates: H3Candidate[];
+  context_video_candidates?: H3ContextVideoCandidate[];
   fixed_dependencies: H3Dependency[];
   issues: H3Issue[];
   lifecycle: H3Lifecycle;

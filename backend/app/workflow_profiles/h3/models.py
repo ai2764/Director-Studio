@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_serializer, model_validator
 
 from .errors import ProfileWarning
 
@@ -41,11 +41,31 @@ class H3OutputSelection(_StrictModel):
     artifact_index: int | None = Field(default=None, ge=0)
 
 
+class H3ContextVideoInput(_StrictModel):
+    """Optional file input that receives one uploaded context video."""
+
+    node_id: StrictStr = Field(min_length=1)
+    input_name: StrictStr = Field(min_length=1)
+
+
 class H3BoundaryMapping(_StrictModel):
     """The complete Director Studio boundary around an opaque H3 graph."""
 
     inputs: H3InputMapping
     output: H3OutputSelection
+    context_video: H3ContextVideoInput | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_context_video(self, handler):
+        payload = handler(self)
+        if isinstance(payload, dict) and payload.get("context_video") is None:
+            payload.pop("context_video", None)
+        return payload
+
+
+def contract_version_for(mapping: H3BoundaryMapping) -> Literal[2, 3]:
+    """v2 mappings stay v2. A context-video file mapping uses the v3 contract."""
+    return 3 if mapping.context_video is not None else 2
 
 
 class H3WorkflowProfile(_StrictModel):
@@ -53,7 +73,7 @@ class H3WorkflowProfile(_StrictModel):
 
     id: StrictStr = Field(pattern=r"[a-z0-9][a-z0-9-]{0,63}")
     kind: Literal["h3_ref2av"] = "h3_ref2av"
-    contract_version: Literal[2] = 2
+    contract_version: Literal[2, 3] = 2
     workflow_sha256: StrictStr = Field(pattern=r"[0-9a-f]{64}")
     mapping: H3BoundaryMapping
     status: Literal["draft", "mapped", "validated", "tested", "active", "broken"]
@@ -82,6 +102,15 @@ class H3NodeCandidate(_StrictModel):
     output_types: tuple[StrictStr, ...] = ()
 
 
+class H3ContextVideoCandidate(_StrictModel):
+    """A reachable video-file input the operator can map as context."""
+
+    node_id: StrictStr = Field(min_length=1)
+    class_type: StrictStr = Field(min_length=1)
+    input_name: StrictStr = Field(min_length=1)
+    display_name: StrictStr = Field(min_length=1)
+
+
 class H3FixedDependency(_StrictModel):
     """A reachable workflow-owned local file input disclosed during inspection."""
 
@@ -99,6 +128,7 @@ class H3WorkflowAnalysis(_StrictModel):
     output_candidates: tuple[H3NodeCandidate, ...] = ()
     h3_candidates: tuple[H3NodeCandidate, ...] = ()
     seed_candidates: tuple[H3NodeCandidate, ...] = ()
+    context_video_candidates: tuple[H3ContextVideoCandidate, ...] = ()
     fixed_dependencies: tuple[H3FixedDependency, ...] = ()
     issues: tuple[H3AnalysisIssue, ...] = ()
 

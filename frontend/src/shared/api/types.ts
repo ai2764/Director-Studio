@@ -134,6 +134,17 @@ export interface PromptSections {
   non_diegetic_music: string;
 }
 
+export interface ShotVideoContext {
+  mode: "off" | "previous_shot" | "external_upload";
+  source_shot_id?: string | null;
+  source_job_id?: string | null;
+  source_output_key?: string | null;
+  upload_id?: string | null;
+  context_frames?: 5 | 22 | 39 | 56 | null;
+  audio_context_frames?: number | null;
+  carry_audio?: boolean | null;
+}
+
 export interface Shot {
   id: string;
   project_id: string;
@@ -163,6 +174,7 @@ export interface Shot {
   ref_frame_job_id: string | null;
   layout_refs: LayoutReference[];
   h3_job_id: string | null;
+  video_context?: ShotVideoContext | null;
   source_audio_path: string | null;
   feedback: string;
   blocked_reasons: string[];

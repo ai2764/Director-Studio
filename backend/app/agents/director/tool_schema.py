@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from typing import Any, Iterable
 
 from ...config import settings
-from ...core.projects.models import AssetCoverageReviewSubmission, Project, ProjectMode
+from ...core.projects.models import AssetCoverageReviewSubmission, Project, ProjectMode, Shot
 from ...pipelines.h3_ref2va.resolutions import LOCAL_H3_PRESETS
 from .intent import (
     actor_design_intent,
@@ -310,6 +311,17 @@ CHAT_IMAGE_CLASSIFICATION_TOOL = function_tool(
     required=["image_index", "kind", "name", "notes", "confidence"],
 )
 
+def _storyboard_schema(model) -> dict[str, Any]:
+    schema = model.model_json_schema()
+    role = schema["$defs"]["AssetMatchDraft"]["properties"]["role"]
+    role["enum"] = [value for value in role["enum"] if value not in {"layout", "layout_ref_frame"}]
+    role["description"] += (
+        " Bind user-imported Layout images as other, preserving their exact asset_id and file_key. "
+        "Generated Layout selection is managed separately after storyboarding."
+    )
+    return schema
+
+
 DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     ACTOR_DESIGN_TOOL,
     ACTOR_CONFIRM_TOOL,
@@ -344,7 +356,7 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "existing Shot's PROJECT_STATE id in shot_id, and omit shot_id only "
                 "for a genuinely new Shot. For adding one Shot at the end, use append_shot instead."
             ),
-            "parameters": StoryboardSubmission.model_json_schema(),
+            "parameters": _storyboard_schema(StoryboardSubmission),
         },
     },
     function_tool(
@@ -368,7 +380,7 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "Otherwise include exact words and speaker cues in script_beat; attribution is "
                 "resolved before saving, using the current user request or authored beat, not a stale script."
             ),
-            "parameters": AppendShotSubmission.model_json_schema(),
+            "parameters": _storyboard_schema(AppendShotSubmission),
         },
     },
     {
@@ -597,6 +609,30 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
         required=["shot_id"],
     ),
+    function_tool(
+        "configure_video_context",
+        "Save how this shot continues from a finished source video. "
+        "Pass source_shot_id to select any earlier shot on this project's storyboard; "
+        "omit it only when the user means the immediately previous shot. "
+        "Use mode=previous_shot when the user asks to continue its action or camera motion; "
+        "its actual video resolution is inherited and cannot be overridden. "
+        "This does not start generation. Do not pass a file path.",
+        {
+            "shot_id": {"type": "string"},
+            "mode": {"type": "string", "enum": ["off", "previous_shot", "external_upload"]},
+            "source_shot_id": {"type": "string", "description": "Exact ID of the selected earlier source shot. "
+                "Intermediate shots may be independent. Omit to use the adjacent previous shot."},
+            "source_job_id": {"type": "string"},
+            "source_output_key": {"type": "string"},
+            "upload_id": {"type": "string"},
+            "context_frames": {"type": "integer", "enum": [5, 22, 39, 56],
+                "description": "Built-in workflow window at 24 fps; defaults to 22. Choose from available motion evidence. "
+                               "For a custom workflow, omit this field to inherit its uploaded window."},
+            "audio_context_frames": {"type": "integer"},
+            "carry_audio": {"type": "boolean"},
+        },
+        required=["shot_id", "mode"],
+    ),
 ]
 
 
@@ -620,6 +656,7 @@ def director_tool_schemas(
     current_message: str = "",
     allow_save_storyboard: bool = True,
     include_chat_image_import: bool = False,
+    shots: list[Shot] | None = None,
 ) -> list[dict[str, Any]]:
     if include_chat_image_import:
         return [CHAT_IMAGE_CLASSIFICATION_TOOL]
@@ -644,6 +681,20 @@ def director_tool_schemas(
         for tool in DIRECTOR_TOOL_SCHEMAS
         if tool["function"]["name"] not in excluded
     ]
+    if shots is None:
+        from ...core.projects.store import list_shots
+        shots = list_shots(project.id)
+    acceptable_ids = sorted({layout.id for shot in shots for layout in shot.layout_refs
+                             if layout.asset_id})
+    grounded_tools = []
+    for tool in tools:
+        if tool["function"]["name"] == "accept_ref_frame":
+            if not acceptable_ids:
+                continue
+            tool = deepcopy(tool)
+            tool["function"]["parameters"]["properties"]["layout_ref_id"]["enum"] = acceptable_ids
+        grounded_tools.append(tool)
+    tools = grounded_tools
     if settings.gpt_bridge_configured:
         tools.append(GPT_REF_FRAME_TOOL)
     return tools

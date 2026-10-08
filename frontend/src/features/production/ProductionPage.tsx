@@ -29,6 +29,8 @@ import {
 } from "./api";
 import { listLibraryAssets, type LibraryAsset } from "../library/api";
 import { ShotMaterialEditor } from "../director/ShotMaterialEditor";
+import { VideoContextPanel } from "../director/VideoContextPanel";
+import { getVideoContextStatus } from "../director/api";
 import { ManagedRunControls } from "./ManagedRunControls";
 import { fetchH3Profiles } from "../../shared/api/client";
 import type { H3ActiveProfile } from "../../shared/api/types";
@@ -173,11 +175,22 @@ export function ProductionPage({
   const [resolutionPreset, setResolutionPreset] =
     useState<string>("auto");
   const [managedActive, setManagedActive] = useState(false);
+  const [contextSize, setContextSize] = useState<{ shotId: string; width: number; height: number } | null>(null);
 
   const selected = useMemo(
     () => shots.find((s) => s.id === selectedId) || null,
     [shots, selectedId],
   );
+  const continuesPrevious = selected?.video_context?.mode === "previous_shot";
+  useEffect(() => {
+    setContextSize(null);
+    if (!selected || !continuesPrevious) return;
+    let cancelled = false;
+    getVideoContextStatus(selected.id).then((status) => {
+      if (!cancelled && status.resolution) setContextSize({ shotId: selected.id, ...status.resolution });
+    }).catch(() => { /* Submission rechecks the source and reports a missing video. */ });
+    return () => { cancelled = true; };
+  }, [selected, continuesPrevious]);
   const currentLayout = useMemo(() => {
     if (!selected) return null;
     return selected.layout_refs.find(
@@ -417,7 +430,7 @@ export function ProductionPage({
     setBusy(true);
     try {
       const resolution =
-        h3Provider !== "local" || resolutionPreset === "auto"
+        h3Provider !== "local" || continuesPrevious || resolutionPreset === "auto"
           ? undefined
           : localResolutions.find((preset) => preset.id === resolutionPreset);
       if (h3Provider === "local") await refreshWorkflowProfile();
@@ -556,14 +569,16 @@ export function ProductionPage({
       Resolution
       <select
         className="field-input"
-        value={resolutionPreset}
-        disabled={busy || jobActive}
+        value={continuesPrevious ? "previous" : resolutionPreset}
+        disabled={busy || jobActive || continuesPrevious}
         onChange={(event) =>
           setResolutionPreset(event.target.value)
         }
       >
-        <option value="auto">Auto from project</option>
-        {localResolutions.map((preset) => (
+        {continuesPrevious ? <option value="previous">
+          Match previous shot{contextSize?.shotId === selected?.id ? ` · ${contextSize.width}×${contextSize.height}` : ""}
+        </option> : <option value="auto">Auto from project</option>}
+        {!continuesPrevious && localResolutions.map((preset) => (
           <option key={preset.id} value={preset.id}>{preset.label}</option>
         ))}
       </select>
@@ -655,6 +670,7 @@ export function ProductionPage({
                 </div>
               ) : null}
               {providerPicker}
+              {h3Provider === "local" ? <VideoContextPanel key={selected.id} shot={selected} shots={shots} onShotUpdated={replaceShot} /> : null}
               {h3Provider === "local" ? resolutionPicker : null}
               <button
                 type="button"
@@ -735,6 +751,7 @@ export function ProductionPage({
         {selected && materialEditorOpen ? (
           <ShotMaterialEditor
             shot={selected}
+            shots={shots}
             shotNumber={selectedNumber}
             onClose={() => setMaterialEditorOpen(false)}
             onOpenImage={setPreviewUrl}
@@ -1100,6 +1117,7 @@ export function ProductionPage({
 
                 {tab === "run" ? (
                   <div className="tab-panel">
+                    {h3Provider === "local" ? <VideoContextPanel key={selected.id} shot={selected} shots={shots} onShotUpdated={replaceShot} /> : null}
                     {h3Provider === "local" ? resolutionPicker : null}
                     <ol className="run-steps">
                       <li className={(selected.refs?.length ?? 0) > 0 ? "done" : ""}>

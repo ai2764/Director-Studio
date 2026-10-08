@@ -279,6 +279,9 @@ async def execute_tools(
             logger.exception("tool %s failed", name)
             notes.append(f"{name} failed: {e}")
             failure: dict[str, Any] = {"ok": False, "error": str(e)}
+            from .storyboard_review import StoryboardReviewError
+            if isinstance(e, StoryboardReviewError):
+                failure.update(code=e.code, retryable=False)
             if name == "queue_gpt_ref_frame":
                 failure.update(
                     {

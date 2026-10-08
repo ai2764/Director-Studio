@@ -273,6 +273,16 @@ def _status_summary(project: Project, shots: list[Shot]) -> str:
         )
         if s.blocked_reasons:
             lines.append(f"   ⚠ {'; '.join(s.blocked_reasons)}")
+        from ...core.projects.video_context import video_context_status
+        context_status = video_context_status(s)
+        if context_status["mode"] != "off":
+            lines.append(
+                f"   video context: {context_status['mode']} · "
+                f"source {context_status['source_job_id'] or 'unresolved'} · "
+                f"{context_status['context_frames']} frames"
+            )
+            if context_status["blocked_reasons"]:
+                lines.append(f"   ⚠ {'; '.join(context_status['blocked_reasons'])}")
     from .brief import duration_budget, duration_issues
     budget = duration_budget(project, shots)
     lines.append(f"Runtime: {budget['total_s']:g}s; requested minimum: {budget['required_minimum_s']:g}s; remaining deficit: {budget['deficit_s']:g}s.")
@@ -486,7 +496,7 @@ def sanitize_tools_for_pipeline(
     scope = managed_turn_scope.get()
     if scope is not None and scope.project_id == project.id:
         managed_tools = {"get_status", "inspect_asset", "write_prompt", "start_h3_video",
-                         "set_task_context", "read_task_context"}
+                         "configure_video_context", "set_task_context", "read_task_context"}
         allowed_tools = []
         for item in tools:
             name = _tool_name(item) if isinstance(item, dict) else ""
@@ -517,9 +527,9 @@ def sanitize_tools_for_pipeline(
     names = [_tool_name(t) for t in tools if isinstance(t, dict)]
     # Read-only tools must never implicitly replace a board (including before
     # or after an append on a stale board).
-    if names and set(names) <= {"get_status", "status", "inspect_asset", "set_task_context", "read_task_context"}:
+    if names and set(names) <= {"get_status", "status", "inspect_asset", "set_task_context", "read_task_context", "configure_video_context"}:
         return tools, notes
-    if names and set(names) <= {"start_h3_video", "get_status", "inspect_asset"}:
+    if names and set(names) <= {"start_h3_video", "get_status", "inspect_asset", "configure_video_context"}:
         return tools, notes
     if names and set(names) <= {"queue_actor_design", "confirm_actor_design", "accept_actor_design"}:
         return tools, notes
@@ -1076,6 +1086,8 @@ async def orchestrate_chat(
     prompt_failure_message = ""
     prompt_failure_code = "PROMPT_GENERATION_FAILED"
     prompt_failure_kind = "unknown"
+    from .configuration_recovery import ConfigurationRecovery
+    configuration_recovery = ConfigurationRecovery()
 
     async def progress(type_: str, text: str) -> None:
         """Local helper — also forwards to external on_progress as event dict."""
@@ -1265,13 +1277,15 @@ async def orchestrate_chat(
             current_message=message,
             allow_save_storyboard=allow_save_storyboard,
             include_chat_image_import=pending_uploads,
+            shots=list_shots(current_project.id),
         )
         if storyboard_budget.repairing:
             schemas = [schema for schema in schemas if schema["function"]["name"] != "set_script"]
         from ...core.managed_runs.context import managed_turn_scope
         scope = managed_turn_scope.get()
         if scope is not None and scope.project_id == current_project.id:
-            managed_tools = {"get_status", "inspect_asset", "write_prompt", "start_h3_video"}
+            managed_tools = {"get_status", "inspect_asset", "write_prompt", "start_h3_video",
+                             "configure_video_context"}
             schemas = [schema for schema in schemas
                        if schema["function"]["name"] in managed_tools]
         state = current_task_context(current_project.id)
@@ -1525,20 +1539,29 @@ async def orchestrate_chat(
                 if tool["name"] == "save_storyboard":
                     storyboard_save_attempted = True
                 structured_results: list[dict[str, Any]] = []
-                tool_notes, touched = await run_tools(
-                    project_id=project_id,
-                    tools=[tool],
-                    svc=svc,
-                    actions=actions,
-                    on_progress=progress_event,
-                    result_payloads=structured_results,
-                    user_feedback=message,
-                    user_message_id=user_message_id,
-                    requested_minimum_duration_s=requested_minimum_duration_s,
-                    storyboard_budget=storyboard_budget,
-                    images=attached_images,
-                    user_uploads=user_uploads,
-                )
+                configuration_block = None
+                if tool["name"] == "write_prompt":
+                    current_shot = configuration_recovery.target(list_shots(project_id), tool.get("args") or {})
+                    if current_shot is not None:
+                        configuration_block = configuration_recovery.before_write(current_shot)
+                if configuration_block:
+                    tool_notes, touched = [configuration_block["error"]], set()
+                    structured_results.append(configuration_block)
+                else:
+                    tool_notes, touched = await run_tools(
+                        project_id=project_id,
+                        tools=[tool],
+                        svc=svc,
+                        actions=actions,
+                        on_progress=progress_event,
+                        result_payloads=structured_results,
+                        user_feedback=message,
+                        user_message_id=user_message_id,
+                        requested_minimum_duration_s=requested_minimum_duration_s,
+                        storyboard_budget=storyboard_budget,
+                        images=attached_images,
+                        user_uploads=user_uploads,
+                    )
                 image_ids |= touched
                 tool_payload: dict[str, Any] = {
                     "ok": True,
@@ -1546,12 +1569,23 @@ async def orchestrate_chat(
                 }
                 for structured_result in structured_results:
                     tool_payload.update(structured_result)
+                if tool_payload.get("code") == "SHOT_CONFIGURATION_CONFLICT" and not configuration_block:
+                    from ...core.managed_runs.context import managed_turn_scope
+                    current_shot = load_shot(project_id, tool_payload.get("shot_id"))
+                    may_revise = any(schema["function"]["name"] == "revise_shot" for schema in offered_tool_schemas)
+                    if managed_turn_scope.get() is not None or not may_revise:
+                        configuration_recovery.stop_for_scope(tool_payload)
+                    elif current_shot is None:
+                        tool_payload.update(retryable=False, concludes_turn=True)
+                    else:
+                        configuration_recovery.record(current_shot, tool_payload)
                 if tool["name"] == "write_prompt":
                     prompt_failure_kind = tool_payload.get("failure_kind", "unknown")
                     prompt_failure_code = tool_payload.get("code") or "PROMPT_GENERATION_FAILED"
                     prompt_failure_message = (
                         str(tool_payload.get("reply") or tool_payload.get("error") or "Prompt generation failed")
-                        if tool_payload.get("ok") is False and tool_payload.get("code") != "CONTEXT_REQUIRED" else ""
+                        if tool_payload.get("ok") is False and tool_payload.get("code") != "CONTEXT_REQUIRED"
+                        and tool_payload.get("concludes_turn") is not False else ""
                     )
                     if prompt_failure_message:
                         from ...core.managed_runs.context import managed_turn_scope

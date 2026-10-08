@@ -381,10 +381,11 @@ def test_shot_material_discussion_keeps_full_catalog(
 
     assert {
         "patch_shot_refs",
-        "accept_ref_frame",
         "write_prompt",
         "get_status",
     } <= names
+    # This project has no generated Layout to accept yet.
+    assert "accept_ref_frame" not in names
     assert {"queue_ref_frame", "revise_ref_frame", "extract_clip_tail_frame", "set_script", "save_storyboard", "plan_shots", "queue_actor_design"} <= names
 
 

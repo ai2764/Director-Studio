@@ -9,6 +9,8 @@ from .errors import (
 from .models import (
     H3AnalysisIssue,
     H3BoundaryMapping,
+    H3ContextVideoCandidate,
+    H3ContextVideoInput,
     H3InputMapping,
     H3OutputSelection,
     H3FixedDependency,
@@ -18,6 +20,7 @@ from .models import (
     H3WorkflowProfile,
     ResolvedH3Profile,
     ValidationReport,
+    contract_version_for,
 )
 from .store import (
     H3ProfileStore,
@@ -29,6 +32,8 @@ from .store import (
 __all__ = [
     "H3AnalysisIssue",
     "H3BoundaryMapping",
+    "H3ContextVideoCandidate",
+    "H3ContextVideoInput",
     "H3InputMapping",
     "H3FixedDependency",
     "H3NodeCandidate",
@@ -46,4 +51,5 @@ __all__ = [
     "load_job_profile_snapshot",
     "resolve_active_h3_profile",
     "snapshot_profile_for_job",
+    "contract_version_for",
 ]

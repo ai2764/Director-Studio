@@ -128,9 +128,7 @@ Implementation: [dialogue preflight](../backend/app/agents/director/dialogue_pre
 [prompt repair](../backend/app/agents/director/prompt_repair.py),
 [tail review](../backend/app/agents/director/tail_prompt_review.py),
 [managed prompt commit](../backend/app/core/managed_runs/prompt_commit.py).
-The [prompt/refinement verification report](superpowers/reports/2026-09-26-prompt-contract-managed-refinement.md)
-records test scope and limitations; deterministic checks do not prove generated
-video quality.
+Deterministic checks do not prove generated video quality.
 
 ## Context and history
 
@@ -156,8 +154,7 @@ The task-context pilot implements **P0/P1A only**:
 - P1B–P4 are not implemented. Real-model quality/latency gains are not established.
 
 See the [refactor design](superpowers/specs/2026-09-26-agentic-state-refactor-design.md)
-for the target and the [pilot report](superpowers/reports/2026-09-26-task-context-pilot-verification.md)
-for what was actually verified.
+for the target architecture; the implemented scope is described above.
 
 ## Providers and execution adapters
 

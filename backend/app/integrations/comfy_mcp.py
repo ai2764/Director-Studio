@@ -39,6 +39,20 @@ class ComfyMcpError(RuntimeError):
     pass
 
 
+def _stored_upload_name(item: object) -> str:
+    """Keep subfolder and filename when MCP returns both; otherwise cloud_name."""
+    if not isinstance(item, dict):
+        return ""
+    subfolder = str(item.get("subfolder") or "").replace("\\", "/").strip("/")
+    filename = str(item.get("filename") or item.get("name") or "").replace("\\", "/").strip()
+    filename = filename.rsplit("/", 1)[-1]
+    if subfolder and filename:
+        if ".." in subfolder.split("/") or filename in {"", ".", ".."}:
+            raise ComfyMcpError("MCP upload returned an unsafe path")
+        return f"{subfolder}/{filename}"
+    return str(item.get("cloud_name") or "").strip()
+
+
 def _repair_save_video_dynamic_codec(
     graph: dict[str, Any], errors: list[Any]
 ) -> dict[str, Any] | None:
@@ -317,10 +331,10 @@ class ComfyMcpClient:
             )
         result: dict[str, str] = {}
         for key, item in zip(keys, uploads, strict=True):
-            cloud_name = str((item or {}).get("cloud_name") or "").strip()
-            if not cloud_name:
+            stored_name = _stored_upload_name(item)
+            if not stored_name:
                 raise ComfyMcpError(f"MCP upload returned no cloud_name for {key}")
-            result[key] = cloud_name
+            result[key] = stored_name
         return result
 
     async def submit_workflow(self, graph: dict[str, Any]) -> str:

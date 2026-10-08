@@ -172,11 +172,8 @@ It then decides whether to preserve or revise the existing Creative brief
 concurrent edits or changed file contents prevent publishing a completed review.
 Failure is returned as `ok: false`, not recorded as a successful tool action.
 This is shared by legacy and Harness; Node still owns no images or durable review
-state. See [single-shot reference review](evaluations/2026-09-12-single-shot-reference-review.md)
-for the exact scope and live-test limitations.
-
-Real Qwen findings and the isolated slim-result retest are recorded in
-[the live evaluation](evaluations/2026-09-12-harness-qwen38-live.md).
+state. Deterministic checks cover reference handling; generated-image quality
+still requires visual review.
 
 ```powershell
 npm run typecheck --prefix harness
@@ -256,8 +253,6 @@ Existing template duplication is intentionally retained. Capacity is a heuristic
 not a tokenizer guarantee. Snapshot validation currently reads the project's
 sources repeatedly; smaller packets do not prove lower latency or I/O.
 
-Engineering fixtures and remaining live-evaluation requirements are recorded in
-[the pilot verification report](superpowers/reports/2026-09-26-task-context-pilot-verification.md).
 Real-model quality is not established by deterministic fixture tests. Keep default
 off until an authorized same-model/sample comparison passes. P1B mutation/state
 unification, persistent operation receipts and managed-run redesign are not included.

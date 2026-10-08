@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.workflow_profiles.h3.inspector import inspect_h3_workflow
+from app.workflow_profiles.h3.validator import validate_h3_contract
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "h3_multistage_vhs.api.json"
@@ -64,6 +65,42 @@ def test_reverse_traversal_only_offers_h3_and_seed_upstream_of_output() -> None:
     assert analysis.mapping is not None
     assert analysis.mapping.inputs.h3_node_id == "265"
     assert analysis.mapping.output.node_id == "214"
+
+
+@pytest.mark.parametrize("class_type,input_name", [("LoadVideo", "file"), ("VHS_LoadVideo", "video")])
+def test_empty_video_slot_is_discovered_and_proposed_for_confirmation(class_type, input_name):
+    graph = multistage_graph()
+    graph["50"] = {"class_type": class_type, "inputs": {input_name: ""},
+                   "_meta": {"title": "Previous shot"}}
+    graph["210"]["inputs"]["context_pixels"] = ["50", 0]
+    graph["51"] = {"class_type": "LoadVideo", "inputs": {"file": "unused.mp4"}}
+    analysis = inspect_h3_workflow(graph, object_info=object_info(), output_node_id="214")
+    assert [(item.node_id, item.input_name, item.display_name) for item in analysis.context_video_candidates] == [
+        ("50", input_name, "Previous shot (Node 50)")]
+    assert analysis.mapping.context_video.model_dump() == {"node_id": "50", "input_name": input_name}
+    assert validate_h3_contract(graph, analysis.mapping).valid
+
+
+def test_multiple_video_inputs_require_an_explicit_choice():
+    graph = multistage_graph()
+    for node_id in ("50", "51"):
+        graph[node_id] = {"class_type": "LoadVideo", "inputs": {"file": "clip.mp4"}}
+        graph["210"]["inputs"][f"context_{node_id}"] = [node_id, 0]
+    analysis = inspect_h3_workflow(graph, object_info=object_info(), output_node_id="214")
+    assert len(analysis.context_video_candidates) == 2
+    assert analysis.mapping.context_video is None
+    assert analysis.compatibility == "needs_confirmation"
+    assert any(issue.code == "ambiguous_context_video" for issue in analysis.issues)
+
+
+def test_video_candidate_does_not_expose_a_private_file_path():
+    graph = multistage_graph()
+    graph["50"] = {"class_type": "LoadVideo", "inputs": {"file": "C:/private/clip.mp4"},
+                   "_meta": {"title": "C:/private/clip.mp4"}}
+    graph["210"]["inputs"]["context_pixels"] = ["50", 0]
+    analysis = inspect_h3_workflow(graph, object_info=object_info(), output_node_id="214")
+    assert analysis.context_video_candidates[0].display_name == "Context video (Node 50)"
+    assert "private" not in analysis.model_dump_json()
 
 
 def test_selecting_other_output_changes_reverse_discovered_boundary() -> None:

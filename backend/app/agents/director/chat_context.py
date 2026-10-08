@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from ...config import settings
 from typing import Any
 
 from ...core.projects.models import Project, RefRole, Shot
@@ -41,6 +42,7 @@ def project_context_blob(
     from .service import _inventory, _script_hash
     from .tool_handlers.actor import _load_proposal
     from .tool_handlers.project import _load_storyboard_replacement
+    from ...core.projects.video_context import video_context_status
 
     inv = _inventory(project.id)
     from .brief import directing_requests, duration_issues
@@ -240,6 +242,7 @@ def project_context_blob(
                 shot.music_segment.model_dump(mode="json")
                 if shot.music_segment else None
             ),
+            "video_context_status": video_context_status(shot),
             "material_review_pending": bool(
                 (shot.meta or {}).get("material_review_pending")
             ),
@@ -281,6 +284,17 @@ def project_context_blob(
                 project.music_master.model_dump(mode="json")
                 if project.music_master else None
             ),
+        },
+        "video_context_capability": {
+            "enabled": settings.video_context_enabled,
+            "tool": "configure_video_context",
+            "conditioning": "finished_video_motion_context",
+            "source_modes": ["previous_shot", "external_upload"],
+            "configuration_starts_job": False,
+            "usage": "When the user requests continuity from the previous shot, call configure_video_context "
+                     "with mode=previous_shot. Prompt prose alone does not configure it. "
+                     "Only saved active continuation exposes its UI indicator and frame window.",
+            "resolution_policy": "Previous-shot continuation inherits the selected source video's actual width and height.",
         },
         "script_chars": len(script),
         "directing_requests": directing_requests(project),

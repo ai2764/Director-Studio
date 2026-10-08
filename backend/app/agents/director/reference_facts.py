@@ -193,9 +193,16 @@ User request sources retain their original message identity and script version. 
 chronological requests, not blanket current approvals. A script change alone does not revoke
 a request; apply later replacements and removals to earlier intent. Reference notes describe
 the intended contribution and limits of that particular image, not facts visible in its pixels.
+Resolve overlapping contributions using the user's selected roles: an explicit costume
+reference controls the worn outfit over incidental clothing on an actor identity sheet.
+Do not copy unrelated appearance details merely because a reference shows the same person.
+If a crop hides a detail, preserve established design from its applicable reference; do
+not infer absence or replace it with incidental identity-sheet clothing or footwear.
 Do not assert values for not_visible/uncertain attributes. Conflicting or omitted descriptions
 are unresolved evidence, not alternative appearance instructions. Preserve one narrative identity
 across that person's different views. Choose camera, movement, staging and performance freely.
+Keep the shot's composition and action consistent with all six prompt sections, including
+opening/ending orientation. Remove superseded descriptions when revising the plan.
 If an essential current requirement truly conflicts with pixels, report the specific conflict;
 do not rewrite the user's choice or pretend the image shows something it does not.
 """

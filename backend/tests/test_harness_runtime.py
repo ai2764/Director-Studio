@@ -32,22 +32,22 @@ def test_harness_never_reports_uncreated_layout_job(tmp_projects_dir):
     project = create_project("missing layout job", "An empty hallway.")
     turn = BackendTurn(project.id, "需要换layout", None, None)
     result = turn.finish({
-        "reply": "Shot 6 的新 Layout 已提交生成（job_e25d6d185a24，lay_239f68f13e68）。",
+        "reply": "Shot 6 的新 Layout 已提交生成（job_000000000001，lay_000000000001）。",
     })
     assert "已提交生成" not in result.reply
-    assert "job_e25d6d185a24" not in result.reply
+    assert "job_000000000001" not in result.reply
     assert "不存在" in result.reply
 
     another = BackendTurn(project.id, "清理地面的纸片", None, None)
     result = another.finish({
-        "reply": "Shot 6 的 Layout 已重新生成（job_2d9a1b5440d2，lay_56b0388a5274）。",
+        "reply": "Shot 6 的 Layout 已重新生成（job_000000000002，lay_000000000002）。",
     })
     assert "已重新生成" not in result.reply
-    assert "job_2d9a1b5440d2" not in result.reply
+    assert "job_000000000002" not in result.reply
 
     third = BackendTurn(project.id, "走廊", None, None)
-    result = third.finish({"reply": "请看 job_5d59a2c929c5 的布局。"})
-    assert "job_5d59a2c929c5" not in result.reply
+    result = third.finish({"reply": "请看 job_000000000003 的布局。"})
+    assert "job_000000000003" not in result.reply
 
     real = create_job(pipeline_id="qwen21_layout", asset_kind="layouts",
                       name="test", project_id=project.id)
@@ -89,10 +89,10 @@ def test_agent_history_does_not_reseed_phantom_job_claims(tmp_projects_dir):
 
     project = create_project("phantom job history", "An empty hallway.")
     append_chat_message(project.id, role="user", content="重新设计空走廊")
-    append_chat_message(project.id, role="assistant", content="已提交 job_5d59a2c929c5。")
+    append_chat_message(project.id, role="assistant", content="已提交 job_000000000003。")
     append_chat_message(project.id, role="assistant", content="Earlier assistant reply cited a Job with no matching project record. No task can be inferred from that reply.")
     visible = load_chat_history(project.id)
-    assert "job_5d59a2c929c5" in visible[-2].content
+    assert "job_000000000003" in visible[-2].content
     seeded = agent_history(visible, project_id=project.id)
     assert seeded == [{"role": "user", "content": "重新设计空走廊"}]
 
@@ -716,7 +716,7 @@ async def test_shot_status_omits_large_internal_material_review(tmp_projects_dir
     assert len(json.dumps(result, ensure_ascii=False)) < 12000
 
 
-def test_harness_does_not_preemptively_whitelist_layout_ids(tmp_projects_dir):
+def test_harness_refreshes_layout_acceptance_after_extraction(tmp_projects_dir):
     from app.agents.director.harness_runtime import BackendTurn
 
     project = create_project("tail acceptance", "")
@@ -729,7 +729,7 @@ def test_harness_does_not_preemptively_whitelist_layout_ids(tmp_projects_dir):
     turn = BackendTurn(project.id, "抽尾帧后直接 approve", None, None)
 
     before = {tool["function"]["name"] for tool in turn.context()["tools"]}
-    assert "accept_ref_frame" in before
+    assert "accept_ref_frame" not in before
 
     save_shot(shot.model_copy(update={
         "layout_refs": [LayoutReference(id="lref_real", asset_id="lay_real")],
@@ -740,7 +740,7 @@ def test_harness_does_not_preemptively_whitelist_layout_ids(tmp_projects_dir):
     )
     validator = Draft202012Validator(after["parameters"])
     assert not list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_real"}))
-    assert not list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_invented"}))
+    assert list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_invented"}))
 
 
 @pytest.mark.asyncio

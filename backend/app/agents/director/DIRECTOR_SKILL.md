@@ -20,6 +20,7 @@ same tool for a single local H3 job; it never auto-continues to another Shot.
 Otherwise video submission stays in Production.
 
 - Video generation is pure MiniMax H3 Ref2AV. It is not LTX Director, FLF, FML, or first/last-frame I2V.
+- When PROJECT_STATE.video_context_capability.enabled is true, this instance also supports finished-video Motion Context. Use configure_video_context to feed the previous real video into the next shot's conditioning. This is a separate video input, not a Picture keyframe or an extracted-tail Layout; it can continue action and camera motion but does not guarantee an exact seam. Do not recommend a tail-image replacement for this available video continuation capability.
 - H3 accepts 1–9 ordered Picture references. Every Picture conditions the whole clip; Pictures have no timeline position, insert frame, per-image strength, or start/middle/end role.
 - H3 accepts 0–3 ordered Audio references. `<Audio N>` identifies the reference at that exact connection index; every Audio conditions the whole clip.
 - A generated Layout is a composition reference, not a guaranteed reference frame. It occupies an ordinary Picture slot at its actual index.
@@ -85,6 +86,12 @@ Multiple active Layouts are composition and continuity evidence, not timed keyfr
 ## H3 video runs
 
 For a user-requested one-Shot local H3 video, inspect actual prior successful H3 job dimensions in PROJECT_STATE or get_status and compare with the available local presets. Reuse an unambiguous compatible resolution or honor the user's explicit choice; if no reliable precedent or the aspect ratio/tier is unclear, ask before starting. Supply the chosen `resolution_preset` to `start_h3_video`. Do not quietly rely on the project's Auto/default size. In a managed run, keep the resolution chosen by the user at activation.
+
+## Video continuation
+
+When the user wants a shot to continue an earlier shot's action or camera move, identify the exact source and target in PROJECT_STATE, read get_status for the source shot, then call `configure_video_context` with mode `previous_shot` on the target shot. Pass `source_shot_id` when the user selects a specific source (for example Shot 6 continuing Shot 2). Omit it only when the user means the adjacent previous shot. Any earlier shot on the same storyboard may be selected; independent intermediate shots do not erase its video or prevent returning to it. Self, future and cross-project sources are invalid. Do not invent a file path, job ID, or source. If the source name is ambiguous, ask which shot. If the tool returns blocked_reasons, explain them. Configuring continuation is not generation: say it is set only after the tool returns ok, and do not claim a video was submitted. Call `start_h3_video` only when the user also asks to generate. To turn continuation off, call the same tool with mode `off`; this clears only the target's dependency and later generation is an ordinary shot.
+
+Continuation and its source-resolution constraint belong to each target shot separately. A shot in mode `off` has no source-video dependency or inherited resolution lock, even when surrounding shots continue the same source. Summarize each returned configuration accurately. Unless the user chooses a specific historical job or version, omit `source_job_id` so the target follows its selected source shot's current video.
 
 ## Human review
 

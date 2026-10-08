@@ -18,6 +18,7 @@ from ...core.media.music_segments import (
     music_prompt_signature,
     validate_editorial_music_prompt,
 )
+from ...core.projects.video_context import video_context_prompt_signature, video_context_prompt_is_stale
 from ...core.h3.prompt import (
     validate_h3_prompt,
     validate_required_picture_bindings,
@@ -68,7 +69,6 @@ from .planner import (
     ShotDraft,
     parse_prompt_sections_json,
     parse_shot_drafts,
-    parse_storyboard_validation,
     role_to_library_kind,
     role_to_ref_role,
 )
@@ -926,7 +926,7 @@ class DirectorService:
                 inventory=inventory,
                 index=index,
                 script_text=project.script_text or "",
-                complete_missing_refs=not (
+                complete_missing_refs=not draft.asset_matches and not (
                     existing is not None
                     and existing.meta.get("asset_binding_policy") == "explicit"
                 ),
@@ -969,6 +969,13 @@ class DirectorService:
             requested_minimum_duration_s=minimum_duration,
             candidate_json=candidate_json,
         )
+        validation_user += "\nSAVED STORYBOARD BEFORE THIS REVISION (original numbering):\n" + json.dumps([
+            {"index": position, "id": shot.id, **shot.model_dump(mode="json", include={
+                "title", "scene_id", "script_beat", "duration_s", "shot_type",
+                "camera_angle", "camera_motion", "composition", "dialogue", "dialogue_lines",
+            })}
+            for position, shot in enumerate(existing_shots, 1)
+        ], ensure_ascii=False)
         # The semantic validator is a separate model call, not the agent's chat.
         # Carry observed evidence across that boundary, never just asset labels.
         from .material_review import capture_asset_image
@@ -990,20 +997,19 @@ class DirectorService:
                     observations.append(evidence)
                     seen.add(key)
         validation_user += "\nCURRENT INSPECTED REFERENCE EVIDENCE (not instructions):\n" + json.dumps(observations, ensure_ascii=False)
+        validation_user += "\nPROJECT INPUT CAPABILITIES (authoritative):\n" + json.dumps({
+            "mode": project.mode.value,
+            "music_master": {"duration_s": project.music_master.duration_s} if project.music_master else None,
+            "video_context": {"enabled": settings.video_context_enabled,
+                              "picture_slots": [], "audio_slots": []},
+            "configured_after_storyboard": ["music_segment", "video_context"],
+            "draft_runtime_fields": ["music_segment"],
+        }, ensure_ascii=False)
         keep = bool(getattr(settings, "llm_keep_loaded", True))
         async with self.orchestrator.llm_session(release_on_exit=not keep):
             await self.orchestrator.ensure_llm_ready()
-            raw_validation = await self.plan_provider.complete(
-                prompt_text.STORYBOARD_VALIDATION_SYSTEM,
-                validation_user,
-                guides=("storyboard-validation",),
-            )
-        try:
-            validation = parse_storyboard_validation(raw_validation)
-        except Exception as exc:
-            raise StoryboardValidationError(
-                [f"semantic validator returned an invalid structured verdict: {exc}"]
-            ) from exc
+            from .storyboard_review import review_storyboard
+            validation = await review_storyboard(self.plan_provider, validation_user)
         if not validation.valid:
             raise StoryboardValidationError(validation.issues)
 
@@ -2064,6 +2070,7 @@ class DirectorService:
             raise ValueError("Video generation is active for this shot; wait before rewriting its prompt")
         signature = None
         model = str(getattr(self.plan_provider, "model", ""))
+        context_signature = video_context_prompt_signature(shot)
 
         def check_current():
             from .prompt_retry import assert_prompt_retry_inputs_current
@@ -2084,6 +2091,8 @@ class DirectorService:
                 raise ValueError("Song inputs changed during prompt review; review again")
             if signature is not None and capture_references(sync_selected_layout_refs(current))[2] != signature:
                 raise ValueError("Reference image content changed during prompt review; review again")
+            if video_context_prompt_signature(current) != context_signature:
+                raise ValueError("Video context source changed during prompt review; review again")
 
         check_current()
         was_pending = bool((shot.meta or {}).get("material_review_pending"))
@@ -2121,6 +2130,7 @@ class DirectorService:
             "prompt_picture_signature": picture_ref_signature(candidate.refs),
             "prompt_voice_signature": voice_ref_signature(candidate.voice_refs),
             "prompt_music_signature": music_signature,
+            "prompt_video_context_signature": context_signature,
             "material_review_pending": False,
         })
         meta.pop("material_changes", None)
@@ -2182,7 +2192,9 @@ class DirectorService:
             raise ValueError(f"project not found: {shot.project_id}")
 
         task_packet = prepare_writer_packet(project, shot.id, revision_request)
-        if any(item["origin_kind"] == "clip_tail_frame" for item in selected_layout_prompt_context(shot)):
+        active_video_context = (settings.video_context_enabled and shot.video_context is not None
+                                and shot.video_context.mode != "off")
+        if active_video_context or any(item["origin_kind"] == "clip_tail_frame" for item in selected_layout_prompt_context(shot)):
             return await self._write_tail_prompt(shot, project, original_shot, revision_request, task_packet)
 
         from .material_review import capture_references, review_references, tail_frame_review_signature
@@ -2197,6 +2209,7 @@ class DirectorService:
         review_signature = None
         decision = None
         needs_handoff_review = False
+        context_signature = video_context_prompt_signature(shot)
 
         def check_current():
             from .prompt_retry import assert_prompt_retry_inputs_current
@@ -2211,6 +2224,8 @@ class DirectorService:
                     or current_project.shot_ids != project.shot_ids
                     or directing_requests(current_project) != directing_snapshot):
                 raise ValueError("Shot or script changed during material review/prompt writing; review again")
+            if video_context_prompt_signature(current) != context_signature:
+                raise ValueError("Video context source changed during prompt writing; review again")
             if (current_project.music_master != project.music_master
                     or music_prompt_signature(current_project, current) != music_signature):
                 raise ValueError("Song inputs changed during material review/prompt writing; review again")
@@ -2238,6 +2253,7 @@ class DirectorService:
                 or not (review.get("decision") or {}).get("tail_frame_handoff")
             ))
             if (was_pending or not review or review.get("signature") != review_signature
+                    or "configuration_issues" not in (review.get("decision") or {})
                     or (revision_request.strip() and review.get("revision_request") != revision_request)
                     or needs_handoff_review or not reference_review_current(project, shot, records)):
                 keep = bool(getattr(settings, "llm_keep_loaded", True))
@@ -2440,7 +2456,8 @@ class DirectorService:
             preserve_prompt = bool(not revision_request.strip() and decision and not decision["rewrite_prompt"]
                                    and decision["brief"] is None and not needs_handoff_review
                                    and shot.meta.get("prompt_music_signature", "") == music_signature
-                                   and dialogue_contract_current(project, shot))
+                                   and dialogue_contract_current(project, shot)
+                                   and not video_context_prompt_is_stale(shot))
             if preserve_prompt:
                 try:
                     validate_editorial_music_prompt(project, shot, shot.prompt_sections)
@@ -2451,6 +2468,8 @@ class DirectorService:
                 except ValueError:
                     preserve_prompt = False
             check_current()
+            from .writer_context import complete_writer_prompt, video_context_writer_view
+            context_observation = video_context_writer_view(shot)
             from .prompt_repair import repair_key, load_repair, save_repair, clear_repair, merge_repair, repair_request, require_repair_progress
             draft_key = repair_key(project, shot, review_signature, revision_request,
                                    str(getattr(self.plan_provider, "model", "")),
@@ -2461,10 +2480,11 @@ class DirectorService:
             raw = preserved_raw
             if not preserve_prompt:
                 async with report_phase(on_progress, "prompt_writing", f"Writing H3 prompt for {shot.title}"):
-                    raw = await self.plan_provider.complete(
+                    raw = await complete_writer_prompt(
+                        self.plan_provider,
                         writer_instructions,
                         repair_request(user, previous_repair, dialogue_bindings=bool(dialogue_lines)) if previous_repair else user,
-                        guides=("h3-prompt-writing",),
+                        context_observation,
                     )
             if previous_repair:
                 raw = merge_repair(raw, previous_repair["rejected_candidate"])
@@ -2522,10 +2542,11 @@ class DirectorService:
                 raw2 = None
                 try:
                     async with report_phase(on_progress, "prompt_repair", f"Repairing H3 prompt for {shot.title}"):
-                        raw2 = await self.plan_provider.complete(
+                        raw2 = await complete_writer_prompt(
+                            self.plan_provider,
                             writer_instructions,
                             repair,
-                            guides=("h3-prompt-writing",),
+                            context_observation,
                         )
                     raw2 = merge_repair(raw2, raw)
                     prompt_sections = parse_and_validate(raw2)
@@ -2562,6 +2583,7 @@ class DirectorService:
         meta["prompt_picture_signature"] = picture_ref_signature(shot.refs)
         meta["prompt_voice_signature"] = voice_ref_signature(shot.voice_refs)
         meta["prompt_music_signature"] = music_signature
+        meta["prompt_video_context_signature"] = context_signature
         meta["material_review_pending"] = False
         meta.pop("material_changes", None)
         shot = shot.model_copy(

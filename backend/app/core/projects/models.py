@@ -160,6 +160,25 @@ class PromptSections(BaseModel):
         return "\n".join(f"{k}:\n{v}" for k, v in parts)
 
 
+class ShotVideoContext(BaseModel):
+    """How this shot continues from an earlier finished video.
+
+    ``previous_shot`` may select any earlier shot via ``source_shot_id``;
+    leaving that ID empty defaults to the adjacent predecessor when configured.
+    ``source_job_id`` empty means follow the source shot's current ``h3_job_id``.
+    ``carry_audio`` empty means the built-in adapter does not carry sound.
+    """
+
+    mode: Literal["off", "previous_shot", "external_upload"] = "off"
+    source_shot_id: str | None = None
+    source_job_id: str | None = None
+    source_output_key: str = "video"
+    upload_id: str | None = None
+    context_frames: Literal[5, 22, 39, 56] | None = None
+    audio_context_frames: int | None = None
+    carry_audio: bool | None = None
+
+
 class Shot(BaseModel):
     id: str
     project_id: str
@@ -185,6 +204,7 @@ class Shot(BaseModel):
     ref_frame_job_id: str | None = None
     layout_refs: list[LayoutReference] = Field(default_factory=list)
     h3_job_id: str | None = None
+    video_context: ShotVideoContext | None = None
     source_audio_path: str | None = None
     feedback: str = ""
     blocked_reasons: list[str] = Field(default_factory=list)

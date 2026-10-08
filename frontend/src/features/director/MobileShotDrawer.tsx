@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   layoutPreviewUrl,
   refPreviewCandidates,
@@ -8,6 +8,7 @@ import {
 } from "../../shared/api/types";
 import { isDisplayableLayout, isRetiredLayout } from "../../shared/layoutReferenceStatus";
 import { shotWorkflowStatus } from "../../shared/shotWorkflowStatus";
+import { VideoContextPanel } from "./VideoContextPanel";
 
 function referenceLabel(role: string) {
   return role.replaceAll("_", " ");
@@ -47,12 +48,17 @@ function MobileLayoutCard({ layout, onOpen }: { layout: LayoutReference; onOpen:
 export function MobileShotDrawer({
   shots,
   onOpenImage,
+  focusShotId = null,
+  onShotUpdated,
 }: {
   shots: Shot[];
   onOpenImage: (url: string) => void;
+  focusShotId?: string | null;
+  onShotUpdated?: (shot: Shot) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(shots[0]?.id ?? null);
+  const appliedFocus = useRef<string | null>(null);
   const selectedIndex = Math.max(0, shots.findIndex((shot) => shot.id === selectedId));
   const selected = shots[selectedIndex] ?? null;
   const displayableLayouts = selected?.layout_refs.filter(isDisplayableLayout) ?? [];
@@ -62,6 +68,14 @@ export function MobileShotDrawer({
       setSelectedId(shots[0].id);
     }
   }, [selectedId, shots]);
+
+  useEffect(() => {
+    if (!focusShotId || appliedFocus.current === focusShotId) return;
+    if (!shots.some((shot) => shot.id === focusShotId)) return;
+    appliedFocus.current = focusShotId;
+    setSelectedId(focusShotId);
+    setExpanded(true);
+  }, [focusShotId, shots]);
 
   return (
     <section className={`mobile-shot-drawer${expanded ? " expanded" : ""}`}>
@@ -111,9 +125,12 @@ export function MobileShotDrawer({
                 <a href="#mobile-shot-brief">Brief</a>
                 <a href="#mobile-shot-references">References</a>
                 <a href="#mobile-shot-layouts">Layouts</a>
+                <a href="#mobile-shot-production">Production</a>
               </nav>
 
               <article className="mobile-shot-document" aria-label={`${selected.title} shot design document`}>
+                  <VideoContextPanel key={selected.id} shot={selected} shots={shots}
+                    expanded={focusShotId === selected.id} onShotUpdated={onShotUpdated} />
                   <dl className="mobile-shot-meta">
                     <div><dt>Duration</dt><dd>{selected.duration_s}s</dd></div>
                     <div><dt>Status</dt><dd>{shotWorkflowStatus(selected).label}</dd></div>
@@ -176,6 +193,11 @@ export function MobileShotDrawer({
                       </div>
                     </details>
                   ) : null}
+                  </section>
+
+                  <section id="mobile-shot-production" className="mobile-shot-document-section">
+                    <span className="mobile-document-section-label">04 / Record</span>
+                    <h4>Production record</h4>
                   </section>
               </article>
             </div>

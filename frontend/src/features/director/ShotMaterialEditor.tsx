@@ -6,6 +6,7 @@ import {
   type LibraryKind,
 } from "../library/api";
 import { replaceShotMaterials, type ShotMaterialSelection } from "./api";
+import { VideoDependencyIndicator } from "./VideoDependencyIndicator";
 
 type PictureKind = Exclude<LibraryKind, "voices">;
 
@@ -67,12 +68,14 @@ function TrashIcon() {
 export function ShotMaterialEditor({
   shot,
   shotNumber,
+  shots,
   onClose,
   onOpenImage,
   onSaved,
 }: {
   shot: Shot;
   shotNumber: number;
+  shots?: Shot[];
   onClose: () => void;
   onOpenImage: (url: string) => void;
   onSaved?: (shot: Shot, message: string, notifyAgent: boolean) => void;
@@ -177,6 +180,7 @@ export function ShotMaterialEditor({
           </div>
           <button type="button" aria-label="Close material editor" onClick={onClose}>×</button>
         </header>
+        <VideoDependencyIndicator shot={shot} shotNumber={shotNumber} shots={shots} />
         {confirming ? (
           <div className="shot-material-save-review">
             <div>

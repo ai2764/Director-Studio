@@ -12,6 +12,7 @@ const getH3ProviderStatusMock = vi.hoisted(() => vi.fn());
 const getLocalH3ResolutionsMock = vi.hoisted(() => vi.fn());
 const getManagedRunMock = vi.hoisted(() => vi.fn());
 const fetchH3ProfilesMock = vi.hoisted(() => vi.fn());
+const getVideoContextStatusMock = vi.hoisted(() => vi.fn());
 vi.mock("../../shared/api/client", () => ({ fetchH3Profiles: fetchH3ProfilesMock }));
 
 let currentProjectId = "prj_test";
@@ -43,6 +44,7 @@ vi.mock("../library/api", () => ({
 
 vi.mock("../director/api", () => ({
   replaceShotMaterials: replaceShotMaterialsMock,
+  getVideoContextStatus: getVideoContextStatusMock,
 }));
 
 const emptyPrompt: PromptSections = {
@@ -127,6 +129,8 @@ describe("ProductionPage prompt refresh", () => {
       { id: "portrait-1080", label: "Portrait 1080 tier · 1088×1920", width: 1088, height: 1920 },
     ] });
     getManagedRunMock.mockResolvedValue(null);
+    getVideoContextStatusMock.mockResolvedValue({ mode: "previous_shot", source_job_id: "job_prev", context_frames: 22,
+      carry_audio: false, blocked_reasons: [], resolution: { width: 480, height: 864 } });
   });
 
   it("does not keep reloading every shot after an H3 job has completed", async () => {
@@ -408,6 +412,14 @@ describe("ProductionPage prompt refresh", () => {
     expect(screen.getByRole("heading", { name: "H3 prompt" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Submit H3" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Save prompt" })).toBeNull();
+  });
+
+  it("hides continuation settings on an ordinary mobile Shot", async () => {
+    vi.mocked(getProject).mockResolvedValue(detail(shot(generatedPrompt)));
+    render(<ProductionPage active mobile />);
+    await screen.findByText("Corridor walk-in");
+    expect(screen.queryByRole("region", { name: "Video continuation" })).toBeNull();
+    expect(screen.queryByText("Continuation settings")).toBeNull();
   });
 
   it("opens the selected Shot's material editor from mobile Production references", async () => {
@@ -851,6 +863,23 @@ describe("ProductionPage prompt refresh", () => {
     expect(
       (screen.getByLabelText("Add Voice reference") as HTMLSelectElement).disabled,
     ).toBe(true);
+  });
+
+  it.each([false, true])("locks resolution to the previous video in mobile=%s", async (mobile) => {
+    const ready = { ...shot(generatedPrompt), video_context: {
+      mode: "previous_shot" as const, source_shot_id: "sht_prev", context_frames: 22 as const,
+    }, refs: [{ role: "actor" as const, asset_id: "act_1", picture_index: 1 }] };
+    vi.mocked(getProject).mockResolvedValue(detail(ready));
+    vi.mocked(submitShot).mockResolvedValue(ready);
+    render(<ProductionPage active mobile={mobile} />);
+    fireEvent.click(await screen.findByText("Corridor walk-in"));
+    if (!mobile) fireEvent.click(screen.getByRole("tab", { name: "Run H3" }));
+    const picker = screen.getByLabelText("Resolution") as HTMLSelectElement;
+    expect(picker.disabled).toBe(true);
+    expect(picker.options).toHaveLength(1);
+    expect(picker.options[0].textContent).toContain("Match previous shot");
+    fireEvent.click(screen.getByRole("button", { name: mobile ? "Run H3" : "Submit H3" }));
+    await waitFor(() => expect(submitShot).toHaveBeenCalledWith(ready.id, "local", undefined));
   });
 
   it("submits the selected H3 resolution preset", async () => {

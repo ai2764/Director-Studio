@@ -52,7 +52,8 @@ def test_repeated_words_keep_distinct_occurrence_and_speaker():
     lines = [line(), line("l2", "p2")]
     validate_dialogue_uses(candidate, lines)
     annotated = annotate_speakers(candidate, lines)
-    assert "p1" in annotated.detailed_description and "p2" in annotated.detailed_description
+    assert "(S1) <d>" in annotated.detailed_description and "(S2) <d>" in annotated.detailed_description
+    assert "S1 is Visitor; S2 is Visitor" in annotated.subject_definitions
     assert annotated.detailed_description.count("<d>[English] Hello.</d>") == 2
     again = annotate_speakers(candidate.model_copy(update={"prompt_sections": annotated}), lines)
     assert annotated == again
@@ -63,7 +64,58 @@ def test_annotation_preserves_creative_direction(prose):
     original = draft(prose + "<d>[English] Hello.</d>", [use()])
     result = annotate_speakers(original, [line()])
     assert result.detailed_description.startswith(prose)
-    assert result.model_dump(exclude={"detailed_description"}) == original.prompt_sections.model_dump(exclude={"detailed_description"})
+    assert result.subject_definitions.startswith(original.prompt_sections.subject_definitions)
+    assert result.model_dump(exclude={"detailed_description", "subject_definitions"}) == original.prompt_sections.model_dump(exclude={"detailed_description", "subject_definitions"})
+
+
+def test_compiler_keeps_named_speaker_metadata_out_of_speech_cues():
+    from app.core.h3.dialogue_binding import compile_dialogue_draft
+    tao = line(who="tao", text="By the late 1990s, games gave her a body.").model_copy(
+        update={"speaker_name": "Tao"})
+    mia = line("l2", "mia", "Hi!").model_copy(update={"speaker_name": "Mia"})
+    source = draft("He speaks: {{speech:l1}} She replies: {{speech:l2}}", [])
+    result = compile_dialogue_draft(source, [tao, mia])
+    assert result.prompt_sections.detailed_description == (
+        "He speaks: (S1) <d>[English] By the late 1990s, games gave her a body.</d> "
+        "She replies: (S2) <d>[English] Hi!</d>")
+    assert "S1 is Tao; S2 is Mia" in result.prompt_sections.subject_definitions
+    assert [use.speaker_id for use in result.dialogue_uses] == ["tao", "mia"]
+    assert [use.line_ids for use in result.dialogue_uses] == [["l1"], ["l2"]]
+    assert compile_dialogue_draft(result, [tao, mia]) == result
+
+
+def test_recompiling_legacy_generated_name_cue_replaces_it_without_changing_words():
+    from app.core.h3.dialogue_binding import compile_dialogue_draft
+    tao = line(who="tao").model_copy(update={"speaker_name": "Tao"})
+    source = draft("He says: (tao: Tao) <d>[English] Hello.</d>", [use(who="tao")])
+    result = compile_dialogue_draft(source, [tao])
+    assert result.prompt_sections.detailed_description == "He says: (S1) <d>[English] Hello.</d>"
+    assert result.dialogue_uses == source.dialogue_uses
+
+
+def test_recompile_preserves_direction_added_after_generated_speaker_bindings():
+    from app.core.h3.dialogue_binding import compile_dialogue_draft
+    source = draft("He says: {{speech:l1}}", [])
+    first = compile_dialogue_draft(source, [line()])
+    revised_sections = first.prompt_sections.model_copy(update={"subject_definitions":
+        first.prompt_sections.subject_definitions + "\n<Picture 3> defines the burgundy games room."})
+    revised = compile_dialogue_draft(first.model_copy(update={"prompt_sections": revised_sections}), [line()])
+    assert "<Picture 3> defines the burgundy games room." in revised.prompt_sections.subject_definitions
+    assert revised.prompt_sections.subject_definitions.count("Speaker identities:") == 1
+
+
+def test_recompile_reassigns_generated_handle_when_an_earlier_speaker_is_removed():
+    from app.core.h3.dialogue_binding import compile_dialogue_draft
+    mia = line("l2", "mia", "Hi!").model_copy(update={"speaker_name": "Mia"})
+    remaining = draft("She replies: (S2) <d>[English] Hi!</d>",
+                      [use(["l2"], "mia", [0])])
+    remaining = remaining.model_copy(update={"prompt_sections":
+        remaining.prompt_sections.model_copy(update={"subject_definitions":
+            "Two performers.\nSpeaker identities: S1 is Tao; S2 is Mia."})})
+    result = compile_dialogue_draft(remaining, [mia])
+    assert result.prompt_sections.detailed_description == "She replies: (S1) <d>[English] Hi!</d>"
+    assert result.prompt_sections.subject_definitions == "Two performers.\nSpeaker identities: S1 is Mia."
+    assert result.dialogue_uses == remaining.dialogue_uses
 
 
 def test_silence_needs_no_binding_but_extra_speech_is_rejected():

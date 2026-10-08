@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     projects_dir: Path = _DEFAULT_DATA_DIR / "projects"
     workflow_profiles_dir: Path = _DEFAULT_DATA_DIR / "workflow_profiles"
     workflows_dir: Path = Path(__file__).resolve().parents[1] / "workflows"
+    h3_builtin_workflow: Literal["h3_ref2va.api.json", "h3_ref2va_fast4.api.json"] = "h3_ref2va.api.json"
 
     # Legacy convenience path (actor pipeline)
     library_dir: Path = _DEFAULT_DATA_DIR / "library" / "actors"
@@ -41,6 +42,8 @@ class Settings(BaseSettings):
     # the official Comfy MCP transport; ``minimax`` uses the official
     # asynchronous MiniMax H3 V2 API. ``mcp`` remains a legacy alias for local.
     h3_provider: str = "local"
+    # Experiment switch. The main instance leaves this false.
+    video_context_enabled: bool = False
     comfy_mcp_command: str = "comfy-mcp"
     comfy_mcp_args: str = ""
     comfy_mcp_comfy_bin: str = "comfy"
