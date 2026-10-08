@@ -91,6 +91,7 @@ class BackendTurn:
         self.call_ids: set[str] = set()
         self.calls: set[tuple[str, str]] = set()
         self.successful_prompt_shot_ids: set[str] = set()
+        self.video_authorization_cache: dict = {}
         from .configuration_recovery import ConfigurationRecovery
         self.configuration_recovery = ConfigurationRecovery()
         self.storyboard_failed = False
@@ -430,6 +431,7 @@ class BackendTurn:
             actions=self.actions, on_progress=self.on_progress, result_payloads=payloads,
             user_feedback=self.message, requested_minimum_duration_s=_requested_minimum_duration_s(self.message),
             user_message_id=self.user_message_id,
+            video_authorization_cache=self.video_authorization_cache,
             previous_assistant=(
                 str(self.seed_history[-1].get("content") or "")
                 if self.seed_history and self.seed_history[-1].get("role") == "assistant"

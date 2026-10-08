@@ -1308,6 +1308,7 @@ async def orchestrate_chat(
     from .turn_identity import current_user_message_id
     user_message_id = current_user_message_id(project_id, message)
     storyboard_budget = _StoryboardSubmissionBudget()
+    video_authorization_cache: dict = {}
     offered_tool_schemas = tool_schemas_for(project)
     chat_guides = _director_chat_guides(
         project,
@@ -1557,6 +1558,7 @@ async def orchestrate_chat(
                         result_payloads=structured_results,
                         user_feedback=message,
                         user_message_id=user_message_id,
+                        video_authorization_cache=video_authorization_cache,
                         requested_minimum_duration_s=requested_minimum_duration_s,
                         storyboard_budget=storyboard_budget,
                         images=attached_images,
@@ -1731,6 +1733,7 @@ async def orchestrate_chat(
             on_progress=progress_event,
             user_feedback=message,
             user_message_id=user_message_id,
+            video_authorization_cache=video_authorization_cache,
             requested_minimum_duration_s=requested_minimum_duration_s,
             storyboard_budget=storyboard_budget,
             images=attached_images,

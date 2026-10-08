@@ -95,6 +95,7 @@ async def execute_tools(
     user_feedback: str = "",
     user_message_id: str | None = None,
     previous_assistant: str = "",
+    video_authorization_cache: dict | None = None,
     requested_minimum_duration_s: float = 0.0,
     storyboard_budget: Any | None = None,
     images: list[Any] | None = None,
@@ -111,6 +112,8 @@ async def execute_tools(
     storyboard_save_failed = False
     from .turn_identity import current_user_message_id
     user_message_id = user_message_id or current_user_message_id(project_id, user_feedback)
+    if video_authorization_cache is None:
+        video_authorization_cache = {}
 
     def refresh_shots() -> list[Shot]:
         return list_shots(project_id)
@@ -261,6 +264,7 @@ async def execute_tools(
                 actions=actions, notes=notes, result_payloads=result_payloads,
                 user_feedback=user_feedback,
                 previous_assistant=previous_assistant,
+                video_authorization_cache=video_authorization_cache,
             ):
                 continue
             if await handle_casting_tool(
