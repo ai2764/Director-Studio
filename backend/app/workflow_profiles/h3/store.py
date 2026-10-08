@@ -1084,7 +1084,7 @@ class H3ProfileStore:
             source="builtin",
             display_name=("Built-in H3 Turbo 4 (video-context experiment)"
                           if settings.h3_builtin_workflow == "h3_ref2va_fast4.api.json"
-                          else "Built-in H3 Turbo 8 (temporary test)"),
+                          else "Built-in Official H3"),
         )
 
     def _resolve_custom(self, profile_id: str) -> ResolvedH3Profile:

@@ -549,9 +549,9 @@ def test_fast_template_uses_verified_sampling_and_leaves_the_official_graph():
     root = Path(__file__).parents[1] / "workflows"
     official = json.loads((root / "h3_ref2va.api.json").read_text(encoding="utf-8"))
     fast = json.loads((root / "h3_ref2va_fast4.api.json").read_text(encoding="utf-8"))
-    assert any(node.get("class_type") == "H3SparseAttention" for node in official.values())
+    assert not any(node.get("class_type") in {"H3SparseAttention", "H3MemoryOptimization", "LoraLoaderModelOnly"} for node in official.values())
     assert any(
-        node.get("class_type") == "BasicScheduler" and node["inputs"]["steps"] == 8
+        node.get("class_type") == "BasicScheduler" and node["inputs"]["steps"] == 20
         for node in official.values()
     )
     assert not any("Singularity" in json.dumps(node) for node in official.values())

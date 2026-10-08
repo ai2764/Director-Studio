@@ -1,19 +1,18 @@
-# Built-in MiniMax H3 Ref2AV workflow
+# Official MiniMax H3 Ref2AV workflow
 
-The packaged `h3_ref2va.api.json` currently uses Turbo 8. Settings displays it as
-**Built-in H3 Turbo 8 (temporary test)**. The internal profile ID remains
-`builtin-official-h3` for compatibility with saved projects; it does not imply
-that the graph is the unmodified upstream template.
+`h3_ref2va.api.json` is the API-format execution graph for the full-quality
+branch of the [Comfy-Org H3 Ref2AV template](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/video_minimax_h3_r2v.json).
+Settings displays it as **Built-in Official H3**; its profile ID is
+`builtin-official-h3`.
 
-The graph derives from the
-[Comfy-Org MiniMax H3 Ref2AV template](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/video_minimax_h3_r2v.json).
-It retains the base model, encoders, VAEs and video/audio output path, and adds
-Turbo LoRA, sigma shift, memory optimization and sparse attention. Sampling uses
-eight steps, the `simple` scheduler and the `euler` sampler. Install the required
-models and custom nodes in ComfyUI.
+The graph uses the template's base model, text encoder, video/audio VAEs,
+20-step `simple` scheduler, `res_multistep` sampler, decoding and video output.
+It does not enable the template's optional Turbo LoRA branch or add third-party
+memory/sparse-attention nodes. UI-only notes, switches, sample media and duration
+controls are omitted from the execution graph.
 
-Director Studio fills the prompt, dimensions, frame count, seed, reference media
-and output prefix. Model, sampling, decoding and encoding settings remain in the
-workflow. Import an alternative API graph in Settings to use your own variation.
-See [custom H3 video input](../../docs/custom-h3-video-input.md) for continuation
-requirements and downloadable API/visual examples.
+Director Studio fills the prompt, dimensions, frame count, seed, references and
+output prefix. Internal model and sampling parameters stay in the workflow.
+Import a custom variation in Settings for Turbo sampling or video continuation;
+see [custom H3 video input](../../docs/custom-h3-video-input.md) for API/visual
+examples and dependencies.

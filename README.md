@@ -315,7 +315,7 @@ Troubleshooting:
 
 ## Connect a custom H3 workflow
 
-The packaged default is currently the Turbo 8 Ref2AV graph, displayed as **Built-in H3 Turbo 8 (temporary test)**. It is derived from the Comfy-Org template with additional LoRA and optimization nodes. First make sure your replacement H3 Ref2AV workflow runs successfully in ComfyUI, then connect it at runtime:
+The packaged default is the full-quality branch of the Comfy-Org H3 Ref2AV template, displayed as **Built-in Official H3**. It uses 20 steps, `res_multistep`, and the `simple` scheduler, without Turbo LoRA or third-party optimization nodes. First make sure your replacement H3 Ref2AV workflow runs successfully in ComfyUI, then connect it at runtime:
 
 ```text
 Settings -> Workflows -> H3 -> Import Workflow
@@ -359,7 +359,7 @@ The main bundled generation graphs are:
 | Prop assets | `qwen_prop_master.api.json` | Prop master generation |
 | Director Layout | `qwen_image_21_layout.api.json` | Qwen Image 2.1 text-to-image or reference-to-image composition |
 | Legacy Layout pipeline | `ref_frame_layout.api.json` | Earlier reference-frame adapter; distinct from the current Director Layout route |
-| Local H3 video | `h3_ref2va.api.json` | Comfy-Org-derived Ref2AV graph with Turbo 8 sampling and optimization nodes |
+| Local H3 video | `h3_ref2va.api.json` | Comfy-Org Ref2AV template, full-quality 20-step branch |
 
 The [Turbo 4-step continuation example](docs/custom-h3-video-input.md#downloadable-turbo-4-step-continuation-example) is available as both API and editable visual JSON. Importing it does not replace the packaged default automatically.
 
@@ -519,7 +519,7 @@ py -m pytest tests/test_ref_frame_pipeline.py -q
 - Builder: `build_ref2va_prompt()` / `fill_ref2va_graph()`
 - Output mapper: `map_history_outputs()`
 
-The current built-in graph is derived from Comfy-Org's `video_minimax_h3_r2v.json` template and uses Turbo 8 sampling. It includes additional LoRA, sigma-shift, memory-optimization, and sparse-attention nodes; it is not an unchanged copy of the upstream template. Use runtime profile import to choose another variation. The primary H3 node is discovered by `class_type = MiniMaxH3ReferenceToVideo`.
+The built-in API graph follows the full-quality execution branch of Comfy-Org's `video_minimax_h3_r2v.json` template: 20 steps, `res_multistep`, `simple`, and no Turbo LoRA. UI-only notes, sample media and disabled branches are omitted; Director Studio supplies the prompt and shot inputs. Use runtime profile import to choose another variation. The primary H3 node is discovered by `class_type = MiniMaxH3ReferenceToVideo`.
 
 Minimal application boundary:
 

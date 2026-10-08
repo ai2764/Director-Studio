@@ -125,18 +125,16 @@ def _install_profile(store: H3ProfileStore, profile_id: str, *, saver_id: str) -
     )
 
 
-def test_builtin_profile_matches_temporary_turbo8_fill() -> None:
+def test_builtin_profile_uses_official_template_defaults() -> None:
     profile = H3ProfileStore().resolve_active()
-
     actual = fill_profile_graph(profile, _job_params())
-    canonical = json.dumps(
-        actual, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
 
-    # Captured from the temporary Turbo 8 graph filler for these exact inputs.
-    assert hashlib.sha256(canonical).hexdigest() == (
-        "15a7be902203dfab2970ebd69e35a264ad2091d875a8e207b4ce61a58c39d376"
-    )
+    assert profile.display_name == "Built-in Official H3"
+    assert actual["124"]["inputs"]["steps"] == 20
+    assert actual["123"]["inputs"]["sampler_name"] == "res_multistep"
+    assert actual["126"]["inputs"]["model"] == ["127", 0]
+    assert actual["136"]["inputs"]["prompt"] == _job_params()["prompt"]
+
 
 
 def test_changed_node_ids_and_socket_names_fill_from_mapping() -> None:
