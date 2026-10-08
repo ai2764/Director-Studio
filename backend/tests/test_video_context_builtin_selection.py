@@ -11,7 +11,7 @@ def test_experiment_can_select_fast_template_without_changing_primary(monkeypatc
     monkeypatch.setattr(settings, "h3_builtin_workflow", "h3_ref2va.api.json")
     normal = H3ProfileStore().resolve_builtin()
     scheduler = next(n for n in normal.workflow.values() if n["class_type"] == "BasicScheduler")
-    assert scheduler["inputs"]["steps"] == 8
+    assert scheduler["inputs"]["steps"] == 20
     assert fast.workflow_sha256 != normal.workflow_sha256
 
 
