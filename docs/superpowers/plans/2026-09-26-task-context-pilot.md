@@ -1,6 +1,6 @@
 # DS P0/P1A Task Context Pilot Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. User selected native inline execution. The steps below retain the original implementation recipe; verified execution results are recorded in the linked report.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. User selected native inline execution. The steps below retain the original implementation recipe; verification evidence is kept locally.
 
 **Goal:** 为 Director 的单 Shot 提示词任务提供带来源、版本和按需查询能力的上下文工作包，并测量真实输入与信息完整性，保持已有权限、生成和恢复边界。
 
@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-26-agentic-state-refactor-design.md`，提交 `449ad74`。
 
-**Status:** 用户批准 Native 执行；六个步骤已实现并分步提交（实际执行基线 `06190fc`，实现提交 `1faf1ad` 至 `c6ab049`）。验证和独立审查结果见 [试点报告](../reports/2026-09-26-task-context-pilot-verification.md)。真实模型对照未执行，默认 off、空 allowlist。这里只实现 P0/P1A，P1B—P4 不属于本清单。
+**Status:** 用户批准 Native 执行；六个步骤已实现并分步提交（实际执行基线 `06190fc`，实现提交 `1faf1ad` 至 `c6ab049`）。验证和独立审查记录保存在本地。真实模型对照未执行，默认 off、空 allowlist。这里只实现 P0/P1A，P1B—P4 不属于本清单。
 
 ## Global Constraints
 

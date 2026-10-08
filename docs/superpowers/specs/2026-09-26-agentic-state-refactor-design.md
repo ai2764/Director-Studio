@@ -4,7 +4,7 @@
 
 代码基线：`ecfee97`，分支 `feature/mv-mode`。
 
-状态：用户已确认架构设计，并批准 Native 执行首批 [P0/P1A Task Context Pilot](../plans/2026-09-26-task-context-pilot.md)。六步试点实现已提交；验证、独立审查与尚未执行的真实模型对照见 [试点报告](../reports/2026-09-26-task-context-pilot-verification.md)。默认 off、空 allowlist；P1B—P4 未实施。
+状态：用户已确认架构设计，并批准 Native 执行首批 [P0/P1A Task Context Pilot](../plans/2026-09-26-task-context-pilot.md)。六步试点实现已提交；验证与独立审查记录保存在本地，真实模型对照尚未执行。默认 off、空 allowlist；P1B—P4 未实施。
 
 ## 1. 目标和共同理解
 
