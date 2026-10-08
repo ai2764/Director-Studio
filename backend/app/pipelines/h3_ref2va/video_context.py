@@ -29,6 +29,7 @@ def context_runtime_options(config, profile=None) -> dict[str, Any]:
             raise VideoContextGraphError("Only a single Ref2AV Motion Context variation is certified for video continuation")
         _validate_context_sampling_chain(profile.workflow,
             h3_node_id=mapping.inputs.h3_node_id,
+            output_node_id=mapping.output.node_id,
             context_node_id=video_mapping.node_id)
         inputs = motions[0]["inputs"]
         window = int(inputs.get("context_length", 22))
@@ -53,12 +54,13 @@ def context_runtime_options(config, profile=None) -> dict[str, Any]:
             "carry_audio": carry}
 
 
-def fit_mapped_context_delivery(graph, *, h3_node_id, delivered_frames, context_node_id=None):
+def fit_mapped_context_delivery(graph, *, h3_node_id, output_node_id, delivered_frames, context_node_id=None):
     """Budget a certified imported Motion Context graph without changing its windows."""
     motions = [key for key,n in graph.items() if n.get("class_type") == "MiniMaxH3MotionContext"]
     if not motions:
         return  # Other file-input profiles remain opaque; no continuation certification.
-    _validate_context_sampling_chain(graph, h3_node_id=h3_node_id, context_node_id=context_node_id)
+    _validate_context_sampling_chain(graph, h3_node_id=h3_node_id,
+                                     output_node_id=output_node_id, context_node_id=context_node_id)
     motion_id = _require_role(graph, "MiniMaxH3MotionContext")
     trim_id = _require_role(graph, "MiniMaxH3MotionContextTrim")
     create_id = _require_role(graph, "CreateVideo")
@@ -86,8 +88,8 @@ def fit_mapped_context_delivery(graph, *, h3_node_id, delivered_frames, context_
             raise VideoContextGraphError("Unsupported custom continuation delivery path; use direct overlap trim or delivery crop")
 
 
-def _validate_context_sampling_chain(graph, *, h3_node_id, context_node_id=None):
-    """Certify that the mapped video conditions the samples used by both decoders."""
+def _validate_context_sampling_chain(graph, *, h3_node_id, output_node_id, context_node_id=None):
+    """Certify conditioning, both decoders, and the selected trimmed delivery."""
     try:
         motion_id = _require_role(graph, "MiniMaxH3MotionContext")
         guider_id = _require_role(graph, "BasicGuider")
@@ -95,6 +97,11 @@ def _validate_context_sampling_chain(graph, *, h3_node_id, context_node_id=None)
         decode_id = _require_role(graph, "VAEDecode")
         audio_decode_id = _require_role(graph, "VAEDecodeAudio")
         trim_id = _require_role(graph, "MiniMaxH3MotionContextTrim")
+        create_id = _require_role(graph, "CreateVideo")
+        if graph.get(output_node_id, {}).get("class_type") != "SaveVideo":
+            raise ValueError("selected output must be SaveVideo on the trimmed delivery path")
+        if _inputs(graph, output_node_id).get("video") != [create_id, 0]:
+            raise ValueError("selected output bypasses the certified CreateVideo delivery")
         video_id = context_node_id or _require_role(graph, "LoadVideo")
         video_class = graph.get(video_id, {}).get("class_type")
         if video_class == "LoadVideo":
@@ -140,6 +147,21 @@ def _validate_context_sampling_chain(graph, *, h3_node_id, context_node_id=None)
         audio_samples = _inputs(graph, audio_decode_id).get("samples")
         if video_samples not in ([sampler_id, 0], [sampler_id, 1]) or audio_samples != video_samples:
             raise ValueError("video and audio decoders must use the same conditioned samples")
+        window = int(_inputs(graph, motion_id)["context_length"])
+        if _inputs(graph, trim_id).get("trim_frames") not in ([motion_id, 1], window):
+            raise ValueError("overlap trim must match its Motion Context window")
+        for field, class_type, source_field, output_index in (
+            ("images", "ImageFromBatch", "image", 0),
+            ("audio", "TrimAudioDuration", "audio", 1),
+        ):
+            link = _inputs(graph, create_id).get(field)
+            if link == [trim_id, output_index]:
+                continue
+            if (isinstance(link, list) and len(link) == 2 and link[1] == 0
+                    and graph.get(str(link[0]), {}).get("class_type") == class_type
+                    and _inputs(graph, str(link[0])).get(source_field) == [trim_id, output_index]):
+                continue
+            raise ValueError(f"CreateVideo.{field} bypasses the certified overlap trim or delivery crop")
     except ValueError as exc:
         raise VideoContextGraphError(f"Unsupported continuation sampling chain: {exc}") from exc
 

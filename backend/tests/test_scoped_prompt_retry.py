@@ -8,6 +8,23 @@ from test_director_material_review import tail_handoff_shot
 
 
 @pytest.mark.asyncio
+async def test_retry_rejects_changed_saved_lyric_timing_before_inference(material_shot, monkeypatch):
+    from app.agents.director.prompt_retry import record_prompt_failure, run_prompt_retry
+    from test_director_material_review import music_review_inputs
+    project, shot, document = music_review_inputs(material_shot, monkeypatch)
+    receipt = record_prompt_failure(shot, "Sing softly", ValueError("invalid block"))
+    document.segments[0].start_s = 0.5
+    calls = []
+    class Service:
+        async def write_prompts_after_layout(self, *args, **kwargs):
+            calls.append(args)
+            return shot
+    with pytest.raises(ValueError, match="changed"):
+        await run_prompt_retry(project.id, receipt, Service())
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_context_overflow_does_not_offer_or_execute_identical_retry(material_shot):
     from app.agents.director.prompt_retry import record_prompt_failure, pending_prompt_retry, run_prompt_retry
     project, shot, _, _ = material_shot

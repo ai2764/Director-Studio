@@ -357,8 +357,8 @@ def _prepare_config(project: Project, shot: Shot, config: ShotVideoContext) -> S
         return config.model_copy(update={"source_shot_id": None, "source_job_id": None})
     source = _previous_shot(project, shot, config.source_shot_id)
     prepared = config.model_copy(update={"source_shot_id": source.id, "upload_id": None})
-    _require_previous_video(project, shot, prepared)
-    return prepared
+    _source, _job, output_key, _path = _require_previous_video(project, shot, prepared)
+    return prepared.model_copy(update={"source_output_key": output_key})
 
 
 def _previous_shot(project: Project, shot: Shot, requested_id: str | None) -> Shot:

@@ -641,6 +641,102 @@ async def test_review_can_preserve_brief_and_valid_prompt(material_shot):
     assert not updated.meta["material_review_pending"]
 
 
+def music_review_inputs(material_shot, monkeypatch):
+    from app.core.projects.models import ProjectMode, ProjectMusicMaster, ShotMusicSegment
+    from app.core.projects.song_segments import SongSegment, SongSegmentsDocument
+    from app.core.media import music_segments
+    project, shot, _, _ = material_shot
+    project = project.model_copy(update={"mode": ProjectMode.mv, "music_master": ProjectMusicMaster(
+        filename="song.wav", relative_path="music/master.wav", duration_s=30,
+        content_sha256="a" * 64, source_format="wav")})
+    save_project(project)
+    shot = shot.model_copy(update={"dialogue_lines": None, "music_segment": ShotMusicSegment(
+        core_start_s=0, core_end_s=6, submit_start_s=0, submit_end_s=6)})
+    save_shot(shot)
+    document = SongSegmentsDocument(revision=1, master_sha256="a" * 64, segments=[
+        SongSegment(id="line", start_s=0, end_s=5, text="Hello.")])
+    monkeypatch.setattr(music_segments, "load_segments", lambda _: document)
+    return project, shot, document
+
+
+class MusicReviewProvider(Provider):
+    def __init__(self, orch, document):
+        super().__init__(orch, rewrite=False)
+        self.document = document
+        self.edit_during_write = False
+
+    async def complete(self, system, user, *, guides=()):
+        if "reference review decision" in system.lower():
+            return await super().complete(system, user, guides=guides)
+        self.text.append((system, user))
+        result = sections()
+        start = self.document.segments[0].start_s
+        result["detailed_description"] = f"From {start}-5 seconds the watchmaker sings <d>[English] Hello.</d> in sync with <Audio 1>."
+        result["overall_soundscape"] = "Original song from <Audio 1>."
+        if self.edit_during_write:
+            self.document.segments[0].start_s = 0.5
+        return json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_changed_lyric_timing_overrides_review_preserve_advice(material_shot, monkeypatch):
+    from app.core.media.music_segments import music_prompt_signature
+    project, shot, document = music_review_inputs(material_shot, monkeypatch)
+    provider = MusicReviewProvider(Orchestrator(), document)
+    svc = DirectorService(plan_provider=provider, orchestrator=provider.orch)
+    first = await svc.write_prompts_after_layout(shot.id)
+    count = len(provider.text)
+    document.segments[0].start_s = 0.5
+    updated = await svc.write_prompts_after_layout(shot.id)
+    assert len(provider.text) == count + 1
+    assert '"clip_start_s": 0.5' in provider.text[-1][1]
+    assert "0.5-5 seconds" in updated.prompt_sections.detailed_description
+    assert updated.meta["prompt_music_signature"] == music_prompt_signature(project, updated)
+    assert updated.prompt_sections != first.prompt_sections
+
+
+@pytest.mark.asyncio
+async def test_lyric_edit_during_writing_does_not_certify_stale_prompt(material_shot, monkeypatch):
+    _, shot, document = music_review_inputs(material_shot, monkeypatch)
+    provider = MusicReviewProvider(Orchestrator(), document)
+    svc = DirectorService(plan_provider=provider, orchestrator=provider.orch)
+    first = await svc.write_prompts_after_layout(shot.id)
+    provider.edit_during_write = True
+    with pytest.raises(ValueError, match="[Ss]ong|[Mm]usic"):
+        await svc.write_prompts_after_layout(shot.id, revision_request="Use a steady camera.")
+    assert load_shot(shot.project_id, shot.id).prompt_sections == first.prompt_sections
+
+
+@pytest.mark.asyncio
+async def test_tail_lyric_edit_during_writing_does_not_certify_stale_prompt(tail_handoff_shot, monkeypatch):
+    from app.core.projects.models import ProjectMode, ProjectMusicMaster, ShotMusicSegment
+    from app.core.projects.song_segments import SongSegment, SongSegmentsDocument
+    from app.core.media import music_segments
+    project, shot = tail_handoff_shot
+    project = project.model_copy(update={"mode": ProjectMode.mv, "music_master": ProjectMusicMaster(
+        filename="song.wav", relative_path="music/master.wav", duration_s=30,
+        content_sha256="a" * 64, source_format="wav")})
+    save_project(project)
+    shot = shot.model_copy(update={"music_segment": ShotMusicSegment(
+        core_start_s=0, core_end_s=6, submit_start_s=0, submit_end_s=6)})
+    save_shot(shot)
+    document = SongSegmentsDocument(revision=1, master_sha256="a" * 64, segments=[
+        SongSegment(id="line", start_s=0, end_s=5, text="Hello.")])
+    monkeypatch.setattr(music_segments, "load_segments", lambda _: document)
+    class EditingProvider(TailHandoffProvider):
+        async def complete(self, *args, **kwargs):
+            raw = await super().complete(*args, **kwargs)
+            payload = json.loads(raw)
+            if "prompt_sections" in payload:
+                payload["prompt_sections"]["overall_soundscape"] = "Original music from <Audio 1>."
+                document.segments[0].start_s = 0.5
+            return json.dumps(payload)
+    provider = EditingProvider(Orchestrator())
+    with pytest.raises(ValueError, match="[Ss]ong|[Mm]usic"):
+        await DirectorService(plan_provider=provider, orchestrator=provider.orch).write_prompts_after_layout(shot.id)
+    assert load_shot(project.id, shot.id).prompt_sections == shot.prompt_sections
+
+
 @pytest.mark.asyncio
 async def test_explicit_prompt_revision_overrides_review_preserve_advice(material_shot):
     _, shot, _, _ = material_shot

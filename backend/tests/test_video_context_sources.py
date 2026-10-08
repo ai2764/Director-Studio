@@ -79,6 +79,23 @@ def test_limits_match_the_external_video_contract():
     assert MAX_DURATION_S == 60
 
 
+def test_implicit_single_artifact_selection_survives_save_and_reload(monkeypatch, tmp_path):
+    from app.core.projects.video_context import video_context_status
+    project, first, second = _board(monkeypatch, tmp_path)
+    job = _succeed(project.id, first.id, key="video_raw")
+    save_shot(first.model_copy(update={"h3_job_id": job.id}))
+    result = configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
+    saved = load_shot(project.id, second.id)
+    assert result["video_context"]["source_output_key"] == "video_raw"
+    assert saved.video_context.source_output_key == "video_raw"
+    assert saved.video_context.source_job_id is None
+    assert video_context_status(saved)["blocked_reasons"] == []
+    monkeypatch.setattr("app.core.projects.video_context.probe_video", lambda _: _media())
+    resolved = resolve_video_context(saved, width=864, height=480)
+    assert resolved.provenance["source_output_key"] == "video_raw"
+    assert resolved.data == b"source-video"
+
+
 def test_prompt_freshness_tracks_followed_source_versions_and_bytes(monkeypatch, tmp_path):
     from app.core.projects.video_context import video_context_prompt_signature, video_context_prompt_is_stale
     project, first, second = _board(monkeypatch, tmp_path)

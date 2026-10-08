@@ -413,6 +413,31 @@ def test_imported_motion_context_rejects_bypassed_sampling_chain(bypass):
         fill_profile_graph(profile, _job(context_video="actual.mp4"))
 
 
+@pytest.mark.parametrize("bypass", ["terminal", "images", "audio"])
+def test_imported_continuation_certifies_the_selected_delivery_output(bypass):
+    from types import SimpleNamespace
+    from app.workflow_profiles.h3.inspector import inspect_h3_workflow
+
+    graph = attach_video_context(load_base_prompt(), uploaded_video="old.mp4",
+        delivered_frames=56, context_frames=22, audio_context_frames=24, carry_audio=False)
+    output_id = "92"
+    if bypass == "terminal":
+        graph["999"] = {"class_type": "VHS_VideoCombine", "inputs": {
+            "images": ["122", 0], "audio": ["121", 0], "frame_rate": 24,
+            "loop_count": 0, "filename_prefix": "test", "format": "video/h264-mp4",
+            "pingpong": False, "save_output": True}}
+        output_id = "999"
+    else:
+        graph["130"]["inputs"][bypass] = ["122" if bypass == "images" else "121", 0]
+    mapping = inspect_h3_workflow(graph, output_node_id=output_id).mapping
+    profile = replace(_builtin(graph), source="custom", mapping=mapping)
+    assert not validate_h3_contract(graph, mapping).valid
+    with pytest.raises(ValueError, match="continuation"):
+        context_runtime_options(SimpleNamespace(context_frames=None, carry_audio=None, audio_context_frames=None), profile)
+    with pytest.raises(ValueError, match="continuation"):
+        fill_profile_graph(profile, _job(context_video="actual.mp4"))
+
+
 def test_custom_without_a_video_or_mapping_is_rejected():
     graph = _shaped_graph()
     graph["50"] = {"class_type": "LoadVideo", "inputs": {"file": "leftover.mp4"}}

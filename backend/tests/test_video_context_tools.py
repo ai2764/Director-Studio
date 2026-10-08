@@ -595,3 +595,32 @@ async def test_harness_managed_turn_offers_configure(monkeypatch, tmp_path):
     assert "configure_video_context" in names
     assert "save_storyboard" not in names
     assert first.id and second.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope_target", ["same", "other_shot", "other_project"])
+async def test_managed_configure_only_changes_the_scoped_shot(monkeypatch, tmp_path, scope_target):
+    from app.agents.director.harness_runtime import BackendTurn
+    from app.core.managed_runs.context import ManagedTurnScope, managed_turn_scope
+    from app.core.projects.models import ShotVideoContext
+
+    project, first, second = _board(monkeypatch, tmp_path)
+    save_shot(second.model_copy(update={"video_context": ShotVideoContext(mode="off", context_frames=39)}))
+    before = load_shot(project.id, second.id).model_dump()
+    token = managed_turn_scope.set(ManagedTurnScope(
+        project_id="another_project" if scope_target == "other_project" else project.id,
+        run_id="mrun_context", event_id="evt",
+        shot_id=first.id if scope_target == "other_shot" else second.id,
+    ))
+    try:
+        turn = BackendTurn(project.id, "Disable continuation", object(), None)
+        result = await turn.tool({"name": "configure_video_context",
+            "arguments": {"shot_id": second.id, "mode": "off"}, "call_id": "configure"})
+    finally:
+        managed_turn_scope.reset(token)
+    assert result["ok"] is (scope_target == "same")
+    if scope_target == "same":
+        assert load_shot(project.id, second.id).video_context.context_frames is None
+    else:
+        assert load_shot(project.id, second.id).model_dump() == before
+        assert not turn.actions

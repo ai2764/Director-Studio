@@ -40,6 +40,21 @@ vi.mock("../director/api", () => ({ uploadMusicMaster: vi.fn() }));
 describe("AssetWorkspace", () => {
   afterEach(() => { cleanup(); vi.mocked(uploadMusicMaster).mockReset(); });
 
+  it("shows the library when switching from MV Music to a regular project", () => {
+    state.project = {
+      id: "prj_mv", name: "Song film", script_text: "", mode: "mv",
+      created_at: "2026-01-01", updated_at: "2026-01-01", shot_ids: [],
+    };
+    const view = render(<AssetWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Music" }));
+    expect(screen.getByLabelText("Lyrics and time notes")).toBeTruthy();
+    state.project = { ...state.project, id: "prj_film", mode: "director" };
+    view.rerender(<AssetWorkspace />);
+    expect(screen.queryByRole("button", { name: "Music" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Project library" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Library" }).className).toContain("active");
+  });
+
   it("offers the MV song master upload inside Assets Music", () => {
     state.project = {
       id: "prj_mv", name: "Song film", script_text: "", mode: "mv",

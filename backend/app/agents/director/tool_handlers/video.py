@@ -232,6 +232,9 @@ async def _configure_video_context_tool(
         if key in args and args[key] is not None
     }
     try:
+        scope = managed_turn_scope.get()
+        if scope is not None and (scope.project_id != project_id or scope.shot_id != shot_id):
+            raise VideoContextError("Managed continuation configuration may only change the scoped project and Shot")
         config = ShotVideoContext.model_validate(provided)
         saved = configure_video_context(project_id, shot_id, config)
     except (ValidationError, VideoContextError) as exc:

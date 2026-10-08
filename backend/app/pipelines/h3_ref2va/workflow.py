@@ -288,6 +288,7 @@ def fill_profile_graph(
         target.setdefault("inputs", {})[context_mapping.input_name] = context_name
         from .video_context import fit_mapped_context_delivery
         fit_mapped_context_delivery(filled, h3_node_id=binding.h3_node_id, delivered_frames=frames,
+                                   output_node_id=profile.mapping.output.node_id,
                                    context_node_id=context_mapping.node_id)
         return filled
     if context_name:

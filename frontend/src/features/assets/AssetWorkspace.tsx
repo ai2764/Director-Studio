@@ -32,6 +32,7 @@ export function AssetWorkspace() {
   const { project, projectId } = useProject();
   const [category, setCategory] = useState<AssetCategory>("library");
   const [importKind, setImportKind] = useState<PreparedAssetCategory | null>(null);
+  const visibleCategory = category === "music" && project?.mode !== "mv" ? "library" : category;
 
   return (
     <main className="asset-workspace" aria-label="Asset preparation">
@@ -53,9 +54,9 @@ export function AssetWorkspace() {
             <button
               key={item.id}
               type="button"
-              className={`asset-category-main ${category === item.id ? "active" : ""}`}
+              className={`asset-category-main ${visibleCategory === item.id ? "active" : ""}`}
               aria-label={item.label}
-              aria-current={category === item.id ? "page" : undefined}
+              aria-current={visibleCategory === item.id ? "page" : undefined}
               onClick={() => setCategory(item.id)}
             >
               <strong>{item.label}</strong>
@@ -65,12 +66,12 @@ export function AssetWorkspace() {
         </nav>
 
         <section className="asset-category-content" aria-live="polite">
-          {category === "library" ? (
+          {visibleCategory === "library" ? (
             <div className="asset-library-overview-panel">
               <LibraryOverview onSelectKind={setCategory} />
             </div>
           ) : null}
-          {category === "music" && project?.mode === "mv" ? (
+          {visibleCategory === "music" && project?.mode === "mv" ? (
             <div className="asset-preparation-panel">
               <div className="workspace-kicker">Music Video source</div>
               <h2>Original song</h2>
@@ -85,7 +86,7 @@ export function AssetWorkspace() {
               <div
                 key={workflowCategory}
                 className="asset-preparation-panel"
-                hidden={category !== workflowCategory}
+                hidden={visibleCategory !== workflowCategory}
               >
               <div className="asset-workflow-toolbar">
                 <span>Already have a reference?</span>

@@ -9,7 +9,7 @@ Supported continuation paths:
 - `LoadVideo → GetVideoComponents → MiniMaxH3MotionContext.context_frames`; optional context audio comes from the same components node.
 - `VHS_LoadVideo.IMAGE → MiniMaxH3MotionContext.context_frames`; optional context audio comes from the same loader's AUDIO output, index 2.
 
-Both paths must feed the conditioned sampler, video/audio decoders and overlap trim. Continuation remains restricted to the supported Ref2AV + Motion Context graph at 24 fps. Other custom video or VideoExtend nodes are not certified by this change.
+Both paths must feed the conditioned sampler, video/audio decoders and overlap trim. The selected final output must be `SaveVideo` connected to `CreateVideo`, whose images and audio come from that trim directly or through the supported delivery crops (`ImageFromBatch` / `TrimAudioDuration`). Other output sinks, including `VHS_VideoCombine`, are not certified for continuation. Continuation remains restricted to the supported Ref2AV + Motion Context graph at 24 fps. Other custom video or VideoExtend nodes are not certified by this change.
 
 Disconnect `Motion Context.context_latent` when using the mapped video: the node prefers that latent over video pixels, so Director Studio rejects a graph with both connected. A connected `context_audio` inherits sound even when `audio_context_length=0`; zero means follow the video context span. To disable inherited audio in your custom variation, disconnect `context_audio`. Director Studio reports these uploaded settings rather than overriding them.
 
