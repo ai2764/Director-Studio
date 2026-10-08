@@ -70,6 +70,55 @@ def test_append_preserves_explicit_imported_layout_identity_reference():
     assert not any(a["id"] == "lay_identity_group" for a in _inventory(project.id))
 
 
+def test_reference_edit_preserves_imported_layout_identity_reference():
+    from app.agents.director.service import DirectorService
+    from app.core.projects.store import load_shot
+    project = create_project("Paper light", "Mia holds a light beside the lake.")
+    layout(project.id, "lay_identity_group")
+    svc = DirectorService(plan_provider=None, orchestrator=object())
+    shot = svc.append_shot(project.id, append_request(project, "lay_identity_group"))
+    svc.patch_shot_refs(project.id, [{"shot_id": shot.id, "refs": [{
+        "role": "other", "asset_id": "lay_identity_group", "file_key": "master",
+        "picture_index": 1, "notes": "Use only the character identities.",
+    }]}])
+    saved = load_shot(project.id, shot.id)
+    assert saved.refs[0].notes == "Use only the character identities."
+    assert saved.script_beat == shot.script_beat
+    assert saved.meta["material_review_pending"] is True
+
+
+@pytest.mark.asyncio
+async def test_storyboard_edit_preserves_imported_layout_identity_reference():
+    from app.agents.director.service import DirectorService
+    from app.core.projects.models import PromptSections
+    from app.core.projects.store import save_shot
+    from app.core.projects.layouts import LayoutReference
+    from test_director_material_review import Orchestrator
+    class Validator:
+        async def complete(self, *args, **kwargs):
+            return json.dumps({"valid": True, "issues": []})
+    project = create_project("Paper light", "Mia holds a light beside the lake.")
+    layout(project.id, "lay_identity_group")
+    svc = DirectorService(plan_provider=Validator(), orchestrator=Orchestrator())
+    request = append_request(project, "lay_identity_group")
+    shot = svc.append_shot(project.id, request)
+    write_asset(LibraryAsset(id="act_available", kind="actors", name="Extra actor",
+        pipeline_id="external", job_id="", created_at="2026-10-03T00:00:00Z",
+        files={"master": "actor.png"}, project_id=project.id))
+    write_asset(LibraryAsset(id="scn_available", kind="scenes", name="Extra scene",
+        pipeline_id="external", job_id="", created_at="2026-10-03T00:00:00Z",
+        files={"master": "scene.png"}, project_id=project.id))
+    shot.prompt_sections = PromptSections(summary="Keep this approved prompt.")
+    shot.layout_refs = [LayoutReference(id="lref_saved", asset_id="lay_identity_group", purpose="Saved study")]
+    save_shot(shot)
+    draft = {**request["shot"], "shot_id": shot.id}
+    saved = await svc.save_storyboard(project.id, [draft], request["expected_script_hash"])
+    assert saved[0].id == shot.id
+    assert saved[0].refs == shot.refs
+    assert saved[0].prompt_sections == shot.prompt_sections
+    assert saved[0].layout_refs == shot.layout_refs
+
+
 @pytest.mark.parametrize("invalid", ["foreign", "generated", "rejected", "file_key"])
 def test_append_rejects_inaccessible_or_invalid_layout_reference(invalid):
     from app.agents.director.service import DirectorService

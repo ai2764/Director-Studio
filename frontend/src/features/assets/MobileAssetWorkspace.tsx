@@ -32,6 +32,7 @@ export function MobileAssetWorkspace() {
   const { project, projectId } = useProject();
   const [category, setCategory] = useState<MobileAssetCategory>("library");
   const [importKind, setImportKind] = useState<PreparedMobileCategory | null>(null);
+  const visibleCategory = category === "music" && project?.mode !== "mv" ? "library" : category;
 
   return (
     <main className="mobile-asset-workspace">
@@ -47,9 +48,9 @@ export function MobileAssetWorkspace() {
           <button
             key={item.id}
             type="button"
-            className={`mobile-category-main ${category === item.id ? "active" : ""}`}
+            className={`mobile-category-main ${visibleCategory === item.id ? "active" : ""}`}
             aria-label={item.label}
-            aria-current={category === item.id ? "page" : undefined}
+            aria-current={visibleCategory === item.id ? "page" : undefined}
             onClick={() => setCategory(item.id)}
           >
             {item.label}
@@ -57,10 +58,10 @@ export function MobileAssetWorkspace() {
         ))}
       </nav>
 
-      {category === "library" ? (
+      {visibleCategory === "library" ? (
         <MobileLibraryOverview onSelectKind={setCategory} />
       ) : null}
-      {category === "music" && project?.mode === "mv" ? (
+      {visibleCategory === "music" && project?.mode === "mv" ? (
         <section className="mobile-workflow-callout">
           <div><span className="mobile-eyebrow">Music Video source</span><h2>Original song</h2></div>
           <MusicMasterControl />
@@ -73,7 +74,7 @@ export function MobileAssetWorkspace() {
         <div
           key={workflowCategory}
           className="mobile-asset-category-page"
-          hidden={category !== workflowCategory}
+          hidden={visibleCategory !== workflowCategory}
         >
           <section className="mobile-workflow-callout">
             <div>

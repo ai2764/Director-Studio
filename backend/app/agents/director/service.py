@@ -622,7 +622,7 @@ class DirectorService:
                 "reference patch names unknown project shot(s): " + ", ".join(missing)
             )
 
-        inventory = _inventory(project_id)
+        inventory = [*_inventory(project_id), *_imported_layout_inventory(project_id)]
         index = _asset_index(project_id)
         replacements: dict[str, Shot] = {}
         for update in validated:
@@ -898,7 +898,7 @@ class DirectorService:
                 ]
             )
 
-        inventory = _inventory(project_id)
+        inventory = [*_inventory(project_id), *_imported_layout_inventory(project_id)]
         index = _asset_index(project_id)
         _validate_storyboard_bindings(
             validated,
@@ -926,6 +926,10 @@ class DirectorService:
                 inventory=inventory,
                 index=index,
                 script_text=project.script_text or "",
+                complete_missing_refs=not (
+                    existing is not None
+                    and existing.meta.get("asset_binding_policy") == "explicit"
+                ),
             )
             if draft.shot_id in preserve_dialogue_ids:
                 # A round-trip of omitted dialogue is not a new author approval.
@@ -2053,6 +2057,7 @@ class DirectorService:
         from .brief import directing_requests
 
         directing_snapshot = directing_requests(project)
+        music_signature = music_prompt_signature(project, shot)
         active_job = load_job(shot.h3_job_id) if shot.h3_job_id else None
         if (shot.status in {ShotStatus.queued, ShotStatus.running}
                 or (active_job and active_job.status in {JobStatus.queued, JobStatus.uploading, JobStatus.running})):
@@ -2074,6 +2079,9 @@ class DirectorService:
                     or directing_requests(current_project) != directing_snapshot
                     or str(getattr(self.plan_provider, "model", "")) != model):
                 raise ValueError("Shot, script, confirmed choices or model changed during prompt review; review again")
+            if (current_project.music_master != project.music_master
+                    or music_prompt_signature(current_project, current) != music_signature):
+                raise ValueError("Song inputs changed during prompt review; review again")
             if signature is not None and capture_references(sync_selected_layout_refs(current))[2] != signature:
                 raise ValueError("Reference image content changed during prompt review; review again")
 
@@ -2112,7 +2120,7 @@ class DirectorService:
             "prompt_layout_signature": layout_prompt_signature(candidate),
             "prompt_picture_signature": picture_ref_signature(candidate.refs),
             "prompt_voice_signature": voice_ref_signature(candidate.voice_refs),
-            "prompt_music_signature": music_prompt_signature(project, candidate),
+            "prompt_music_signature": music_signature,
             "material_review_pending": False,
         })
         meta.pop("material_changes", None)
@@ -2182,6 +2190,7 @@ class DirectorService:
         from .progress import report_phase
 
         directing_snapshot = directing_requests(project)
+        music_signature = music_prompt_signature(project, shot)
         review = (shot.meta or {}).get("material_review")
         from .reference_facts import (reference_review_current,
             certify_reference_prompt, REFERENCE_WRITER_CONTRACT)
@@ -2202,6 +2211,9 @@ class DirectorService:
                     or current_project.shot_ids != project.shot_ids
                     or directing_requests(current_project) != directing_snapshot):
                 raise ValueError("Shot or script changed during material review/prompt writing; review again")
+            if (current_project.music_master != project.music_master
+                    or music_prompt_signature(current_project, current) != music_signature):
+                raise ValueError("Song inputs changed during material review/prompt writing; review again")
             if review_signature is not None:
                 if capture_references(sync_selected_layout_refs(current))[2] != review_signature:
                     raise ValueError("Reference image content changed during review; review again")
@@ -2427,6 +2439,7 @@ class DirectorService:
             dialogue_draft = None
             preserve_prompt = bool(not revision_request.strip() and decision and not decision["rewrite_prompt"]
                                    and decision["brief"] is None and not needs_handoff_review
+                                   and shot.meta.get("prompt_music_signature", "") == music_signature
                                    and dialogue_contract_current(project, shot))
             if preserve_prompt:
                 try:
@@ -2548,7 +2561,7 @@ class DirectorService:
         meta["prompt_layout_signature"] = layout_prompt_signature(shot)
         meta["prompt_picture_signature"] = picture_ref_signature(shot.refs)
         meta["prompt_voice_signature"] = voice_ref_signature(shot.voice_refs)
-        meta["prompt_music_signature"] = music_prompt_signature(project, shot)
+        meta["prompt_music_signature"] = music_signature
         meta["material_review_pending"] = False
         meta.pop("material_changes", None)
         shot = shot.model_copy(

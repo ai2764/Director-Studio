@@ -54,13 +54,15 @@ def authored_payload(shot):
 def source_version(project, shot):
     from .brief import directing_requests
     from .material_review import capture_references
+    from ...core.media.music_segments import music_prompt_signature
     try:
         references = capture_references(shot)[0]
     except ValueError as exc:
         references = {"unavailable": str(exc)}
     return digest([project.model_dump(mode="json", exclude={"updated_at"}),
         authored_payload(shot), shot.prompt_sections.model_dump(mode="json"), references, directing_requests(project),
-        shot.meta.get("prompt_revision_requests"), shot.meta.get("prompt_revision_request")])
+        shot.meta.get("prompt_revision_requests"), shot.meta.get("prompt_revision_request"),
+        music_prompt_signature(project, shot)])
 
 
 def _path(project_id):
