@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -58,8 +59,10 @@ async def test_bounded_prompt_call_cancels_silent_transport_at_deadline(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_bounded_prompt_review_uses_provider_schema_and_rejects_truncation():
+async def test_bounded_prompt_review_uses_provider_schema_and_rejects_truncation(monkeypatch):
     from app.agents.director.llm_plan_provider import DirectorLLMPlanProvider
+    from app.config import settings
+    monkeypatch.setattr(settings, "director_num_predict", 1024)
     requests = []
 
     class Client:
@@ -80,6 +83,62 @@ async def test_bounded_prompt_review_uses_provider_schema_and_rejects_truncation
     client.finish_reason = "length"
     with pytest.raises(ValueError, match="truncated"):
         await adapter.complete_bounded("Review", "Candidate", max_tokens=1024, schema=schema)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage_budget", [1024, 4096, 6144])
+async def test_configured_output_budget_reaches_bounded_writer_and_review(monkeypatch, stage_budget):
+    from app.agents.director.llm_plan_provider import DirectorLLMPlanProvider
+    from app.config import settings
+    monkeypatch.setattr(settings, "director_num_predict", 65536)
+    requests = []
+
+    class Client:
+        async def chat_response(self, model, **kwargs):
+            requests.append(kwargs)
+            return {"content": '{"valid":true}', "finish_reason": "stop"}
+
+    adapter = DirectorLLMPlanProvider(provider=RecordingProvider(Client()))
+    assert await adapter.complete_bounded("Review", "Candidate", max_tokens=stage_budget) == '{"valid":true}'
+    assert len(requests) == 1
+    assert requests[0]["options"]["num_predict"] == 65536
+
+
+@pytest.mark.asyncio
+async def test_bounded_writer_keeps_larger_stage_budget_with_default_config(monkeypatch):
+    from app.agents.director.llm_plan_provider import DirectorLLMPlanProvider
+    from app.config import settings
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(settings, "director_num_predict", 4096)
+    client = SimpleNamespace(chat_response=AsyncMock(return_value={"content": "{}", "finish_reason": "stop"}))
+    adapter = DirectorLLMPlanProvider(provider=RecordingProvider(client))
+    assert await adapter.complete_bounded("Write", "Candidate", max_tokens=6144) == "{}"
+    assert client.chat_response.call_args.kwargs["options"]["num_predict"] == 6144
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason_field", ["finish_reason", "done_reason"])
+async def test_truncation_reports_budget_and_usage_without_response_text(monkeypatch, reason_field, caplog):
+    import logging
+    from app.agents.director.llm_plan_provider import DirectorLLMPlanProvider
+    from app.config import settings
+    from app.core.prompt_errors import PromptOutputTruncated
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(settings, "director_num_predict", 8192)
+    private_text = "private response marker"
+    client = SimpleNamespace(chat_response=AsyncMock(return_value={
+        "content": private_text, "thinking": private_text, reason_field: "length",
+        "usage": {"output_tokens": 8192, "reasoning_tokens": 7000}}))
+    adapter = DirectorLLMPlanProvider(provider=RecordingProvider(client))
+    with caplog.at_level(logging.INFO), pytest.raises(PromptOutputTruncated) as failure:
+        await adapter.complete_bounded("Review", "Candidate", max_tokens=1024)
+    assert "8192" in str(failure.value)
+    assert "7000" in str(failure.value)
+    assert "DS_DIRECTOR_NUM_PREDICT" in str(failure.value)
+    assert "finish_reason=length" in caplog.text
+    assert "output_tokens=8192" in caplog.text
+    assert private_text not in caplog.text + str(failure.value)
+    assert client.chat_response.await_count == 1
 
 
 class RecordingLifecycle:

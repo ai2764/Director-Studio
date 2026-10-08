@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from ...core.h3.prompt import validate_h3_prompt
 from ...core.h3.errors import PromptFailureError
-from ...core.prompt_errors import PromptContextOverflow
+from ...core.prompt_errors import PromptContextOverflow, PromptOutputTruncated
 from ...core.projects.layouts import selected_layout_prompt_context
 from ...core.projects.models import PromptSections
 from ...core.h3.dialogue_binding import DialogueUse, DialogueConflict, DialoguePromptDraft, compile_dialogue_draft
@@ -491,6 +491,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
         raw = None
         audit_raw = None
         motion_raw = None
+        call_stage = "draft"
         check_current()
         try:
             attempt_instructions = draft_instructions
@@ -603,6 +604,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                 audit_request["managed_execution"] = request["managed_execution"]
             if source_ending is not None:
                 audit_request["source_ending_observation"] = source_ending
+            call_stage = "prompt_review"
             audit_raw = await complete_bounded(provider, REVIEW_INSTRUCTIONS,
                 json.dumps(audit_request, ensure_ascii=False), max_tokens=4096,
                 schema=review_schema(), observation=context_view)
@@ -618,6 +620,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                     "declared_viewpoint": changed.camera_angle,
                     "camera_motion_field": changed.camera_motion,
                 }
+                call_stage = "motion_review"
                 motion, motion_raw = await extract_motion_claims(provider, motion_request, check_current)
                 motion_review = motion.model_dump()
                 if (motion.camera_attachment == "viewer"
@@ -666,6 +669,12 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             return changed.model_copy(update={"meta": meta})
         except (DialogueMetadataError, PromptContextOverflow):
             raise  # A source problem cannot be repaired by rewriting this candidate.
+        except PromptOutputTruncated as exc:
+            # An exhausted output budget is not a creative rejection. Rewriting
+            # the candidate repeats the same capped call and can alter good work.
+            save_diagnostics(shot, [*attempts, {"stage": "output_budget", "call_stage": call_stage,
+                "raw": raw, "review_raw": audit_raw, "error": str(exc)}])
+            raise
         except MotionReviewError as exc:
             save_diagnostics(shot, [*attempts, {"stage": "motion_review", "raw": raw,
                 "review_raw": audit_raw, "motion_attempts": exc.attempts, "error": str(exc)}])

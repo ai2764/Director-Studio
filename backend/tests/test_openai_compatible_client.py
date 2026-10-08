@@ -51,6 +51,31 @@ def _chat_response(
 
 
 @pytest.mark.asyncio
+async def test_director_budget_reaches_openai_request_without_hidden_review_cap(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from app.config import settings
+    from app.agents.director.llm_plan_provider import DirectorLLMPlanProvider
+    monkeypatch.setattr(settings, "director_num_predict", 65536)
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return _chat_response(content='{"valid":true}')
+
+    client = _client(handler)
+    try:
+        adapter = DirectorLLMPlanProvider(provider=SimpleNamespace(client=client), model="test-model")
+        result = await adapter.complete_bounded("Review", "Candidate", max_tokens=1024,
+            schema={"type": "object", "properties": {"valid": {"type": "boolean"}}})
+        assert result == '{"valid":true}'
+        assert len(bodies) == 1
+        assert bodies[0]["max_tokens"] == 65536
+        assert bodies[0]["response_format"]["type"] == "json_schema"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_lists_models_through_openai_compatible_endpoint() -> None:
     requests: list[httpx.Request] = []
 

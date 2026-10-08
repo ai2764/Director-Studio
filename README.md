@@ -799,12 +799,15 @@ API: `/api/actors/*` · `GET /api/pipelines`
 | `DS_LLM_BASE_URL` | provider default | `/v1` base URL for LM Studio, llama-swap or an OpenAI-compatible server |
 | `DS_LLM_API_KEY` | empty | Optional credential for the active OpenAI-compatible endpoint |
 | `DS_LLM_TIMEOUT_SEC` | `600` | LLM request timeout in seconds |
+| `DS_DIRECTOR_NUM_PREDICT` | `4096` | Director output token budget; structured prompt writing and review use the larger of this value and their stage budget |
 | `DS_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local Ollama for Director |
 | `DS_H3_MINIMAX_API_KEY` | empty | MiniMax API credential; enables the official API option in H3 provider selectors |
 | `DS_H3_MINIMAX_MODEL` | `MiniMax-H3` | MiniMax H3 API model |
 | `DS_H3_MINIMAX_RESOLUTION` | `768P` | Requested MiniMax API output resolution |
 
 The Director model is not required in the environment. Director Studio discovers the active provider's catalog, selects the first available model when no prior choice exists, and persists subsequent model-picker selections with their provider under `data/director_model.json`. If the provider returns no models, the selection remains empty. The catalog endpoint must be reachable from the Director Studio backend, not only from the browser.
+
+`DS_DIRECTOR_NUM_PREDICT` limits generated tokens, not retry attempts. Some servers count reasoning within this budget. Structured prompt writing and review retain their stage budgets (up to 6144 tokens for a continuation draft), and a higher configured value raises those budgets too. Leave room for both input and output in the model's actual context window; raising this setting does not increase model capacity. Output-budget failures report the requested limit and available usage counts, and do not trigger a creative rewrite of a continuation draft.
 
 For source development, set values in `backend/.env` (prefix `DS_`). In a portable package, use the `.env` beside `DirectorStudio.exe` on Windows or `DirectorStudio` on macOS/Linux. Both files are ignored by Git; keep real credentials out of README, issue reports, screenshots, and committed example files.
 

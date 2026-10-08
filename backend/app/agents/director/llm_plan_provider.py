@@ -89,7 +89,8 @@ class DirectorLLMPlanProvider:
     async def complete_bounded(self, system: str, user: str, *, max_tokens: int,
                                guides: Iterable[str] = (), schema: dict | None = None,
                                images: list[str] | None = None) -> str:
-        """Short prompt audits and candidate drafts have explicit output budgets."""
+        """Stage budgets are floors; an increased Director budget also applies here."""
+        output_budget = max(max_tokens, settings.director_num_predict)
         prompt = with_director_skill(f"{system}\n\n{user}", guides=guides)
         message = {"role": "user", "content": prompt}
         if images:
@@ -97,17 +98,32 @@ class DirectorLLMPlanProvider:
         observe_request("writer.bounded", [message], image_count=len(images or []))
         deadline = min(PROMPT_CALL_TIMEOUT_SEC, settings.llm_timeout_sec)
         try:
-            async with asyncio.timeout(deadline), self._input_budget(prompt, output_tokens=max_tokens, images=bool(images)):
+            async with asyncio.timeout(deadline), self._input_budget(prompt, output_tokens=output_budget, images=bool(images)):
                 response = await self.client.chat_response(self.model,
                     messages=[message], format=schema,
-                    options={"num_predict": max_tokens, "temperature": 0.1},
+                    options={"num_predict": output_budget, "temperature": 0.1},
                     **({"require_vision": True} if images else {}))
         except TimeoutError as exc:
             # Transport failure is not a rejected creative draft: do not repair/retry it.
             raise TimeoutError(f"Prompt generation/review timed out after {deadline:g}s; "
                                "no completed result was saved and no automatic retry was started") from exc
-        if response.get("finish_reason") in {"length", "max_tokens"}:
-            raise PromptOutputTruncated("Prompt review output was truncated at its output budget")
+        finish_reason = response.get("finish_reason") or response.get("done_reason") or "unknown"
+        usage = response.get("usage") or {}
+        output_tokens = usage.get("output_tokens", "unknown")
+        reasoning_tokens = usage.get("reasoning_tokens", "unknown")
+        logging.getLogger(__name__).info(
+            "Writer bounded output: stage_budget=%s configured_budget=%s requested_budget=%s "
+            "finish_reason=%s output_tokens=%s reasoning_tokens=%s content_chars=%s thinking_chars=%s",
+            max_tokens, settings.director_num_predict, output_budget, finish_reason,
+            output_tokens, reasoning_tokens, len(response.get("content") or ""),
+            len(response.get("thinking") or ""))
+        if finish_reason in {"length", "max_tokens"}:
+            raise PromptOutputTruncated(
+                "Prompt generation/review output was truncated: "
+                f"requested_budget={output_budget}, output_tokens={output_tokens}, "
+                f"reasoning_tokens={reasoning_tokens}, finish_reason={finish_reason}. "
+                "Increase DS_DIRECTOR_NUM_PREDICT if the model context has room for input plus output; "
+                "reasoning can consume the same output budget. No truncated result was accepted.")
         return str(response.get("content") or "")
 
     async def complete_bounded_with_images(self, system: str, user: str, *, images: list[str],

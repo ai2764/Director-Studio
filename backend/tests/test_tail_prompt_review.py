@@ -545,6 +545,42 @@ async def test_transport_timeout_stops_without_repair_and_keeps_diagnostics(tail
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("truncated_stage", ["draft", "prompt_review", "motion_review"])
+async def test_output_truncation_preserves_shot_and_does_not_restart_writer(tail_handoff_shot, truncated_stage):
+    from app.core.prompt_errors import PromptOutputTruncated
+    from app.config import settings
+    project, shot = tail_handoff_shot
+
+    class TruncatedProvider(Provider):
+        async def complete_bounded(self, system, user, **kwargs):
+            self.text.append((system, user))
+            if truncated_stage != "draft" and len(self.text) == 1:
+                return json.dumps(candidate())
+            if truncated_stage == "motion_review" and len(self.text) == 2:
+                review = verdict()
+                review["viewpoint_motion"] = {"camera_attached_to": "external",
+                    "viewer_path": "The performer bends.", "camera_path": "Pull back and lower.",
+                    "compatible": True, "evidence": "Independent camera follows the authored action."}
+                return json.dumps(review)
+            raise PromptOutputTruncated("Output reached its requested limit")
+
+    provider = TruncatedProvider([])
+    with pytest.raises(PromptOutputTruncated):
+        await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+    assert len(provider.text) == {"draft": 1, "prompt_review": 2, "motion_review": 3}[truncated_stage]
+    stored = load_shot(project.id, shot.id)
+    assert stored.prompt_sections == shot.prompt_sections
+    assert stored.camera_motion == shot.camera_motion
+    assert stored.script_beat == shot.script_beat
+    diagnostics = list((settings.projects_dir / project.id / "agent" / "prompt_failures").glob("*.json"))
+    assert len(diagnostics) == 1
+    attempts = json.loads(diagnostics[0].read_text(encoding="utf-8"))["attempts"]
+    assert attempts[-1]["stage"] == "output_budget"
+    assert attempts[-1]["call_stage"] == truncated_stage
+    assert not list((settings.projects_dir / project.id / "agent" / "prompt_drafts").glob("*.json"))
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["shot", "directing_request"])
 async def test_user_edit_during_audit_is_not_overwritten(tail_handoff_shot, change):
     from app.agents.director.brief import remember_directing_request
