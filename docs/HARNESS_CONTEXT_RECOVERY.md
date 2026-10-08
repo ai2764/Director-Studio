@@ -1,60 +1,49 @@
-# Director Harness context recovery
+# Director history and context recovery
 
-The Python backend issues the complete Director skill/instructions and focused
-project state once. Harness uses a native complete system section (literal values
-through a prompt variable), not a fresh user-role snapshot every turn. Its
-normalized tool presentation is also the provider's presentation. Python still
-validates execution against its original schemas and the project version that
-the model actually read.
+The Python backend supplies current Director instructions, focused project state
+and tool schemas. Harness owns native JSONL history and compaction checkpoints.
+Python still validates tool calls against the original schemas and the project
+version the model read.
 
-Without a named Shot, the project payload contains Shot summaries. Naming a Shot
-includes its details, not neighboring details. The existing get_status tool accepts
-an optional exact shot_id to read full saved details before a cross-shot edit.
-This does not change Layout permissions, workflow configuration or saved materials.
+## What compaction preserves
 
-Native JSONL remains the durable source of history. On an old session's first use,
-regenerable host-state snapshots are identified by plugin provenance and migrated
-through native compactNow. Only the summarizer's input omits those snapshots;
-the original log, user messages and UI transcript are retained. A small sourced
-boundary permits native compaction to include the last old snapshot. Explicit
-manual compaction reuses that migration's result rather than compacting twice.
+Compaction summarizes the replay history; it does not delete the original native
+log, user messages or UI transcript. Old host-state snapshots can be migrated
+through native compaction on first use. Manual compaction reuses that migration's
+result rather than summarizing twice.
 
-Summaries use the native summarizer and checkpoint transaction, with a small
-summary system prompt and no Director business tools, skill or current project
-payload. Automatic pressure uses the native two-attempt limit. If successful
-checkpoints still exceed the soft threshold but fit the reserved input budget,
-the turn may continue. A failed summary is distinct and its underlying cause is
-reported, including during provider-overflow recovery. No completed business
-tool is replayed by this recovery.
+Summaries use a minimal system envelope without Director business tools or
+current project payload. They cannot perform project edits. Completed business
+actions are not replayed when context recovery runs.
 
-The input budget reserves the configured output allowance and 2,048 tokens per
-locally hydrated image. The image allowance and native text meter are estimates,
-not exact tokenization or a guarantee that any image count will fit. Actual
-provider counts remain the debug usage source after a response. A fixed current
-request that cannot fit is stopped; compaction cannot make arbitrarily large
-current input or unbounded model reasoning fit.
+Automatic compaction has a bounded two-attempt policy. A successful checkpoint
+may remain above the soft pressure threshold if it fits the reserved input
+budget. A failed summary is reported with its underlying cause and leaves the
+original history available.
 
-Both backend and sidecar must be updated/restarted. The backend requires the
-context-envelope-v2 capability and will reject an older sidecar.
+## When a turn fails
 
-## Reproducible neutral real-model check
+1. Read the complete error to distinguish summary failure from provider context
+   overflow or a failed business tool.
+2. Check saved shot state and generation jobs before retrying an action; earlier
+   writes or submissions may already have completed.
+3. Use the Director's manual compaction control to reduce replay history.
+4. Focus the next request on a named shot and relevant references. Compaction
+   cannot shrink an oversized current project/material payload.
+5. If the sidecar is incompatible, update and restart both backend and Harness.
+   The backend requires `context-envelope-v2` and `native-sessions-v1`.
 
-From the repository root:
+Without a named shot, the context includes shot summaries. Naming a shot includes
+its details; the agent can use `get_status` with `shot_id` for full saved state.
+This does not change references, Layout permissions or workflow settings.
 
-    py -3 scripts/harness_context_probe.py --model "qwen3.8:27b"
+## Limits and backups
 
-Run only while Comfy and other model work are idle. The opt-in probe uses temporary
-project and native-session directories, keeps real model inference, and permits
-only get_status reads. It does not touch a live project.
+Input budgeting reserves the configured output allowance and an estimated 2,048
+tokens per locally hydrated image. Text and image estimates are not exact
+provider token counts or a guarantee that any request will fit.
 
-2026-09-12 local results, final envelope implementation:
-
-- Qwen 27.3B Q4_K_M, context 32,768, output allowance 4,096; reasoning enabled.
-- 80 historical messages and 12 neutral Shots.
-- Automatic summary: 26,403 input / 438 output tokens, completed.
-- Three chat turns: completed, including a get_status tool call.
-- Manual summary: 4,794 input / 657 output tokens, completed.
-- Next fresh-runtime chat reused the checkpoint: 7,743 input / 53 output tokens,
-  correctly retained the agreed BLUE color.
-- Four chat turns, two summaries, one read tool, zero mutations. All finished
-  normally. These are fixture observations, not a production success-rate estimate.
+Back up native sessions together with project data. Source launches use
+`.run/harness-sessions`; Windows portable uses `data/harness-sessions`.
+Do not share one session root between concurrent sidecars. Runtime settings and
+log locations are documented in [Harness](HARNESS.md).

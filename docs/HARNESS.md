@@ -1,55 +1,40 @@
-# Slim Harness runtime
+# Director conversation runtime
 
-Current implementation notes, checked 2026-09-26. For system boundaries see
-[architecture](ARCHITECTURE.md); for durable history and summary behavior see
-[context recovery](HARNESS_CONTEXT_RECOVERY.md).
+The Harness runtime manages the Director's model/tool loop, native session
+history and compaction. It uses pinned DeepSeek Harness packages, but **does not
+require a DeepSeek model**. The configured Ollama, LM Studio, llama-swap or
+OpenAI-compatible model still runs through Python's provider boundary.
 
-This runtime replaces the Director's conversational loop with
-the pinned DeepSeek Harness agent loop and stock context compaction. It does
-**not** select a DeepSeek model. The same configured Ollama, LM Studio, llama-swap, or
-OpenAI-compatible model still runs through Python's provider/VRAM boundary.
-This branch launches Harness by default. Windows x64 portable bundles Harness;
-Linux portable integration remains separate.
+For system responsibilities, see [architecture](ARCHITECTURE.md). For summary
+failures and history recovery, see [context recovery](HARNESS_CONTEXT_RECOVERY.md).
 
-## Windows x64 portable
+## Windows portable
 
-Extract the complete `Director-Studio-Windows-x64.zip` and run
-`DirectorStudio.exe`. The archive includes a private Node.js runtime, compiled
-Harness sidecar, production dependencies, the Koffi Windows x64 native module,
-and a private Python runtime with a checksum-pinned `pip` bootstrap. On first
-launch, it downloads the locked `comfy-mcp` and `comfy-cli` wheels into
-`data/tools/comfy`; subsequent launches reuse that private environment. Do not
-install Node.js, Python, npm packages, or MCP tools yourself. ComfyUI and the
-selected LLM server remain external.
+Extract the complete ZIP and run `DirectorStudio.exe`. The Windows x64 package
+includes private Node.js, Python and Harness runtimes. ComfyUI and the chosen LLM
+server remain external services.
 
-The backend starts the managed MCP process on demand with
-`runtime/python/python.exe -m comfy_mcp.server` and supplies the adjacent
-`runtime/python/comfy.exe` to it. The first launch needs PyPI access; downloads
-are hash-verified and staged before atomically replacing any previous private
-runtime. Failures are logged to `data/logs/comfy-bootstrap.log` and preserve the
-last valid copy. Director Studio does not probe system installations.
-`Install-Tools.cmd` is not included. Explicit process environment values and
-uncommented portable `.env` MCP command settings skip bootstrap and take
-precedence.
+On first launch, the application downloads checksum-pinned `comfy-mcp` and
+`comfy-cli` packages into `data/tools/comfy`; later launches reuse this environment.
+The first launch needs PyPI access. Bootstrap failures are logged to
+`data/logs/comfy-bootstrap.log` and preserve the previous valid installation.
+Explicit MCP command overrides in the process environment or portable `.env`
+take precedence over managed bootstrap.
 
-The executable starts the loopback sidecar, validates its authenticated
-identity and capabilities, and only then starts the backend. Managed sessions
-are stored in `data/harness-sessions`; the current launch log is
-`data/logs/harness-sidecar.log`. Closing the application stops its owned
-sidecar, and the sidecar also exits if its parent process disappears. Harness
-startup failures identify the failed stage and log path; they never silently
-fall back to Legacy.
+The launcher validates the authenticated sidecar before starting the backend.
+Native history is stored in `data/harness-sessions`; the sidecar log is
+`data/logs/harness-sidecar.log`. Closing the application stops its owned sidecar.
+A failed Harness startup reports the failure instead of falling back to Legacy.
 
-Set `DS_DIRECTOR_AGENT_RUNTIME=legacy` in the portable `.env` for explicit
-Legacy mode. To connect to a separately managed sidecar, set
-`DS_HARNESS_MANAGED=false`, `DS_HARNESS_BASE_URL` to its loopback URL, and
-`DS_HARNESS_INTERNAL_TOKEN` to the matching token. The bundled sidecar is not
-started in either mode.
+Set `DS_DIRECTOR_AGENT_RUNTIME=legacy` in the portable `.env` to use Legacy.
+To use a separately managed sidecar, set `DS_HARNESS_MANAGED=false`,
+`DS_HARNESS_BASE_URL` to its loopback URL, and `DS_HARNESS_INTERNAL_TOKEN` to the
+matching token. Restart after changing runtime settings.
 
-## Run on Windows from this checkout
+## Windows source launch
 
-Install the normal source prerequisites, Python backend requirements, frontend
-dependencies, and Node.js 22 or later. Then:
+Install the [source prerequisites](../README.md#run-from-source) and Node.js 22
+or later, then install the Harness and backend dependencies:
 
 ```powershell
 npm ci --prefix harness
@@ -57,202 +42,75 @@ python -m pip install -r backend/requirements.txt
 .\start.ps1
 ```
 
-The launcher starts the loopback-only sidecar automatically, verifies its
-authenticated identity and the backend's connection to it, and then starts the
-frontend. It stores a generated internal token in ignored `.run/harness.token`.
-Do not share that file. Node receives only an allowlisted environment, not
-provider keys or backend URLs. This is architectural separation, not an OS
-security sandbox: both processes run as the current user.
+The launcher starts the sidecar, verifies the backend connection, and starts the
+frontend. It stores a generated internal token in ignored `.run/harness.token`;
+keep that file private. Node receives an allowlisted environment. Both processes
+run as the current user; the sidecar is not an OS security sandbox.
 
-To switch back, stop the services launched from this checkout, then restart:
+Stop services from this checkout before switching runtimes:
 
 ```powershell
 .\kill.ps1
 .\start.ps1 -AgentRuntime legacy
 ```
 
-Runtime precedence is explicit `-AgentRuntime`, process
-`DS_DIRECTOR_AGENT_RUNTIME`, `backend/.env`, then `harness`. Existing backends
-must be stopped before switching. An unavailable sidecar or incompatible
-native-tool provider fails explicitly; it never silently uses legacy.
-`-FrontendOnly` needs no Harness. Logs and owned process IDs are in `.run/`.
-For simultaneous checkouts use distinct backend, frontend and Harness ports
-and separate project data; configure the frontend's backend URL accordingly.
+The launcher's runtime precedence is `-AgentRuntime`, process
+`DS_DIRECTOR_AGENT_RUNTIME`, `backend/.env`, then `harness`. A direct backend
+launch uses the settings default (`legacy`) unless configured explicitly.
+`-FrontendOnly` does not start Harness. Logs and owned process IDs live in `.run/`.
+Concurrent checkouts need separate data directories, backend/frontend/Harness
+ports, and a matching frontend backend URL.
 
-Backend options: `DS_HARNESS_MAX_STEPS` (12 model steps by default, 1–32),
-`DS_HARNESS_MAX_TOOL_CALLS` (64 tool admissions per turn by default, 1–64),
-`DS_HARNESS_TURN_TIMEOUT_SEC` (1800 by default, at most 7200), and
-`DS_HARNESS_BASE_URL` (HTTP literal 127.0.0.1 only). `DS_HARNESS_MANAGED`
-controls the bundled portable sidecar and defaults to true. The source Windows launcher sets
-the URL from `-HarnessPort` (8791 by default). Manual launches must give Python
-and Node the same `DS_HARNESS_INTERNAL_TOKEN` and run
+## Configuration
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `DS_HARNESS_MANAGED` | `true` | Start the bundled portable sidecar. |
+| `DS_HARNESS_BASE_URL` | `http://127.0.0.1:8791` | Authenticated sidecar URL; literal loopback HTTP only. |
+| `DS_HARNESS_INTERNAL_TOKEN` | Launcher-managed | Shared authentication token for Python and Node. |
+| `DS_HARNESS_MAX_STEPS` | `12` | Model steps per turn; range 1–32. |
+| `DS_HARNESS_MAX_TOOL_CALLS` | `64` | Tool admissions per turn; range 1–64. |
+| `DS_HARNESS_TURN_TIMEOUT_SEC` | `1800` | Turn timeout in seconds; maximum 7200. |
+| `DS_HARNESS_SESSION_ROOT` | Launch-dependent | Native session directory used by the sidecar. |
+
+The source launcher sets the URL from `-HarnessPort` (8791 by default).
+For a manual sidecar launch, give Python and Node the same token, then run
 `node --import tsx src/server.ts` inside `harness/`.
 
-One model step can request multiple tools; tool admissions no longer share the
-model-step limit. Tool admission counts include argument, availability and
-stale-state rejections after a new well-formed call ID is admitted. Duplicate
-call IDs and exact executed arguments remain rejected before admission;
-equivalent normalized arguments can consume an admission before rejection.
-Neither context refresh nor fresh
-inference replenishes the tool budget. The cap permits bounded batches, not
-unlimited retries; existing replay, state, transport and timeout guards remain.
+One model step can request multiple tools. Rejected new calls can consume the
+tool budget; context refresh does not reset it. Tools execute sequentially in
+Python, which validates arguments, current availability and project state.
+Stale calls require fresh inference, and duplicate executed mutations are
+rejected within a turn.
 
-## Ownership and failure semantics
+## History, cancellation and recovery
 
-- Python owns projects, shot IDs, assets, workflows/MCP, provider routing,
-  generation jobs, file writes, model lifecycle/VRAM, and durable chat history.
-  Business inference gets current Python context and authoritative tool schemas;
-  compaction uses a separate, minimal envelope without business tools.
-- Harness creates an ephemeral runtime handle per request but resumes a stable
-  native JSONL session, including tool history and compaction checkpoints. It owns
-  model/tool sequencing, stock compaction and at most two retries of a transient
-  inference failure. Summarization calls use the same Python inference boundary
-  and cannot execute business tools.
-- Tools execute sequentially in Python through existing handlers. Python
-  validates arguments, current tool availability, and the project snapshot.
-  Stale calls need fresh inference. Duplicate executed mutation fingerprints
-  are rejected within the turn; known pre-execution rejections can be repaired.
-- For `revise_shot`, Python first normalizes arguments with the existing
-  `ShotRevisionSubmission` business model, preserving omitted fields, then
-  applies the tool schema and state checks. Numeric strings such as `"7"` and
-  `"7.0"` become `7.0`; equivalent encodings share an executed-call fingerprint.
-  Boolean, non-finite, null and non-positive durations and unknown fields remain
-  rejected. Other tools retain their existing argument-validation behavior.
-- Cancellation, sidecar disconnect, timeout, or lost acknowledgement stops the
-  loop without reconnecting or replaying a mutation. Completed changes remain
-  in Python; inspect the project before explicitly asking for another attempt.
-  Already submitted generation jobs retain their existing job lifecycle:
-  cancelling chat does not roll back or automatically cancel those jobs.
-- Native history and compaction checkpoints persist across requests and process
-  restarts. Python UI history is imported only when initializing the native
-  session. This is not a business-operation receipt database, autonomous resume
-  daemon, judge model, or automatic cross-turn mutation deduplication. Chat
-  reservation is process-local, intended for the existing single-backend
-  deployment; snapshot checks are not cross-process database transactions.
+Harness creates a short-lived runtime handle per request and resumes a stable
+native JSONL session. Python's UI transcript is imported only when initializing
+that session. Summary calls omit business tools and current project payload.
 
-Transport is bounded to 8 MiB request bodies, 10,000 imported history rows and
-eight active turns. These are explicit safety limits, not silent truncation.
-Initial imports can still exceed them; resumed native sessions do not resend
-the full Python UI transcript.
+Cancellation, timeout, disconnect or lost acknowledgement stops the loop without
+replaying mutations. Completed edits remain saved, and submitted jobs continue
+under their own lifecycle. Inspect the project and job before retrying.
 
-`POST /api/projects/{project_id}/chat/compact` invokes native manual compaction
-under the same admission guard as chat. It does not add a user message, execute
-tools or retry the prior action. Successful responses await native session flush.
-Session storage defaults to `.run/harness-sessions` for source development and
-`data/harness-sessions` in Windows portable. Do not share one root between
-concurrently running sidecars.
+`POST /api/projects/{project_id}/chat/compact` runs native manual compaction under
+the same admission guard as chat. It does not send a new message, execute tools
+or retry an action. Both backend and sidecar must support `native-sessions-v1`
+and `context-envelope-v2`; an incompatible sidecar is rejected.
 
-Current instructions and focused project state are supplied through a complete
-system section. Summary requests omit Director business tools, skill and project
-payload. Native compaction has a bounded two-attempt policy; a failed summary is
-reported rather than silently continuing on oversized input. Successful
-checkpoints may continue above the soft pressure threshold if they fit the
-reserved input budget. Completed business writes are not replayed by recovery.
+Requests are limited to 8 MiB, initial history imports to 10,000 rows, and active
+turns to eight. Context estimates reserve output and image capacity; they are
+not exact provider tokenization. A large current request can still need narrowing.
 
-The budget reserves the configured output allowance and an estimated 2,048 tokens
-per locally hydrated image. The native text meter is heuristic, not exact provider
-tokenization or a universal input/output guarantee. Provider usage is forwarded
-after inference, but a large fixed current request can still require narrowing.
-The original native log and Python UI transcript are retained; compaction changes
-the persisted replay surface. Both backend and sidecar must support
-`native-sessions-v1` and `context-envelope-v2`; incompatible sidecars are rejected.
-
-## Verification and useful A/B test
-
-`revise_shot` returns `{ok: true, shot: ...}` containing only the saved target's
-storyboard fields, in both runtimes. It no longer repeats the full storyboard
-after every single-shot edit. Persistence, project reads, final chat state, and
-the existing prompt/H3 invalidation behavior are unchanged. Other storyboard
-tool result contracts are unchanged.
-
-For a shot marked `material_review_pending`, `write_prompt` now runs a Python-owned
-review of all 1–9 current Picture references, one thumbnail per vision request.
-It then decides whether to preserve or revise the existing Creative brief
-(`script_beat`) and prompt. Missing/unreadable images, unresolved conflicts,
-concurrent edits or changed file contents prevent publishing a completed review.
-Failure is returned as `ok: false`, not recorded as a successful tool action.
-This is shared by legacy and Harness; Node still owns no images or durable review
-state. Deterministic checks cover reference handling; generated-image quality
-still requires visual review.
-
-```powershell
-npm run typecheck --prefix harness
-npm test --prefix harness
-cd backend
-python -m pytest tests/test_harness_runtime.py tests/test_harness_integration.py tests/test_harness_launcher.py -q
-```
-
-Integration tests start a real Node process and the actual stock Harness loop,
-while model responses and VRAM orchestration are controlled fixtures. They
-exercise a real isolated shot edit, argument repair, neighboring-shot preservation,
-history, provider lease exit on cancellation, and authenticated backend readiness.
-Kernel tests additionally force overflow through the real stock compactor.
-Tests never run a live model, GPU generation, or modify user projects.
-
-For a live A/B, use two copies of one small fixture project, the same model and
-the same prompt (for example, revise only shot 2 while preserving neighboring
-shots), once per runtime. Record verified requested changes, unintended changes,
-model/tool call counts, elapsed time, and how a deliberate invalid argument is
-handled. Add long-history and interruption cases separately. Passing these
-engineering tests does not establish improved task convergence; that remains
-the outcome the live comparison must measure.
-## Append-only shot authoring
-
-`append_shot` is available in both native and Harness tool loops. It accepts
-`expected_script_hash`, required `expected_last_shot_id` (null on an empty board),
-and exactly one `shot` containing authored fields plus optional Picture/voice
-matches. The backend allocates the new ID and appends it to the project index.
-Existing Shot JSON files are never written or removed by this tool: refs, prompts,
-Layouts and video/job links remain intact. It returns only the saved new Shot.
-
-Stale script/tail, replayed tail, invalid bindings, supplied existing IDs, unknown
-production fields and invalid durations are rejected before persistence. Numeric
-duration strings are normalized through the same append model in both runtimes.
-Appending does not certify old shots against a changed script. It suppresses
-automatic full replanning for its own batch; status-only reads also never replan.
-Agent instructions direct end-additions to this tool rather than `save_storyboard`.
-Other tools still retain their existing powers; this is not a global prohibition
-on storyboard replacement or a distributed/crash-atomic transaction protocol.
-
-Tests: `backend/tests/test_director_append_shot.py` covers unchanged old file
-bytes/mtimes, rejected writes, replay and ID collision, native execution and a
-real Node sidecar roundtrip with a scripted model. Both status-before-append and
-status-after-append are covered. This verifies tool execution, not Qwen's
-natural-language tool selection rate; no new live-model estimate is claimed.
-
-## Task-context pilot (P0/P1A)
+## Experimental focused context
 
 `DS_DIRECTOR_TASK_CONTEXT_MODE` accepts `off` (default), `shadow`, or `pilot`.
-`DS_DIRECTOR_TASK_CONTEXT_PROJECTS` is a JSON array of explicitly allowed project
-IDs (default `[]`). Both gates must allow a Director project; MV is unchanged.
-No environment or live project configuration is enabled by the implementation.
-Return the mode to `off` to use the existing context path on subsequent turns.
+`DS_DIRECTOR_TASK_CONTEXT_PROJECTS` is a JSON array of allowed project IDs
+(default `[]`). Both settings must allow a Director project; MV uses its existing
+context path.
 
-- `shadow` builds a read-only comparison and logs request shapes but sends the
-  existing model input. It neither adds inference calls nor enforces pilot gaps.
-- `pilot` starts chat in `overview`. The same agent can choose `shot_prompt` with
-  `set_task_context`, or read a versioned, project-scoped source page with
-  `read_task_context`. Subsequent pages require the first page's version.
-- The view filters existing tools; it does not grant business authority, reset
-  budgets, change script locks, or start a second agent loop. Upload classification
-  and terminal-failure tool restrictions remain in place.
-- Normal and tail writers share current source evidence, preserving visual
-  inspection, dialogue compilation, voice mapping and exact selected tail origin.
-  Missing evidence/capacity returns nonterminal `CONTEXT_REQUIRED` before candidate
-  generation. Only a newly read, resolved missing source can unlock that rejected
-  preflight once; saved or unknown mutation outcomes cannot be replayed this way.
-- Source versions include selected file bytes. Save checks reject stale evidence;
-  paging is not permission to concatenate incompatible versions or bypass capacity.
-
-The `director_studio.context_metrics` logger emits character counts, image counts,
-source keys and an input digest, not script bodies, image bytes or exact token
-usage. Full system instructions, history and tool schemas still cost context;
-native assistant tool-call arguments are not yet counted in those metrics (known
-deferred limitation); the digest is not a full transport-envelope identity.
-Existing template duplication is intentionally retained. Capacity is a heuristic,
-not a tokenizer guarantee. Snapshot validation currently reads the project's
-sources repeatedly; smaller packets do not prove lower latency or I/O.
-
-Real-model quality is not established by deterministic fixture tests. Keep default
-off until an authorized same-model/sample comparison passes. P1B mutation/state
-unification, persistent operation receipts and managed-run redesign are not included.
+`shadow` records comparison metrics while keeping the existing model input.
+`pilot` lets the same agent choose focused `overview` / `shot_prompt` views and
+read versioned project evidence. Missing evidence returns `CONTEXT_REQUIRED`;
+stale evidence blocks saving. This does not expand tool permissions or reset
+budgets. Return the mode to `off` to restore ordinary context on subsequent turns.

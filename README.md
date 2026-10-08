@@ -1,25 +1,27 @@
-# Director Studio
+# <img src="frontend/public/director-agent-shot-board.png" alt="Director robot" width="56" height="56"> Director Studio
 
-Local-first pre-production workspace for planning shots, managing reusable visual and voice assets, writing MiniMax H3 Ref2AV prompts, and generating media through ComfyUI.
+An agentic filmmaking workspace for **MiniMax H3 Ref2AV**. Talk to a Director Agent, prepare reusable assets, plan shots, and generate images and video through ComfyUI.
 
-Director Studio runs the planning Agent through one configured Ollama, LM Studio, llama-swap, or OpenAI-compatible provider. Image and local video workflows run in ComfyUI through ComfyUI MCP; H3 video can alternatively be submitted to the official MiniMax API.
+Director Studio connects your LLM to generation tools and keeps projects, assets, prompts, and results on your machine. **Director Studio itself does not require a GPU**; hardware requirements come from the LLM and generation models you choose. With local services and the required tools/models installed, the production process can run offline. Cloud LLMs and the official MiniMax API are optional.
 
-Core features include a typed asset library, actor and set workflows, conversational shot planning, editable Picture and Audio references, optional Layout studies, six-section H3 prompts, local/cloud video submission, durable jobs, and exclusive local-LLM/ComfyUI VRAM coordination.
+### What you can do
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and extension points.
+- **Direct through conversation:** plan and revise shots, choose references, write H3 prompts, and submit generation jobs.
+- **Prepare reusable assets:** actors, outfits, scenes, props, portraits, and voice references.
+- **Generate optional Layouts:** use Qwen Image 2.1 with text alone or up to three image references.
+- **Make music videos:** upload the song, import externally prepared lyrics/timing, listen to segments, and discuss individual sections with the Agent.
+- **Continue a shot from video:** use a completed earlier take or an external clip as independent video context. This local H3 feature is experimental and disabled by default.
+- **Use your own H3 workflow:** import variations in Settings while preserving their internal model and sampling choices.
 
-Current runtime and recovery behavior is documented in [Harness](docs/HARNESS.md)
-and [context recovery](docs/HARNESS_CONTEXT_RECOVERY.md). Dated audits, specs, plans
-and reports record their own historical scope; proposed work is not automatically
-implemented. The architecture page separates current behavior from the refactor target.
+### Get started
 
-The [slim Harness runtime](docs/HARNESS.md) is the default Director agent loop,
-using the same Python-owned providers and tools. Windows, Linux, and macOS
-portable packages each include a native private Node runtime and compiled
-Harness sidecar; source checkouts retain an explicit Legacy switch.
-Harness can compact older conversation history, but the model server still sets
-the usable context capacity. Director Studio reads that capacity when the
-provider reports it and shows context usage in the Director UI.
+[Windows Portable](#windows-portable-installation) · [Linux Portable](#linux-portable-installation) · [macOS Portable](#macos-portable-installation) · [Run from source](#run-from-source)
+
+Download published packages from [Releases](https://github.com/ai2764/Director-Studio/releases). For newer preview builds, use the **Artifacts** section of a successful [Windows](https://github.com/ai2764/Director-Studio/actions/workflows/windows-portable.yml), [Linux](https://github.com/ai2764/Director-Studio/actions/workflows/linux-portable.yml), or [macOS](https://github.com/ai2764/Director-Studio/actions/workflows/macos-portable.yml) build. Preview downloads require a GitHub account and expire after seven days. This README describes `main`; a tagged release may contain an earlier feature set.
+
+Director supports Ollama, LM Studio, llama-swap, and OpenAI-compatible providers. The [Harness runtime](docs/HARNESS.md) is selected by the example configuration and portable defaults; source users can also choose Legacy. Portable packages include a private Node runtime and compiled Harness sidecar. Conversation compaction helps manage history, while the model server determines the available context capacity.
+
+For implementation details, see [Architecture](docs/ARCHITECTURE.md), [context recovery](docs/HARNESS_CONTEXT_RECOVERY.md), and [Director configuration recovery](docs/director-configuration-recovery.md).
 
 ## Stack
 
@@ -78,7 +80,7 @@ server and ComfyUI remain external services.
 
   LM Studio, llama-swap and other OpenAI-compatible servers are configured below instead. Director reads the active provider's model catalog; choose the model in the Director dropdown.
 
-- [ComfyUI Desktop for Windows](https://docs.comfy.org/installation/desktop/windows), running at `http://127.0.0.1:8188`.
+- A compatible ComfyUI installation with the selected workflow's models and custom nodes. The usual local endpoint is `http://127.0.0.1:8188`; a remote ComfyUI server is also supported. [ComfyUI Desktop](https://docs.comfy.org/installation/desktop/windows) is one installation option.
 
 Extract the complete zip to a writable folder such as `C:\DirectorStudio`; do not copy only the executable. The release archive intentionally contains no user data. Director Studio creates `data` beside the executable on first launch; after that, keep it with the other extracted files and back it up before upgrades.
 
@@ -313,20 +315,22 @@ Troubleshooting:
 
 ## Connect a custom H3 workflow
 
-Every clean Portable normally starts with **Built-in Official H3**. This temporary test commit instead starts with **Built-in H3 Turbo 8 (temporary test)**. First make sure your custom H3 Ref2AV workflow already runs successfully in the same local ComfyUI. Then connect it at runtime:
+The packaged default is currently the Turbo 8 Ref2AV graph, displayed as **Built-in H3 Turbo 8 (temporary test)**. It is derived from the Comfy-Org template with additional LoRA and optimization nodes. First make sure your replacement H3 Ref2AV workflow runs successfully in ComfyUI, then connect it at runtime:
 
 ```text
 Settings -> Workflows -> H3 -> Import Workflow
 -> Final Video Output -> H3 Inputs -> Validate & Test -> Use Workflow
 ```
 
-Director Studio treats everything inside the selected path as an opaque ComfyUI graph. It first lists terminal video nodes; after you choose the final output, it searches backward and asks you to confirm the upstream `MiniMaxH3ReferenceToVideo` node and optional seed node. Node titles are shown before class names and IDs. The application only injects prompt, width, height, frame count, Picture 1–9, optional standalone Audio 1–3, and an optional seed. Internal models, samplers, LoRAs, upscalers, frame interpolation, and muxing stay exactly as the workflow defines them.
+Director Studio discovers the selected graph's input/output boundary. Choose a final video output, then confirm the upstream `MiniMaxH3ReferenceToVideo` node, optional seed node, and optional source-video file input. Node titles are shown before class names and IDs. Director Studio injects the prompt, width, height, frame count, Picture 1–9, optional Audio 1–3, seed when mapped, and source video when mapped. Internal model, LoRA, sampler, scheduler, steps, and encoding settings remain owned by the uploaded workflow. Continuation graphs also undergo sampling-path validation and delivery-length adjustment.
 
-The 56-frame test retains videos only from the final output node you selected. If that node emits several videos, preview them and choose one; this selection does not rerun ComfyUI. Reference-video inputs are not supported. Ollama is not used for importing, mapping, validating, or testing a custom workflow—the setup is deterministic and uses ComfyUI metadata plus your confirmations.
+The 56-frame test retains videos only from the final output node you selected. If that node emits several videos, preview them and choose one; this selection does not rerun ComfyUI. For a mapped video input, supply a sample clip using **Video for test**. A workflow without a video input remains usable for independent shots. Importing, mapping, validating, and testing do not call the Director LLM.
 
-Imported workflow JSON and its setup metadata stay under the external `data/workflow_profiles` directory and are never embedded in a release executable or zip. Any custom nodes, models, LoRAs, and other dependencies referenced by an imported graph remain the user's ComfyUI responsibility. If a custom workflow becomes unavailable or invalid, Director Studio falls back to the built-in H3 graph (Turbo 8 in this temporary test commit).
+Imported workflow JSON and setup metadata stay under the external `data/workflow_profiles` directory and are not embedded in a release executable or zip. Install the imported graph's custom nodes, models, and LoRAs in ComfyUI. If a custom profile becomes unavailable or invalid, Director Studio falls back to the packaged built-in graph; continuation still requires a supported source and graph.
 
 Workflow changes apply only to jobs submitted after the switch. Queued and running jobs keep the immutable workflow snapshot captured when they were submitted. You can switch back to the built-in H3 graph without restarting, and doing so does not alter work already in flight.
+
+For video-input mapping, supported Motion Context paths, required nodes/models, and matching API/visual JSON examples, see [Custom H3 video input](docs/custom-h3-video-input.md).
 
 ## How the local components fit together
 
@@ -346,15 +350,18 @@ JSON Production Picture and Audio selections are uploaded immediately into the c
 
 ## Bundled workflows
 
-Director Studio currently uses five ComfyUI workflow graphs:
+The main bundled generation graphs are:
 
 | Purpose | Workflow file | Notes |
 |---|---|---|
 | Actor assets | `qwen_actor_asset_workbench.api.json` | Character master and three-view outputs |
 | Scene assets | `QwenEdit2511_MultiAngle_SceneRef.api.json` | Multi-angle scene generation |
 | Prop assets | `qwen_prop_master.api.json` | Prop master generation |
-| Layout reference | `ref_frame_layout.api.json` | Optional shot-composition Picture reference |
-| Local H3 video | `h3_ref2va.api.json` | Temporary Turbo 8 overlay on the Comfy-Org H3 Ref2AV API branch |
+| Director Layout | `qwen_image_21_layout.api.json` | Qwen Image 2.1 text-to-image or reference-to-image composition |
+| Legacy Layout pipeline | `ref_frame_layout.api.json` | Earlier reference-frame adapter; distinct from the current Director Layout route |
+| Local H3 video | `h3_ref2va.api.json` | Comfy-Org-derived Ref2AV graph with Turbo 8 sampling and optimization nodes |
+
+The [Turbo 4-step continuation example](docs/custom-h3-video-input.md#downloadable-turbo-4-step-continuation-example) is available as both API and editable visual JSON. Importing it does not replace the packaged default automatically.
 
 The workflow JSON files are bundled with the application, but their model files and custom-node dependencies must also be available in the user's ComfyUI installation.
 
@@ -380,7 +387,7 @@ For a new or incompatible graph:
 4. Add tests for graph validation, prompt injection, and output mapping.
 5. Rebuild with `pwsh -File scripts/build-windows-portable.ps1`.
 
-Non-H3 custom-workflow overrides remain source-only in the current release. Portable supports H3 Ref2AV workflow import through Settings, while the packaged built-in workflow remains a read-only fallback. In this temporary test commit, that fallback is Turbo 8. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the pipeline contract and extension points.
+Non-H3 graph replacement requires source adapter changes and a rebuild. Portable supports H3 Ref2AV workflow import through Settings, while the packaged built-in graph remains a read-only fallback. See [Architecture](docs/ARCHITECTURE.md) for pipeline contracts and extension points.
 
 ## Replacing bundled generation workflows
 
@@ -460,6 +467,24 @@ py -m pytest tests/test_actor_hair_policy.py tests/test_job_execution_adapters.p
 
 ### Layout reference-frame workflow
 
+Director's local Layout generation now uses **Qwen Image 2.1**. A Layout can be generated from text alone; image references are optional.
+
+- Workflow: `backend/workflows/qwen_image_21_layout.api.json`
+- Adapter: `backend/app/pipelines/qwen21_layout/workflow.py`
+- Pipeline: `qwen21_layout`
+
+| Director Studio value | Qwen Image 2.1 boundary |
+|---|---|
+| Composition prompt / negative prompt | `10`, `TextEncodeQwenImage21` → `prompt` / `negative_prompt` |
+| Optional references | Dynamic `LoadImage` nodes → `images.image_1..3` on node `10` |
+| Seed and sampling controls | `12`, `KSampler` |
+| Canvas | `15`, `EmptySD3LatentImage`; 1536×864 or 864×1536 |
+| Final image | `14`, `SaveImage` → `layout` |
+
+Focused checks: `python -m pytest tests/test_qwen21_layout_pipeline.py -q` from `backend`.
+
+The earlier `ref_frame` pipeline is still available separately. The following mapping describes that legacy adapter, not the current Director Layout route:
+
 - Workflow: `backend/workflows/ref_frame_layout.api.json`
 - Adapter: `backend/app/pipelines/ref_frame/workflow.py`
 - Builder: `build_layout_prompt()` / `fill_layout_graph()`
@@ -494,7 +519,7 @@ py -m pytest tests/test_ref_frame_pipeline.py -q
 - Builder: `build_ref2va_prompt()` / `fill_ref2va_graph()`
 - Output mapper: `map_history_outputs()`
 
-This temporary test commit overlays the built-in API graph derived from Comfy-Org's `video_minimax_h3_r2v.json` template with Turbo 8 sampling. Revert this commit to restore the full-quality official graph. The primary H3 node is discovered by `class_type = MiniMaxH3ReferenceToVideo`; its node ID may change without changing a constant.
+The current built-in graph is derived from Comfy-Org's `video_minimax_h3_r2v.json` template and uses Turbo 8 sampling. It includes additional LoRA, sigma-shift, memory-optimization, and sparse-attention nodes; it is not an unchanged copy of the upstream template. Use runtime profile import to choose another variation. The primary H3 node is discovered by `class_type = MiniMaxH3ReferenceToVideo`.
 
 Minimal application boundary:
 
@@ -509,9 +534,9 @@ Minimal application boundary:
 | Output directory | Unique `SaveVideo` → `inputs.filename_prefix` |
 | UI result | Built-in saver node `92` → `video` |
 
-Everything else comes from the workflow JSON. The adapter does not overwrite the model, LoRA, sampler, scheduler, steps, denoise, guider, decode, mux, FPS, format, or codec. In this temporary graph, node `127` loads the official Ref2AV base model, nodes `131`–`134` apply Turbo LoRA and optimization, node `123` selects `euler`, node `124` contains the 8-step `simple` schedule, and node `92` saves the single final video.
+Model and sampling choices come from the workflow JSON. The adapter does not overwrite the model, LoRA, sampler, scheduler, steps, denoise, guider, FPS, format, or codec. In the packaged graph, node `127` loads the Ref2AV model, nodes `131`–`134` apply Turbo LoRA and optimization, node `123` selects `euler`, node `124` uses an 8-step `simple` schedule, and node `92` saves the final video. Active video continuation additionally applies the supported context and delivery-trim path.
 
-The adapter requires exactly one `MiniMaxH3ReferenceToVideo`, one `RandomNoise`, and one `SaveVideo`. It rejects `MiniMaxH3ImageToVideo`, `ref_frame`, and `last_frame`. The official local workflow generates synchronized audio as part of H3 Ref2AV, but it does not preserve a supplied source track exactly and produces only the `video` output.
+The built-in adapter requires one `MiniMaxH3ReferenceToVideo`, one `RandomNoise`, and one `SaveVideo`. It rejects I2V `ref_frame` and `last_frame` inputs. Video continuation uses an independent source-video input instead. Local H3 generates synchronized audio, but reference audio does not guarantee exact reproduction of a source track. The built-in graph returns the `video` output.
 
 Because sampling settings remain inside the JSON, updating the official template's internal quality settings does not require a Python change as long as the three unique boundary node classes and H3 input names remain compatible. If the official saver node ID changes, update `NODE_SAVE` so completed history maps deterministically to `video`.
 
@@ -709,6 +734,23 @@ Current production contract:
 - Picture references use their actual saved order. A shot becomes ready for H3 when its production prompt is complete; a Layout is not required.
 - **VRAM exclusive:** The local Ollama, LM Studio or llama-swap model is released before Comfy Layout, asset, and local H3 jobs. Durable history and project state are separate from GPU residency.
 
+### Music videos
+
+Create an MV project, then open **Assets → Music** to upload the song and import lyrics/timing. Prepare transcription or segmentation externally; Director Studio does not require Whisper. Paste timestamped lyrics, JSON, CSV, or other readable text into the single import entry, review the normalized segments, then save them.
+
+The song player appears above Director and Shots. Listen to the full song or loop a segment, browse neighboring lyrics, and choose the section to discuss with the Agent. A shot can cover multiple lyric segments. The original song remains the timing authority; each shot stores its song interval and whether that interval is used as an H3 Audio reference. An instrumental shot can omit that reference without losing its place in the song.
+
+### Experimental video continuation
+
+Set `DS_VIDEO_CONTEXT_ENABLED=true` in the source or portable `.env`, then restart Director Studio. The experiment is off by default and supports **local H3** only.
+
+- Ask Director to continue a completed earlier shot, or configure a source video for the target shot. Sources can come from nonadjacent earlier shots or an uploaded clip; unrelated intermediate shots can remain independent.
+- An explicitly selected take stays pinned. Agent configuration can instead follow the source shot's current take. Source changes invalidate the saved continuation prompt so it must be updated before resubmission.
+- Previous-shot continuation inherits the selected source video's resolution. The source is submitted separately from Picture and Audio references, with its actual bytes and provenance captured for the job.
+- The receiving graph decodes the source video, encodes its tail into Motion Context, samples the next shot, and trims the inherited overlap. Direct latent-tensor exchange between arbitrary workflows is not supported.
+
+Custom continuation graphs require the certified Ref2AV + Motion Context path at 24 fps. Video windows are 5, 22, 39, or 56 frames; uploaded custom variations keep their configured window. See [Custom H3 video input](docs/custom-h3-video-input.md) for mapping, dependencies, delivery constraints, and API/visual examples. Model output still needs visual and audio review; context does not guarantee a seamless result.
+
 API: `/api/projects/*` · pipelines: `GET /api/pipelines` · health: `GET /api/health`
 
 ## Layout (extension points)
@@ -717,12 +759,12 @@ API: `/api/projects/*` · pipelines: `GET /api/pipelines` · health: `GET /api/h
 backend/app/
   core/           # jobs, library, comfy, projects, h3, vram
   agents/         # Director planning, casting, reference selection, prompts
-  pipelines/      # actor, scene, prop, ref_frame, h3_ref2va
+  pipelines/      # actor, scene, prop, qwen21_layout, ref_frame, h3_ref2va
   api/            # health, files, pipelines, projects
 frontend/src/
   app/            # shell + nav
   shared/         # components, api client
-  features/       # casting, set, library, director, production
+  features/       # assets, director (including shots), music, production
 docs/ARCHITECTURE.md
 ```
 
@@ -745,6 +787,8 @@ API: `/api/actors/*` · `GET /api/pipelines`
 |----------|---------|---------|
 | `DS_COMFY_BASE_URL` | `http://127.0.0.1:8188` | ComfyUI |
 | `DS_QWEN_IMAGE_21_COMFY_BASE_URL` | `DS_COMFY_BASE_URL` | Optional separate ComfyUI instance with Qwen Image 2.1 nodes and models for Layout generation; leave empty to use the H3 instance |
+| `DS_VIDEO_CONTEXT_ENABLED` | `false` | Enable experimental local H3 shot continuation; restart after changing |
+| `DS_DIRECTOR_AGENT_RUNTIME` | `harness` in the example `.env` and portable defaults | Director loop; bare source settings default to `legacy` when this value is absent |
 | `DS_H3_PROVIDER` | `local` | Initial H3 provider shown in Production and JSON Production; each run can override it |
 | `DS_COMFY_MCP_COMMAND` | `comfy-mcp` | ComfyUI MCP executable; Windows portable defaults to its private Python module |
 | `DS_COMFY_MCP_ARGS` | empty | Optional extra command-line arguments passed to the MCP server process |
@@ -782,8 +826,8 @@ turn without system Node on `PATH`, exercises a real first-launch installation
 of the locked Comfy MCP/CLI wheels into isolated package data, launches the
 packaged application on isolated ports, checks authenticated Harness readiness
 and the bundled UI, confirms child cleanup, then writes the archive and reports
-its SHA-256. It also verifies that the executable and zip contain the official
-H3 workflow but no Comfy MCP/CLI packages, obsolete Windows installer, imported
+its SHA-256. It also verifies that the executable and zip contain the packaged
+H3 graph but no Comfy MCP/CLI packages, obsolete Windows installer, imported
 profiles, active pointer, user data, projects, jobs, outputs, compiled tests, or
 Harness development dependencies:
 
