@@ -215,6 +215,29 @@ function Start-Backend {
     Write-Host "[backend] API docs: http://127.0.0.1:$BackendPort/docs"
 }
 
+function Start-ConfiguredLlm {
+    $settings = @{}
+    $envFile = Join-Path $BackendDir '.env'
+    if (Test-Path -LiteralPath $envFile) {
+        foreach ($line in Get-Content -LiteralPath $envFile) {
+            if ($line -match '^\s*(?:export\s+)?(DS_LLM_PROVIDER|DS_LLM_BASE_URL)\s*=\s*(.*?)\s*$') {
+                $settings[$Matches[1]] = ($Matches[2] -replace '\s+#.*$', '').Trim().Trim('"', "'")
+            }
+        }
+    }
+    foreach ($key in @('DS_LLM_PROVIDER', 'DS_LLM_BASE_URL')) {
+        $value = [Environment]::GetEnvironmentVariable($key, 'Process')
+        if ($value) { $settings[$key] = $value }
+    }
+    if ($settings['DS_LLM_PROVIDER'] -ne 'llama-swap') { return }
+    $url = $settings['DS_LLM_BASE_URL']
+    if (-not $url) { $url = 'http://127.0.0.1:11435/v1' }
+    $endpoint = [Uri]$url
+    if ($endpoint.Scheme -ne 'http' -or $endpoint.Host -notin @('127.0.0.1', 'localhost')) { return }
+    # A return in the child script skips only LLM startup; app startup continues.
+    & (Join-Path $Root 'start-llama-swap.ps1') -Port $endpoint.Port -RunDir $RunDir
+}
+
 function Start-Frontend {
     if (Test-PortInUse $FrontendPort) {
         Write-Host "[frontend] port $FrontendPort already in use — skip start" -ForegroundColor Yellow
@@ -266,6 +289,7 @@ foreach ($key in @('DS_DIRECTOR_AGENT_RUNTIME', 'DS_HARNESS_INTERNAL_TOKEN', 'DS
 }
 try {
     if (-not $FrontendOnly) {
+        Start-ConfiguredLlm
         $env:DS_DIRECTOR_AGENT_RUNTIME = $runtime
         Write-Host "[director] agent runtime: $runtime"
         if ($runtime -eq 'harness') {

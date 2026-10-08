@@ -127,7 +127,15 @@ DS_LLM_PROVIDER=lm-studio
 DS_LLM_BASE_URL=http://127.0.0.1:1234/v1
 ```
 
-For a dedicated local llama-swap proxy (start the proxy separately):
+For a dedicated local llama-swap proxy:
+
+On Windows, `.\start-llama-swap.ps1` starts the locally installed proxy at
+`127.0.0.1:11435` and writes its PID and logs to `.run/`. Override the
+installation paths with `-ExePath` and `-ConfigPath` if needed; use
+`-ValidateOnly` to check the config without starting the service.
+With the local `llama-swap` provider configured below, Windows `start.ps1`
+starts or reuses the proxy, then continues starting the Harness, backend and
+frontend. A healthy existing proxy is skipped without stopping app startup.
 
 ```dotenv
 DS_LLM_PROVIDER=llama-swap
@@ -736,6 +744,7 @@ API: `/api/actors/*` · `GET /api/pipelines`
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `DS_COMFY_BASE_URL` | `http://127.0.0.1:8188` | ComfyUI |
+| `DS_QWEN_IMAGE_21_COMFY_BASE_URL` | `DS_COMFY_BASE_URL` | Optional separate ComfyUI instance with Qwen Image 2.1 nodes and models for Layout generation; leave empty to use the H3 instance |
 | `DS_H3_PROVIDER` | `local` | Initial H3 provider shown in Production and JSON Production; each run can override it |
 | `DS_COMFY_MCP_COMMAND` | `comfy-mcp` | ComfyUI MCP executable; Windows portable defaults to its private Python module |
 | `DS_COMFY_MCP_ARGS` | empty | Optional extra command-line arguments passed to the MCP server process |

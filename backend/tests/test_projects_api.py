@@ -2234,10 +2234,10 @@ def test_approve_shot_and_submit_h3(client, api_env, monkeypatch, edit_during_st
     )
     shot = shot.model_copy(update={"meta": _fresh_layout_prompt_meta(shot)})
     from test_director_dialogue_attribution import certify_test_shot
-    shot = certify_test_shot(project, shot, "Actor")
-    save_shot(shot)
     project.shot_ids = [shot.id]
     save_project(project)
+    shot = certify_test_shot(project, shot, "Actor")
+    save_shot(shot)
 
     r = client.post(f"/api/shots/{shot.id}/approve")
     assert r.status_code == 200
@@ -2344,9 +2344,10 @@ def test_submit_rejects_prompt_picture_tag_without_a_matching_shot_ref(
         ),
     )
     from test_reference_facts import certify_reference_test_shot
+    project.shot_ids = [shot.id]
+    save_project(project)
     shot = certify_reference_test_shot(project, shot)
     save_shot(shot)
-    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
 
     async def fail_if_started(job, *, images=None):
         raise AssertionError("an invalid Picture tag must fail before job start")
@@ -2391,10 +2392,10 @@ def test_submit_h3_rejects_locked_source_audio_for_official_providers(
     )
     shot = shot.model_copy(update={"meta": _fresh_layout_prompt_meta(shot)})
     from test_reference_facts import certify_reference_test_shot
-    shot = certify_reference_test_shot(project, shot)
-    save_shot(shot)
     project.shot_ids = [shot.id]
     save_project(project)
+    shot = certify_reference_test_shot(project, shot)
+    save_shot(shot)
 
     started: list[dict] = []
 
@@ -2422,8 +2423,9 @@ def test_submit_h3_rejects_locked_source_audio_for_official_providers(
     assert started == []
 
 
+@pytest.mark.parametrize("use_audio", [True, False])
 def test_submit_stages_mv_music_segment_as_audio_1(
-    client, api_env, monkeypatch
+    client, api_env, monkeypatch, use_audio
 ):
     _seed_layout(api_env["library"])
     project = create_project("MV", "song", mode="mv")
@@ -2437,6 +2439,7 @@ def test_submit_stages_mv_music_segment_as_audio_1(
         core_end_s=1.75,
         submit_start_s=0.5,
         submit_end_s=2.75,
+        use_as_audio_reference=use_audio,
     )
     shot = Shot(
         id="sht_mv_audio_1",
@@ -2464,6 +2467,8 @@ def test_submit_stages_mv_music_segment_as_audio_1(
         layout_review_status="approved",
     )
     shot = shot.model_copy(update={"meta": _fresh_layout_prompt_meta(shot)})
+    if not use_audio:
+        shot.prompt_sections = _full_prompt(layout_picture_index=1)
     save_shot(shot)
     save_project((load_project(project.id) or project).model_copy(update={"shot_ids": [shot.id]}))
 
@@ -2493,10 +2498,49 @@ def test_submit_stages_mv_music_segment_as_audio_1(
     assert refreshed == [shot.id]
     assert len(started) == 1
     job = started[0]["job"]
-    assert job.params["audio_keys"] == ["music_audio_1"]
+    assert job.params["audio_keys"] == (["music_audio_1"] if use_audio else [])
     assert job.params["duration_s"] == pytest.approx(2.25)
-    assert started[0]["images"]["music_audio_1"][0] == "music_audio_1.wav"
-    assert started[0]["images"]["music_audio_1"][1][:4] == b"RIFF"
+    if use_audio:
+        assert started[0]["images"]["music_audio_1"][0] == "music_audio_1.wav"
+        assert started[0]["images"]["music_audio_1"][1][:4] == b"RIFF"
+    else:
+        assert list(started[0]["images"]) == ["ref_0"]
+        assert load_shot(project.id, shot.id).music_segment.core_start_s == 0.75
+
+
+def test_submit_blocks_editorial_song_title_even_if_refresh_keeps_it(client, api_env, monkeypatch):
+    from app.api import projects as projects_api
+
+    _seed_layout(api_env["library"])
+    project = create_project("MV", "Empty lobby", mode="mv")
+    project = project.model_copy(update={"music_master": ProjectMusicMaster(
+        filename="Anywhere Will Do (Remix).wav", relative_path="music/master.wav",
+        duration_s=30, content_sha256="a" * 64, source_format="wav")})
+    shot = Shot(id="sht_editorial_music", project_id=project.id, scene_id="lobby",
+        title="Lobby", script_beat="Empty lobby", duration_s=3.22, status=ShotStatus.approved,
+        refs=[ShotRef(role=RefRole.layout_ref_frame, asset_id="lay_testlayout01", picture_index=1)],
+        music_segment=ShotMusicSegment(core_start_s=20.8, core_end_s=24.02,
+            submit_start_s=20.3, submit_end_s=24.77, use_as_audio_reference=False),
+        prompt_sections=_full_prompt(layout_picture_index=1).model_copy(update={
+            "non_diegetic_music": "None generated. Anywhere Will Do (Remix) is added in post."}),
+        layout_asset_id="lay_testlayout01", layout_review_status="approved")
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    refreshed = []
+
+    async def unchanged_prompt(shot_id):
+        refreshed.append(shot_id)
+        return load_shot(project.id, shot_id)
+
+    async def unexpected_job(*args, **kwargs):
+        pytest.fail("Editorial music leakage must not reach H3")
+
+    client.app.state.director_service.write_prompts_after_layout = unchanged_prompt
+    monkeypatch.setattr(projects_api, "start_pipeline_job", unexpected_job)
+    response = client.post(f"/api/shots/{shot.id}/submit", json={"h3_provider": "local"})
+    assert refreshed == [shot.id]
+    assert response.status_code == 400
+    assert "editorial-only" in response.text
 
 
 def test_submit_refreshes_prompt_when_layout_provenance_is_stale(
@@ -3099,7 +3143,13 @@ def test_patch_shot_sets_and_clears_mv_music_segment(client, api_env):
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["music_segment"] == segment
+    assert response.json()["music_segment"] == {**segment, "use_as_audio_reference": True}
+    disabled = client.patch(
+        f"/api/shots/{shot.id}",
+        json={"music_segment": {**segment, "use_as_audio_reference": False}},
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["music_segment"] == {**segment, "use_as_audio_reference": False}
     cleared = client.patch(
         f"/api/shots/{shot.id}",
         json={"music_segment": None},

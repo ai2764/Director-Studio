@@ -9,7 +9,7 @@ import { fetchHealth } from "../shared/api/client";
 import { ProjectProvider, useProject } from "../shared/project/ProjectContext";
 import { ProjectPicker } from "../shared/project/ProjectPicker";
 import { DirectorStudioMark } from "../shared/components/DirectorStudioMark";
-import { NAV_ITEMS, type DesktopPage } from "./navigation";
+import { navigationForMode, type DesktopPage } from "./navigation";
 import { WorkflowSettingsPage } from "../features/settings/WorkflowSettingsPage";
 import type { Shot } from "../shared/api/types";
 
@@ -90,7 +90,7 @@ function MobileAppShell() {
         <MobileAssetWorkspace />
       </div>
       <div className="mobile-page mobile-director-page" hidden={activePage !== "director"}>
-        <DirectorPage mobile chatOnly requestedMessage={directorRequest} />
+        <DirectorPage mobile chatOnly active={activePage === "director"} requestedMessage={directorRequest} />
       </div>
       <div
         className={`mobile-page mobile-production-page${
@@ -173,7 +173,7 @@ function AppShell() {
           ) : null}
 
           {!jsonProductionMode ? <nav className="workflow-nav" aria-label="Project workflow">
-            {NAV_ITEMS.map((item) => (
+            {navigationForMode(project?.mode).map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -211,7 +211,7 @@ function AppShell() {
         className={activePage === "director" ? "page-pane active" : "page-pane"}
         hidden={activePage !== "director"}
       >
-        <DirectorPage requestedMessage={directorRequest} />
+        <DirectorPage active={activePage === "director"} requestedMessage={directorRequest} />
       </div>
       <div
         className={activePage === "production" ? "page-pane active" : "page-pane"}

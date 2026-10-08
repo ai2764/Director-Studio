@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Sequence
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -110,3 +111,20 @@ class LlamaSwapLifecycle:
         payload = response.json()
         value = (payload.get("default_generation_settings") or {}).get("n_ctx")
         return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+    async def prompt_token_count(self, model: str, prompt: str) -> int:
+        """Use the selected llama.cpp chat template and tokenizer, not a char estimate."""
+        route = "/upstream/" + quote(model, safe="")
+        template = await self._client.post(route + "/apply-template", json={
+            "messages": [{"role": "user", "content": prompt}],
+            "add_generation_prompt": True,
+        })
+        template.raise_for_status()
+        response = await self._client.post(route + "/tokenize", json={
+            "content": template.json()["prompt"], "add_special": False, "parse_special": True,
+        })
+        response.raise_for_status()
+        tokens = response.json()["tokens"]
+        if not isinstance(tokens, list):
+            raise ValueError("Tokenizer did not return a token list")
+        return len(tokens)

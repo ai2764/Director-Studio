@@ -12,10 +12,11 @@ from typing import Any
 
 from ...config import settings
 from ...core.jobs import create_job, load_job, start_pipeline_job
-from ...core.library.store import load_asset
+from ...core.library.store import list_assets, load_asset
 from ...core.media.music_segments import (
     music_prompt_context,
     music_prompt_signature,
+    validate_editorial_music_prompt,
 )
 from ...core.h3.prompt import (
     validate_h3_prompt,
@@ -80,6 +81,7 @@ from .asset_catalog import (
     _asset_index,
     _default_file_key,
     _inventory,
+    _imported_layout_inventory,
     _read_asset_image_bytes,
     _repair_unique_file_key_typo,
     _script_hash,
@@ -93,6 +95,7 @@ from .casting_service import (
     _heuristic_match,
     _kind_candidates,
     _resolve_voice_matches,
+    resolve_revised_voice_matches,
     _shot_from_draft,
     _validate_materialized_storyboard_bindings,
     _validate_storyboard_bindings,
@@ -260,9 +263,9 @@ def _apply_source_audio_contract(
 def _normalize_unambiguous_dialogue_language_tag(
     sections: PromptSections,
 ) -> PromptSections:
-    """Repair the local model's exact ``<d>English words</d>`` omission."""
+    """Canonicalize an explicit English language prefix missing its brackets."""
     detail = re.sub(
-        r"(<d>\s*)English(?=\s+\S)",
+        r"(<d>\s*)(?:English|EN)(?=\s+\S)",
         r"\1[English]",
         sections.detailed_description,
         flags=re.IGNORECASE,
@@ -427,13 +430,14 @@ class DirectorService:
         tail = project.shot_ids[-1] if project.shot_ids else None
         if validated.expected_last_shot_id != tail:
             raise ValueError("Storyboard tail changed; inspect the last Shot before appending again.")
-        inventory, index = _inventory(project_id), _asset_index(project_id)
+        inventory = [*_inventory(project_id), *_imported_layout_inventory(project_id)]
+        index = _asset_index(project_id)
         if validated.shot.music_segment is not None and project.mode != ProjectMode.mv:
             raise ValueError("music_segment is available only for Music Video projects")
         _validate_mv_append_timing(project, validated.shot)
         _validate_storyboard_bindings([validated.shot], inventory=inventory, index=index)
         shot = _shot_from_draft(project_id, validated.shot, inventory=inventory, index=index,
-                                script_text=project.script_text or "")
+                                script_text=project.script_text or "", complete_missing_refs=False)
         if dialogue_authoring is not None:
             from ...core.projects.dialogue import revision_digest
             shot.meta["dialogue_authoring"] = {**dialogue_authoring,
@@ -509,13 +513,22 @@ class DirectorService:
             validate_shot_duration(authored_updates["duration_s"])
         if "music_segment" in authored_updates:
             authored_updates["music_segment"] = validated.music_segment
+        if "voice_matches" in authored_updates:
+            inventory, index = _inventory(project_id), _asset_index(project_id)
+            authored_updates["voice_refs"] = resolve_revised_voice_matches(
+                validated.voice_matches,
+                inventory=inventory,
+                index=index,
+            )
+            authored_updates.pop("voice_matches")
         if (
             authored_updates.get("music_segment") is not None
             and project.mode != ProjectMode.mv
         ):
             raise ValueError("music_segment is available only for Music Video projects")
         resulting_music = authored_updates.get("music_segment", shot.music_segment)
-        if resulting_music is not None and shot.voice_refs:
+        resulting_voices = authored_updates.get("voice_refs", shot.voice_refs)
+        if resulting_music is not None and resulting_music.use_as_audio_reference and resulting_voices:
             raise ValueError("music_segment cannot be combined with Voice references")
         meta = dict(shot.meta or {})
         if shot.h3_job_id:
@@ -562,6 +575,15 @@ class DirectorService:
         else:
             save_shot(revised)
 
+        if "voice_refs" in authored_updates and revised.voice_refs:
+            # Match storyboard casting: a selected unassigned Voice becomes
+            # project-owned so canonical H3 submission can use it.
+            _claim_storyboard_assets(
+                project_id,
+                [revised.model_copy(update={"refs": []})],
+                index=index,
+            )
+
         persisted = list_shots(project_id)
         save_agent_context(
             project_id,
@@ -600,7 +622,7 @@ class DirectorService:
                 "reference patch names unknown project shot(s): " + ", ".join(missing)
             )
 
-        inventory = _inventory(project_id)
+        inventory = [*_inventory(project_id), *_imported_layout_inventory(project_id)]
         index = _asset_index(project_id)
         replacements: dict[str, Shot] = {}
         for update in validated:
@@ -677,6 +699,7 @@ class DirectorService:
                 if ref_identity(ref) in previous_by_identity
                 and previous_by_identity[ref_identity(ref)].notes != ref.notes]
             meta = dict(original.meta or {})
+            meta["asset_binding_policy"] = "explicit"
             if added or removed or reordered or notes_changed:
                 meta["prompt_picture_signature"] = ""
                 meta["prompt_layout_signature"] = ""
@@ -692,16 +715,16 @@ class DirectorService:
                 update={"refs": refs, "meta": meta}
             )
 
-        candidate = [replacements.get(shot.id, shot) for shot in current]
+        # A local binding edit must not be blocked by unrelated historical
+        # shots whose generated assets have since become unavailable.
         _validate_materialized_storyboard_bindings(
-            candidate,
+            list(replacements.values()),
             inventory=inventory,
             index=index,
         )
 
-        for shot in candidate:
-            if shot.id in replacements:
-                save_shot(shot)
+        for shot in replacements.values():
+            save_shot(shot)
         _claim_storyboard_assets(project_id, list(replacements.values()), index=index)
         persisted = list_shots(project_id)
         save_agent_context(
@@ -875,7 +898,7 @@ class DirectorService:
                 ]
             )
 
-        inventory = _inventory(project_id)
+        inventory = [*_inventory(project_id), *_imported_layout_inventory(project_id)]
         index = _asset_index(project_id)
         _validate_storyboard_bindings(
             validated,
@@ -903,6 +926,10 @@ class DirectorService:
                 inventory=inventory,
                 index=index,
                 script_text=project.script_text or "",
+                complete_missing_refs=not (
+                    existing is not None
+                    and existing.meta.get("asset_binding_policy") == "explicit"
+                ),
             )
             if draft.shot_id in preserve_dialogue_ids:
                 # A round-trip of omitted dialogue is not a new author approval.
@@ -1135,6 +1162,7 @@ class DirectorService:
         shot_ids: list[str] | None = None,
         *,
         force: bool = False,
+        directing_request: str = "",
     ) -> list[Shot]:
         """Compatibility wrapper that queues one default Layout per target shot."""
         project = load_project(project_id)
@@ -1196,7 +1224,7 @@ class DirectorService:
                 } | ({shot.ref_frame_job_id} if shot.ref_frame_job_id else set()))
                 and any(
                     (existing_job := load_job(job_id)) is not None
-                    and existing_job.pipeline_id == "ref_frame"
+                    and existing_job.pipeline_id in {"ref_frame", "qwen21_layout"}
                     and existing_job.status in active_ref_frame_statuses
                     for job_id in layout_job_ids
                 )
@@ -1207,7 +1235,8 @@ class DirectorService:
         updated: list[Shot] = []
         for shot in targets:
             updated.append(
-                await self.queue_reference_frame(shot.id, brief=None, force=force)
+                await self.queue_reference_frame(shot.id, brief=None, force=force,
+                                                 directing_request=directing_request)
             )
         return updated
 
@@ -1217,6 +1246,7 @@ class DirectorService:
         *,
         brief: LayoutBrief | None = None,
         force: bool = False,
+        directing_request: str = "",
     ) -> Shot:
         """Queue one Layout whose activation mode is applied after success."""
         shot = _find_shot(shot_id)
@@ -1230,7 +1260,7 @@ class DirectorService:
 
         compatibility_request = brief is None
         requested_brief = brief or LayoutBrief()
-        uses_default_pack = not requested_brief.source_refs
+        uses_default_pack = brief is None
         if uses_default_pack:
             shot = self._ensure_ref_frame_refs(project, shot)
             missing = self._ref_frame_missing_requirements(shot)
@@ -1251,8 +1281,8 @@ class DirectorService:
             effective_brief = requested_brief
 
         images = packed["images"]
-        if not 1 <= len(images) <= 3:
-            raise ValueError("Qwen Layout generation requires 1 to 3 source images")
+        if len(images) > 3:
+            raise ValueError("Qwen Layout generation accepts at most 3 source images")
         ref_labels = list(packed["labels"])
         vision_captions = list(packed.get("image_labels") or [])
         if not vision_captions:
@@ -1278,7 +1308,7 @@ class DirectorService:
         save_agent_context(project.id, ctx)
 
         review_image: tuple[str, bytes] | None = None
-        if uses_default_pack and (shot.feedback or "").strip() and shot.layout_asset_id:
+        if (uses_default_pack or force) and (shot.feedback or "").strip() and shot.layout_asset_id:
             previous_layout = load_asset("layouts", shot.layout_asset_id)
             if previous_layout is not None:
                 review_image = _read_asset_image_bytes(
@@ -1299,7 +1329,7 @@ class DirectorService:
             and effective_brief.source_refs[0].role == RefRole.layout_ref_frame
         )
         direction_feedback = ""
-        if review_image is not None or tail_frame_redraw:
+        if review_image is not None or tail_frame_redraw or force:
             direction_feedback = shot.feedback or ""
 
         runtime_provider = getattr(self.orchestrator, "provider", None)
@@ -1323,6 +1353,8 @@ class DirectorService:
                     layout_brief=effective_brief,
                     review_image=review_image,
                     feedback=direction_feedback,
+                    project_script=project.script_text,
+                    directing_request=directing_request,
                     model=model,
                     ollama=vision_client,
                 )
@@ -1340,7 +1372,7 @@ class DirectorService:
             source.model_dump(mode="json") for source in effective_brief.source_refs
         ]
         job = create_job(
-            pipeline_id="ref_frame",
+            pipeline_id="qwen21_layout",
             asset_kind="layouts",
             name=f"layout:{shot.title}",
             notes=shot.script_beat,
@@ -1349,6 +1381,9 @@ class DirectorService:
                 "compiled_prompt": direction.compiled_prompt,
                 "visual_director_model": model,
                 "visual_brief": direction.brief.model_dump(),
+                "visual_project_script": project.script_text,
+                "visual_project_script_hash": _script_hash(project.script_text),
+                "visual_directing_request": directing_request,
                 "selected_refs": direction.selected_refs,
                 "vision_input_captions": direction.vision_input_captions,
                 "review_image_used": direction.review_image_used,
@@ -1372,6 +1407,7 @@ class DirectorService:
                 "image_keys": list(images),
                 "ref_labels": ref_labels,
                 "aspect_ratio": _reference_frame_aspect_ratio(project),
+                "comfy_base_url": settings.qwen_image_21_comfy_base_url or settings.comfy_base_url,
                 "output_prefix": (
                     f"director-studio/{project.id}/{shot.id}/ref_frame/{layout_ref_id}"
                 ),
@@ -1386,6 +1422,7 @@ class DirectorService:
             state_description=effective_brief.state_description,
             time_hint=effective_brief.time_hint,
             source_refs=list(effective_brief.source_refs),
+            source_refs_explicit=True,
             activation_mode=effective_brief.activation_mode,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -1485,6 +1522,7 @@ class DirectorService:
             state_description=brief.state_description,
             time_hint=brief.time_hint,
             source_refs=list(brief.source_refs),
+            source_refs_explicit=True,
             activation_mode=brief.activation_mode,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -1578,8 +1616,8 @@ class DirectorService:
         return {"images": images, "resolved_sources": resolved_sources}
 
     def _collect_layout_brief_refs(self, brief: LayoutBrief) -> dict[str, Any]:
-        if not 1 <= len(brief.source_refs) <= 3:
-            raise ValueError("Qwen Layout generation requires 1 to 3 source images")
+        if len(brief.source_refs) > 3:
+            raise ValueError("Qwen Layout generation accepts at most 3 source images")
         images: dict[str, tuple[str, bytes]] = {}
         labels: list[str] = []
         for index, source in enumerate(brief.source_refs, start=1):
@@ -1681,10 +1719,13 @@ class DirectorService:
         Agent casting: auto-attach scene + actor from library when missing
         (name match or unambiguous project inventory). Pin three-view / plate keys.
         """
+        if shot.meta.get("asset_binding_policy") == "explicit":
+            return shot
         # Full recast when missing critical roles
         has_actor = any(r.role == RefRole.actor for r in shot.refs)
         has_scene = any(r.role == RefRole.scene for r in shot.refs)
-        if not has_actor or not has_scene:
+        actor_required = shot.meta.get("actor_presence") != "none"
+        if (actor_required and not has_actor) or not has_scene:
             recast = recast_shot_assets(
                 project.id,
                 shot,
@@ -1729,7 +1770,7 @@ class DirectorService:
                 changed = True
 
         has_actor = any(r.role == RefRole.actor for r in refs)
-        if not has_actor:
+        if not has_actor and actor_required:
             actor_asset = _match_library_actor(project, shot)
             if actor_asset is not None:
                 _append_ref(
@@ -1755,11 +1796,12 @@ class DirectorService:
         return shot
 
     def _ref_frame_missing_requirements(self, shot: Shot) -> list[str]:
-        """Hard requirements: at least one actor three-view; scene strongly preferred."""
+        """Validate available image references for a legacy reference-frame job."""
         missing: list[str] = []
         actors = [r for r in shot.refs if r.role == RefRole.actor]
         scenes = [r for r in shot.refs if r.role == RefRole.scene]
-        if not actors:
+        require_default_pack = shot.meta.get("asset_binding_policy") != "explicit"
+        if not actors and require_default_pack and shot.meta.get("actor_presence") != "none":
             missing.append("ref_frame requires at least one actor ref (three-view)")
         else:
             for r in actors:
@@ -1775,7 +1817,7 @@ class DirectorService:
                     missing.append(
                         f"actor {r.asset_id} has no usable three-view/master image"
                     )
-        if not scenes:
+        if not scenes and require_default_pack:
             missing.append(
                 "ref_frame requires a scene library ref (generate Set Design plate first)"
             )
@@ -1986,9 +2028,16 @@ class DirectorService:
         from .material_review import capture_asset_image, observe_reference
         item = next((item for item in _inventory(project_id) if item["id"] == asset_id), None)
         if item is None:
+            layout = next((asset for asset in list_assets(
+                "layouts", project_id=project_id, include_unassigned=True
+            ) if asset.id == asset_id), None)
+            if layout is not None:
+                item = {"id": layout.id, "kind": "layouts"}
+        if item is None:
             raise ValueError("Asset is not in this project's inventory")
         asset = load_asset(item["kind"], asset_id)
-        role = {"actors": "actor", "scenes": "scene", "costumes": "costume", "props": "prop"}.get(item["kind"])
+        role = {"actors": "actor", "scenes": "scene", "costumes": "costume", "props": "prop",
+                "layouts": "layout_ref_frame"}.get(item["kind"])
         if asset is None or role is None:
             raise ValueError("Asset does not provide an inspectable Picture")
         record, image = capture_asset_image(asset, role, file_key)
@@ -2008,6 +2057,7 @@ class DirectorService:
         from .brief import directing_requests
 
         directing_snapshot = directing_requests(project)
+        music_signature = music_prompt_signature(project, shot)
         active_job = load_job(shot.h3_job_id) if shot.h3_job_id else None
         if (shot.status in {ShotStatus.queued, ShotStatus.running}
                 or (active_job and active_job.status in {JobStatus.queued, JobStatus.uploading, JobStatus.running})):
@@ -2024,10 +2074,14 @@ class DirectorService:
             current_project = load_project(project.id)
             if (current is None or current.model_dump(mode="json") != original_shot
                     or current_project is None or current_project.script_text != project.script_text
+                    or current_project.shot_ids != project.shot_ids
                     or current_project.asset_coverage_review != project.asset_coverage_review
                     or directing_requests(current_project) != directing_snapshot
                     or str(getattr(self.plan_provider, "model", "")) != model):
                 raise ValueError("Shot, script, confirmed choices or model changed during prompt review; review again")
+            if (current_project.music_master != project.music_master
+                    or music_prompt_signature(current_project, current) != music_signature):
+                raise ValueError("Song inputs changed during prompt review; review again")
             if signature is not None and capture_references(sync_selected_layout_refs(current))[2] != signature:
                 raise ValueError("Reference image content changed during prompt review; review again")
 
@@ -2066,7 +2120,7 @@ class DirectorService:
             "prompt_layout_signature": layout_prompt_signature(candidate),
             "prompt_picture_signature": picture_ref_signature(candidate.refs),
             "prompt_voice_signature": voice_ref_signature(candidate.voice_refs),
-            "prompt_music_signature": music_prompt_signature(project, candidate),
+            "prompt_music_signature": music_signature,
             "material_review_pending": False,
         })
         meta.pop("material_changes", None)
@@ -2136,6 +2190,7 @@ class DirectorService:
         from .progress import report_phase
 
         directing_snapshot = directing_requests(project)
+        music_signature = music_prompt_signature(project, shot)
         review = (shot.meta or {}).get("material_review")
         from .reference_facts import (reference_review_current,
             certify_reference_prompt, REFERENCE_WRITER_CONTRACT)
@@ -2153,8 +2208,12 @@ class DirectorService:
             if (current is None or current.model_dump(mode="json") != original_shot
                     or current_project is None or current_project.script_text != project.script_text
                     or current_project.asset_coverage_review != project.asset_coverage_review
+                    or current_project.shot_ids != project.shot_ids
                     or directing_requests(current_project) != directing_snapshot):
                 raise ValueError("Shot or script changed during material review/prompt writing; review again")
+            if (current_project.music_master != project.music_master
+                    or music_prompt_signature(current_project, current) != music_signature):
+                raise ValueError("Song inputs changed during material review/prompt writing; review again")
             if review_signature is not None:
                 if capture_references(sync_selected_layout_refs(current))[2] != review_signature:
                     raise ValueError("Reference image content changed during review; review again")
@@ -2179,6 +2238,7 @@ class DirectorService:
                 or not (review.get("decision") or {}).get("tail_frame_handoff")
             ))
             if (was_pending or not review or review.get("signature") != review_signature
+                    or (revision_request.strip() and review.get("revision_request") != revision_request)
                     or needs_handoff_review or not reference_review_current(project, shot, records)):
                 keep = bool(getattr(settings, "llm_keep_loaded", True))
                 async with self.orchestrator.llm_session(release_on_exit=not keep):
@@ -2187,7 +2247,7 @@ class DirectorService:
                         self.plan_provider, project, shot, records, images, review_signature, check_current,
                         revision_request=revision_request, on_progress=on_progress,
                     )
-                decision = review["decision"]
+            decision = review["decision"]
             shot = shot.model_copy(update={"meta": {**shot.meta, "material_review": review}})
 
         ctx = load_agent_context(shot.project_id) if task_packet is None else None
@@ -2317,7 +2377,7 @@ class DirectorService:
         )
         effective_audio_count = (
             1
-            if music_context is not None
+            if music_context is not None and music_context["use_as_audio_reference"]
             else 0 if shot.source_audio_path else len(shot.voice_refs)
         )
 
@@ -2335,6 +2395,11 @@ class DirectorService:
                     dialogue_lines=[line.model_dump(mode="json") for line in dialogue_lines] if dialogue_lines else [],
                     reference_evidence=(review or {}).get("references", []))
                 context_json = json.dumps(canonical, ensure_ascii=False)
+            from .writer_context import project_writer_context
+            intent = shot_execution_intent(project, shot, revision_request)
+            writer_context, writer_refs = project_writer_context(json.loads(context_json), intent, prompt_refs)
+            context_json = json.dumps(writer_context, ensure_ascii=False)
+            refs_json = json.dumps(writer_refs, ensure_ascii=False)
             user = prompt_text.PROMPT_SECTIONS_USER_TEMPLATE.format(
                 title=shot.title,
                 scene_id=shot.scene_id,
@@ -2357,10 +2422,13 @@ class DirectorService:
                     ensure_ascii=False,
                 ),
                 layout_asset_id=selected_layout_asset_id,
-                feedback=(shot.feedback or "") + (f"\nCurrent user revision request: {revision_request}" if revision_request else ""),
+                feedback=shot.feedback or "",
                 context_json=context_json,
             )
-            user += "\nShot execution intent:\n" + json.dumps(shot_execution_intent(project, shot, revision_request), ensure_ascii=False)
+            user += "\nShot execution intent (intent; text_ref links above resolve here):\n" + json.dumps(intent, ensure_ascii=False)
+            if review:
+                user += ("\nReviewed reference suitability (current inputs; not story authoring):\n"
+                         + json.dumps(review.get("decision"), ensure_ascii=False))
             if dialogue_lines:
                 user += "\nSource dialogue lines:\n" + json.dumps([line.model_dump(mode="json") for line in dialogue_lines], ensure_ascii=False)
                 user += "\nExisting prompt, if present: preserve valid creative choices while repairing attribution or applying the current requested revision:\n" + shot.prompt_sections.model_dump_json()
@@ -2369,11 +2437,13 @@ class DirectorService:
             if prompt_only_retry_active():
                 writer_instructions += PROMPT_ONLY_INSTRUCTIONS
             dialogue_draft = None
-            preserve_prompt = bool(decision and not decision["rewrite_prompt"]
+            preserve_prompt = bool(not revision_request.strip() and decision and not decision["rewrite_prompt"]
                                    and decision["brief"] is None and not needs_handoff_review
+                                   and shot.meta.get("prompt_music_signature", "") == music_signature
                                    and dialogue_contract_current(project, shot))
             if preserve_prompt:
                 try:
+                    validate_editorial_music_prompt(project, shot, shot.prompt_sections)
                     validate_h3_prompt(shot.prompt_sections.as_ordered_text(), shot.dialogue,
                                        audio_count=effective_audio_count,
                                        required_picture_indices=[r.picture_index for r in shot.refs],
@@ -2393,7 +2463,7 @@ class DirectorService:
                 async with report_phase(on_progress, "prompt_writing", f"Writing H3 prompt for {shot.title}"):
                     raw = await self.plan_provider.complete(
                         writer_instructions,
-                        repair_request(user, previous_repair) if previous_repair else user,
+                        repair_request(user, previous_repair, dialogue_bindings=bool(dialogue_lines)) if previous_repair else user,
                         guides=("h3-prompt-writing",),
                     )
             if previous_repair:
@@ -2416,12 +2486,16 @@ class DirectorService:
                         submitted_picture_indices=[r.picture_index for r in shot.refs]):
                     dialogue_draft = parse_dialogue_draft(value) if dialogue_lines else None
                     parsed = dialogue_draft.prompt_sections if dialogue_draft else PromptSections(**parse_prompt_sections_json(value))
+                    from ...core.h3.prompt import normalize_reference_tag_delimiters
+                    parsed = normalize_reference_tag_delimiters(parsed)
+                    parsed = _normalize_unambiguous_dialogue_language_tag(parsed)
                     parsed = _apply_source_audio_contract(parsed, shot)
                     if dialogue_draft:
                         dialogue_draft = dialogue_draft.model_copy(update={"prompt_sections": parsed})
                         dialogue_draft = compile_dialogue_draft(dialogue_draft, dialogue_lines)
                         parsed = dialogue_draft.prompt_sections
                     ordered_text = parsed.as_ordered_text()
+                    validate_editorial_music_prompt(project, shot, parsed)
                     validate_h3_prompt(ordered_text, shot.dialogue,
                                        audio_count=effective_audio_count,
                                        required_picture_indices=(required_ordinary_picture_indices
@@ -2443,7 +2517,8 @@ class DirectorService:
                 check_current()
                 require_repair_progress(previous_repair, raw, first_err)
                 repair = repair_request(user, {"error": str(first_err), "rejected_candidate": raw,
-                    "issues": [issue.model_dump(mode="json") for issue in getattr(first_err, "issues", [])]})
+                    "issues": [issue.model_dump(mode="json") for issue in getattr(first_err, "issues", [])]},
+                    dialogue_bindings=bool(dialogue_lines))
                 raw2 = None
                 try:
                     async with report_phase(on_progress, "prompt_repair", f"Repairing H3 prompt for {shot.title}"):
@@ -2486,7 +2561,7 @@ class DirectorService:
         meta["prompt_layout_signature"] = layout_prompt_signature(shot)
         meta["prompt_picture_signature"] = picture_ref_signature(shot.refs)
         meta["prompt_voice_signature"] = voice_ref_signature(shot.voice_refs)
-        meta["prompt_music_signature"] = music_prompt_signature(project, shot)
+        meta["prompt_music_signature"] = music_signature
         meta["material_review_pending"] = False
         meta.pop("material_changes", None)
         shot = shot.model_copy(

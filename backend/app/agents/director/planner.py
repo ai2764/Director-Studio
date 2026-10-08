@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from typing import Any, Iterable, Protocol, runtime_checkable
+from typing import Any, Iterable, Literal, Protocol, runtime_checkable
 
 from pydantic import (
     BaseModel,
@@ -127,8 +127,16 @@ class ShotDraft(BaseModel):
     music_segment: ShotMusicSegment | None = Field(
         default=None,
         description=(
-            "MV-only song timestamps for readable lip sync. Leave null for "
-            "audio-free cutaways."
+            "MV song timing and optional audio conditioning. Set "
+            "use_as_audio_reference=false for cutaways or editorial-only music; "
+            "use true when the song must condition generation."
+        ),
+    )
+    actor_presence: Literal["auto", "none"] = Field(
+        default="auto",
+        description=(
+            "Set none for an intentionally unoccupied shot. This prevents automatic "
+            "actor casting; use auto when a person should appear or casting is undecided."
         ),
     )
     asset_matches: list[AssetMatchDraft] = Field(default_factory=list)
@@ -165,6 +173,10 @@ class ShotDraft(BaseModel):
     def _validate_picture_order(self) -> "ShotDraft":
         validate_authored_dialogue(self.dialogue, self.dialogue_lines)
         matches = list(self.asset_matches)
+        if self.actor_presence == "none" and any(
+            role_to_ref_role(match.role) == RefRole.actor for match in matches
+        ):
+            raise ValueError("actor_presence=none cannot include an actor asset match")
         if len(matches) > 9:
             raise ValueError("H3 supports at most 9 asset matches")
         specified = [m.picture_index for m in matches if m.picture_index is not None]
@@ -179,7 +191,7 @@ class ShotDraft(BaseModel):
             raise ValueError("voice match assets must be unique")
         if [voice.audio_index for voice in voices] != list(range(1, len(voices) + 1)):
             raise ValueError("audio_index must be contiguous and ordered from 1")
-        if self.music_segment is not None and voices:
+        if self.music_segment is not None and self.music_segment.use_as_audio_reference and voices:
             raise ValueError("music_segment cannot be combined with voice matches")
         return self
 
@@ -243,7 +255,23 @@ class ShotRevisionSubmission(BaseModel):
     dialogue: list[str] | None = None
     dialogue_lines: list[DialogueLine] | None = None
     dialogue_language_updates: list[DialogueLanguageUpdate] | None = Field(default=None, min_length=1)
-    music_segment: ShotMusicSegment | None = None
+    music_segment: ShotMusicSegment | None = Field(
+        default=None,
+        description=(
+            "Replace the song timing/audio configuration. Omit to preserve it; "
+            "null removes it. To disable song conditioning while retaining edit "
+            "timing, copy the saved timestamps and set use_as_audio_reference=false. "
+            "Voice references are independent; clear voice_matches separately."
+        ),
+    )
+    voice_matches: list[VoiceMatchDraft] | None = Field(
+        default=None,
+        max_length=3,
+        description=(
+            "Complete ordered Voice reference replacement for this Shot. "
+            "Omit to preserve existing references; use [] to clear them."
+        ),
+    )
 
     @field_validator(
         "shot_id",
@@ -281,6 +309,17 @@ class ShotRevisionSubmission(BaseModel):
     def _require_language_updates(cls, value: list[DialogueLanguageUpdate] | None):
         if value is None:
             raise ValueError("dialogue_language_updates must be a nonempty list")
+        return value
+
+    @field_validator("voice_matches")
+    @classmethod
+    def _require_ordered_voice_matches(cls, value: list[VoiceMatchDraft] | None):
+        if value is None:
+            raise ValueError("voice_matches must be a list; use [] to clear Voice references")
+        if len({match.asset_id for match in value}) != len(value):
+            raise ValueError("voice match assets must be unique")
+        if [match.audio_index for match in value] != list(range(1, len(value) + 1)):
+            raise ValueError("audio_index must be contiguous and ordered from 1")
         return value
 
     @model_validator(mode="after")

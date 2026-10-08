@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -70,9 +71,29 @@ def append_chat_message(
     return message
 
 
-def agent_history(messages: list[DirectorChatMessage]) -> list[dict[str, str]]:
-    return [
-        {"role": message.role, "content": message.content}
-        for message in messages
-        if message.content.strip()
-    ]
+def agent_history(
+    messages: list[DirectorChatMessage], *, project_id: str | None = None,
+) -> list[dict[str, str]]:
+    """Keep unsupported prior Job IDs from becoming evidence in later turns."""
+    from ..jobs.store import load_job
+
+    history: list[dict[str, str]] = []
+    for message in messages:
+        content = message.content.strip()
+        if not content:
+            continue
+        if message.role == "assistant":
+            if content == "Earlier assistant reply cited a Job with no matching project record. No task can be inferred from that reply.":
+                continue
+            job_ids = set(re.findall(r"\bjob_[a-z0-9]+\b", content, re.I))
+            if any(
+                (job := load_job(job_id)) is None
+                or (project_id is not None and job.project_id != project_id)
+                for job_id in job_ids
+            ):
+                # Keep the visible transcript for audit, but do not seed the
+                # agent with fabricated execution claims or a replacement
+                # sentence it may parrot as its next answer.
+                continue
+        history.append({"role": message.role, "content": content})
+    return history

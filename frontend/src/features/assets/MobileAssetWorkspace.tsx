@@ -6,8 +6,11 @@ import { SetDesignPage } from "../set/SetDesignPage";
 import { MobileLibraryOverview } from "./MobileLibraryOverview";
 import { AssetImportDialog } from "../library/AssetImportDialog";
 import { useProject } from "../../shared/project/ProjectContext";
+import { SongSegmentsEditor } from "../music/SongSegmentsEditor";
+import { MusicMasterControl } from "./MusicMasterControl";
 
-type MobileAssetCategory = "library" | Exclude<LibraryKind, "layouts" | "costumes">;
+type PreparedMobileCategory = Exclude<LibraryKind, "layouts" | "costumes">;
+type MobileAssetCategory = "library" | PreparedMobileCategory | "music";
 
 const CATEGORIES: { id: MobileAssetCategory; label: string }[] = [
   { id: "library", label: "Library" },
@@ -15,9 +18,10 @@ const CATEGORIES: { id: MobileAssetCategory; label: string }[] = [
   { id: "scenes", label: "Scenes" },
   { id: "props", label: "Props" },
   { id: "voices", label: "Voices" },
+  { id: "music", label: "Music" },
 ];
 
-const WORKFLOW_COPY: Record<Exclude<MobileAssetCategory, "library">, { singular: string; description: string }> = {
+const WORKFLOW_COPY: Record<PreparedMobileCategory, { singular: string; description: string }> = {
   actors: { singular: "Actor", description: "Build a reusable character identity and reference sheet." },
   scenes: { singular: "Scene", description: "Build a reusable location with consistent viewing angles." },
   props: { singular: "Prop", description: "Turn a story object into a clean reusable reference." },
@@ -25,9 +29,10 @@ const WORKFLOW_COPY: Record<Exclude<MobileAssetCategory, "library">, { singular:
 };
 
 export function MobileAssetWorkspace() {
-  const { projectId } = useProject();
+  const { project, projectId } = useProject();
   const [category, setCategory] = useState<MobileAssetCategory>("library");
-  const [importKind, setImportKind] = useState<Exclude<MobileAssetCategory, "library"> | null>(null);
+  const [importKind, setImportKind] = useState<PreparedMobileCategory | null>(null);
+  const visibleCategory = category === "music" && project?.mode !== "mv" ? "library" : category;
 
   return (
     <main className="mobile-asset-workspace">
@@ -39,13 +44,13 @@ export function MobileAssetWorkspace() {
       </header>
 
       <nav className="mobile-category-strip" aria-label="Asset categories">
-        {CATEGORIES.map((item) => (
+        {CATEGORIES.filter((item) => item.id !== "music" || project?.mode === "mv").map((item) => (
           <button
             key={item.id}
             type="button"
-            className={`mobile-category-main ${category === item.id ? "active" : ""}`}
+            className={`mobile-category-main ${visibleCategory === item.id ? "active" : ""}`}
             aria-label={item.label}
-            aria-current={category === item.id ? "page" : undefined}
+            aria-current={visibleCategory === item.id ? "page" : undefined}
             onClick={() => setCategory(item.id)}
           >
             {item.label}
@@ -53,16 +58,23 @@ export function MobileAssetWorkspace() {
         ))}
       </nav>
 
-      {category === "library" ? (
+      {visibleCategory === "library" ? (
         <MobileLibraryOverview onSelectKind={setCategory} />
       ) : null}
-      {CATEGORIES.filter((item) => item.id !== "library").map((item) => {
-        const workflowCategory = item.id as Exclude<MobileAssetCategory, "library">;
+      {visibleCategory === "music" && project?.mode === "mv" ? (
+        <section className="mobile-workflow-callout">
+          <div><span className="mobile-eyebrow">Music Video source</span><h2>Original song</h2></div>
+          <MusicMasterControl />
+          <SongSegmentsEditor />
+        </section>
+      ) : null}
+      {CATEGORIES.filter((item) => item.id !== "library" && item.id !== "music").map((item) => {
+        const workflowCategory = item.id as PreparedMobileCategory;
         return (
         <div
           key={workflowCategory}
           className="mobile-asset-category-page"
-          hidden={category !== workflowCategory}
+          hidden={visibleCategory !== workflowCategory}
         >
           <section className="mobile-workflow-callout">
             <div>

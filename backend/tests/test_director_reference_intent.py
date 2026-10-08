@@ -57,6 +57,26 @@ def test_replacement_removal_and_repeated_original_intent_remain_chronological()
     assert [source["source_message_id"] for source in reference_sources(project, {})] == ids
 
 
+def test_song_map_is_not_saved_as_a_directing_request() -> None:
+    project = create_project("Music intent", "")
+    authored = "Keep the camera fixed."
+    expanded = authored + "\n\nComplete saved song segmentation: 2 timestamped units.\nAll saved song segments:\n[]"
+    append_chat_message(project.id, role="user", content=authored)
+    remember_directing_request(project.id, expanded)
+    assert directing_requests(project) == [authored]
+    assert reference_sources(project, {})[0]["source_message_id"] is not None
+
+    from app.agents.director.context_io import load_agent_context, save_agent_context
+    context = load_agent_context(project.id)
+    record = context.extra["directing_brief"]
+    record["sources"][0]["text"] = expanded  # Existing project data from an older run.
+    save_agent_context(project.id, context)
+    assert directing_requests(project) == [authored]
+
+    remember_directing_request(project.id, "Change the angle.\n\nSelected song segment IDs: [\"seg_b\"]")
+    assert directing_requests(project)[-1] == "Change the angle."
+
+
 def test_legacy_request_keeps_original_script_provenance_after_update():
     from app.core.projects.models import AgentContext
     from app.core.projects.store import save_project

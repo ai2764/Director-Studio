@@ -1528,20 +1528,72 @@ async def test_queue_two_layout_briefs_for_one_shot(director_dirs, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source_names,force", [((), False), (("scene",), False), (("scene",), True)])
+async def test_layout_queue_propagates_current_project_bible_to_writer_and_job(director_dirs, monkeypatch, source_names, force):
+    import app.agents.director.service as service_module
+    from app.agents.director.service import _script_hash
+    svc, project, shot, sources = _make_layout_queue_fixture(director_dirs)
+    project.script_text = "完整项目圣经：真人与纸世界；人物不可变成纸人。"
+    save_project(project)
+    requests, jobs = [], []
+    async def analyze(*args, **kwargs):
+        requests.append(kwargs)
+        return _visual_result()
+    async def start(job, **kwargs):
+        jobs.append(job)
+        return job
+    monkeypatch.setattr(service_module, "analyze_ref_frame", analyze)
+    monkeypatch.setattr(service_module, "start_pipeline_job", start)
+    monkeypatch.setattr(service_module, "get_director_model", lambda: "test")
+    await svc.queue_reference_frame(shot.id, brief=LayoutBrief(source_refs=[sources[n] for n in source_names]), force=force)
+    assert requests[0].get("project_script") == project.script_text
+    assert jobs[0].params.get("visual_project_script") == project.script_text
+    assert jobs[0].params.get("visual_project_script_hash") == _script_hash(project.script_text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compatibility", [False, True])
+async def test_layout_writer_receives_original_directing_request(director_dirs, monkeypatch, compatibility):
+    import app.agents.director.service as module
+    svc, project, shot, sources = _make_layout_queue_fixture(director_dirs)
+    request = "这一轮所有画面改成清晨；参考图的夜色不能沿用。人物包在腰前。"
+    requests, jobs = [], []
+    async def analyze(*args, **kwargs):
+        requests.append(kwargs)
+        return _visual_result()
+    async def start(job, **kwargs):
+        jobs.append(job)
+        return job
+    monkeypatch.setattr(module, "analyze_ref_frame", analyze)
+    monkeypatch.setattr(module, "start_pipeline_job", start)
+    monkeypatch.setattr(module, "get_director_model", lambda: "test")
+    if compatibility:
+        await svc.queue_ref_frames(project.id, shot_ids=[shot.id], directing_request=request)
+    else:
+        await svc.queue_reference_frame(shot.id, brief=LayoutBrief(source_refs=[]), directing_request=request)
+    assert requests[0].get("directing_request") == request
+    assert jobs[0].params.get("visual_directing_request") == request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("qwen_endpoint", ["", "http://localhost:8190"])
 @pytest.mark.parametrize(
     "source_names",
     [
+        (),
         ("lu",),
         ("scene", "lu"),
         ("scene", "lu", "recorder"),
     ],
 )
-async def test_explicit_layout_pack_preserves_one_to_three_sources_in_order(
-    director_dirs, monkeypatch, source_names
+async def test_explicit_layout_pack_preserves_zero_to_three_sources_in_order(
+    director_dirs, monkeypatch, source_names, qwen_endpoint
 ):
     import app.agents.director.service as service_module
 
     svc, _project, shot, sources = _make_layout_queue_fixture(director_dirs)
+    monkeypatch.setattr(settings, "comfy_base_url", "http://localhost:8118")
+    monkeypatch.setattr(settings, "qwen_image_21_comfy_base_url", qwen_endpoint)
     started: list[tuple[JobRecord, dict]] = []
 
     async def fake_start(job, *, images=None):
@@ -1563,6 +1615,8 @@ async def test_explicit_layout_pack_preserves_one_to_three_sources_in_order(
 
     assert len(started) == 1
     job, images = started[0]
+    assert job.pipeline_id == "qwen21_layout"
+    assert job.params["comfy_base_url"] == (qwen_endpoint or settings.comfy_base_url)
     assert list(images) == [f"ref_{index}" for index in range(len(source_names))]
     assert [item["asset_id"] for item in job.params["layout_source_refs"]] == [
         source.asset_id for source in ordered_sources
@@ -2057,8 +2111,9 @@ async def test_compatibility_regeneration_projects_its_job_and_terminal_asset(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("pipeline_id", ["ref_frame", "qwen21_layout"])
 async def test_queue_ref_frame_does_not_replace_active_job(
-    director_dirs, monkeypatch
+    director_dirs, monkeypatch, pipeline_id
 ):
     """A second click must not orphan the first in-flight layout result."""
     from app.agents.director import service as service_mod
@@ -2069,7 +2124,7 @@ async def test_queue_ref_frame_does_not_replace_active_job(
 
     project = create_project("No duplicate layout", "actor enters hallway")
     active_job = create_job(
-        pipeline_id="ref_frame",
+        pipeline_id=pipeline_id,
         asset_kind="layouts",
         name="layout:entrance",
         params={"shot_id": "sht_no_duplicate", "project_id": project.id},
@@ -2248,7 +2303,9 @@ async def test_planner_retries_on_bad_json_then_blocks(director_dirs):
 
 
 @pytest.mark.asyncio
-async def test_write_prompts_after_layout(director_dirs, enable_reference_review):
+@pytest.mark.parametrize("language_prefix", ["[English]", "English", "EN"])
+@pytest.mark.parametrize("picture_delimiters", [True, False])
+async def test_write_prompts_after_layout(director_dirs, enable_reference_review, language_prefix, picture_delimiters):
     from app.agents.director.context_io import save_agent_context
     from app.agents.director.service import DirectorService
     from app.core.projects.models import RefRole, ShotRef
@@ -2322,11 +2379,13 @@ async def test_write_prompts_after_layout(director_dirs, enable_reference_review
             ),
             "summary": "A short cafe walk-in.",
             "retention_analysis": "Retain the actor and Layout continuity.",
-            "detailed_description": "Actor enters and (S1) says <d>[English] Hello.</d>",
+            "detailed_description": f"Actor enters and (S1) says <d>{language_prefix} Hello.</d>",
             "overall_soundscape": "Cafe ambience.",
             "non_diegetic_music": "Soft piano.",
         }
     )
+    if not picture_delimiters:
+        sections_json = sections_json.replace("<Picture 1>", "Picture 1").replace("<Picture 2>", "Picture 2")
     provider = FakePlanProvider(response=sections_json)
     enable_reference_review(provider)
     orch = RecordingOrchestrator()
@@ -2336,6 +2395,7 @@ async def test_write_prompts_after_layout(director_dirs, enable_reference_review
     assert updated.prompt_sections.subject_definitions.startswith("S1")
     assert "<Picture 2>" in updated.prompt_sections.subject_definitions
     assert updated.prompt_sections.summary
+    assert "<d>[English] Hello.</d>" in updated.prompt_sections.detailed_description
     assert updated.meta["prompt_layout_asset_id"] == "lay_approved01"
     prompt_user = provider.calls[0][1]
     assert "Lin Ya" in prompt_user

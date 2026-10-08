@@ -1,2 +1,3 @@
 *.sh text eol=lf
 *.command text eol=lf
+scripts/git-hooks/pre-commit text eol=lf

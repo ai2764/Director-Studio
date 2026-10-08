@@ -40,6 +40,41 @@ logger = logging.getLogger("director_studio.director.tool_handlers.layout")
 
 _LAYOUT_TOOL_NAMES = frozenset({"accept_ref_frame", "revise_ref_frame", "queue_gpt_ref_frame", "queue_ref_frame", "ref_frame", "approve_layout", "approve", "write_prompt", "rewrite_prompt", "write_prompts", "reject_layout", "reject"})
 
+
+def _require_new_layout_job(previous: Shot, updated: Shot) -> None:
+    """A returned Shot may hold an optional generation failure or an older job."""
+    old_ids = {layout.id for layout in previous.layout_refs}
+    if any(layout.id not in old_ids and layout.job_id for layout in updated.layout_refs):
+        return
+    reasons = (updated.meta or {}).get("layout_generation_issues") or updated.blocked_reasons
+    reason = "; ".join(str(item) for item in reasons) if reasons else "No new Layout job was created"
+    raise ValueError(reason)
+
+
+def _resolve_layout_shot(shots: list[Shot], args: dict[str, Any]) -> Shot | None:
+    shot = resolve_shot(shots, shot_id=args.get("shot_id"),
+                        shot_index=args.get("shot_index") or args.get("index"),
+                        title=args.get("title"))
+    if any(args.get(key) is not None for key in ("shot_id", "shot_index", "index", "title")):
+        return shot
+    layout_id = str(args.get("layout_ref_id") or "").strip()
+    matches = [candidate for candidate in shots
+               if any(layout.id == layout_id for layout in candidate.layout_refs)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _revision_source_refs(layouts: list[Any], target: Any) -> list[LayoutSourceRef]:
+    """Carry real source images through linked redraws, never the rejected output."""
+    by_id = {layout.id: layout for layout in layouts}
+    seen: set[str] = set()
+    current = target
+    while current is not None and current.id not in seen:
+        seen.add(current.id)
+        if current.source_refs or current.source_refs_explicit:
+            return list(current.source_refs)
+        current = by_id.get(current.revision_of)
+    return []
+
 _LIBRARY_KIND_BY_ROLE = {
     "actor": "actors",
     "scene": "scenes",
@@ -101,12 +136,7 @@ async def handle_layout_tool(
         return False
 
     if name == "accept_ref_frame":
-        shot = resolve_shot(
-            shots,
-            shot_id=args.get("shot_id"),
-            shot_index=args.get("shot_index") or args.get("index"),
-            title=args.get("title"),
-        )
+        shot = _resolve_layout_shot(shots, args)
         if not shot and len(shots) == 1:
             shot = shots[0]
         if not shot:
@@ -179,12 +209,7 @@ async def handle_layout_tool(
         )
 
     elif name == "revise_ref_frame":
-        shot = resolve_shot(
-            shots,
-            shot_id=args.get("shot_id"),
-            shot_index=args.get("shot_index") or args.get("index"),
-            title=args.get("title"),
-        )
+        shot = _resolve_layout_shot(shots, args)
         if not shot and len(shots) == 1:
             shot = shots[0]
         if not shot:
@@ -212,6 +237,8 @@ async def handle_layout_tool(
         )
         extra_payload = args.get("additional_source_refs") or []
         if tail_origin:
+            if "source_refs" in args:
+                raise ValueError("tail-frame redraw uses additional_source_refs, not source_refs")
             if extra_payload and not isinstance(extra_payload, list):
                 raise ValueError("additional_source_refs must be a list")
             additional_refs = [
@@ -234,10 +261,16 @@ async def handle_layout_tool(
         else:
             review_status = LayoutReviewStatus.reject
             asset_review = "rejected"
+            source_refs = (
+                [LayoutSourceRef.model_validate(item) for item in args["source_refs"]]
+                if "source_refs" in args
+                else _revision_source_refs(shot.layout_refs, target)
+            )
             revision_brief = LayoutBrief(
                 purpose=target.purpose,
                 state_description=target.state_description,
                 time_hint=target.time_hint,
+                source_refs=source_refs,
             )
         revision_brief = revision_brief.model_copy(
             update={"activation_mode": "append"}
@@ -269,6 +302,7 @@ async def handle_layout_tool(
             shot.id,
             brief=revision_brief,
             force=True,
+            directing_request=user_feedback,
         )
         replacement = next(
             (
@@ -279,11 +313,8 @@ async def handle_layout_tool(
             None,
         )
         if replacement is None:
-            notes.append(
-                f"Recorded dialogue feedback for **{shot.title}**, but no replacement Layout was queued."
-            )
             touched.add(shot.id)
-            return True
+            _require_new_layout_job(reviewed, generated)
 
         linked_layouts = []
         for layout in generated.layout_refs:
@@ -465,9 +496,11 @@ async def handle_layout_tool(
                         shot.id,
                         brief=explicit_brief,
                         force=force,
+                        directing_request=user_feedback,
                     )
-                    notes.append(runtime.explicit_layout_queue_note(updated_shot))
                     touched.add(shot.id)
+                    _require_new_layout_job(shot, updated_shot)
+                    notes.append(runtime.explicit_layout_queue_note(updated_shot))
                 return True
             # Agent said "all" with no pending → treat as redo
             if not force:
@@ -486,18 +519,18 @@ async def handle_layout_tool(
                 if not needs and live:
                     force = True
             updated = await svc.queue_ref_frames(
-                project_id, shot_ids=None, force=force
+                project_id, shot_ids=None, force=force, directing_request=user_feedback
             )
             if not updated and not force:
                 force = True
                 updated = await svc.queue_ref_frames(
-                    project_id, shot_ids=None, force=True
+                    project_id, shot_ids=None, force=True, directing_request=user_feedback
                 )
             if not updated:
                 live = refresh_shots()
                 if len(live) == 1:
                     updated = await svc.queue_ref_frames(
-                        project_id, shot_ids=[live[0].id], force=True
+                        project_id, shot_ids=[live[0].id], force=True, directing_request=user_feedback
                     )
                     force = True
             queued = [
@@ -548,13 +581,15 @@ async def handle_layout_tool(
                     shot.id,
                     brief=explicit_brief,
                     force=force,
+                    directing_request=user_feedback,
                 )
-                notes.append(runtime.explicit_layout_queue_note(s2))
                 touched.add(shot.id)
+                _require_new_layout_job(shot, s2)
+                notes.append(runtime.explicit_layout_queue_note(s2))
                 return True
             prev_job = shot.ref_frame_job_id
             updated = await svc.queue_ref_frames(
-                project_id, shot_ids=[shot.id], force=True
+                project_id, shot_ids=[shot.id], force=True, directing_request=user_feedback
             )
             s2 = load_shot(project_id, shot.id) or shot
             if s2.blocked_reasons:

@@ -9,6 +9,7 @@ import type {
   ShotRef,
 } from "../../shared/api/types";
 import type { DirectorVramStatus } from "./generationStatus";
+import type { SegmentSelection } from "../music/api";
 
 export type { Project, ProjectDetail, Shot };
 
@@ -264,6 +265,7 @@ export async function chatWithDirectorStream(
   images: File[] = [],
   signal?: AbortSignal,
   promptRetry?: PromptRetryRequest,
+  segmentSelection?: SegmentSelection,
 ): Promise<ChatResponse> {
   if (promptRetry && images.length) throw new Error("Prompt retry cannot include new images");
   const serializedHistory = history.map((h) => ({ role: h.role, content: h.content }));
@@ -275,11 +277,12 @@ export async function chatWithDirectorStream(
     const form = new FormData();
     form.append("message", message);
     form.append("history", JSON.stringify(serializedHistory));
+    if (segmentSelection) form.append("segment_selection", JSON.stringify(segmentSelection));
     images.forEach((image) => form.append("images", image, image.name));
     body = form;
     headers = { Accept: "text/event-stream" };
   } else {
-    body = JSON.stringify({ message, history: serializedHistory, ...(promptRetry ? { prompt_retry: promptRetry } : {}) });
+    body = JSON.stringify({ message, history: serializedHistory, ...(promptRetry ? { prompt_retry: promptRetry } : {}), ...(segmentSelection ? { segment_selection: segmentSelection } : {}) });
     headers = { "Content-Type": "application/json", Accept: "text/event-stream" };
   }
   const res = await fetch(path, { method: "POST", headers, body, signal });

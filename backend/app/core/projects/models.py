@@ -75,6 +75,14 @@ class ShotMusicSegment(BaseModel):
     core_end_s: float = Field(gt=0)
     submit_start_s: float = Field(ge=0)
     submit_end_s: float = Field(gt=0)
+    use_as_audio_reference: bool = Field(
+        default=True,
+        description=(
+            "Whether to send this song excerpt to H3 as Audio 1. Set false for "
+            "editorial-only timing, cutaways, or an explicit no-audio-reference "
+            "request; all core/submit timestamps remain available."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_intervals(self) -> "ShotMusicSegment":

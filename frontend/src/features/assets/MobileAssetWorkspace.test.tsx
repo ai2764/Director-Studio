@@ -13,8 +13,9 @@ const state = vi.hoisted(() => ({
   } as Project | null,
 }));
 
+vi.mock("../music/api", () => ({ getSongSegments: vi.fn(async () => ({ document: null, master_stale: false })) }));
 vi.mock("../../shared/project/ProjectContext", () => ({
-  useProject: () => ({ project: state.project, projectId: state.project?.id ?? null }),
+  useProject: () => ({ project: state.project, projectId: state.project?.id ?? null, refreshProjects: vi.fn(async () => {}) }),
 }));
 vi.mock("../library/LibraryPage", () => ({
   LibraryPage: ({ lockedKind, mobile }: { lockedKind?: string; mobile?: boolean }) => (
@@ -42,6 +43,31 @@ describe("MobileAssetWorkspace", () => {
       id: "prj_1", name: "Night film", script_text: "", mode: "director",
       created_at: "2026-01-01", updated_at: "2026-01-01", shot_ids: [],
     };
+  });
+
+  it("shows the library when switching from MV Music to a regular project", () => {
+    state.project = { ...state.project!, id: "prj_mv", mode: "mv" };
+    const view = render(<MobileAssetWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Music" }));
+    expect(screen.getByLabelText("Lyrics and time notes")).toBeTruthy();
+    state.project = { ...state.project, id: "prj_film", mode: "director" };
+    view.rerender(<MobileAssetWorkspace />);
+    expect(screen.queryByRole("button", { name: "Music" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Project library" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Library" }).className).toContain("active");
+  });
+
+  it("offers the MV song master upload inside mobile Assets Music", () => {
+    state.project = {
+      id: "prj_mv", name: "Song film", script_text: "", mode: "mv",
+      created_at: "2026-01-01", updated_at: "2026-01-01", shot_ids: [], music_master: null,
+    };
+    render(<MobileAssetWorkspace />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Music" }));
+    expect(screen.getByLabelText("Song master")).toBeTruthy();
+    expect(screen.getByText("Import song")).toBeTruthy();
+    expect(screen.getByLabelText("Lyrics and time notes")).toBeTruthy();
   });
 
   it("opens on a cross-category Library overview", async () => {

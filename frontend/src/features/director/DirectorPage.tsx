@@ -5,11 +5,12 @@ import {
 } from "../../shared/api/types";
 import { ResizableWorkspace } from "../../shared/components/ResizableWorkspace";
 import { useProject } from "../../shared/project/ProjectContext";
+import type { SegmentSelection } from "../music/api";
+import { SongTransport } from "../music/SongTransport";
 import { ShotWorkspace } from "./ShotWorkspace";
 import { ContextUsagePanel } from "./ContextUsage";
 import { ContextCompaction } from "./ContextCompaction";
 import { MobileShotDrawer } from "./MobileShotDrawer";
-import { MusicMasterControl } from "./MusicMasterControl";
 import {
   cancelDirectorChatSession,
   DirectorChatError,
@@ -152,13 +153,17 @@ export interface DirectorChatRequest {
 }
 
 export function DirectorPage({
+  active = true,
   chatOnly = false,
   mobile = false,
   requestedMessage = null,
+  segmentSelection,
 }: {
+  active?: boolean;
   chatOnly?: boolean;
   mobile?: boolean;
   requestedMessage?: DirectorChatRequest | null;
+  segmentSelection?: SegmentSelection;
 } = {}) {
   const { project } = useProject();
   if (project?.mode === "json_production") {
@@ -166,23 +171,31 @@ export function DirectorPage({
   }
   return (
     <DirectorAgentWorkspace
+      active={active}
       chatOnly={chatOnly}
       mobile={mobile}
       requestedMessage={requestedMessage}
+      segmentSelection={segmentSelection}
     />
   );
 }
 
 function DirectorAgentWorkspace({
+  active,
   chatOnly,
   mobile,
   requestedMessage,
+  segmentSelection: providedSelection,
 }: {
+  active: boolean;
   chatOnly: boolean;
   mobile: boolean;
   requestedMessage: DirectorChatRequest | null;
+  segmentSelection?: SegmentSelection;
 }) {
-  const { projectId, refreshProjects, createAndSelect } = useProject();
+  const { projectId, project, refreshProjects, createAndSelect } = useProject();
+  const [musicSelection, setMusicSelection] = useState<SegmentSelection | undefined>();
+  const segmentSelection = providedSelection ?? (project?.mode === "mv" ? musicSelection : undefined);
   const [shots, setShots] = useState<Shot[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -559,7 +572,16 @@ function DirectorAgentWorkspace({
       const res = options?.promptRetry
         ? await chatWithDirectorStream(projectId, requestMessage, [], handlers, [], controller.signal, options.promptRetry)
         : outgoingImages.length
-        ? await chatWithDirectorStream(
+        ? segmentSelection ? await chatWithDirectorStream(
+            projectId,
+            requestMessage,
+            [],
+            handlers,
+            outgoingImages.map((image) => image.file),
+            controller.signal,
+            undefined,
+            segmentSelection,
+          ) : await chatWithDirectorStream(
             projectId,
             requestMessage,
             [],
@@ -567,7 +589,16 @@ function DirectorAgentWorkspace({
             outgoingImages.map((image) => image.file),
             controller.signal,
           )
-        : await chatWithDirectorStream(
+        : segmentSelection ? await chatWithDirectorStream(
+            projectId,
+            requestMessage,
+            [],
+            handlers,
+            [],
+            controller.signal,
+            undefined,
+            segmentSelection,
+          ) : await chatWithDirectorStream(
             projectId,
             requestMessage,
             [],
@@ -744,8 +775,6 @@ function DirectorAgentWorkspace({
             </div>
           </div>
         </div>
-
-        <MusicMasterControl />
 
         {mobile && !chatOnly ? (
           <MobileShotDrawer shots={shots} onOpenImage={setLightbox} />
@@ -965,6 +994,7 @@ function DirectorAgentWorkspace({
 
   return (
     <main className={`workspace director-chat-layout${!chatOnly && !mobile ? " director-fill-viewport" : ""}${chatOnly ? " chat-only" : ""}${mobile ? " mobile-director-layout" : ""}`}>
+      {project?.mode === "mv" && <SongTransport key={projectId} active={active} onSelectionChange={setMusicSelection} />}
       {chatOnly || mobile ? chatPanel : (
         <ResizableWorkspace
           className="director-resizable-workspace"

@@ -273,7 +273,21 @@ export async function runTurn(
         // Native bounded attempts may commit useful summaries yet remain above
         // the early-pressure threshold. That is not a failed checkpoint.
         const after = ctx.tokenMeter.measure(args[0].session).totalTokens;
-        if (!args[2]?.aborted && this.committed && !this.regionFailed && after < input.context_window)
+        const noFurtherReduction = error instanceof Error
+          && error.message.startsWith("summary is not smaller than the shadowed content");
+        // Proactive pressure compaction is an optimization. If the summary
+        // cannot shrink history but the complete request still fits the hard
+        // host budget, keep the original surface and let the turn continue.
+        // A provider-confirmed overflow must still fail closed without a
+        // useful replacement, even when our token estimate is below budget.
+        if (!args[2]?.aborted && args[1] === "pressure" && noFurtherReduction
+          && after < input.context_window) {
+          compactionFailure = undefined;
+          return null;
+        }
+        if (!args[2]?.aborted && this.committed
+          && (!this.regionFailed || noFurtherReduction)
+          && after < input.context_window)
           return this.committed;
         compactionFailure = error;
         throw error;

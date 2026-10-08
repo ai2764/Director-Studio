@@ -20,6 +20,17 @@ SECTION_KEYS: list[str] = [
 # UTF-8 replacement character — optional corruption signal
 _REPLACEMENT_CHAR = "\ufffd"
 
+
+def normalize_reference_tag_delimiters(sections: PromptSections) -> PromptSections:
+    """Canonicalize explicit numbered reference mentions without inventing bindings."""
+    def canonical(value: str) -> str:
+        return re.sub(
+            r"(?<![<\w])\b(Picture|Audio)[ \t]+(\d+)\b(?!>)",
+            lambda match: f"<{match.group(1)} {match.group(2)}>",
+            value,
+        )
+    return sections.model_copy(update={key: canonical(getattr(sections, key)) for key in SECTION_KEYS})
+
 def validate_required_picture_bindings(
     text: str,
     required_indices: Iterable[int],

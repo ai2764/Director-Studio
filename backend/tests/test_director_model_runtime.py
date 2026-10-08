@@ -13,6 +13,7 @@ from app.core.vram import director_model as dm
 @pytest.fixture(autouse=True)
 def _isolate_model_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(dm, "_override", None)
+    monkeypatch.setattr(dm.settings, "director_plan_model", "")
     monkeypatch.setattr(dm, "_persist_path", lambda: tmp_path / "director_model.json")
     yield
     monkeypatch.setattr(dm, "_override", None)

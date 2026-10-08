@@ -173,16 +173,52 @@ Output rules:
   <Audio N> tag at least once, state the named speaker identity and delivery it controls,
   and never copy words from the reference recording. The same tag may be referenced
   again where it clarifies action or sound; the shot dialogue below is the new performance.
-- When the MV song segment is non-null, <Audio 1> is the exact excerpt submitted for
+- Keep song titles, artist names and filenames out of all six generated fields,
+  including when song audio is submitted. Identify that recording by its Audio tag.
+- When the MV song segment has use_as_audio_reference=true, <Audio 1> is the excerpt submitted for
   this generation. Bind <Audio 1> as the singing, speech, musical, and performance-timing
   source. Synchronize clearly readable lips to it. Express action time relative to the
   submitted excerpt: generation second 0 equals submit_start_s, while the core interval
   marks the edit content protected inside the wider generation window.
+  core_clip_start_s/core_clip_end_s already express that core interval in clip seconds.
+  When lyric_segments is supplied, each row's clip_start_s/clip_end_s is the original
+  recording's timing for that specific lyric, already relative to this generated clip.
+  A shot may cover several song segments: preserve each row's own window and gaps,
+  rather than assigning arbitrary visual beats or stretching both lyrics across one window.
+  Place the corresponding lyric performance at its supplied times; camera and acting may
+  overlap singing. Never postpone a line to finish an entrance, pose or camera move first.
+  These audio-derived offsets override any conflicting invented vocal schedule in
+  script_beat, dialogue staging, or older prompts. Adapt gestures to the recording;
+  do not compress the whole lyric into a shorter action interval.
+  Keep the authored lyric inside this window and follow the recording's vocal onset
+  and delivery; never assign an independent delayed or shortened lyric window for
+  visual staging. A song reference is a sung performance, not newly spoken dialogue.
+  The <d>[Language] exact words</d> format also applies to singing. Include each
+  authored shot.dialogue lyric exactly once inside detailed_description even when
+  Audio 1 supplies its recording. Saying only "she sings the line" is insufficient;
+  keep the singer, timing and action outside the lyric block.
+  Preserve the recording's vocals AND instrumental accompaniment in overall_soundscape
+  and non_diegetic_music; do not describe it as vocal-only or remove its existing music.
+  Do not add ambience or a new score unless explicitly requested.
+- When use_as_audio_reference=false, the song interval is editorial timing only.
+  No song audio is submitted: do not invent an Audio tag, song playback, singing or
+  lyric performance from that interval or the project soundtrack. Use only the
+  explicitly saved Shot dialogue and Voice references for any generated performance.
+  All six output fields are sent directly to H3. Never copy editorial song names,
+  filenames, lyrics, artists, soundtrack descriptions or post-production/overlay
+  instructions into them, even as "not generated" or "added later" explanations.
+  Describe only what H3 should produce. When no score is requested, write
+  non_diegetic_music as "None. No background music." The soundscape should name
+  only requested ambience/effects, or silence with no speech, singing or music.
 - Treat each ref's approved_description and approved_notes as authoritative for
   identity, wardrobe, set and prop appearance; never replace them with guesses.
 - Use visual_analysis for what the selected Picture visibly establishes. Asset names
   and file keys are lookup labels, not visual descriptions; do not turn a misleading
   label into an appearance, location or story fact absent from the visual evidence.
+  State each Picture's actual visible contribution separately. A face portrait can
+  anchor identity, hair and jewelry, but cannot establish unseen hands, sleeves or
+  a full outfit. Use the Layout or an applicable supplied wardrobe description for
+  those details, and keep uncertain geometry uncertain rather than inventing it.
 - Express all action timing as seconds (for example, "0–2 seconds"); never label
   second ranges as frames or write ambiguous ranges such as "Frame 0–2". Every
   interval must stay inside duration_s, and its stated length must match its endpoints.
@@ -212,7 +248,8 @@ PROMPT_SECTIONS_USER_TEMPLATE = """Shot:
 - voice refs (audio order): {voice_refs_json}
 - MV song segment (null when absent): {music_segment_json}
 - layout_asset_id: {layout_asset_id}
-- human feedback: {feedback}
+- saved Shot feedback (may precede the current Layout or directing revision;
+  resolve against current intent and reference review before applying): {feedback}
 
 Agent context snapshot:
 {context_json}

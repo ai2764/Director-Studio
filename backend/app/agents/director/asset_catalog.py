@@ -71,10 +71,43 @@ def _asset_index(project_id: str | None = None) -> dict[str, LibraryAsset]:
     return index
 
 
+def _imported_layout_inventory(project_id: str | None = None) -> list[dict[str, Any]]:
+    """Discover user-supplied Layout sources without adding them to automatic casting."""
+    items = []
+    for asset in list_assets("layouts", project_id=project_id, include_unassigned=True):
+        meta = asset.meta or {}
+        external = bool(meta.get("external")) or asset.pipeline_id == "external"
+        if not external or str(meta.get("review_status") or "").lower() in {"reject", "rejected"}:
+            continue
+        files = {key: value for key, value in (asset.files or {}).items() if value}
+        if not files:
+            continue
+        items.append({
+            "id": asset.id, "kind": "layouts", "name": asset.name,
+            "notes": (asset.notes or "")[:240],
+            "description": str(meta.get("description") or asset.notes or "")[:240],
+            "source_filename": str(meta.get("source_filename") or ""),
+            "filenames": list(files.values())[:8], "file_keys": list(files),
+            "external": True, "project_id": asset.project_id,
+            "owned_by_project": bool(project_id and asset.project_id == project_id),
+            "review_status": meta.get("review_status"),
+        })
+    return items
+
+
 def _default_file_key(
     role: RefRole,
     asset: LibraryAsset | None = None,
 ) -> str | None:
+    if role == RefRole.layout_ref_frame:
+        if asset and asset.files:
+            for key in ("layout", "master", "image"):
+                if asset.files.get(key):
+                    return key
+            for key in sorted(asset.files):
+                if asset.files.get(key) and not str(key).startswith("input_"):
+                    return key
+        return "layout"
     if role == RefRole.actor:
         if asset and asset.files:
             for key in (

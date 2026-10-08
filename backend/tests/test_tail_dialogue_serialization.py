@@ -33,7 +33,7 @@ async def test_tail_one_repair_gets_schema_and_picture_defects(tail_handoff_shot
     shot = with_dialogue(shot)
     save_shot(shot)
     bad = candidate()
-    bad["prompt_sections"]["subject_definitions"] = "The dancer (Picture 1)."
+    bad["prompt_sections"]["subject_definitions"] = "The dancer."
     bad["prompt_sections"]["detailed_description"] += " {{speech:line-1}}"
     bad["dialogue_uses"] = [dict(line_id="line-1", speaker_id="visitor", block_indexes=[0])]
     good = candidate()

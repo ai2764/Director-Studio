@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DS_", env_file=".env", extra="ignore")
 
     comfy_base_url: str = "http://127.0.0.1:8188"
+    qwen_image_21_comfy_base_url: str = ""
     host: str = "127.0.0.1"
     port: int = 8790
 

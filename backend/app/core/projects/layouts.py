@@ -66,6 +66,7 @@ class LayoutReference(BaseModel):
     state_description: str = ""
     time_hint: str = ""
     source_refs: list[LayoutSourceRef] = Field(default_factory=list)
+    source_refs_explicit: bool = False
     review_status: LayoutReviewStatus | None = None
     review_feedback: str = ""
     feedback_source: str = ""

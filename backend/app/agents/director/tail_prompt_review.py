@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from ...core.h3.prompt import validate_h3_prompt
 from ...core.h3.errors import PromptFailureError
+from ...core.prompt_errors import PromptContextOverflow
 from ...core.projects.layouts import selected_layout_prompt_context
 from ...core.projects.models import PromptSections
 from ...core.h3.dialogue_binding import DialogueUse, DialogueConflict, DialoguePromptDraft, compile_dialogue_draft
@@ -170,7 +171,7 @@ Do not redesign the shot, enforce aesthetics or reject a feasible camera move.
 
 async def draft_and_review(provider, project, shot, records, images, signature,
                            check_current, save_diagnostics, *, task_packet=None):
-    from ...core.media.music_segments import music_prompt_context
+    from ...core.media.music_segments import music_prompt_context, validate_editorial_music_prompt
     from .brief import directing_requests
 
     references = await observe_references_cached(provider, project.id, records, images, check_current)
@@ -301,10 +302,11 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                         dialogue_draft = compile_dialogue_draft(dialogue_draft, candidate_lines)
                         sections = dialogue_draft.prompt_sections
                         changed = changed.model_copy(update={"prompt_sections": sections})
+                    validate_editorial_music_prompt(project, changed, sections)
                     validate_h3_prompt(sections.as_ordered_text(), changed.dialogue,
                         audio_count=(
                             1
-                            if music_context is not None
+                            if music_context is not None and music_context["use_as_audio_reference"]
                             else 0 if changed.source_audio_path else len(changed.voice_refs)
                         ),
                         required_picture_indices=[r.picture_index for r in changed.refs],
@@ -369,7 +371,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                 meta["dialogue_grounding"] = {"script_beat": changed.script_beat, "lines": record["lines"],
                     **({"metadata": record["metadata"]} if record.get("metadata") else {})}
             return changed.model_copy(update={"meta": meta})
-        except DialogueMetadataError:
+        except (DialogueMetadataError, PromptContextOverflow):
             raise  # A source problem cannot be repaired by rewriting this candidate.
         except CreativeQuestion as exc:
             save_diagnostics(shot, [*attempts, {"stage": "decision", "raw": raw, "review_raw": audit_raw, "error": str(exc)}])

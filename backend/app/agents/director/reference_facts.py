@@ -22,6 +22,7 @@ class VisualFact(BaseModel):
     source_quote: str | None = None
     source_kind: str = "model_observation"
     cited_source_kind: str | None = None
+    source_id_repaired_from: str | None = None
 
     @model_validator(mode="after")
     def visible_value(self):
@@ -49,13 +50,23 @@ def validate_observation_sources(observation, sources):
     by_id = {source["id"]: source for source in sources}
     issues = []
     for index, fact in enumerate(observation.facts):
+        # Repair provenance is computed here, never asserted by model output.
+        fact.source_id_repaired_from = None
         if fact.source_id:
             source = by_id.get(fact.source_id)
             if not source or not fact.source_quote or fact.source_quote not in source["text"]:
+                matches = [sid for sid, candidate in by_id.items()
+                           if fact.source_quote and fact.source_quote in candidate["text"]]
+                if len(matches) == 1:
+                    # Repair only an unambiguous pointer to verbatim supplied evidence.
+                    # This does not certify the model's interpretation of that evidence.
+                    fact.source_id_repaired_from = fact.source_id
+                    fact.source_id = matches[0]
+                    continue
                 issues.append(dict(code="reference_fact_source_invalid", path=f"facts[{index}].source_quote",
                     attribute=fact.attribute, source_id=fact.source_id, source_quote=fact.source_quote,
                     reason="source quote must exist verbatim in the supplied source" if source else "unknown source_id",
-                    available_source_ids=list(by_id)))
+                    available_source_ids=list(by_id), matching_source_ids=matches))
         elif fact.source_quote or fact.source_kind != "model_observation":
             issues.append(dict(code="reference_fact_source_invalid", path=f"facts[{index}].source_id",
                 attribute=fact.attribute, reason="model observations cannot claim user authority without a valid source citation"))
@@ -103,14 +114,16 @@ def sourced_records(project, records):
 
 
 def reference_context_signature(project, records):
-    return digest([REFERENCE_POLICY_VERSION, project.script_text,
+    return digest([REFERENCE_POLICY_VERSION, project.script_text, project.shot_ids,
         project.asset_coverage_review.model_dump(mode="json") if project.asset_coverage_review else None,
         sourced_records(project, records)])
 
 
 def reference_intent_signature(shot):
-    return digest({k: getattr(shot, k) for k in ("scene_id", "title", "script_beat", "shot_type",
-        "camera_angle", "camera_motion", "composition", "duration_s", "dialogue", "feedback")})
+    payload = {k: getattr(shot, k) for k in ("scene_id", "title", "script_beat", "shot_type",
+        "camera_angle", "camera_motion", "composition", "duration_s", "dialogue", "feedback")}
+    payload["music_segment"] = shot.music_segment.model_dump(mode="json") if shot.music_segment else None
+    return digest(payload)
 
 
 def persist_reference_facts(project_id, references, check_current):

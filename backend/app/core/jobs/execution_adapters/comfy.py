@@ -22,6 +22,7 @@ class ComfyExecutionRuntime:
     finish: Callable[[JobRecord], Awaitable[None]]
     update_phase: Callable[[str, str, str], Awaitable[None]]
     save_completed_outputs: Callable[..., Awaitable[JobRecord]]
+    client_factory_for_job: Callable[[JobRecord], Any] | None = None
 
 
 class ComfyExecutionAdapter:
@@ -39,7 +40,7 @@ class ComfyExecutionAdapter:
         cancel_event: asyncio.Event,
         runtime: ComfyExecutionRuntime,
     ) -> None:
-        client = runtime.client_factory()
+        client = _client_for_job(runtime, job)
         try:
             await runtime.prepare(job)
 
@@ -105,7 +106,7 @@ class ComfyExecutionAdapter:
     ) -> None:
         if not job.comfy_prompt_id:
             return
-        client = runtime.client_factory()
+        client = _client_for_job(runtime, job)
         try:
             await runtime.prepare(job)
             await runtime.update_phase(job.id, job.status.value, "generating")
@@ -133,9 +134,12 @@ class ComfyExecutionAdapter:
         finally:
             await self._finalize(job.id, runtime)
 
-    async def cancel(self, runtime: ComfyExecutionRuntime) -> None:
+    async def cancel(
+        self, runtime: ComfyExecutionRuntime, job: JobRecord | None = None
+    ) -> None:
         try:
-            await runtime.client_factory().interrupt()
+            client = _client_for_job(runtime, job) if job else runtime.client_factory()
+            await client.interrupt()
         except Exception:
             return
 
@@ -165,3 +169,9 @@ class ComfyExecutionAdapter:
                 job.id,
                 job.pipeline_id,
             )
+
+
+def _client_for_job(runtime: ComfyExecutionRuntime, job: JobRecord) -> Any:
+    if runtime.client_factory_for_job is not None:
+        return runtime.client_factory_for_job(job)
+    return runtime.client_factory()

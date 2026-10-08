@@ -1,5 +1,7 @@
 """Behavior and compatibility contracts for Director domain-service seams."""
 
+import pytest
+
 from app.agents.director import service
 from app.core.projects.layouts import LayoutReference
 from app.core.projects.models import Project, RefRole, Shot, ShotStatus
@@ -91,6 +93,62 @@ def test_casting_service_materializes_explicit_actor_and_scene_bindings():
         (RefRole.actor, actor.id, "fullbody_threeview"),
         (RefRole.scene, scene.id, "angle_00"),
     ]
+
+
+def test_scene_only_shot_does_not_auto_cast_actor_on_append_or_recast():
+    from app.agents.director import casting_service
+
+    actor = _asset(kind="actors", files={"fullbody_threeview": "actor.png"}, asset_id="actor-1")
+    scene = _asset(kind="scenes", files={"angle_00": "scene.png"}, asset_id="scene-1")
+    inventory = [
+        {"id": actor.id, "kind": actor.kind, "h3_ready": None},
+        {"id": scene.id, "kind": scene.kind, "h3_ready": None},
+    ]
+    index = {actor.id: actor, scene.id: scene}
+    draft = ShotDraft(
+        shot_type="close-up",
+        camera_angle="eye level",
+        camera_motion="locked-off",
+        composition="Telephone alone on a table",
+        scene_id="scene-1",
+        title="Empty telephone shot",
+        script_beat="An empty room with a ringing telephone.",
+        actor_presence="none",
+        asset_matches=[AssetMatchDraft(role="scene", asset_id=scene.id)],
+    )
+
+    shot = casting_service._shot_from_draft(
+        "project-1", draft, inventory=inventory, index=index
+    )
+    assert [ref.role for ref in shot.refs] == [RefRole.scene]
+    assert shot.status == ShotStatus.ref_frame_pending
+    assert shot.meta["actor_presence"] == "none"
+
+    recast = casting_service.recast_shot_assets(
+        "project-1", shot, inventory=inventory, index=index
+    )
+    assert [ref.role for ref in recast.refs] == [RefRole.scene]
+    missing = service.DirectorService(plan_provider=None)._ref_frame_missing_requirements(shot)
+    assert not any("actor" in reason for reason in missing)
+
+
+def test_saved_layout_binding_is_valid_outside_casting_inventory():
+    from app.agents.director import casting_service
+
+    asset = _asset(kind="layouts", files={"layout": "layout.png"}, asset_id="layout-1").model_copy(
+        update={"project_id": "project-1"}
+    )
+    shot = Shot(id="shot-1", project_id="project-1", scene_id="room", title="Room",
+                script_beat="Empty room", duration_s=4,
+                refs=[{"role": "layout_ref_frame", "asset_id": asset.id, "file_key": "layout", "picture_index": 1}],
+                layout_refs=[LayoutReference(id="lref-1", asset_id=asset.id)])
+    casting_service._validate_materialized_storyboard_bindings(
+        [shot], inventory=[], index={asset.id: asset}
+    )
+    with pytest.raises(ValueError, match="inaccessible"):
+        casting_service._validate_materialized_storyboard_bindings(
+            [shot], inventory=[], index={asset.id: asset.model_copy(update={"project_id": "other-project"})}
+        )
 
 
 def test_reference_service_owns_brief_builders_with_facade_compatibility():

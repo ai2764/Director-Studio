@@ -139,7 +139,7 @@ async def test_large_ui_history_is_not_resent_in_the_turn_envelope(tmp_projects_
             assert body["history"] == []
             assert "history" not in await dispatch("context", {})
             seed = await dispatch("context", {"include_history": True})
-            assert seed["history"] == history
+            assert seed["history"] == history[-runtime.MAX_HARNESS_SEED_MESSAGES:]
             return {"reply": "done"}
     monkeypatch.setattr(runtime, "HarnessClient", Client)
     await runtime.handle_harness_chat(project_id=project.id, message="next", history=history, svc=None)

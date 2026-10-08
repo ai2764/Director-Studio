@@ -49,6 +49,7 @@ from ..core.media.music_segments import (
     import_music_master,
     music_prompt_signature,
     prepare_music_segment,
+    validate_editorial_music_prompt,
     resolve_music_master,
 )
 from ..core.projects.models import (
@@ -70,6 +71,12 @@ from ..core.projects.chat_history import (
     agent_history,
     append_chat_message,
     load_chat_history,
+)
+from ..core.projects.song_segments import (
+    SegmentRevisionConflict,
+    context_for_discussion,
+    context_for_selection,
+    load_segments,
 )
 from ..core.projects.chat_sessions import (
     DirectorChatSessionConflict,
@@ -185,10 +192,16 @@ class ChatHistoryItem(BaseModel):
     content: str
 
 
+class SegmentSelection(BaseModel):
+    revision: int = Field(ge=1)
+    ids: list[str] = Field(min_length=1, max_length=32)
+
+
 class ChatBody(BaseModel):
     message: str = Field(min_length=1)
     history: list[ChatHistoryItem] = Field(default_factory=list)
     prompt_retry: PromptRetryRequest | None = None
+    segment_selection: SegmentSelection | None = None
 
 
 class ChatMessage(BaseModel):
@@ -379,6 +392,49 @@ def _validate_voice_refs(shot: Shot) -> list[tuple[ShotVoiceRef, LibraryAsset, P
     if total_duration > 15.0:
         raise ValueError("Voice reference total duration must not exceed 15 seconds")
     return resolved
+
+
+def _mv_dialogue_song_matches(project: Project, shot: Shot) -> list[tuple[str, list[Any]]]:
+    """Match dialogue to saved lyrics inside the configured source-song interval."""
+    if project.mode != ProjectMode.mv or project.music_master is None or not shot.dialogue:
+        return []
+    document = load_segments(project.id)
+    if document is None or document.master_sha256 != project.music_master.content_sha256:
+        return []
+
+    def normalize(text: str) -> str:
+        return re.sub(r"[^\w]+", " ", text.casefold()).strip()
+
+    timecode = re.match(
+        r"^\s*\[\s*(\d+):(\d{2}(?:\.\d+)?)\s*[–—-]\s*"
+        r"(\d+):(\d{2}(?:\.\d+)?)\s*\]",
+        shot.script_beat,
+    )
+    if shot.music_segment is not None:
+        # This is the interval actually submitted. Creative prose can lose or
+        # retain an old timecode when revised; it must not override this binding.
+        start_s = shot.music_segment.core_start_s
+        end_s = shot.music_segment.core_end_s
+    elif timecode:
+        start_s = int(timecode.group(1)) * 60 + float(timecode.group(2))
+        end_s = int(timecode.group(3)) * 60 + float(timecode.group(4))
+    else:
+        start_s = end_s = None
+    timed_segments = [
+        segment for segment in document.segments
+        if segment.start_s >= start_s - 0.05 and segment.end_s <= end_s + 0.05
+    ] if start_s is not None else []
+
+    matches = []
+    for line in shot.dialogue:
+        normalized = normalize(line)
+        if normalized:
+            saved_lyrics = [segment for segment in document.segments if normalize(segment.text) == normalized]
+            if saved_lyrics:
+                matches.append((normalized, [
+                    segment for segment in timed_segments if normalize(segment.text) == normalized
+                ]))
+    return matches
 
 
 def _voice_signature(refs: list[ShotVoiceRef]) -> str:
@@ -698,7 +754,11 @@ async def _make_chat_fn(
         async with orch.llm_session(
             release_on_exit=not keep,
             on_status=_runtime,
-            fail_if_generation_pending=True,
+            # A tool in this turn may already have queued a Layout. Internal
+            # history compaction must wait for its GPU, rather than aborting
+            # the turn after successful mutations. New chat admission stays
+            # blocked while generation is pending.
+            fail_if_generation_pending=_kwargs.get("inference_purpose") != "compaction",
         ):
             # Always (re)load / verify GPU residency after Comfy may have unloaded it
             await orch.ensure_llm_ready(on_status=_runtime)
@@ -870,6 +930,36 @@ async def _make_chat_fn(
     return chat_fn
 
 
+def _chat_message_with_segments(
+    project_id: str, message: str, selection: SegmentSelection | None,
+) -> str:
+    project = load_project(project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    try:
+        if settings.director_agent_runtime == "harness":
+            # Bind the current focus to saved timestamps and lyrics in this
+            # turn. The full map in system state is too easy to misread when
+            # the selection is represented only by IDs.
+            if selection is not None:
+                selected = context_for_selection(
+                    project, revision=selection.revision, ids=selection.ids,
+                )
+                return (message + "\n\nSelected song segment IDs: "
+                        + json.dumps(selection.ids) + "\n" + selected)
+            return message
+        context = context_for_discussion(
+            project,
+            revision=selection.revision if selection else None,
+            ids=selection.ids if selection else None,
+        )
+    except SegmentRevisionConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return f"{message}\n\n{context}" if context else message
+
+
 @router.post("/projects/{project_id}/chat", response_model=ChatResponse)
 async def project_chat_endpoint(
     project_id: str,
@@ -886,6 +976,9 @@ async def project_chat_endpoint(
     msg = (body.message or "").strip()
     if not msg:
         raise HTTPException(400, "message is required")
+    agent_msg = msg if body.prompt_retry else _chat_message_with_segments(
+        project_id, msg, body.segment_selection,
+    )
     try:
         await _assert_chat_available()
     except GenerationActiveError as exc:
@@ -903,14 +996,14 @@ async def project_chat_endpoint(
     try:
         await director_chat_sessions.attach(project_id, session.session_id or "", asyncio.current_task())
         stored_history = load_chat_history(project_id)
-        history = agent_history(stored_history)
+        history = agent_history(stored_history, project_id=project_id)
         if not history:
             history = [{"role": h.role, "content": h.content} for h in (body.history or [])]
         chat_fn = None if body.prompt_retry else await _make_chat_fn(on_progress=None)
         append_chat_message(project_id, role="user", content=msg)
         result = await _run_scoped_prompt_retry(project_id, body.prompt_retry, svc) if body.prompt_retry else await handle_chat(
             project_id=project_id,
-            message=msg,
+            message=agent_msg,
             svc=svc,
             chat_fn=chat_fn,
             history=history,
@@ -968,7 +1061,7 @@ async def compact_project_chat_endpoint(project_id: str) -> ChatCompactionResult
     try:
         await director_chat_sessions.attach(project_id, session.session_id or "", asyncio.current_task())
         result = await compact_harness_chat(project_id=project_id, chat_fn=await _make_chat_fn(),
-                                            history=agent_history(load_chat_history(project_id)))
+                                            history=agent_history(load_chat_history(project_id), project_id=project_id))
         return ChatCompactionResult.model_validate(result)
     except GenerationActiveError as exc:
         raise _generation_active_http(exc) from exc
@@ -1084,6 +1177,7 @@ async def _project_chat_stream_response(
     user_history_images: list[DirectorChatImage] | None = None,
     user_upload_dir: Path | None = None,
     prompt_retry: PromptRetryRequest | None = None,
+    segment_selection: SegmentSelection | None = None,
 ):
     from ..agents.director.chat import handle_chat
 
@@ -1092,6 +1186,9 @@ async def _project_chat_stream_response(
     msg = (message or "").strip()
     if not msg:
         raise HTTPException(400, "message is required")
+    agent_msg = msg if prompt_retry else _chat_message_with_segments(
+        project_id, msg, segment_selection,
+    )
     try:
         await _assert_chat_available()
     except GenerationActiveError as exc:
@@ -1099,7 +1196,7 @@ async def _project_chat_stream_response(
         raise _generation_active_http(exc) from exc
 
     stored_history = load_chat_history(project_id)
-    history = agent_history(stored_history)
+    history = agent_history(stored_history, project_id=project_id)
     if not history:
         history = [
             {"role": item.role, "content": item.content}
@@ -1131,7 +1228,7 @@ async def _project_chat_stream_response(
         try:
             result = await _run_scoped_prompt_retry(project_id, prompt_retry, svc, on_progress) if prompt_retry else await handle_chat(
                 project_id=project_id,
-                message=msg,
+                message=agent_msg,
                 svc=svc,
                 chat_fn=chat_fn,
                 history=history,
@@ -1211,11 +1308,18 @@ async def project_chat_image_stream_endpoint(
     project_id: str,
     message: str = Form(...),
     history: str = Form("[]"),
+    segment_selection: str = Form(""),
     images: list[UploadFile] = File(...),
     svc: DirectorService = Depends(get_director_service),
 ):
     if load_project(project_id) is None:
         raise HTTPException(404, "Project not found")
+    try:
+        selection = SegmentSelection.model_validate_json(segment_selection) if segment_selection else None
+    except ValueError as exc:
+        raise HTTPException(422, "segment_selection must be valid JSON") from exc
+    if selection is not None:
+        _chat_message_with_segments(project_id, message.strip(), selection)
     try:
         await _assert_chat_available()
     except GenerationActiveError as exc:
@@ -1223,16 +1327,21 @@ async def project_chat_image_stream_endpoint(
     batch = await _persist_chat_images(project_id, images)
     if not batch.encoded:
         raise HTTPException(400, "at least one image is required")
-    return await _project_chat_stream_response(
-        project_id=project_id,
-        message=message,
-        request_history=_parse_chat_history(history),
-        svc=svc,
-        user_images_b64=batch.encoded,
-        user_image_captions=batch.captions,
-        user_history_images=batch.history_images,
-        user_upload_dir=batch.directory,
-    )
+    try:
+        return await _project_chat_stream_response(
+            project_id=project_id,
+            message=message,
+            request_history=_parse_chat_history(history),
+            svc=svc,
+            user_images_b64=batch.encoded,
+            user_image_captions=batch.captions,
+            user_history_images=batch.history_images,
+            user_upload_dir=batch.directory,
+            segment_selection=selection,
+        )
+    except Exception:
+        _cleanup_chat_upload_batch(project_id, batch.directory)
+        raise
 
 
 @router.post("/projects/{project_id}/chat/stream")
@@ -1255,6 +1364,7 @@ async def project_chat_stream_endpoint(
         request_history=body.history,
         svc=svc,
         prompt_retry=body.prompt_retry,
+        segment_selection=body.segment_selection,
     )
 
 
@@ -1709,7 +1819,7 @@ async def patch_shot_endpoint(shot_id: str, body: ShotPatchBody) -> Shot:
             400,
             "music_segment is available only for Music Video projects",
         )
-    if shot.music_segment is not None and shot.voice_refs:
+    if shot.music_segment is not None and shot.music_segment.use_as_audio_reference and shot.voice_refs:
         raise HTTPException(
             400,
             "MV music segments cannot be combined with Voice references",
@@ -1930,7 +2040,31 @@ async def submit_shot_endpoint(
         raise HTTPException(404, "Project not found")
     if shot.music_segment is not None and project.mode != ProjectMode.mv:
         raise HTTPException(400, "Music segments require a Music Video project")
-    music_active = project.mode == ProjectMode.mv and shot.music_segment is not None
+    music_active = (
+        project.mode == ProjectMode.mv
+        and shot.music_segment is not None
+        and shot.music_segment.use_as_audio_reference
+    )
+    lyric_matches = _mv_dialogue_song_matches(project, shot)
+    if lyric_matches and not music_active:
+        raise HTTPException(
+            400,
+            "Shot dialogue matches a saved song lyric but has no active, time-aligned music segment. "
+            "Bind the matching song interval with use_as_audio_reference=true and clear Voice references; "
+            "for a no-vocal shot, clear dialogue and Voice references.",
+        )
+    if lyric_matches and shot.music_segment is not None:
+        segment = shot.music_segment
+        if not all(any(
+            candidate.start_s >= segment.core_start_s - 0.05
+            and candidate.end_s <= segment.core_end_s + 0.05
+            for candidate in candidates
+        ) for _line, candidates in lyric_matches):
+            raise HTTPException(
+                400,
+                "The active song interval does not contain the saved lyric timing for this dialogue. "
+                "Align music_segment.core_start_s/core_end_s to the matching song segments.",
+            )
     if music_active and shot.voice_refs:
         raise HTTPException(
             400,
@@ -2037,8 +2171,14 @@ async def submit_shot_endpoint(
     )
     from ..agents.director.dialogue_preflight import dialogue_contract_current, require_current_dialogue_contract
     from ..agents.director.reference_facts import reference_contract_current, require_current_reference_contract
+    try:
+        validate_editorial_music_prompt(project, shot, shot.prompt_sections)
+        editorial_music_leaked = False
+    except ValueError:
+        editorial_music_leaked = True
     if (
-        not dialogue_contract_current(project, shot)
+        editorial_music_leaked
+        or not dialogue_contract_current(project, shot)
         or not reference_contract_current(project, shot)
         or (picture_contract_present and prompt_picture_signature != current_picture_signature)
         or (
@@ -2052,7 +2192,7 @@ async def submit_shot_endpoint(
             and prompt_voice_signature != current_voice_signature
         )
         or (
-            music_active
+            (music_active or "prompt_music_signature" in (shot.meta or {}) or shot.music_segment is not None)
             and prompt_music_signature != current_music_signature
         )
     ):
@@ -2082,6 +2222,7 @@ async def submit_shot_endpoint(
         int(item["picture_index"]) for item in selected_layouts
     ]
     try:
+        validate_editorial_music_prompt(project, shot, shot.prompt_sections)
         validate_h3_prompt(
             prompt_text,
             list(shot.dialogue),
@@ -2101,7 +2242,7 @@ async def submit_shot_endpoint(
     try:
         effective_duration_s = (
             shot.music_segment.submit_end_s - shot.music_segment.submit_start_s
-            if music_active and shot.music_segment is not None
+            if shot.music_segment is not None
             else shot.duration_s
         )
         frames = (

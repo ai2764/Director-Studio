@@ -1,0 +1,134 @@
+import json
+
+import pytest
+
+from app.agents.director.asset_catalog import _inventory
+from app.agents.director.chat_context import project_context_blob
+from app.core.library.store import write_asset
+from app.core.projects.store import create_project
+from app.core.schemas import LibraryAsset
+
+
+def layout(project_id, asset_id, *, external=True, review_status=None):
+    return write_asset(LibraryAsset(
+        id=asset_id, kind="layouts", name="Mia and puppet identity group",
+        notes="Group portrait establishes actor and puppet identities; disregard its stage.",
+        pipeline_id="external" if external else "qwen21_layout", job_id="",
+        created_at="2026-10-03T00:00:00Z", files={"master": "group.png"},
+        project_id=project_id,
+        meta={"external": external, "review_status": review_status},
+    ))
+
+
+def test_imported_layout_discoverable_in_director_context_but_not_casting_pool():
+    project = create_project("Layout discovery", "Generate a new lake scene.")
+    asset = layout(project.id, "lay_imported_identity")
+    context = json.loads(project_context_blob(project, []))
+    item = next((a for a in context["library_inventory"] if a["id"] == asset.id), None)
+    assert item is not None, "Imported reference image must expose an exact handle to Agent"
+    assert item["kind"] == "layouts"
+    assert item["file_keys"] == ["master"]
+    assert "identities" in item["notes"]
+    assert not any(a["id"] == asset.id for a in _inventory(project.id))
+
+
+def test_context_does_not_expand_to_foreign_generated_or_rejected_layouts():
+    project = create_project("Layout discovery", "Generate a new lake scene.")
+    foreign = create_project("Other project", "Unrelated")
+    layout(project.id, "lay_rejected", review_status="reject")
+    layout(project.id, "lay_generated", external=False)
+    layout(foreign.id, "lay_foreign")
+    visible = json.loads(project_context_blob(project, []))["library_inventory"]
+    assert not {"lay_rejected", "lay_generated", "lay_foreign"}.intersection(a["id"] for a in visible)
+
+
+def append_request(project, asset_id, file_key="master"):
+    from app.agents.director.asset_catalog import _script_hash
+    return {
+        "expected_script_hash": _script_hash(project.script_text),
+        "expected_last_shot_id": None,
+        "shot": {
+            "scene_id": "lake", "title": "Paper light", "script_beat": "Mia holds a light.",
+            "shot_type": "medium", "camera_angle": "eye level", "camera_motion": "locked-off",
+            "composition": "Mia beside puppets", "duration_s": 8,
+            "asset_matches": [{"role": "other", "asset_id": asset_id, "file_key": file_key}],
+        },
+    }
+
+
+def test_append_preserves_explicit_imported_layout_identity_reference():
+    from app.agents.director.service import DirectorService
+    from app.core.projects.store import load_shot
+    project = create_project("Paper light", "Mia holds a light beside the lake.")
+    layout(project.id, "lay_identity_group")
+    svc = DirectorService(plan_provider=None, orchestrator=object())
+    shot = svc.append_shot(project.id, append_request(project, "lay_identity_group"))
+    saved = load_shot(project.id, shot.id)
+    assert [(r.role.value, r.asset_id, r.file_key) for r in saved.refs] == [
+        ("other", "lay_identity_group", "master")
+    ]
+    assert not any(a["id"] == "lay_identity_group" for a in _inventory(project.id))
+
+
+def test_reference_edit_preserves_imported_layout_identity_reference():
+    from app.agents.director.service import DirectorService
+    from app.core.projects.store import load_shot
+    project = create_project("Paper light", "Mia holds a light beside the lake.")
+    layout(project.id, "lay_identity_group")
+    svc = DirectorService(plan_provider=None, orchestrator=object())
+    shot = svc.append_shot(project.id, append_request(project, "lay_identity_group"))
+    svc.patch_shot_refs(project.id, [{"shot_id": shot.id, "refs": [{
+        "role": "other", "asset_id": "lay_identity_group", "file_key": "master",
+        "picture_index": 1, "notes": "Use only the character identities.",
+    }]}])
+    saved = load_shot(project.id, shot.id)
+    assert saved.refs[0].notes == "Use only the character identities."
+    assert saved.script_beat == shot.script_beat
+    assert saved.meta["material_review_pending"] is True
+
+
+@pytest.mark.asyncio
+async def test_storyboard_edit_preserves_imported_layout_identity_reference():
+    from app.agents.director.service import DirectorService
+    from app.core.projects.models import PromptSections
+    from app.core.projects.store import save_shot
+    from app.core.projects.layouts import LayoutReference
+    from test_director_material_review import Orchestrator
+    class Validator:
+        async def complete(self, *args, **kwargs):
+            return json.dumps({"valid": True, "issues": []})
+    project = create_project("Paper light", "Mia holds a light beside the lake.")
+    layout(project.id, "lay_identity_group")
+    svc = DirectorService(plan_provider=Validator(), orchestrator=Orchestrator())
+    request = append_request(project, "lay_identity_group")
+    shot = svc.append_shot(project.id, request)
+    write_asset(LibraryAsset(id="act_available", kind="actors", name="Extra actor",
+        pipeline_id="external", job_id="", created_at="2026-10-03T00:00:00Z",
+        files={"master": "actor.png"}, project_id=project.id))
+    write_asset(LibraryAsset(id="scn_available", kind="scenes", name="Extra scene",
+        pipeline_id="external", job_id="", created_at="2026-10-03T00:00:00Z",
+        files={"master": "scene.png"}, project_id=project.id))
+    shot.prompt_sections = PromptSections(summary="Keep this approved prompt.")
+    shot.layout_refs = [LayoutReference(id="lref_saved", asset_id="lay_identity_group", purpose="Saved study")]
+    save_shot(shot)
+    draft = {**request["shot"], "shot_id": shot.id}
+    saved = await svc.save_storyboard(project.id, [draft], request["expected_script_hash"])
+    assert saved[0].id == shot.id
+    assert saved[0].refs == shot.refs
+    assert saved[0].prompt_sections == shot.prompt_sections
+    assert saved[0].layout_refs == shot.layout_refs
+
+
+@pytest.mark.parametrize("invalid", ["foreign", "generated", "rejected", "file_key"])
+def test_append_rejects_inaccessible_or_invalid_layout_reference(invalid):
+    from app.agents.director.service import DirectorService
+    from app.core.projects.store import list_shots
+    project = create_project("Paper light", "Mia holds a light beside the lake.")
+    owner = create_project("Other", "Other").id if invalid == "foreign" else project.id
+    layout(owner, "lay_invalid", external=invalid != "generated",
+           review_status="reject" if invalid == "rejected" else None)
+    svc = DirectorService(plan_provider=None, orchestrator=object())
+    key = "missing" if invalid == "file_key" else "master"
+    with pytest.raises(ValueError, match="unknown library asset|invalid file_key"):
+        svc.append_shot(project.id, append_request(project, "lay_invalid", key))
+    assert list_shots(project.id) == []

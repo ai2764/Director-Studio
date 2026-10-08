@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from ...config import settings
 from ...integrations.comfy_mcp import ComfyMcpClient
 from ...integrations.minimax_h3 import MiniMaxH3Client
 from ...pipelines.base import ExternalPipeline
@@ -49,7 +50,13 @@ def _comfy_runtime() -> ComfyExecutionRuntime:
         finish=finish_comfy,
         update_phase=update_generation_phase,
         save_completed_outputs=_save_completed_outputs,
+        client_factory_for_job=_comfy_client_for_job,
     )
+
+
+def _comfy_client_for_job(job: JobRecord) -> ComfyClient:
+    base_url = (job.params or {}).get("comfy_base_url")
+    return ComfyClient(base_url=base_url) if base_url else ComfyClient()
 
 
 def _h3_api_runtime() -> H3ApiExecutionRuntime:
@@ -119,6 +126,14 @@ async def finish_comfy(job: JobRecord) -> None:
     """Clear Comfy GPU ownership after a terminal job status."""
     if not _uses_exclusive_vram(job.pipeline_id):
         return
+    endpoint = (job.params or {}).get("comfy_base_url")
+    if endpoint and endpoint.rstrip("/") != settings.comfy_base_url.rstrip("/"):
+        # Unload the server that actually ran this job while we still own the GPU.
+        # The orchestrator also frees the default server when ownership is released.
+        try:
+            await _comfy_client_for_job(job).free_memory(unload_models=True, free_memory=True)
+        except Exception:
+            logger.exception("Comfy endpoint cleanup failed for job=%s endpoint=%s", job.id, endpoint)
     await get_orchestrator().after_comfy_job(job.pipeline_id, job.status.value)
 
 
@@ -405,7 +420,10 @@ async def cancel_job(job_id: str) -> JobRecord | None:
     if job.status in (JobStatus.running, JobStatus.uploading, JobStatus.queued):
         previous_status = job.status
         if adapter.interrupt_on_cancel:
-            await adapter.cancel(_runtime_for(adapter))
+            try:
+                await adapter.cancel(_runtime_for(adapter), job)
+            except TypeError:
+                await adapter.cancel(_runtime_for(adapter))
         job.status = JobStatus.cancelled
         if adapter.id == "h3_api":
             if job.external_task_id:

@@ -11,7 +11,7 @@ from ...core.projects.models import PromptSections, RefRole, Shot, ShotRef, Shot
 from ...core.projects.store import new_shot_id
 from ...core.schemas import LibraryAsset
 from .asset_catalog import _asset_index, _default_file_key, _inventory, _repair_unique_file_key_typo
-from .planner import ShotDraft, role_to_library_kind, role_to_ref_role
+from .planner import ShotDraft, VoiceMatchDraft, role_to_library_kind, role_to_ref_role
 
 logger = logging.getLogger("director_studio.director.casting")
 
@@ -131,6 +131,37 @@ def _resolve_voice_matches(
             )
         )
     return resolved
+
+
+def resolve_revised_voice_matches(
+    matches: list[VoiceMatchDraft],
+    *,
+    inventory: list[dict[str, Any]],
+    index: dict[str, LibraryAsset],
+) -> list[ShotVoiceRef]:
+    """Materialize an explicit Voice replacement without silently dropping a match."""
+    available = {str(item.get("id") or ""): item for item in inventory}
+    refs: list[ShotVoiceRef] = []
+    for match in matches:
+        asset = index.get(match.asset_id)
+        item = available.get(match.asset_id)
+        if (asset is None or item is None or asset.kind != "voices"
+                or not item.get("h3_ready")):
+            raise ValueError(
+                f"unknown or non-H3-ready voice asset {match.asset_id!r}"
+            )
+        if not (asset.files or {}).get(match.file_key):
+            raise ValueError(
+                f"invalid voice file_key {match.file_key!r} for asset {match.asset_id}"
+            )
+        refs.append(ShotVoiceRef(
+            asset_id=match.asset_id,
+            audio_index=match.audio_index,
+            file_key=match.file_key,
+            speaker=match.speaker,
+            notes=match.reason,
+        ))
+    return refs
 
 
 def _kind_candidates(
@@ -258,7 +289,7 @@ def _complete_refs_from_inventory(
     has_actor = any(r.role == RefRole.actor for r in refs)
     has_scene = any(r.role == RefRole.scene for r in refs)
 
-    if not has_actor:
+    if not has_actor and draft.actor_presence != "none":
         aid = _find_by_name_or_tag(
             draft, "actors", inventory, extra_hay=script_text[:500]
         ) or _default_asset_id("actors", inventory)
@@ -302,7 +333,7 @@ def _complete_refs_from_inventory(
 
     # Recompute hard blocks for reference-frame readiness
     blocked: list[str] = []
-    if not any(r.role == RefRole.actor for r in refs):
+    if draft.actor_presence != "none" and not any(r.role == RefRole.actor for r in refs):
         blocked.append("ref_frame requires at least one actor ref (three-view)")
     if not any(r.role == RefRole.scene for r in refs):
         blocked.append(
@@ -323,12 +354,15 @@ def _shot_from_draft(
     inventory: list[dict[str, Any]],
     index: dict[str, LibraryAsset],
     script_text: str = "",
+    complete_missing_refs: bool = True,
 ) -> Shot:
     refs, match_blocked = _heuristic_match(draft, inventory, index)
     voice_refs = _resolve_voice_matches(draft, inventory, index)
-    refs, fill_blocked = _complete_refs_from_inventory(
-        refs, draft, inventory, index, script_text=script_text
-    )
+    fill_blocked: list[str] = []
+    if complete_missing_refs:
+        refs, fill_blocked = _complete_refs_from_inventory(
+            refs, draft, inventory, index, script_text=script_text
+        )
     # Prefer fill_blocked (authoritative casting state); keep unresolved LLM id errors
     blocked = list(fill_blocked)
     for b in match_blocked:
@@ -369,6 +403,10 @@ def _shot_from_draft(
         blocked_reasons=blocked,
         prompt_sections=PromptSections(),
     )
+    if draft.actor_presence == "none":
+        shot.meta["actor_presence"] = "none"
+    if not complete_missing_refs:
+        shot.meta["asset_binding_policy"] = "explicit"
     if draft.dialogue_lines is not None:
         from ...core.projects.dialogue import apply_dialogue_update
         shot = apply_dialogue_update(shot, {"dialogue": list(draft.dialogue),
@@ -467,13 +505,20 @@ def _validate_materialized_storyboard_bindings(
         RefRole.costume: {"costumes"},
         RefRole.scene: {"scenes"},
         RefRole.prop: {"props"},
-        RefRole.other: {"actors", "costumes", "scenes", "props"},
+        RefRole.other: {"actors", "costumes", "scenes", "props", "layouts"},
     }
     for shot_index, shot in enumerate(shots, start=1):
         for ref in shot.refs:
             asset = index.get(ref.asset_id)
             inventory_item = inventory_by_id.get(ref.asset_id)
-            if asset is None or inventory_item is None:
+            saved_layout = (
+                asset is not None
+                and ref.role == RefRole.layout_ref_frame
+                and asset.kind == "layouts"
+                and asset.project_id == shot.project_id
+                and any(layout.asset_id == ref.asset_id for layout in shot.layout_refs)
+            )
+            if asset is None or (inventory_item is None and not saved_layout):
                 raise ValueError(
                     f"shot {shot_index} materialized inaccessible image asset "
                     f"{ref.asset_id!r}"
@@ -555,15 +600,22 @@ def recast_shot_assets(
     index_loader: Callable[[str | None], dict[str, LibraryAsset]] = _asset_index,
 ) -> Shot:
     """Re-run agent casting for an existing shot (chat / reference-frame prep)."""
+    if shot.meta.get("asset_binding_policy") == "explicit" and not force:
+        return shot
     inv = inventory if inventory is not None else inventory_loader(project_id)
     idx = index if index is not None else index_loader(project_id)
     draft = ShotDraft(
         scene_id=shot.scene_id or "sc01",
         title=shot.title or "shot",
         script_beat=shot.script_beat or shot.title or "action",
+        shot_type=shot.shot_type or "unspecified shot",
+        camera_angle=shot.camera_angle or "unspecified angle",
+        camera_motion=shot.camera_motion or "locked-off",
+        composition=shot.composition or "unspecified composition",
         duration_s=shot.duration_s or 8.0,
         dialogue=list(shot.dialogue or []),
         asset_matches=[],
+        actor_presence="none" if shot.meta.get("actor_presence") == "none" else "auto",
     )
     refs = [] if force else list(shot.refs)
     # Drop empty / layout-only when force

@@ -17,3 +17,8 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "director", label: "Director", step: "02" },
   { id: "production", label: "Production", step: "03" },
 ];
+
+export function navigationForMode(_mode?: string): NavItem[] {
+  return NAV_ITEMS
+    .map((item, index) => ({ ...item, step: String(index + 1).padStart(2, "0") }));
+}

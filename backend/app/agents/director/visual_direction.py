@@ -38,6 +38,7 @@ class VisualCharacter(BaseModel):
 class VisualBrief(BaseModel):
     shot_type: str = Field(min_length=1)
     camera: str = Field(min_length=1)
+    visual_style: str = ""
     scene_lock: list[str] = Field(min_length=1)
     characters: list[VisualCharacter] = Field(default_factory=list)
     forbidden: list[str] = Field(min_length=1)
@@ -161,8 +162,10 @@ def compile_visual_prompt(
         )
 
     return (
-        "Create one photoreal cinematic production still. One continuous frame; "
+        "Create one cinematic composition image. One continuous frame; "
         "no collage, panels, character sheet, or repeated person.\n\n"
+        + (f"VISUAL STYLE\n{brief.visual_style.strip()}\n\n" if brief.visual_style.strip() else "")
+        +
         "SHOT\n"
         f"Title: {shot.title}\n"
         f"Action: {shot.script_beat}\n"
@@ -198,11 +201,15 @@ def _analysis_prompt(
     layout_brief: LayoutBrief | None = None,
     review_image_used: bool = False,
     feedback: str = "",
+    project_script: str = "",
+    directing_request: str = "",
 ) -> str:
-    character_count = sum(
-        bool(re.match(r"^\s*Image\d+\s*(?:=\s*)?(?:ACTOR|CHARACTER)\b", caption, re.I))
+    character_images = [
+        match.group(1)
         for caption in captions
-    )
+        if (match := re.match(r"^\s*(Image\d+)\s*(?:=\s*)?(?:ACTOR|CHARACTER)\b", caption, re.I))
+    ]
+    character_count = len(character_images)
     review_block = ""
     layout_block = ""
     if layout_brief is not None:
@@ -233,17 +240,48 @@ def _analysis_prompt(
                 "identity features.\n"
                 f"HUMAN FEEDBACK: {feedback.strip()}"
             )
-    characters_schema = "[]"
-    if character_count:
-        characters_schema = (
-            '[{"reference_image":"Image2","frame_position":"...",'
-            '"body_angle":"...","head_direction":"...","pose":"...",'
-            '"interaction":"none or explicit object interaction",'
-            '"identity_lock":["..."],"wardrobe_lock":["..."]}]'
-        )
+        else:
+            review_block = (
+                "\n\nLAYOUT REVISION:\n"
+                "Use the attached authoritative source images and apply the human feedback "
+                "to this new composition. The prior generated result is not a generation "
+                "reference.\n"
+                f"HUMAN FEEDBACK: {feedback.strip()}"
+            )
+    characters_schema = json.dumps([
+        {"reference_image": image, "frame_position": "...", "body_angle": "...",
+         "head_direction": "...", "pose": "...",
+         "interaction": "none or explicit object interaction",
+         "identity_lock": ["..."], "wardrobe_lock": ["..."]}
+        for image in character_images
+    ])
+    reference_instruction = (
+        "Use the supplied images as evidence: preserve visible scene architecture and "
+        "extract visible actor identity, hairstyle, body build, and every garment including footwear. "
+        if captions
+        else "Design scene, characters, and visual details from the shot description and planned brief; do not claim to preserve unseen references. "
+    )
     return (
         "You are the visual director for one image-generation shot. Inspect every attached "
-        "image before answering. Image captions are ordered exactly like the attachments.\n\n"
+        "image before answering. When no images are attached, design the image from the shot "
+        "description and planned camera brief alone. Image captions are ordered exactly like "
+        "the attachments.\n\n"
+        "CURRENT HUMAN DIRECTING REQUEST (original conversation text):\n"
+        f"{directing_request or '(none)'}\n"
+        "Apply the parts relevant to this Shot. This current human request can correct "
+        "older shot plans, agent-authored Layout descriptions, and incidental reference "
+        "image lighting or geography. Resolve those conflicts semantically; do not copy "
+        "an outdated direction just because the agent repeated it. Do not apply feedback "
+        "about a different Shot to this one.\n\n"
+        "CURRENT PROJECT SOURCE (authored screenplay and visual bible):\n"
+        f"{project_script or '(not supplied)'}\n\n"
+        "Use this project's visual bible for rendering style, palette, materials and "
+        "the division of visual roles between people, environments and props. Do not "
+        "inherit another project's style. Reference images supply the identity, wardrobe, "
+        "geometry or style contribution assigned in their captions; their incidental "
+        "backgrounds do not override the project direction. A style-only reference does "
+        "not define every location. Apply the current shot-specific feedback within that "
+        "direction. Record the resolved rendering and material roles in visual_style.\n\n"
         f"SHOT TITLE: {shot.title}\n"
         f"SHOT ACTION: {shot.script_beat}\n"
         f"PLANNED SHOT TYPE: {shot.shot_type or '(not specified)'}\n"
@@ -253,22 +291,24 @@ def _analysis_prompt(
         f"DURATION: {shot.duration_s:.2f} seconds\n"
         f"{layout_block}\n"
         "ATTACHMENTS:\n"
-        f"{_bullets(captions)}"
+        f"{_bullets(captions) if captions else '(none; use text-to-image)'}"
         f"{review_block}\n\n"
-        "Treat this planned camera brief as authoritative when choosing the representative "
+        "Treat this planned camera brief as authoritative except where the current human "
+        "feedback explicitly changes framing or composition. Apply that feedback rather "
+        "than repeating a rejected crop. The representative "
         "composition; the generated image is a static composition reference, not a promise "
-        "that it is the first frame. Return only one JSON object. Preserve visible scene architecture and extract visible "
-        "actor identity, hairstyle, body build, and every garment including footwear. "
-        f"The characters array MUST contain exactly {character_count} distinct entries: "
+        "that it is the first frame. Return only one JSON object. "
+        + reference_instruction
+        + f"The characters array MUST contain exactly {character_count} distinct entries: "
         "one for every attached ACTOR/CHARACTER image, each referenced exactly once. Design "
         "a shot-specific frame position, body angle, head direction, pose, and interaction. "
-        "Do not invent information from a screenplay. Write generation_prompt as the final "
-        "English positive prompt that Qwen Image Edit should receive verbatim: lead with the "
+        "Do not claim intended screenplay actions are observed image facts. Write generation_prompt as the final "
+        "English positive prompt that Qwen Image 2.1 should receive verbatim: lead with the "
         "shot action and composition, assign every attached ImageN exactly one visual job, "
         "then state only the identity, wardrobe, environment, prop, and spatial details needed "
-        "for this shot. Keep it concise and coherent. Do not put headings, JSON, a generic "
+        "for this shot. Use Qwen Image 2.1 as the image model. Keep it concise and coherent. Do not put headings, JSON, a generic "
         "quality preamble, or negative instructions inside generation_prompt. Use exactly this schema:\n"
-        '{"shot_type":"...","camera":"...","scene_lock":["..."],'
+        '{"shot_type":"...","camera":"...","visual_style":"...","scene_lock":["..."],'
         f'"characters":{characters_schema},'
         '"forbidden":["..."],"generation_prompt":"..."}'
     )
@@ -300,12 +340,12 @@ async def analyze_ref_frame(
     layout_brief: LayoutBrief | None = None,
     review_image: tuple[str, bytes] | None = None,
     feedback: str = "",
+    project_script: str = "",
+    directing_request: str = "",
     model: str,
     ollama: _VisionClient,
 ) -> VisualDirectionResult:
     ordered = list(images.items())
-    if not ordered:
-        raise ValueError("visual direction requires at least one image")
     if len(ordered) != len(captions):
         raise ValueError("vision image and caption counts must match")
 
@@ -322,11 +362,13 @@ async def analyze_ref_frame(
                 layout_brief=layout_brief,
                 review_image_used=review_image is not None,
                 feedback=feedback,
+                project_script=project_script,
+                directing_request=directing_request,
             ),
             guides=("reference-strategy", "reference-frame-generation"),
         ),
         images=ollama_images,
-        require_vision=True,
+        require_vision=bool(ollama_images),
         keep_alive="10m",
         options={"temperature": 0.1},
         format=VisualBrief.model_json_schema(),

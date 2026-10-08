@@ -346,7 +346,8 @@ def material_shot(tmp_path, monkeypatch):
     neighbor = shot.model_copy(update={"id": "sht_neighbor", "title": "Untouched"}, deep=True)
     save_shot(shot)
     save_shot(neighbor)
-    save_project(project.model_copy(update={"shot_ids": [shot.id, neighbor.id]}))
+    project = project.model_copy(update={"shot_ids": [shot.id, neighbor.id]})
+    save_project(project)
     return project, shot, neighbor, files
 
 
@@ -530,6 +531,44 @@ async def test_inspect_library_asset_before_planning_is_read_only(material_shot)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("external", [False, True])
+async def test_inspect_layout_reads_actual_image_without_mutating_shot(material_shot, external):
+    import hashlib
+    from app.core.library.store import write_asset
+    project, shot, _, files = material_shot
+    asset = write_asset(LibraryAsset(
+        id="lay_current", kind="layouts", name="Current Layout", project_id=project.id,
+        pipeline_id="external" if external else "qwen21_layout", job_id="fixture",
+        created_at="2026-10-03T00:00:00Z", files={"layout": str(files[0])},
+        meta={"external": external},
+    ))
+    orch = Orchestrator()
+    svc = DirectorService(plan_provider=Provider(orch), orchestrator=orch)
+    observation = await svc.inspect_asset(project.id, asset.id, "layout")
+    assert observation["asset_id"] == "lay_current"
+    assert observation["file_key"] == "layout"
+    assert observation["content_sha256"] == hashlib.sha256(files[0].read_bytes()).hexdigest()
+    assert observation["description"] == "Observed detail 1"
+    assert load_shot(project.id, shot.id) == shot
+
+
+@pytest.mark.asyncio
+async def test_inspect_layout_rejects_another_projects_image(material_shot):
+    from app.core.library.store import write_asset
+    project, _, _, files = material_shot
+    foreign = create_project("Foreign", "Unrelated")
+    write_asset(LibraryAsset(
+        id="lay_foreign", kind="layouts", name="Foreign Layout", project_id=foreign.id,
+        pipeline_id="external", job_id="fixture", created_at="2026-10-03T00:00:00Z",
+        files={"layout": str(files[0])}, meta={"external": True},
+    ))
+    orch = Orchestrator()
+    svc = DirectorService(plan_provider=Provider(orch), orchestrator=orch)
+    with pytest.raises(ValueError, match="not in this project's inventory"):
+        await svc.inspect_asset(project.id, "lay_foreign", "layout")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("fault", ["empty", "truncated", "unreadable", "vision_error", "conflict", "missing_file"])
 async def test_incomplete_review_preserves_old_brief_prompt_and_pending(material_shot, fault):
     project, shot, _, files = material_shot
@@ -577,6 +616,121 @@ async def test_review_can_preserve_brief_and_valid_prompt(material_shot):
     assert updated.script_beat == shot.script_beat
     assert updated.prompt_sections == shot.prompt_sections
     assert not updated.meta["material_review_pending"]
+
+
+def music_review_inputs(material_shot, monkeypatch):
+    from app.core.projects.models import ProjectMode, ProjectMusicMaster, ShotMusicSegment
+    from app.core.projects.song_segments import SongSegment, SongSegmentsDocument
+    from app.core.media import music_segments
+    project, shot, _, _ = material_shot
+    project = project.model_copy(update={"mode": ProjectMode.mv, "music_master": ProjectMusicMaster(
+        filename="song.wav", relative_path="music/master.wav", duration_s=30,
+        content_sha256="a" * 64, source_format="wav")})
+    save_project(project)
+    shot = shot.model_copy(update={"dialogue_lines": None, "music_segment": ShotMusicSegment(
+        core_start_s=0, core_end_s=6, submit_start_s=0, submit_end_s=6)})
+    save_shot(shot)
+    document = SongSegmentsDocument(revision=1, master_sha256="a" * 64, segments=[
+        SongSegment(id="line", start_s=0, end_s=5, text="Hello.")])
+    monkeypatch.setattr(music_segments, "load_segments", lambda _: document)
+    return project, shot, document
+
+
+class MusicReviewProvider(Provider):
+    def __init__(self, orch, document):
+        super().__init__(orch, rewrite=False)
+        self.document = document
+        self.edit_during_write = False
+
+    async def complete(self, system, user, *, guides=()):
+        if "reference review decision" in system.lower():
+            return await super().complete(system, user, guides=guides)
+        self.text.append((system, user))
+        result = sections()
+        start = self.document.segments[0].start_s
+        result["detailed_description"] = f"From {start}-5 seconds the watchmaker sings <d>[English] Hello.</d> in sync with <Audio 1>."
+        result["overall_soundscape"] = "Original song from <Audio 1>."
+        if self.edit_during_write:
+            self.document.segments[0].start_s = 0.5
+        return json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_changed_lyric_timing_overrides_review_preserve_advice(material_shot, monkeypatch):
+    from app.core.media.music_segments import music_prompt_signature
+    project, shot, document = music_review_inputs(material_shot, monkeypatch)
+    provider = MusicReviewProvider(Orchestrator(), document)
+    svc = DirectorService(plan_provider=provider, orchestrator=provider.orch)
+    first = await svc.write_prompts_after_layout(shot.id)
+    count = len(provider.text)
+    document.segments[0].start_s = 0.5
+    updated = await svc.write_prompts_after_layout(shot.id)
+    assert len(provider.text) == count + 1
+    assert '"clip_start_s": 0.5' in provider.text[-1][1]
+    assert "0.5-5 seconds" in updated.prompt_sections.detailed_description
+    assert updated.meta["prompt_music_signature"] == music_prompt_signature(project, updated)
+    assert updated.prompt_sections != first.prompt_sections
+
+
+@pytest.mark.asyncio
+async def test_lyric_edit_during_writing_does_not_certify_stale_prompt(material_shot, monkeypatch):
+    _, shot, document = music_review_inputs(material_shot, monkeypatch)
+    provider = MusicReviewProvider(Orchestrator(), document)
+    svc = DirectorService(plan_provider=provider, orchestrator=provider.orch)
+    first = await svc.write_prompts_after_layout(shot.id)
+    provider.edit_during_write = True
+    with pytest.raises(ValueError, match="[Ss]ong|[Mm]usic"):
+        await svc.write_prompts_after_layout(shot.id, revision_request="Use a steady camera.")
+    assert load_shot(shot.project_id, shot.id).prompt_sections == first.prompt_sections
+
+
+@pytest.mark.asyncio
+async def test_tail_lyric_edit_during_writing_does_not_certify_stale_prompt(tail_handoff_shot, monkeypatch):
+    from app.core.projects.models import ProjectMode, ProjectMusicMaster, ShotMusicSegment
+    from app.core.projects.song_segments import SongSegment, SongSegmentsDocument
+    from app.core.media import music_segments
+    project, shot = tail_handoff_shot
+    project = project.model_copy(update={"mode": ProjectMode.mv, "music_master": ProjectMusicMaster(
+        filename="song.wav", relative_path="music/master.wav", duration_s=30,
+        content_sha256="a" * 64, source_format="wav")})
+    save_project(project)
+    shot = shot.model_copy(update={"music_segment": ShotMusicSegment(
+        core_start_s=0, core_end_s=6, submit_start_s=0, submit_end_s=6)})
+    save_shot(shot)
+    document = SongSegmentsDocument(revision=1, master_sha256="a" * 64, segments=[
+        SongSegment(id="line", start_s=0, end_s=5, text="Hello.")])
+    monkeypatch.setattr(music_segments, "load_segments", lambda _: document)
+    class EditingProvider(TailHandoffProvider):
+        async def complete(self, *args, **kwargs):
+            raw = await super().complete(*args, **kwargs)
+            payload = json.loads(raw)
+            if "prompt_sections" in payload:
+                payload["prompt_sections"]["overall_soundscape"] = "Original music from <Audio 1>."
+                document.segments[0].start_s = 0.5
+            return json.dumps(payload)
+    provider = EditingProvider(Orchestrator())
+    with pytest.raises(ValueError, match="[Ss]ong|[Mm]usic"):
+        await DirectorService(plan_provider=provider, orchestrator=provider.orch).write_prompts_after_layout(shot.id)
+    assert load_shot(project.id, shot.id).prompt_sections == shot.prompt_sections
+
+
+@pytest.mark.asyncio
+async def test_explicit_prompt_revision_overrides_review_preserve_advice(material_shot):
+    _, shot, _, _ = material_shot
+    orch = Orchestrator()
+    class RevisionProvider(Provider):
+        async def complete(self, system, user, *, guides=()):
+            response = await super().complete(system, user, guides=guides)
+            payload = json.loads(response)
+            if "prompt_sections" in payload:
+                payload["prompt_sections"]["summary"] = "The gear turns slowly in the watchmaker's hands."
+            return json.dumps(payload)
+    provider = RevisionProvider(orch, rewrite=False)
+    updated = await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(
+        shot.id, revision_request="Make the gear turn slowly."
+    )
+    assert updated.prompt_sections.summary == "The gear turns slowly in the watchmaker's hands."
+    assert updated.script_beat == shot.script_beat
 
 
 @pytest.mark.asyncio

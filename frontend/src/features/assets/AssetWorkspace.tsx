@@ -6,9 +6,11 @@ import { PropsPage } from "../props/PropsPage";
 import { SetDesignPage } from "../set/SetDesignPage";
 import { LibraryOverview } from "./LibraryOverview";
 import { AssetImportDialog } from "../library/AssetImportDialog";
+import { SongSegmentsEditor } from "../music/SongSegmentsEditor";
+import { MusicMasterControl } from "./MusicMasterControl";
 
 type PreparedAssetCategory = Exclude<LibraryKind, "layouts" | "costumes">;
-type AssetCategory = "library" | PreparedAssetCategory;
+type AssetCategory = "library" | PreparedAssetCategory | "music";
 
 const CATEGORIES: { id: AssetCategory; label: string; eyebrow: string }[] = [
   { id: "library", label: "Library", eyebrow: "All reusable assets" },
@@ -16,6 +18,7 @@ const CATEGORIES: { id: AssetCategory; label: string; eyebrow: string }[] = [
   { id: "scenes", label: "Scenes", eyebrow: "World and locations" },
   { id: "props", label: "Props", eyebrow: "Story objects" },
   { id: "voices", label: "Voices", eyebrow: "Performance reference" },
+  { id: "music", label: "Music", eyebrow: "Original song master" },
 ];
 
 const IMPORT_LABELS: Record<PreparedAssetCategory, string> = {
@@ -26,9 +29,10 @@ const IMPORT_LABELS: Record<PreparedAssetCategory, string> = {
 };
 
 export function AssetWorkspace() {
-  const { projectId } = useProject();
+  const { project, projectId } = useProject();
   const [category, setCategory] = useState<AssetCategory>("library");
   const [importKind, setImportKind] = useState<PreparedAssetCategory | null>(null);
+  const visibleCategory = category === "music" && project?.mode !== "mv" ? "library" : category;
 
   return (
     <main className="asset-workspace" aria-label="Asset preparation">
@@ -46,13 +50,13 @@ export function AssetWorkspace() {
 
       <div className="asset-workspace-body">
         <nav className="asset-category-rail" aria-label="Asset categories">
-          {CATEGORIES.map((item) => (
+          {CATEGORIES.filter((item) => item.id !== "music" || project?.mode === "mv").map((item) => (
             <button
               key={item.id}
               type="button"
-              className={`asset-category-main ${category === item.id ? "active" : ""}`}
+              className={`asset-category-main ${visibleCategory === item.id ? "active" : ""}`}
               aria-label={item.label}
-              aria-current={category === item.id ? "page" : undefined}
+              aria-current={visibleCategory === item.id ? "page" : undefined}
               onClick={() => setCategory(item.id)}
             >
               <strong>{item.label}</strong>
@@ -62,18 +66,27 @@ export function AssetWorkspace() {
         </nav>
 
         <section className="asset-category-content" aria-live="polite">
-          {category === "library" ? (
+          {visibleCategory === "library" ? (
             <div className="asset-library-overview-panel">
               <LibraryOverview onSelectKind={setCategory} />
             </div>
           ) : null}
-          {CATEGORIES.filter((item) => item.id !== "library").map((item) => {
+          {visibleCategory === "music" && project?.mode === "mv" ? (
+            <div className="asset-preparation-panel">
+              <div className="workspace-kicker">Music Video source</div>
+              <h2>Original song</h2>
+              <p>Import the complete song used as the source for this project.</p>
+              <MusicMasterControl />
+              <SongSegmentsEditor />
+            </div>
+          ) : null}
+          {CATEGORIES.filter((item) => item.id !== "library" && item.id !== "music").map((item) => {
             const workflowCategory = item.id as PreparedAssetCategory;
             return (
               <div
                 key={workflowCategory}
                 className="asset-preparation-panel"
-                hidden={category !== workflowCategory}
+                hidden={visibleCategory !== workflowCategory}
               >
               <div className="asset-workflow-toolbar">
                 <span>Already have a reference?</span>

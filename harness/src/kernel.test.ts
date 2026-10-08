@@ -115,6 +115,20 @@ describe("real Harness kernel", () => {
     });
     expect(purposes).toEqual(["compaction"]);
   });
+  it("continues when proactive compaction cannot shrink history that still fits the hard budget", async () => {
+    const purposes: string[] = [];
+    const history = Array.from({ length: 162 }, () => ({ role: "user", content: "historical detail ".repeat(50) }));
+    const host: Host = async (method, params) => {
+      if (method === "context") return { system: "fixture", state: {}, tools: [] };
+      purposes.push(String(params.purpose));
+      return params.purpose === "compaction"
+        ? { content: "not compressed ".repeat(10000) }
+        : { content: "completed within the hard budget" };
+    };
+    const result = await runTurn({ ...input, history, context_window: 40000 }, host, new AbortController().signal);
+    expect(result.reply).toBe("completed within the hard budget");
+    expect(purposes).toEqual(["compaction", "turn"]);
+  });
 
   it.each(["finish_reason", "done_reason"])("reports truncated %s output as incomplete", async (field) => {
     const host: Host = async (method) => method === "context"

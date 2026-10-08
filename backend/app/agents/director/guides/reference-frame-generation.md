@@ -2,7 +2,9 @@
 
 ## Normal Qwen request
 
-For each Layout, state its purpose, the state it depicts, an optional time hint, and an ordered pack of one to three real source images. Map that ordered pack only to Qwen's fixed `image1`, `image2`, and `image3` inputs; there is no fourth source slot.
+For each local Layout, state its purpose, the state it depicts, and an optional time hint. Qwen Image 2.1 supports text-to-image with zero references and reference-to-image with one to three real source images. Choose only sources that materially improve identity, set, prop, style, or continuity; map them in order to `Image1`–`Image3`.
+
+Bind a Scene to a Shot only when that asset depicts its actual location. A lobby is not a bedroom or rooftop because they share a palette. If the required set is absent, leave its Scene binding empty and design it with text-to-image or actor references, following the saved visual bible. For subsequent shots, use an approved Layout of that set to anchor geometry and props. A style-only source must be described as palette/material evidence, with its geometry excluded; never claim it contains target-location features that are absent. Prefer the actual visual-bible image for style.
 
 ## Explicit GPT request
 
@@ -12,7 +14,7 @@ Author the final `generation_prompt`. Name every attached image and state what i
 
 Treat every Actor image as an authoritative character anchor, not a loose style reference. Preserve the same exact face, hair, body proportions, and approved wardrobe; never summarize its job as “identity only.” Clothing may change only when the user explicitly requests it or an attached Costume image controls it. Choose exact file keys: `bust_threeview` is strongest for facial fidelity, while `master` or `fullbody_threeview` carries full-body wardrobe evidence. When both face and wardrobe matter and the reference budget allows, attach both with separate jobs.
 
-Example with four sources:
+GPT example with four sources (GPT is not limited by the local Qwen three-image cap):
 
 ```text
 Create one final cinematic frame in 16:9. Image1 controls the archive corridor geometry and camera axis. Image2 controls Lu's identity and navy uniform. Image3 controls the newcomer's identity and dark coat. Image4 controls the recorder's exact design. Show Lu foreground-left at the desk, the newcomer entering through the marked rear door, and the recorder newly visible between Lu's hands. Preserve identities, wardrobe, set proportions, eyelines, and prop shape. Return one image only; no collage, split screen, labels, borders, or contact sheet.
