@@ -504,7 +504,7 @@ Run: `python -m pytest tests/test_task_context_writers.py tests/test_director_ma
 
 **Files:**
 - Create: `backend/tests/test_task_context_trajectories.py`
-- Create: `docs/superpowers/reports/2026-09-26-task-context-pilot-verification.md`
+- Keep verification evidence in an ignored local directory.
 - Modify: `docs/HARNESS.md`（只增加上下文试点选项与限制）
 
 **Interfaces:** 沿用 Task 1—5，不引入新业务接口。报告中的真实模型部分在未授权/未执行时标记“未执行”，不是通过。

@@ -71,7 +71,7 @@ assert not reference_contract_current(project, shot.model_copy(update={'meta': {
 
 ### Task 3: Real-model probes, regression and report
 
-**Files:** Create `docs/superpowers/reports/2026-09-25-reference-facts-verification.md`; test-only evaluation script and evidence under this plan's ignored workspace.
+**Evidence:** Keep the verification record, test-only evaluation script and evidence under this plan's ignored workspace.
 
 - [x] Run complete backend suite, frontend suite/build and `git diff --check`.
 - [x] If durable jobs are idle, run bounded prompt/vision-only actual-model probes on isolated images/fixtures. Include a conflicting old observation, a crop where clothing is unseen, and an authorized alternative appearance; do not edit Titanic or render media. Report model calls/latency, false blocks and unknowns honestly.

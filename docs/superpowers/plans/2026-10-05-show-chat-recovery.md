@@ -42,4 +42,4 @@
 
 ## Result
 
-Completed inline. Final suite: 1,983 passed, 13 skipped; original candidate accepted by the local reviewer without saving. Original blocked reply replay passed. Independent review clean after the truncation fix. Experiment service 5174 is healthy. Details: `docs/superpowers/reports/2026-10-05-show-chat-recovery.md`.
+Completed inline. Verification evidence is kept locally rather than published as a repository report.

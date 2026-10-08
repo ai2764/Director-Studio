@@ -42,7 +42,7 @@ Set-Location C:/Users/AIBOX/.codex/worktrees/h3-video-context/Director-Studio/ba
 python -m pytest tests/test_h3_workflow_inspector.py tests/test_h3_workflow_validator.py tests/test_h3_profile_runtime.py -q --basetemp=.pytest-video-context-baseline
 ```
 
-实现及实跑已完成；Codex 接手后的修复和验收见 `docs/superpowers/reports/2026-10-04-h3-video-context-verification.md`。实验服务已启动，frontend/harness dependencies 已安装并验证。
+实现及实跑已完成；本地验证记录不作为仓库文档发布。
 
 本机 A/B 输出：`C:/Users/AIBOX/dev/Director-Studio/.run/latent-ab-20261004/`。
 正式源视频 `source2.mp4` 的 Job 为 `job_bf31b0fb9347`；重编码首段 `pixelsB1.mp4` 为 `job_a3a49e1eedc9`。对应 `.executed.api.json` 是 Comfy 实际运行图。不要拿三视图预检 `source.mp4` 作为正式样本。
@@ -181,7 +181,7 @@ def attach_video_context(graph: dict, *, uploaded_video: str, delivered_frames: 
 
 ## Task 6 — 串行实测与 Grok 交付
 
-**Files:** 新 `docs/superpowers/reports/2026-10-04-h3-video-context-verification.md`。视频/截图/完整运行输入放 ignored `.run/video-context/`，文档只引用路径和必要诊断。
+**Evidence:** 视频、截图、完整运行输入与验收记录保存在 ignored `.run/video-context/`。
 
 - [x] 验证 durable paths、实验身份、Harness；profile 初始 hash 和收尾 2243 文件隔离检查通过，主项目初始 snapshot 期间独立活动差异如实写入报告。停止/重启配置保留。
 - [x] 生成前检查主实例 generation_count/owner 和 Comfy queue，串行复用共享服务；实验停止仅停止自己的三个进程。

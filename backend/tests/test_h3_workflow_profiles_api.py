@@ -237,7 +237,7 @@ def test_profile_listing_starts_on_temporary_builtin_turbo8(profile_client: Test
     assert body["active"]["contract_version"] == 2
 
 
-@pytest.mark.parametrize("workflow", ["h3_ref2va_fast4.api.json", "h3_ref2va_turbo8_sfw.api.json"])
+@pytest.mark.parametrize("workflow", ["h3_ref2va_fast4.api.json", "h3_ref2va.api.json"])
 def test_builtin_listing_matches_configured_workflow_name(profile_client, monkeypatch, workflow):
     monkeypatch.setattr(settings, "h3_builtin_workflow", workflow)
     body = profile_client.get("/api/workflow-profiles/h3").json()
