@@ -2191,6 +2191,12 @@ class DirectorService:
         if project is None:
             raise ValueError(f"project not found: {shot.project_id}")
 
+        if (settings.video_context_enabled and shot.video_context is not None
+                and shot.video_context.mode != "off"):
+            from ...core.projects.video_context import video_context_status
+            status = video_context_status(shot)
+            if not status["ready"]:
+                raise ValueError("Video continuation is not ready: " + "; ".join(status["blocked_reasons"]))
         task_packet = prepare_writer_packet(project, shot.id, revision_request)
         active_video_context = (settings.video_context_enabled and shot.video_context is not None
                                 and shot.video_context.mode != "off")

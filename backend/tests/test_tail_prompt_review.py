@@ -112,9 +112,10 @@ async def test_video_only_handoff_cannot_publish_a_rejected_opening(tail_handoff
     from app.core.projects.store import save_project
     from app.core.projects.video_context import configure_video_context
     from app.core.jobs import list_jobs
-    from test_video_context_sources import _succeed
+    from test_video_context_sources import _media, _succeed
     project, shot = tail_handoff_shot
     monkeypatch.setattr(settings, "video_context_enabled", True)
+    monkeypatch.setattr("app.core.projects.video_context.probe_video", lambda _: _media())
     first = shot.model_copy(update={"id": "sht_source", "refs": [], "layout_refs": []})
     source_job = _succeed(project.id, first.id)
     save_shot(first.model_copy(update={"h3_job_id": source_job.id}))

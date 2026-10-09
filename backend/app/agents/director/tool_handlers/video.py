@@ -273,13 +273,16 @@ async def _configure_video_context_tool(
     }
     action = f"configure_video_context:{shot_id}"
     actions.append(action)
+    waiting = status.get("state") == "waiting"
     publish(
-        _context_result(
+        {**_context_result(
             shot_id, ok=True, video_context=saved["video_context"],
             source_job_id=status.get("source_job_id"),
-            blocked=[], taken=[action],
-        ),
-        "Continuation was saved. No video job was started.",
+            blocked=[] if waiting else status.get("blocked_reasons", []), taken=[action],
+        ), "state": status.get("state", "ready"), "ready": status.get("ready", True),
+            "waiting_reasons": status.get("blocked_reasons", []) if waiting else []},
+        ("Continuation plan was saved. Waiting for the source video. No video job was started."
+         if waiting else "Continuation was saved. No video job was started."),
     )
 
 

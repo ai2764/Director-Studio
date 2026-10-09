@@ -161,18 +161,19 @@ class PromptSections(BaseModel):
 
 
 class ShotVideoContext(BaseModel):
-    """How this shot continues from an earlier finished video.
+    """A continuation plan; the earlier video must be ready before execution.
 
     ``previous_shot`` may select any earlier shot via ``source_shot_id``;
     leaving that ID empty defaults to the adjacent predecessor when configured.
     ``source_job_id`` empty means follow the source shot's current ``h3_job_id``.
+    ``source_output_key`` empty resolves the sole video output once it exists.
     ``carry_audio`` empty means the built-in adapter does not carry sound.
     """
 
     mode: Literal["off", "previous_shot", "external_upload"] = "off"
     source_shot_id: str | None = None
     source_job_id: str | None = None
-    source_output_key: str = "video"
+    source_output_key: str | None = None
     upload_id: str | None = None
     context_frames: Literal[5, 22, 39, 56] | None = None
     audio_context_frames: int | None = None

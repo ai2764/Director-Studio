@@ -611,7 +611,9 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     function_tool(
         "configure_video_context",
-        "Save how this shot continues from a finished source video. "
+        "Save a plan for how this shot continues from an earlier source shot. "
+        "The source need not be generated yet: a waiting result means the plan was saved successfully. "
+        "Source video readiness is required before writing its continuation prompt or generating. "
         "Pass source_shot_id to select any earlier shot on this project's storyboard; "
         "omit it only when the user means the immediately previous shot. "
         "Use mode=previous_shot when the user asks to continue its action or camera motion; "

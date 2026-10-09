@@ -2036,6 +2036,7 @@ def get_shot_video_context(shot_id: str) -> dict:
             status["resolution"] = video_context_resolution(shot)
         except VideoContextError as exc:
             status["blocked_reasons"].append(str(exc))
+            status.update(state="blocked", ready=False)
     return status
 
 

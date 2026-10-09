@@ -224,6 +224,37 @@ describe("VideoContextPanel", () => {
     expect(screen.queryByRole("button", { name: /generate|submit/i })).toBeNull();
   });
 
+  it("shows a saved waiting plan and becomes ready after the source finishes", async () => {
+    const previous = makeShot("s1", "Arrival");
+    const current = makeShot("s2", "Continue", { video_context: {
+      mode: "previous_shot", source_shot_id: previous.id, source_output_key: null,
+    } });
+    const { rerender } = render(<VideoContextPanel shot={current} shots={[previous, current]} expanded />);
+    expect(screen.getByRole("status").textContent).toContain("Waiting for the source video");
+    expect(screen.queryByText("Source shot has no H3 job")).toBeNull();
+    expect(document.querySelector("video")).toBeNull();
+    vi.mocked(getVideoJob).mockResolvedValue(succeededJob("job_ready", {
+      video: videoOutput("job_ready"),
+    }));
+    const finished: Shot = { ...previous, h3_job_id: "job_ready", status: "succeeded" };
+    rerender(<VideoContextPanel shot={current} shots={[finished, current]} expanded />);
+    await waitFor(() => expect(document.querySelector("video")?.getAttribute("src"))
+      .toBe("/api/files/jobs/job_ready/outputs/video.mp4"));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect((screen.getByLabelText("Source video version") as HTMLSelectElement).value).toBe("job_ready:video");
+  });
+
+  it("shows a pending generation as waiting rather than an error", async () => {
+    vi.mocked(getVideoJob).mockResolvedValue({ id: "job_pending", status: "running", outputs: {} });
+    const previous = makeShot("s1", "Arrival", { h3_job_id: "job_pending" });
+    const current = makeShot("s2", "Continue", { video_context: {
+      mode: "previous_shot", source_shot_id: previous.id,
+    } });
+    render(<VideoContextPanel shot={current} shots={[previous, current]} />);
+    expect((await screen.findByRole("status")).textContent).toContain("Waiting for the source video");
+    expect(screen.queryByText("Source shot job is running")).toBeNull();
+  });
+
   it("saves an entered supported window without changing the source version", async () => {
     const previous = makeShot("s1", "Arrival", { h3_job_id: "job_new" });
     const current = makeShot("s2", "Continue", { video_context: {

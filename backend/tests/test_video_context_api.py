@@ -16,6 +16,7 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr(settings, "jobs_dir", tmp_path / "jobs")
     monkeypatch.setattr(settings, "video_context_enabled", True)
+    monkeypatch.setattr("app.core.projects.video_context.probe_video", lambda _: _media())
     project = create_project("uploads", "script")
     return project
 
@@ -34,6 +35,43 @@ def test_disabled_endpoints_reject_writes(monkeypatch):
         put_shot_video_context("sht_missing", ShotVideoContext())
     assert saved.value.status_code == 403
     assert saved.value.detail == "Video context is disabled"
+
+
+@pytest.mark.asyncio
+async def test_pending_continuation_cannot_submit_or_create_a_job(monkeypatch, tmp_path):
+    from app.api import projects as api
+    from app.core.jobs.store import list_jobs
+    from app.core.projects.video_context import configure_video_context
+    from test_video_context_sources import _board
+
+    project, _first, second = _board(monkeypatch, tmp_path)
+    configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
+    before = load_shot(project.id, second.id).model_dump(mode="json")
+    with pytest.raises(HTTPException) as error:
+        await api.submit_shot_endpoint(second.id, svc=object())
+    assert error.value.status_code == 400
+    assert "Source shot has no H3 job" in error.value.detail
+    assert list_jobs(project_id=project.id) == []
+    assert load_shot(project.id, second.id).model_dump(mode="json") == before
+
+
+def test_unreadable_source_reports_blocked_readiness(monkeypatch, tmp_path):
+    from app.api import projects as api
+    from app.core.projects.video_context import configure_video_context
+    from test_video_context_sources import _board, _succeed
+
+    project, first, second = _board(monkeypatch, tmp_path)
+    job = _succeed(project.id, first.id)
+    save_shot(first.model_copy(update={"h3_job_id": job.id}))
+    configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
+    def unreadable(_path):
+        raise VideoContextError("Source video cannot be decoded")
+    monkeypatch.setattr("app.core.projects.video_context.probe_video", unreadable)
+    status = api.get_shot_video_context(second.id)
+    assert status["state"] == "blocked"
+    assert status["ready"] is False
+    assert status["resolution"] is None
+    assert status["blocked_reasons"] == ["Source video cannot be decoded"]
 
 
 @pytest.mark.asyncio

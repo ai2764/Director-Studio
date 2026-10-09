@@ -38,6 +38,48 @@ async def _call(name, project_id, args, message):
     return handled, payloads, actions, notes
 
 
+@pytest.mark.asyncio
+async def test_pending_continuation_blocks_writer_before_model_work(monkeypatch, tmp_path):
+    project, _first, second = _board(monkeypatch, tmp_path)
+    configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
+    before = load_shot(project.id, second.id).model_dump(mode="json")
+    service = DirectorService(plan_provider=None, orchestrator=object())
+    with pytest.raises(ValueError, match="Video continuation is not ready"):
+        await service.write_prompts_after_layout(second.id)
+    assert load_shot(project.id, second.id).model_dump(mode="json") == before
+    assert list_jobs(project_id=project.id) == []
+
+
+@pytest.mark.asyncio
+async def test_unreadable_source_blocks_agent_status_and_writer(monkeypatch, tmp_path):
+    from app.core.projects.video_context import VideoContextError, video_context_status
+    project, first, second = _board(monkeypatch, tmp_path)
+    job = _succeed(project.id, first.id)
+    save_shot(first.model_copy(update={"h3_job_id": job.id}))
+    configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
+    def unreadable(_path):
+        raise VideoContextError("Source video cannot be decoded")
+    monkeypatch.setattr("app.core.projects.video_context.probe_video", unreadable)
+    saved = load_shot(project.id, second.id)
+    assert video_context_status(saved)["ready"] is False
+    from app.agents.director.tool_handlers.media import handle_media_tool
+    payloads = []
+    handled = await handle_media_tool(
+        name="get_status", args={"shot_id": second.id}, project_id=project.id,
+        project=project, shots=[load_shot(project.id, first.id), saved],
+        runtime=None, actions=[], notes=[], touched=set(), result_payloads=payloads,
+        images=None, user_feedback="",
+    )
+    assert handled is True
+    status = payloads[-1]["video_context_status"]
+    assert status["state"] == "blocked"
+    before = saved.model_dump(mode="json")
+    with pytest.raises(ValueError, match="Source video cannot be decoded"):
+        await DirectorService(plan_provider=None, orchestrator=object()).write_prompts_after_layout(second.id)
+    assert load_shot(project.id, second.id).model_dump(mode="json") == before
+    assert len(list_jobs(project_id=project.id)) == 1
+
+
 def test_configure_tool_is_offered_for_ordinary_and_lyric_messages():
     project = create_project("Offer", "Two shots")
     for message in ("第二镜接着上一镜往前推", "这两段歌词如何衔接", "hello"):
@@ -134,8 +176,8 @@ async def test_configure_rejects_unsupported_runtime_without_saving(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_rejected_source_returns_failure_and_keeps_the_shot(monkeypatch, tmp_path):
-    project, _first, second = _board(monkeypatch, tmp_path)
+async def test_pending_source_saves_a_plan_without_claiming_readiness(monkeypatch, tmp_path):
+    project, first, second = _board(monkeypatch, tmp_path)
     before = load_shot(project.id, second.id)
     handled, payloads, actions, _notes = await _call(
         "configure_video_context", project.id,
@@ -143,11 +185,19 @@ async def test_rejected_source_returns_failure_and_keeps_the_shot(monkeypatch, t
         "继续刚才的动作",
     )
     assert handled is True
-    assert payloads[-1]["ok"] is False
-    assert payloads[-1]["actions"] == []
-    assert actions == []
-    assert any("no H3 job" in reason for reason in payloads[-1]["blocked_reasons"])
-    assert load_shot(project.id, second.id) == before
+    assert payloads[-1]["ok"] is True
+    assert payloads[-1]["state"] == "waiting"
+    assert payloads[-1]["ready"] is False
+    assert payloads[-1]["source_job_id"] is None
+    assert payloads[-1]["waiting_reasons"]
+    assert payloads[-1]["actions"] == [f"configure_video_context:{second.id}"]
+    assert actions == payloads[-1]["actions"]
+    assert payloads[-1]["blocked_reasons"] == []
+    saved = load_shot(project.id, second.id)
+    assert saved.video_context.source_shot_id == first.id
+    assert saved.model_copy(update={"video_context": before.video_context}) == before
+    assert any("Waiting for the source video" in note for note in _notes)
+    assert list_jobs(project_id=project.id) == []
 
 
 @pytest.mark.asyncio
@@ -486,6 +536,8 @@ async def test_get_status_includes_video_context_block(monkeypatch, tmp_path):
     assert handled is True
     assert payloads[-1]["video_context_status"] == {
         "mode": "previous_shot",
+        "state": "ready",
+        "ready": True,
         "source_job_id": job.id,
         "context_frames": 39,
         "carry_audio": False,

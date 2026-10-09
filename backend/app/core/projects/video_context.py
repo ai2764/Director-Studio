@@ -26,6 +26,10 @@ class VideoContextError(ValueError):
     """The requested continuation cannot be saved or resolved."""
 
 
+class VideoContextPending(VideoContextError):
+    """A valid earlier-shot dependency is waiting for its video."""
+
+
 @dataclass(frozen=True)
 class MediaInfo:
     width: int
@@ -57,8 +61,11 @@ def configure_video_context(
             _runtime_options(prepared)
         except ValueError as exc:
             raise VideoContextError(str(exc)) from exc
-    save_shot(shot.model_copy(update={"video_context": prepared}))
-    return {"shot_id": shot.id, "video_context": prepared.model_dump()}
+    saved = shot.model_copy(update={"video_context": prepared})
+    save_shot(saved)
+    status = video_context_status(saved)
+    return {"shot_id": shot.id, "video_context": prepared.model_dump(),
+            "state": status["state"], "ready": status["ready"]}
 
 
 def resolve_video_context(
@@ -202,18 +209,22 @@ def video_context_status(shot: Shot) -> dict:
     if config is None or config.mode == "off":
         return {
             "mode": "off",
+            "state": "off",
+            "ready": True,
             "source_job_id": None,
             "context_frames": None,
             "carry_audio": False,
             "blocked_reasons": [],
         }
     blocked: list[str] = []
+    state = "ready"
     source_job_id = config.source_job_id
     runtime = {"context_frames": config.context_frames or 22, "carry_audio": bool(config.carry_audio)}
     try:
         runtime = _runtime_options(config)
     except ValueError as exc:
         blocked.append(str(exc))
+        state = "blocked"
     if config.mode == "previous_shot":
         project = load_project(shot.project_id)
         try:
@@ -221,15 +232,25 @@ def video_context_status(shot: Shot) -> dict:
                 raise VideoContextError("Project not found")
             _source, job, _key, _path = _require_previous_video(project, shot, config)
             source_job_id = job.id
+            probe_video(_path)
+        except VideoContextPending as exc:
+            blocked.append(str(exc))
+            if state != "blocked":
+                state = "waiting"
         except VideoContextError as exc:
             blocked.append(str(exc))
+            state = "blocked"
     else:
         try:
-            _require_upload(shot.project_id, config.upload_id)
+            _record, path = _require_upload(shot.project_id, config.upload_id)
+            probe_video(path)
         except VideoContextError as exc:
             blocked.append(str(exc))
+            state = "blocked"
     return {
         "mode": config.mode,
+        "state": state,
+        "ready": state == "ready",
         "source_job_id": source_job_id,
         "context_frames": runtime["context_frames"],
         "carry_audio": runtime["carry_audio"],
@@ -357,7 +378,12 @@ def _prepare_config(project: Project, shot: Shot, config: ShotVideoContext) -> S
         return config.model_copy(update={"source_shot_id": None, "source_job_id": None})
     source = _previous_shot(project, shot, config.source_shot_id)
     prepared = config.model_copy(update={"source_shot_id": source.id, "upload_id": None})
-    _source, _job, output_key, _path = _require_previous_video(project, shot, prepared)
+    try:
+        _source, _job, output_key, _path = _require_previous_video(project, shot, prepared)
+    except VideoContextPending:
+        # Structural validity is already checked. Do not invent a Job or select
+        # an output that does not exist; resolution freezes the actual bytes later.
+        return prepared
     return prepared.model_copy(update={"source_output_key": output_key})
 
 
@@ -384,10 +410,12 @@ def _require_previous_video(project: Project, shot: Shot, config: ShotVideoConte
     source = _previous_shot(project, shot, config.source_shot_id)
     job_id = config.source_job_id or source.h3_job_id
     if not job_id:
-        raise VideoContextError("Source shot has no H3 job")
+        raise VideoContextPending("Source shot has no H3 job")
     job = load_job(job_id)
     if job is None or job.project_id != project.id or str((job.params or {}).get("shot_id") or "") != source.id:
         raise VideoContextError("Context job does not belong to the source shot")
+    if job.status in {JobStatus.queued, JobStatus.uploading, JobStatus.running}:
+        raise VideoContextPending(f"Source shot job is {job.status.value}")
     if job.status != JobStatus.succeeded:
         raise VideoContextError(f"Source shot job is {job.status.value}")
     output_key = _selected_output_key(job, config)
@@ -401,7 +429,7 @@ def _selected_output_key(job, config: ShotVideoContext) -> str:
     ]
     if not candidates:
         raise VideoContextError("Source shot has no video artifact")
-    explicit = "source_output_key" in config.model_fields_set
+    explicit = bool(config.source_output_key)
     if len(candidates) > 1 and not explicit:
         raise VideoContextError("Select one video artifact from the source shot")
     chosen = config.source_output_key if explicit else candidates[0]
