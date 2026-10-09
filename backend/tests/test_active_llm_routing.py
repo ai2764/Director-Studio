@@ -172,7 +172,8 @@ async def test_director_plan_provider_uses_injected_active_provider(monkeypatch)
 
     composed: list[tuple[str, tuple[str, ...]]] = []
 
-    def fake_skill(task: str, *, guides=()):
+    def fake_skill(task: str, *, guides=(), writer_only=False):
+        assert writer_only is True
         composed.append((task, tuple(guides)))
         return "SKILLED"
 
@@ -207,6 +208,52 @@ async def test_make_chat_fn_routes_plain_chat_to_injected_provider(monkeypatch):
     assert len(active.client.generate_calls) == 1
     assert active.client.generate_calls[0][0] == "catalog-model"
     assert active.client.generate_calls[0][1].endswith("\n\nUSER")
+
+
+@pytest.mark.asyncio
+async def test_compaction_keeps_summary_internal_without_hiding_next_reply(monkeypatch):
+    from app.api import projects as projects_api
+
+    summary = '## Primary Request and Intent\n- Multi-shot H3 video arc "first"'
+    response = {"content": summary, "thinking": "internal planning", "tool_calls": [],
+                "usage": {"input_tokens": 200, "output_tokens": 30}}
+
+    class SummaryClient(RecordingClient):
+        async def chat_response(self, model, **kwargs):
+            self.chat_calls.append(kwargs)
+            return response
+
+    events = []
+
+    async def progress(event):
+        events.append(event)
+
+    monkeypatch.setattr("app.core.vram.get_orchestrator", lambda: FakeOrchestrator())
+    client = SummaryClient()
+    chat_fn = await projects_api._make_chat_fn(progress, provider=RecordingProvider(client))
+    messages = [{"role": "user", "content": "Summarize the history"}]
+
+    result = await chat_fn("SYSTEM", "USER", messages=messages,
+                           prepared_system=True, inference_purpose="compaction")
+
+    # Harness still needs the full summary to replace history internally.
+    assert result == response
+    assert not any(event["type"] in {"token", "think"} for event in events)
+    assert any(event["type"] == "runtime" and event["text"] == "整理对话上下文…"
+               for event in events)
+    usage = [event["data"] for event in events if event["type"] == "context_usage"]
+    assert [event["status"] for event in usage] == ["running", "completed"]
+    assert all(event["purpose"] == "compaction" for event in usage)
+    assert usage[-1]["output_tokens"] == 30
+
+    # A normal reply can legitimately use the same heading. Filter by purpose,
+    # and do not leave suppression enabled on this shared chat_fn.
+    events.clear()
+    assert await chat_fn("SYSTEM", "USER", messages=messages, prepared_system=True) == response
+    assert {"type": "token", "text": summary} in events
+    assert {"type": "think", "text": response["thinking"]} in events
+    assert all(event["data"]["purpose"] == "turn"
+               for event in events if event["type"] == "context_usage")
 
 
 @pytest.mark.asyncio

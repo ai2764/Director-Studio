@@ -15,14 +15,21 @@ if (-not $ValidateOnly) {
     try {
         $pending = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
         if ($pending.AsyncWaitHandle.WaitOne(300) -and $client.Connected) {
-            # Reuse a healthy proxy without changing its process, PID or logs.
+            # Reuse a healthy proxy without interrupting it; report binding differences.
             $healthy = $false
             try {
                 $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2 -UseBasicParsing
                 $healthy = $response.StatusCode -eq 200 -and $response.Content.Trim() -eq 'OK'
             } catch { }
             if ($healthy) {
-                Write-Host "llama-swap already running at http://127.0.0.1:$Port - skip start"
+                $listener = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue |
+                    Where-Object { $_.LocalAddress -in @('0.0.0.0', '::') }
+                if (-not $listener) {
+                    Write-Warning "Port $Port has a healthy loopback-only or restricted listener; reusing it. New launches listen on 0.0.0.0. LAN/Tailscale access for this existing instance depends on its binding or forwarding."
+                    Write-Host "llama-swap already running on port $Port - skip start"
+                    return
+                }
+                Write-Host "llama-swap already running on all interfaces, port $Port - skip start"
                 return
             }
             throw "Port $Port is already in use. Existing service was not changed."
@@ -60,7 +67,7 @@ $workDir = Split-Path -Parent $config
 # cmd owns the log redirection. Avoid a live process inheriting this script's
 # output pipes (which otherwise keeps callers that capture output blocked).
 $command = '/d /v:off /c cd /d "' + $workDir + '" && "' + $exe +
-    '" -config "' + $config + '" -listen 127.0.0.1:' + $Port +
+    '" -config "' + $config + '" -listen 0.0.0.0:' + $Port +
     ' > "' + $logOut + '" 2> "' + $logErr + '"'
 $process = Start-Process -FilePath $env:ComSpec -ArgumentList $command `
     -WindowStyle Hidden -PassThru
@@ -83,7 +90,7 @@ try {
         throw "llama-swap did not become healthy; inspect $logErr"
     }
     Set-Content -LiteralPath $pidFile -Value $process.Id -Encoding ascii
-    Write-Host "llama-swap ready at http://127.0.0.1:$Port (PID $($process.Id))"
+    Write-Host "llama-swap listening on 0.0.0.0:$Port; local API: http://127.0.0.1:$Port/v1 (PID $($process.Id))"
     Write-Host "Logs: $logOut ; $logErr"
 } catch {
     if (-not $process.HasExited) { & taskkill /PID $process.Id /T /F 2>$null | Out-Null }

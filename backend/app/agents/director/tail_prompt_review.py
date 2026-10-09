@@ -131,6 +131,10 @@ async def extract_motion_claims(provider, request, check_current):
 MOTION_CLAIM_INSTRUCTIONS = """Extract movement CLAIMS independently, without reconciling
 contradictions. Return JSON using the schema. Determine camera_attachment from declared_viewpoint.
 Determine viewer_position_change ONLY from requested_action, quoting that source.
+requested_action may include the authored beat followed by a labelled latest user revision.
+An explicit revision to the viewer's action takes precedence over the authored beat.
+A camera-only or unrelated revision does not change the viewer's action. Resolve that
+precedence before extracting its movement claim; never borrow action from the candidate.
 Determine camera_position_change ONLY from explicit CAMERA movement in camera_motion_field,
 quoting that claim. Movement of a subject, her hands, or an actor does not establish camera
 movement. Do not change a stationary camera claim into moving to make it agree with the action.
@@ -647,8 +651,14 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             if verdict.viewpoint_motion is not None:
                 # Extract claims in a short, independent call. A broad review
                 # can otherwise reconcile conflicting prose by inventing a move.
+                requested_action = request["original_shot"]["script_beat"]
+                revision = request["revision_request"].strip()
+                if revision and "managed_execution" not in request:
+                    # Resolve actual user changes independently of shot_patch.
+                    # Coordinator camera refinements cannot replace authored action.
+                    requested_action += "\n\nLatest user revision:\n" + revision
                 motion_request = {
-                    "requested_action": request["original_shot"]["script_beat"],
+                    "requested_action": requested_action,
                     "declared_viewpoint": changed.camera_angle,
                     "camera_motion_field": changed.camera_motion,
                 }

@@ -322,7 +322,7 @@ class OllamaPlanProvider(DirectorLLMPlanProvider):
         *,
         guides: Iterable[str] = (),
     ) -> str:
-        prompt = with_director_skill(f"{system}\n\n{user}", guides=guides)
+        prompt = with_director_skill(f"{system}\n\n{user}", guides=guides, writer_only=True)
         return await self.client.generate(self.model, prompt)
 
     async def complete_with_images(
@@ -333,7 +333,7 @@ class OllamaPlanProvider(DirectorLLMPlanProvider):
         images: list[str],
         guides: Iterable[str] = (),
     ) -> str:
-        prompt = with_director_skill(f"{system}\n\n{user}", guides=guides)
+        prompt = with_director_skill(f"{system}\n\n{user}", guides=guides, writer_only=True)
         return await self.client.chat(
             self.model,
             prompt,
@@ -734,6 +734,7 @@ async def _make_chat_fn(
         images: list[str] | None = None,
         **_kwargs,
     ) -> str | dict:
+        compacting = _kwargs.get("inference_purpose") == "compaction"
         guides = tuple(_kwargs.get("guides") or ())
         from ..agents.director.context_metrics import observe_request
         if not _kwargs.get("prepared_system"):
@@ -759,13 +760,15 @@ async def _make_chat_fn(
             # history compaction must wait for its GPU, rather than aborting
             # the turn after successful mutations. New chat admission stays
             # blocked while generation is pending.
-            fail_if_generation_pending=_kwargs.get("inference_purpose") != "compaction",
+            fail_if_generation_pending=not compacting,
         ):
             # Always (re)load / verify GPU residency after Comfy may have unloaded it
             await orch.ensure_llm_ready(on_status=_runtime)
             plan_model = _selected_model()
             await _refresh_context_capacity(plan_model)
-            if use_images:
+            if compacting:
+                label = "整理对话上下文…"
+            elif use_images:
                 label = f"Thinking with {plan_model} · {len(use_images)} image{'s' if len(use_images) != 1 else ''}…"
             else:
                 label = f"Thinking with {plan_model}…"
@@ -833,7 +836,7 @@ async def _make_chat_fn(
                         tools=None if forced_tool_schema is not None else tools or None,
                         format=forced_tool_schema or response_format,
                         require_vision=require_vision or bool(use_images),
-                        **({"think": False} if provider_id == "ollama" and _kwargs.get("inference_purpose") == "compaction" else {}),
+                        **({"think": False} if provider_id == "ollama" and compacting else {}),
                         **({"options": {"num_predict": max_output_tokens}} if max_output_tokens is not None else {}),
                     )
                 except Exception as exc:
@@ -865,7 +868,9 @@ async def _make_chat_fn(
                     )
                     observe_request("chat.fallback", [{"role": "user", "content": fallback_prompt}])
                     return await client.generate(plan_model, fallback_prompt)
-                if on_progress:
+                # Compaction output belongs to Harness history, not the visible
+                # assistant reply. Keep usage events and return the full result.
+                if on_progress and not compacting:
                     if result.get("thinking"):
                         await on_progress(
                             {"type": "think", "text": result["thinking"]}

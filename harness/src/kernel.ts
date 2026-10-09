@@ -242,6 +242,8 @@ export async function runTurn(
   class FailClosedCompaction extends BasicCompaction {
     private committed: Awaited<ReturnType<BasicCompaction["compactRegion"]>> | null = null;
     private regionFailed = false;
+    private pressureAttempt = false;
+    private nonshrinkingRegions = new Map<string, Error>();
     override async summarize(...args: Parameters<BasicCompaction["summarize"]>) {
       const [history, agent, signal] = args;
       // This native hook changes only summary input, never the stored transcript.
@@ -253,11 +255,30 @@ export async function runTurn(
       }, agent, signal);
     }
     override async compactRegion(...args: Parameters<BasicCompaction["compactRegion"]>) {
+      const [start, end, agent, signal] = args;
+      const measurement = ctx.tokenMeter.measure(agent.session);
+      // Surface order can differ from seq order after a durable replacement.
+      // Price only the selected span: new tool results in the retained tail do
+      // not make an unchanged, irreducible prefix worth summarizing again.
+      const first = measurement.nodes.findIndex(node => node.seq === start);
+      const last = measurement.nodes.findIndex(node => node.seq === end);
+      const key = first >= 0 && last >= first
+        ? JSON.stringify([agent.session.id, measurement.nodes.slice(first, last + 1)]) : undefined;
       try {
+        const previous = key && this.nonshrinkingRegions.get(key);
+        if (this.pressureAttempt && previous && measurement.totalTokens < input.context_window) {
+          signal?.throwIfAborted();
+          throw previous;
+        }
         this.committed = await super.compactRegion(...args);
+        this.nonshrinkingRegions.clear();
         return this.committed;
       } catch (error) {
         this.regionFailed = true;
+        if (this.pressureAttempt && key && !signal?.aborted && error instanceof Error
+          && error.message.startsWith("summary is not smaller than the shadowed content")
+          && ctx.tokenMeter.measure(agent.session).totalTokens < input.context_window)
+          this.nonshrinkingRegions.set(key, error);
         throw error;
       }
     }
@@ -267,6 +288,7 @@ export async function runTurn(
       compactionFailure = undefined;
       this.committed = null;
       this.regionFailed = false;
+      this.pressureAttempt = args[1] === "pressure";
       try {
         return await super.compactIfNeeded(...args);
       } catch (error) {
@@ -291,6 +313,8 @@ export async function runTurn(
           return this.committed;
         compactionFailure = error;
         throw error;
+      } finally {
+        this.pressureAttempt = false;
       }
     }
   }

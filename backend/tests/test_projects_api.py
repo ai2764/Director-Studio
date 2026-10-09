@@ -1369,7 +1369,8 @@ async def test_ollama_plan_provider_forwards_requested_guides(monkeypatch):
 
     captured: list[tuple[str, tuple[str, ...]]] = []
 
-    def capture_skill(task: str, *, guides=()):
+    def capture_skill(task: str, *, guides=(), writer_only=False):
+        assert writer_only is True
         captured.append((task, tuple(guides)))
         return "COMPOSED PROMPT"
 

@@ -568,7 +568,8 @@ async def test_visual_direction_loads_reference_guides(monkeypatch):
 
     captured: list[tuple[str, ...]] = []
 
-    def capture_guides(task: str, *, guides=()):
+    def capture_guides(task: str, *, guides=(), writer_only=False):
+        assert writer_only is True
         captured.append(tuple(guides))
         return task
 

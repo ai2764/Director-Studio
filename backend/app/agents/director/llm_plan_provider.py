@@ -66,7 +66,7 @@ class DirectorLLMPlanProvider:
         *,
         guides: Iterable[str] = (),
     ) -> str:
-        prompt = with_director_skill(f"{system}\n\n{user}", guides=guides)
+        prompt = with_director_skill(f"{system}\n\n{user}", guides=guides, writer_only=True)
         observe_request("writer.generate", [{"role": "user", "content": prompt}])
         async with self._input_budget(prompt):
             return await self.client.generate(self.model, prompt)
@@ -79,7 +79,7 @@ class DirectorLLMPlanProvider:
         images: list[str],
         guides: Iterable[str] = (),
     ) -> str:
-        prompt = with_director_skill(f"{system}\n\n{user}", guides=guides)
+        prompt = with_director_skill(f"{system}\n\n{user}", guides=guides, writer_only=True)
         observe_request("writer.vision", [{"role": "user", "content": prompt}], image_count=len(images))
         async with self._input_budget(prompt, images=True):
             return await self.client.chat(
@@ -91,7 +91,7 @@ class DirectorLLMPlanProvider:
                                images: list[str] | None = None) -> str:
         """Stage budgets are floors; an increased Director budget also applies here."""
         output_budget = max(max_tokens, settings.director_num_predict)
-        prompt = with_director_skill(f"{system}\n\n{user}", guides=guides)
+        prompt = with_director_skill(f"{system}\n\n{user}", guides=guides, writer_only=True)
         message = {"role": "user", "content": prompt}
         if images:
             message["images"] = list(images)

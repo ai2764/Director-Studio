@@ -5,6 +5,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from urllib.request import urlopen
 
 import pytest
@@ -97,6 +98,13 @@ def test_launcher_validates_then_starts_healthy_proxy(tmp_path):
         assert (run_dir / "llama-swap.err.log").is_file()
         with urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as response:
             assert response.status == 200
+        binding = subprocess.run(
+            [POWERSHELL, "-NoProfile", "-Command",
+             f"(Get-NetTCPConnection -LocalPort {port} -State Listen).LocalAddress"],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert binding.returncode == 0, binding.stderr
+        assert set(binding.stdout.splitlines()) & {"0.0.0.0", "::"}
         before = {path.name: path.read_bytes() for path in run_dir.iterdir()}
         reused = run_launcher(
             "-ExePath", str(tmp_path / "missing.exe"),
@@ -113,6 +121,47 @@ def test_launcher_validates_then_starts_healthy_proxy(tmp_path):
     finally:
         if process_id:
             subprocess.run(["taskkill", "/PID", str(process_id), "/T", "/F"], capture_output=True)
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or not POWERSHELL or not LOCAL_EXE.is_file(),
+    reason="Local llama-swap executable unavailable",
+)
+def test_launcher_reuses_healthy_loopback_only_proxy_without_stopping_it(tmp_path):
+    config = tmp_path / "config.yaml"
+    config.write_text("models: {}\n", encoding="utf-8")
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    process = subprocess.Popen(
+        [str(LOCAL_EXE), "-config", str(config), "-listen", f"127.0.0.1:{port}"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                with urlopen(f"http://127.0.0.1:{port}/health", timeout=1) as response:
+                    assert response.status == 200
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    pytest.fail("Fixture proxy did not become healthy")
+                time.sleep(0.1)
+        run_dir = tmp_path / "run"
+        result = run_launcher(
+            "-ExePath", str(LOCAL_EXE), "-ConfigPath", str(config),
+            "-RunDir", str(run_dir), "-Port", str(port),
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "loopback" in (result.stdout + result.stderr).lower()
+        assert process.poll() is None
+        assert not run_dir.exists()
+        with urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as response:
+            assert response.status == 200
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
 
 
 @pytest.mark.skipif(

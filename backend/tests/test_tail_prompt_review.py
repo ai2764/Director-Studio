@@ -405,6 +405,96 @@ async def test_motion_claim_extraction_blocks_false_positive_full_review(tail_ha
 
 
 @pytest.mark.asyncio
+async def test_motion_review_honors_explicit_action_revision_without_candidate_evidence(tail_handoff_shot):
+    project, shot = tail_handoff_shot
+    shot = shot.model_copy(update={"script_beat": "The viewer waits beside the display.",
+        "camera_angle": "First-person POV, camera is the viewer."})
+    save_shot(shot)
+    revision = "Change the action: the viewer walks across the room; the POV camera moves with the viewer."
+    draft = candidate("The POV camera moves across the room with the viewer.")
+    draft["shot_patch"]["script_beat"] = "The viewer walks across the room."
+    draft["prompt_sections"]["summary"] = "The viewer walks across the room."
+    draft["prompt_sections"]["detailed_description"] = "From the inherited view, the viewer walks across the room with the attached POV camera."
+    review = verdict()
+    review["viewpoint_motion"] = {"camera_attached_to": "viewer", "viewer_path": "moving",
+        "camera_path": "moving", "compatible": True, "evidence": "The revised action and attached camera travel together."}
+
+    class ActionProvider(Provider):
+        async def complete(self, system, user, **kwargs):
+            packet = json.loads(user)
+            if "requested_action" in packet:
+                self.text.append((system, user))
+                source = packet["requested_action"]
+                revised = revision in source
+                # Candidate additions cannot become independent request evidence.
+                assert draft["shot_patch"]["script_beat"] not in source
+                return json.dumps(dict(camera_attachment="viewer",
+                    viewer_position_change="moving" if revised else "stationary",
+                    camera_position_change="moving",
+                    viewer_quote="viewer walks across the room" if revised else "viewer waits beside the display",
+                    camera_quote="camera moves across the room"))
+            return await super().complete(system, user, **kwargs)
+
+    provider = ActionProvider([draft, review, draft, review])
+    updated = await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(
+        shot.id, revision_request=revision)
+    assert len(provider.text) == 3
+    motion = updated.meta["material_review"]["motion_claim_review"]
+    assert motion["viewer_position_change"] == "moving"
+    assert motion["viewer_quote"] in revision
+    assert load_shot(project.id, shot.id) == updated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["automatic", "managed", "camera_only"])
+async def test_motion_review_cannot_replace_authored_action_without_user_revision(tail_handoff_shot, origin):
+    from app.core.managed_runs.context import ManagedTurnScope, managed_turn_scope
+
+    project, shot = tail_handoff_shot
+    shot = shot.model_copy(update={"script_beat": "The viewer waits beside the display.",
+        "camera_angle": "First-person POV, camera is the viewer."})
+    save_shot(shot)
+    revision = ("Change the action: the viewer walks across the room." if origin == "managed" else
+                "Keep the viewer waiting; change only the camera framing." if origin == "camera_only" else "")
+    draft = candidate("The POV camera moves across the room with the viewer.")
+    draft["shot_patch"]["script_beat"] = "The viewer walks across the room."
+    review = verdict()
+    review["viewpoint_motion"] = {"camera_attached_to": "viewer", "viewer_path": "moving",
+        "camera_path": "moving", "compatible": True, "evidence": "A mistaken positive broad review."}
+
+    class AuthoredActionProvider(Provider):
+        async def complete(self, system, user, **kwargs):
+            packet = json.loads(user)
+            if "requested_action" in packet:
+                self.text.append((system, user))
+                source = packet["requested_action"]
+                assert shot.script_beat in source
+                assert draft["shot_patch"]["script_beat"] not in source
+                if origin == "camera_only":
+                    assert revision in source
+                    assert "camera-only or unrelated revision does not change" in system
+                else:
+                    assert source == shot.script_beat
+                return json.dumps(dict(camera_attachment="viewer", viewer_position_change="stationary",
+                    camera_position_change="moving", viewer_quote="viewer waits beside the display",
+                    camera_quote="camera moves across the room"))
+            return await super().complete(system, user, **kwargs)
+
+    provider = AuthoredActionProvider([draft, review, draft, review])
+    token = managed_turn_scope.set(ManagedTurnScope(project.id, "run_fixture", "event_fixture", shot.id)) if origin == "managed" else None
+    try:
+        with pytest.raises(ValueError, match="viewpoint owner moves differently"):
+            await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(
+                shot.id, revision_request=revision)
+    finally:
+        if token is not None:
+            managed_turn_scope.reset(token)
+    stored = load_shot(project.id, shot.id)
+    assert stored.script_beat == shot.script_beat
+    assert stored.prompt_sections == shot.prompt_sections
+
+
+@pytest.mark.asyncio
 async def test_motion_quote_recovery_rechecks_evidence_without_rewriting_prompt(tail_handoff_shot):
     project, shot = tail_handoff_shot
     shot = shot.model_copy(update={"script_beat": "The viewer waits beside the display.",

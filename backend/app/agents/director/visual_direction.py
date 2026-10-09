@@ -366,6 +366,7 @@ async def analyze_ref_frame(
                 directing_request=directing_request,
             ),
             guides=("reference-strategy", "reference-frame-generation"),
+            writer_only=True,
         ),
         images=ollama_images,
         require_vision=bool(ollama_images),
@@ -382,6 +383,7 @@ async def analyze_ref_frame(
                 with_director_skill(
                     _generation_prompt_repair_prompt(brief, captions, missing_refs),
                     guides=("reference-strategy", "reference-frame-generation"),
+                    writer_only=True,
                 ),
                 keep_alive="10m",
                 options={"temperature": 0.0},

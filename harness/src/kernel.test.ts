@@ -130,6 +130,82 @@ describe("real Harness kernel", () => {
     expect(purposes).toEqual(["compaction", "turn"]);
   });
 
+  it("does not repeatedly summarize the same nonshrinking history after small tool results", async () => {
+    let summaries = 0, models = 0, changes = 0;
+    const history = Array.from({ length: 162 }, () => ({ role: "user", content: "historical detail ".repeat(50) }));
+    const host: Host = async (method, params) => {
+      if (method === "context") return { system: "fixture", state: {}, tools };
+      if (method === "tool") { changes++; return { ok: true }; }
+      if (params.purpose === "compaction") {
+        summaries++;
+        return { content: "not compressed ".repeat(10000) };
+      }
+      models++;
+      expect(JSON.stringify(params.messages)).toContain("historical detail");
+      return models < 3 ? { tool_calls: [{ id: `change-${models}`, name: "change", arguments: { value: "next" } }] }
+        : { content: "completed without repeated summaries" };
+    };
+    const result = await runTurn({ ...input, history, context_window: 40000 }, host, new AbortController().signal);
+    expect(result.reply).toBe("completed without repeated summaries");
+    expect(changes).toBe(2);
+    expect(summaries).toBe(1);
+  });
+
+  it("tries compaction again when added history changes the compactable span", async () => {
+    let summaries = 0, models = 0;
+    const history = Array.from({ length: 162 }, (_, index) => ({ role: "user",
+      content: index === 0 ? "Keep BLUE. " + "historical detail ".repeat(50) : "historical detail ".repeat(50) }));
+    const host: Host = async (method, params) => {
+      if (method === "context") return { system: "fixture", state: {}, tools };
+      if (method === "tool") return { ok: true, evidence: "New confirmed detail. ".repeat(300) };
+      if (params.purpose === "compaction") {
+        summaries++;
+        expect(JSON.stringify(params.messages)).toContain("Keep BLUE");
+        return { content: summaries === 1 ? "not compressed ".repeat(10000) : "Confirmed BLUE." };
+      }
+      models++;
+      if (models === 1) return { tool_calls: [{ id: "change-1", name: "change", arguments: { value: "next" } }] };
+      expect(JSON.stringify(params.messages)).toContain("Confirmed BLUE");
+      expect(JSON.stringify(params.messages)).toContain("New confirmed detail");
+      return { content: "done" };
+    };
+    expect((await runTurn({ ...input, history, context_window: 40000 }, host, new AbortController().signal)).reply).toBe("done");
+    expect(summaries).toBe(2);
+  });
+
+  it("still recovers provider-confirmed overflow after a nonshrinking proactive summary", async () => {
+    let summaries = 0, models = 0;
+    const history = Array.from({ length: 162 }, () => ({ role: "user", content: "historical detail ".repeat(50) }));
+    const host: Host = async (method, params) => {
+      if (method === "context") return { system: "fixture", state: {}, tools: [] };
+      if (params.purpose === "compaction") {
+        summaries++;
+        return { content: summaries === 1 ? "not compressed ".repeat(10000) : "Saved confirmed decisions." };
+      }
+      if (++models === 1) throw new ProtocolError("CONTEXT_WINDOW_EXCEEDED", "provider-confirmed overflow");
+      expect(JSON.stringify(params.messages)).toContain("Saved confirmed decisions");
+      return { content: "recovered" };
+    };
+    expect((await runTurn({ ...input, history, context_window: 40000 }, host, new AbortController().signal)).reply).toBe("recovered");
+    expect(summaries).toBe(2);
+    expect(models).toBe(2);
+  });
+
+  it("fails closed if overflow compaction still cannot shrink the history", async () => {
+    let summaries = 0, models = 0;
+    const history = Array.from({ length: 162 }, () => ({ role: "user", content: "historical detail ".repeat(50) }));
+    const host: Host = async (method, params) => {
+      if (method === "context") return { system: "fixture", state: {}, tools: [] };
+      if (params.purpose === "compaction") { summaries++; return { content: "not compressed ".repeat(20000) }; }
+      models++;
+      throw new ProtocolError("CONTEXT_WINDOW_EXCEEDED", "provider-confirmed overflow");
+    };
+    await expect(runTurn({ ...input, history, context_window: 40000 }, host, new AbortController().signal))
+      .rejects.toMatchObject({ code: "COMPACTION_FAILED", message: expect.stringContaining("not smaller") });
+    expect(summaries).toBe(2);
+    expect(models).toBe(1);
+  });
+
   it.each(["finish_reason", "done_reason"])("reports truncated %s output as incomplete", async (field) => {
     const host: Host = async (method) => method === "context"
       ? { system: "fixture", state: {}, tools: [] }
