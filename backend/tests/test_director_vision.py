@@ -22,6 +22,9 @@ from app.core.projects.store import create_project, save_project, save_shot
 from app.core.schemas import LibraryAsset
 
 
+pytestmark = pytest.mark.usefixtures("legacy_chat_runtime")
+
+
 def test_wants_vision_chinese_and_english():
     assert wants_vision("帮我看一下参考帧")
     assert wants_vision("第2镜构图怎么样，看图")

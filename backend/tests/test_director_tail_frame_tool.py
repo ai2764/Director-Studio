@@ -25,6 +25,9 @@ from app.core.projects.store import (
 from app.core.schemas import JobStatus
 
 
+pytestmark = pytest.mark.usefixtures("legacy_chat_runtime")
+
+
 def _schema(name: str) -> dict:
     return next(
         item for item in DIRECTOR_TOOL_SCHEMAS if item["function"]["name"] == name

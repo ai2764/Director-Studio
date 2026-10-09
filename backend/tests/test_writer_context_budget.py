@@ -53,3 +53,18 @@ async def test_writer_translates_provider_context_error_without_retry():
     with pytest.raises(PromptContextOverflow):
         await plan.complete("system", "request")
     assert client.generate.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_bounded_review_preflight_reserves_configured_output_budget(monkeypatch):
+    from app.agents.director.llm_plan_provider import DirectorLLMPlanProvider
+    from app.config import settings
+    from app.core.prompt_errors import PromptContextOverflow
+    monkeypatch.setattr(settings, "director_num_predict", 8192)
+    lifecycle = SimpleNamespace(context_capacity=AsyncMock(return_value=16384),
+        prompt_token_count=AsyncMock(return_value=10000))
+    client = SimpleNamespace(chat_response=AsyncMock(return_value={"content": "{}"}))
+    plan = DirectorLLMPlanProvider(provider=SimpleNamespace(client=client, lifecycle=lifecycle), model="local-model")
+    with pytest.raises(PromptContextOverflow, match="8192"):
+        await plan.complete_bounded("Review", "Candidate", max_tokens=1024)
+    client.chat_response.assert_not_called()

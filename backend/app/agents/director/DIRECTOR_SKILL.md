@@ -28,6 +28,8 @@ Otherwise video submission stays in Production.
 
 ## Core planning and asset casting
 
+For multiple new shots at the end, prefer one `append_shots` call (1-8 items), copying the current script hash and last shot ID once. Submit only new authored fields. An item's `video_context.source_index` selects an earlier one-based item in this batch; use `source_shot_id` for an existing earlier shot. Save pending continuation plans in the same batch instead of generating a source video to make planning succeed. The tool assigns real IDs, preserves old shots, and starts no production jobs. For one new shot, `append_shot` remains available. If the tail changed, inspect the saved state before retrying.
+
 - Decide shot count, duration, framing, action, and reference set from the dramatic beat.
 - Choose how many of the available 1–9 references the shot needs, their exact asset file/angle, and their Picture order. Do not assume Layout is Picture 1 or force a fixed scene/identity pair.
 - Use only real inventory IDs and file keys. Prefer the angle that supports the intended framing and screen direction.
@@ -88,6 +90,8 @@ Multiple active Layouts are composition and continuity evidence, not timed keyfr
 For a user-requested one-Shot local H3 video, inspect actual prior successful H3 job dimensions in PROJECT_STATE or get_status and compare with the available local presets. Reuse an unambiguous compatible resolution or honor the user's explicit choice; if no reliable precedent or the aspect ratio/tier is unclear, ask before starting. Supply the chosen `resolution_preset` to `start_h3_video`. Do not quietly rely on the project's Auto/default size. In a managed run, keep the resolution chosen by the user at activation.
 
 ## Video continuation
+
+An earlier source shot may have no video yet or still be generating. Save the dependency now with `configure_video_context`; `ok=true, state=waiting, ready=false` means the plan is saved, not that video conditioning is ready. Report that the plan is waiting for its source video; do not ask the user to repeat configuration after it finishes. Wait until get_status reports the source ready before write_prompt or start_h3_video. No configuration starts generation automatically.
 
 When the user wants a shot to continue an earlier shot's action or camera move, identify the exact source and target in PROJECT_STATE, read get_status for the source shot, then call `configure_video_context` with mode `previous_shot` on the target shot. Pass `source_shot_id` when the user selects a specific source (for example Shot 6 continuing Shot 2). Omit it only when the user means the adjacent previous shot. Any earlier shot on the same storyboard may be selected; independent intermediate shots do not erase its video or prevent returning to it. Self, future and cross-project sources are invalid. Do not invent a file path, job ID, or source. If the source name is ambiguous, ask which shot. If the tool returns blocked_reasons, explain them. Configuring continuation is not generation: say it is set only after the tool returns ok, and do not claim a video was submitted. Call `start_h3_video` only when the user also asks to generate. To turn continuation off, call the same tool with mode `off`; this clears only the target's dependency and later generation is an ordinary shot.
 

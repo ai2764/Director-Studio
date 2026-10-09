@@ -70,8 +70,10 @@ async def test_off_writer_keeps_ordinary_request_and_does_not_attach_old_tail(da
 
 
 @pytest.mark.asyncio
-async def test_bounded_tail_writer_attaches_video_observation_and_preserves_schema_and_limit():
+async def test_bounded_tail_writer_attaches_video_observation_and_preserves_schema_and_limit(monkeypatch):
     from app.agents.director.llm_plan_provider import DirectorLLMPlanProvider
+    from app.config import settings
+    monkeypatch.setattr(settings, "director_num_predict", 1024)
     from app.agents.director.tail_prompt_review import complete_bounded
     client = SimpleNamespace(chat_response=AsyncMock(return_value={"content": "{}"}))
     provider = DirectorLLMPlanProvider(provider=SimpleNamespace(client=client), model="local-vision")

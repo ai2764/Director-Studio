@@ -17,6 +17,117 @@ def _write_skill(path, token: str) -> None:
     )
 
 
+@pytest.mark.parametrize("selection", ["personal", "explicit"])
+@pytest.mark.asyncio
+async def test_harness_inference_keeps_runtime_contract_with_old_custom_skill(
+    tmp_path, tmp_projects_dir, monkeypatch, selection
+):
+    from pathlib import Path
+    from app.agents.director.harness_runtime import BackendTurn
+    from app.core.projects.store import create_project
+
+    custom = tmp_path / ".codex" / "skills" / "director" / "SKILL.md"
+    custom.parent.mkdir(parents=True)
+    _write_skill(custom, "PERSONAL_CREATIVE_DIRECTION")
+    monkeypatch.delenv("DS_DIRECTOR_SKILL_PATH", raising=False)
+    if selection == "explicit":
+        monkeypatch.setenv("DS_DIRECTOR_SKILL_PATH", str(custom))
+    else:
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    project = create_project("Continuation", "")
+    prompts = []
+
+    async def provider(system, user, **kwargs):
+        prompts.append(system)
+        return {"content": "Which shot should continue?", "tool_calls": []}
+
+    turn = BackendTurn(project.id, "Continue Shot 2 from Shot 1", None, provider)
+    await turn.dispatch("context", {})
+    await turn.infer({"messages": [{"role": "user", "content": turn.message}]})
+    prompt = prompts[0]
+    # A stale personal skill must not remove the runtime's tool-use contract
+    # from the actual provider request. Keep customization as separate guidance.
+    assert "Save the dependency now with `configure_video_context`" in prompt
+    assert "say it is set only after the tool returns ok" in prompt
+    assert "PERSONAL_CREATIVE_DIRECTION" in prompt
+    assert prompt.count("<DIRECTOR_SKILL>") == 1
+    assert "<DIRECTOR_CUSTOM_GUIDANCE>" in prompt
+
+
+def test_bundled_skill_is_not_duplicated_when_no_custom_skill_exists(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.delenv("DS_DIRECTOR_SKILL_PATH", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    prompt = skill_loader.with_director_skill("TASK")
+    assert prompt.count("# Director") == 1
+    assert "<DIRECTOR_CUSTOM_GUIDANCE>" not in prompt
+
+
+def test_duplicate_custom_rules_do_not_expand_provider_prompt(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    bundled = skill_loader._read_skill(Path(skill_loader.__file__).with_name("DIRECTOR_SKILL.md"))
+    custom = tmp_path / "SKILL.md"
+    # Different whitespace and a distinct instruction in the same bullet list.
+    shared = "- Use only real inventory IDs and file keys. Prefer the angle that supports the intended framing and screen direction."
+    custom.write_text(shared.replace(" ", "  ") + "\n- Prefer quiet, patient camera movement.", encoding="utf-8")
+    monkeypatch.setenv("DS_DIRECTOR_SKILL_PATH", str(custom))
+    prompt = skill_loader.with_director_skill("TASK")
+    assert " ".join(prompt.split()).count("Use only real inventory IDs") == 1
+    assert "Prefer quiet, patient camera movement." in prompt
+    custom.write_text(bundled, encoding="utf-8")
+    prompt = skill_loader.with_director_skill("TASK")
+    assert "<DIRECTOR_CUSTOM_GUIDANCE>" not in prompt
+    writer_prompt = skill_loader.with_director_skill("TASK", writer_only=True)
+    assert "<DIRECTOR_CUSTOM_GUIDANCE>" not in writer_prompt
+    assert "queue_actor_design" not in writer_prompt
+    assert "Save the dependency now" not in writer_prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["complete", "complete_with_images", "complete_bounded"])
+async def test_writer_provider_omits_unavailable_tool_rules_but_keeps_production_guides(
+    tmp_path, monkeypatch, method
+):
+    from pathlib import Path
+    from types import SimpleNamespace
+    from app.agents.director.llm_plan_provider import DirectorLLMPlanProvider
+
+    monkeypatch.delenv("DS_DIRECTOR_SKILL_PATH", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    prompts = []
+
+    class Client:
+        async def generate(self, model, prompt, **kwargs):
+            prompts.append(prompt)
+            return "ok"
+
+        async def chat(self, model, prompt, **kwargs):
+            prompts.append(prompt)
+            return "ok"
+
+        async def chat_response(self, model, *, messages, **kwargs):
+            prompts.append(messages[0]["content"])
+            return {"content": "ok", "tool_calls": []}
+
+    provider = DirectorLLMPlanProvider(SimpleNamespace(client=Client()), model="fixture")
+    kwargs = {"guides": ("h3-prompt-writing",)}
+    if method == "complete_with_images":
+        kwargs["images"] = ["fixture-image"]
+    if method == "complete_bounded":
+        kwargs["max_tokens"] = 1024
+    await getattr(provider, method)("Write this shot", "Fixture evidence", **kwargs)
+    prompt = prompts[0]
+    assert "finished-video Motion Context" in prompt
+    assert "Human-approved" in prompt or "human-approved" in prompt
+    assert '<DIRECTOR_STAGE_GUIDE id="h3-prompt-writing">' in prompt
+    assert "queue_actor_design" not in prompt
+    assert "classify_chat_image" not in prompt
+    assert "Save the dependency now" not in prompt
+    assert len(prompt) < 9000
+
+
 def test_with_director_skill_loads_only_requested_guides(tmp_path, monkeypatch):
     core = tmp_path / "DIRECTOR_SKILL.md"
     guides = tmp_path / "guides"

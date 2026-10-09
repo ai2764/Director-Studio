@@ -158,7 +158,13 @@ export function VideoContextPanel({
   const resolvedJobId = context?.mode === "previous_shot"
     ? (context.source_job_id || previous?.h3_job_id || "")
     : "";
-  const resolvedKey = context?.mode === "previous_shot" ? (context.source_output_key || "") : "";
+  const currentVersions = versions.filter((version) => version.jobId === resolvedJobId);
+  const resolvedKey = context?.mode === "previous_shot"
+    ? (context.source_output_key || (currentVersions.length === 1 ? currentVersions[0].outputKey : "")) : "";
+  const waitingForSource = context?.mode === "previous_shot" && previous && (
+    !resolvedJobId || jobs.some((job) => job.id === resolvedJobId
+      && ["queued", "uploading", "running"].includes(job.status))
+  );
   const blocks = sourceBlocks(context, previous, jobs);
   const preview = previewUrl(shot, versions, uploadFile, previous?.h3_job_id);
   const selectedValue = versions.some((version) => (
@@ -242,6 +248,7 @@ export function VideoContextPanel({
         {profile === "builtin" ? <small>{contextWindowLabel(legalWindow(context?.context_frames))}</small> : null}
       </div>
       {blocks.map((reason) => <p key={reason} className="video-context-blocked">{reason}</p>)}
+      {waitingForSource ? <p role="status">Continuation plan saved. Waiting for the source video.</p> : null}
       {error ? <p className="video-context-blocked" role="alert">{error}</p> : null}
       <details
         className="video-context-settings"
@@ -368,10 +375,11 @@ function sourceBlocks(
   if (context?.mode !== "previous_shot") return [];
   if (!previous) return [context.source_shot_id ? "Selected source shot was not found" : "This shot has no previous shot"];
   const resolvedId = context.source_job_id || previous.h3_job_id || "";
-  if (!resolvedId) return ["Source shot has no H3 job"];
+  if (!resolvedId) return [];
   if (jobs.length === 0) return [];
   const job = jobs.find((item) => item.id === resolvedId);
   if (!job) return ["Context job does not belong to the source shot"];
+  if (["queued", "uploading", "running"].includes(job.status)) return [];
   if (job.status !== "succeeded") return [`Source shot job is ${job.status}`];
   const outputs = videoKeys(job);
   if (outputs.length === 0) return ["Source shot has no video artifact"];

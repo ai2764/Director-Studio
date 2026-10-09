@@ -161,9 +161,10 @@ def test_mv_append_rejects_a_beat_outside_the_authorized_test_span(board):
 
 
 @pytest.mark.asyncio
-async def test_native_append_returns_receipt_before_agent_finishes(board):
+async def test_native_append_returns_receipt_before_agent_finishes(board, monkeypatch):
     from app.agents.director.chat import handle_chat
 
+    monkeypatch.setattr(settings, "director_agent_runtime", "legacy")
     project, svc = board
     calls = 0
 

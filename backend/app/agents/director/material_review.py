@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import uuid
+from time import monotonic
 from typing import Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
@@ -21,7 +22,7 @@ from .asset_catalog import LIBRARY_KINDS, _script_hash
 from .planner import _extract_json_payload, role_to_library_kind
 from .vision import image_bytes_to_b64_jpeg
 from .brief import shot_execution_intent, SHOT_EXECUTION_INTENT
-from .progress import report_phase
+from .progress import emit_progress, report_phase
 from .reference_facts import (VisualFact, ObservationConflict, validate_observation_sources,
     sanitize_observation, REFERENCE_POLICY_VERSION, sourced_records,
     reference_context_signature, reference_intent_signature, persist_reference_facts,
@@ -165,6 +166,12 @@ async def observe_reference(provider, record: dict, image: str, *, brief: str = 
         "consistent; if conflict cannot be resolved, report it rather than choose an unsupported label. "
         "A crop is not evidence of the hidden garment. Multi-view sheets depict views, not extra people. "
         "Latest applicable user requests guide intent, not what pixels visibly contain. "
+        "Do not require a single reference to depict the completed shot. "
+        "An empty scene reference need not contain the cast. Incidental clothing on an identity image "
+        "may differ from an explicitly selected costume; describe it honestly without treating that "
+        "difference alone as an unresolved conflict. Roles and reference_notes limit what the image "
+        "contributes. Selection and compatibility across the full reference pack are reviewed later; "
+        "do not invent missing people or rewrite visible clothing to match the script. "
         "Set readable=false only if the image itself cannot be inspected reliably."
     )
     user = f"{label}\nCurrent brief: {brief}\nReference: " + json.dumps(record, ensure_ascii=False)
@@ -241,29 +248,33 @@ async def observe_references_cached(provider, project_id, records, images, check
             "id": "current_inspection_request", "kind": "prompt_revision_request",
             "text": inspection_request,
         }]} for record in records]
+    from .reference_cache import ObservationCache
+    cache_started = monotonic()
     reviewed = []
+    hits, misses = 0, 0
     for record, image in zip(records, images, strict=True):
         check_current()
         stable_record = {k: v for k, v in record.items()
                          if k not in {"picture_index", "reference_notes"}}
         identity = {
-            "version": 4, "fact_policy": REFERENCE_POLICY_VERSION, "record": stable_record,
+            "version": 5, "fact_policy": REFERENCE_POLICY_VERSION, "record": stable_record,
             "inspection_request": inspection_request,
             "model": str(getattr(provider, "model", "")),
             "provider": type(provider).__qualname__,
             "endpoint": str(getattr(getattr(provider, "client", None), "base_url", "")),
         }
-        key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
-        path = settings.projects_dir / project_id / "agent" / "reference_observations" / f"{key}.json"
-        observation = None
-        try:
-            observation = ReferenceObservation.model_validate_json(path.read_text(encoding="utf-8"))
-            validate_observation_sources(observation, record.get("sources", []))
-            if not observation.readable:
-                observation = None
-        except (OSError, ValueError):
-            observation = None
+        cache = ObservationCache(settings.projects_dir / project_id / "agent" / "reference_observations", identity)
+        observation, reason = cache.load(ReferenceObservation, record.get("sources", []))
+        if observation is not None:
+            hits += 1
+            await emit_progress(on_progress, {"type": "status", "phase": "reference_cache", "state": "hit",
+                "text": f"Reusing the verified observation for Picture {record['picture_index']}.",
+                "cache_hits": hits, "cache_misses": misses})
         if observation is None:
+            misses += 1
+            await emit_progress(on_progress, {"type": "status", "phase": "reference_cache", "state": "miss",
+                "text": f"Picture {record['picture_index']} needs a current observation.", "cache_reason": reason,
+                "cache_hits": hits, "cache_misses": misses})
             attempts = []
             try:
                 async with report_phase(on_progress, "reference_observation",
@@ -278,19 +289,15 @@ async def observe_references_cached(provider, project_id, records, images, check
                     issues=[dict(issue, picture_index=record['picture_index'], asset_id=record['asset_id'])
                             for issue in getattr(exc, 'issues', [])]) from exc
             check_current()
-            temporary = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                temporary.write_text(observation.model_dump_json(), encoding="utf-8")
-                temporary.replace(path)
-            except OSError:
-                logging.getLogger(__name__).exception("Could not cache visual observation")
-            finally:
-                temporary.unlink(missing_ok=True)
+        cache.save(observation)
         reviewed.append({**record, **observation.model_dump(), "observation_model": {
             key: identity[key] for key in ("model", "provider", "endpoint", "fact_policy")}})
     check_current()
     persist_reference_facts(project_id, reviewed, check_current)
+    await emit_progress(on_progress, {"type": "status", "phase": "reference_cache", "state": "completed",
+        "text": f"Reference observations: {hits} reused, {misses} inspected ({monotonic() - cache_started:.1f}s).",
+        "cache_hits": hits, "cache_misses": misses, "elapsed_s": monotonic() - cache_started})
+    logging.getLogger(__name__).info("Reference observations: %s reused, %s inspected", hits, misses)
     return reviewed
 
 

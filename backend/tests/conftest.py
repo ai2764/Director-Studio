@@ -5,6 +5,12 @@ import pytest
 from app.config import settings
 
 
+@pytest.fixture
+def legacy_chat_runtime(monkeypatch):
+    """Opt in when testing the native loop without a Harness sidecar."""
+    monkeypatch.setattr(settings, "director_agent_runtime", "legacy")
+
+
 @pytest.fixture(autouse=True)
 def isolate_default_runtime_data(tmp_path, monkeypatch):
     """Tests must never fall back to the live service's project or Library data."""

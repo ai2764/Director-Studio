@@ -368,7 +368,7 @@ def project_context_blob(
             "save_storyboard and plan_shots remain available, and the user may persist status=skipped."
             if next_step == "review_asset_coverage"
             else
-            "For a user-requested end addition, use append_shot only and preserve existing Shots, even if stale. Otherwise, if shots_stale_vs_script=true or recommended_next_step=save_storyboard, "
+            "For a user-requested end addition, use append_shot for one or append_shots for multiple new shots; preserve existing Shots, even if stale. Otherwise, if shots_stale_vs_script=true or recommended_next_step=save_storyboard, "
             "author and call save_storyboard against script_hash; do not call queue_ref_frame first. "
             "plan_shots remains available only for compatibility."
             if next_step == "save_storyboard"

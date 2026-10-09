@@ -27,7 +27,24 @@ jobs:
             frontend/package-lock.json
             harness/package-lock.json
       - name: Install FFmpeg
-        run: choco install ffmpeg --yes --no-progress
+        run: |
+          $ErrorActionPreference = "Stop"
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            choco install ffmpeg --yes --no-progress
+            $installExitCode = $LASTEXITCODE
+            $ffmpegCommand = Get-Command ffmpeg -ErrorAction SilentlyContinue
+            $ffprobeCommand = Get-Command ffprobe -ErrorAction SilentlyContinue
+            if ($installExitCode -eq 0 -and $ffmpegCommand -and $ffprobeCommand) {
+              ffmpeg -version
+              if ($LASTEXITCODE -ne 0) { throw "FFmpeg verification failed" }
+              ffprobe -version
+              if ($LASTEXITCODE -ne 0) { throw "ffprobe verification failed" }
+              break
+            }
+            if ($attempt -eq 3) { throw "FFmpeg and ffprobe were not installed after 3 attempts" }
+            Write-Warning "FFmpeg installation incomplete; retrying attempt $($attempt + 1) of 3"
+            Start-Sleep -Seconds 5
+          }
       - name: Install Python dependencies
         run: python -m pip install -r backend/requirements.txt -r backend/requirements-build.txt
       - name: Build and verify Windows Portable

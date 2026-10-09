@@ -22,6 +22,9 @@ from app.core.projects.store import (
 )
 
 
+pytestmark = pytest.mark.usefixtures("legacy_chat_runtime")
+
+
 def _shots():
     return [
         Shot(

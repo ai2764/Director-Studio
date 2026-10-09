@@ -64,6 +64,49 @@ class Provider:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fail_review", [False, True])
+async def test_tail_writer_reports_live_phases_and_failures(tail_handoff_shot, fail_review):
+    project, shot = tail_handoff_shot
+    events = []
+    async def progress(event): events.append(event)
+    class LiveProvider(Provider):
+        async def complete_with_images(self, *args, **kwargs):
+            assert events[-1]["phase"] == "reference_observation" and events[-1]["state"] == "started"
+            return await super().complete_with_images(*args, **kwargs)
+        async def complete(self, system, user, **kwargs):
+            phase = "tail_draft" if not self.text else "prompt_review"
+            assert events[-1]["phase"] == phase and events[-1]["state"] == "started"
+            if fail_review and self.text:
+                raise RuntimeError("fixture review unavailable")
+            return await super().complete(system, user, **kwargs)
+    service = DirectorService(plan_provider=LiveProvider([candidate(), verdict()]), orchestrator=Orchestrator())
+    if fail_review:
+        with pytest.raises(RuntimeError, match="review unavailable"):
+            await service.write_prompts_after_layout(shot.id, on_progress=progress)
+    else:
+        await service.write_prompts_after_layout(shot.id, on_progress=progress)
+    states = {(e.get("phase"), e.get("state")) for e in events}
+    assert ("tail_draft", "completed") in states
+    assert ("prompt_review", "failed" if fail_review else "completed") in states
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["draft_json", "review_json", "continuity"])
+async def test_tail_validation_failure_is_visible_after_model_returns(tail_handoff_shot, fault):
+    _project, shot = tail_handoff_shot
+    if fault == "draft_json": responses = [{"invalid": "draft"}, {"invalid": "draft"}]
+    elif fault == "review_json": responses = [candidate(), {"invalid": "review"}, candidate(), {"invalid": "review"}]
+    else: responses = [candidate(), verdict(False), candidate(), verdict(False)]
+    events = []
+    async def progress(event): events.append(event)
+    with pytest.raises(ValueError):
+        await DirectorService(plan_provider=Provider(responses), orchestrator=Orchestrator()).write_prompts_after_layout(
+            shot.id, on_progress=progress)
+    phase = "tail_draft" if fault == "draft_json" else "prompt_review"
+    assert any(e.get("phase") == phase and e.get("state") == "failed" for e in events)
+
+
+@pytest.mark.asyncio
 async def test_tail_draft_and_independent_audit_receive_labelled_video_image(tail_handoff_shot, monkeypatch):
     import base64
     from app.agents.director import writer_context
@@ -112,9 +155,10 @@ async def test_video_only_handoff_cannot_publish_a_rejected_opening(tail_handoff
     from app.core.projects.store import save_project
     from app.core.projects.video_context import configure_video_context
     from app.core.jobs import list_jobs
-    from test_video_context_sources import _succeed
+    from test_video_context_sources import _media, _succeed
     project, shot = tail_handoff_shot
     monkeypatch.setattr(settings, "video_context_enabled", True)
+    monkeypatch.setattr("app.core.projects.video_context.probe_video", lambda _: _media())
     first = shot.model_copy(update={"id": "sht_source", "refs": [], "layout_refs": []})
     source_job = _succeed(project.id, first.id)
     save_shot(first.model_copy(update={"h3_job_id": source_job.id}))
@@ -166,12 +210,15 @@ async def test_managed_tail_checks_actual_evidence_before_drafting(tail_handoff_
     provider = Provider([{"action": action, "reason": "Actual tail is a studio; next beat requires a daylight pier."},
                          candidate(), verdict()])
     svc = DirectorService(plan_provider=provider, orchestrator=Orchestrator())
+    events = []
+    async def progress(event): events.append(event)
     if action == "keep":
-        await svc.write_prompts_after_layout(shot.id)
+        await svc.write_prompts_after_layout(shot.id, on_progress=progress)
         assert len(provider.text) == 3
     else:
         with pytest.raises(CreativeQuestion if action == "needs_decision" else PromptFailureError) as error:
-            await svc.write_prompts_after_layout(shot.id)
+            await svc.write_prompts_after_layout(shot.id, on_progress=progress)
+        assert sum(e.get("phase") == "tail_compatibility" and e.get("state") == "failed" for e in events) == 1
         if action == "drop_optional":
             assert error.value.failure_kind == "tail_incompatible"
         assert len(provider.text) == 1  # No rejected draft/repair loop for an incompatible source.
@@ -232,7 +279,7 @@ async def test_request_and_candidate_reach_reviewer_before_atomic_save(tail_hand
     assert "Pull back and lower" in provider.text[1][1]
     audit = json.loads(provider.text[1][1])
     assert "tail_observations" in audit
-    assert "original_shot" not in audit
+    assert audit["original_shot"]["script_beat"] == shot.script_beat
     assert audit["references"][0]["description"].startswith("Eye-level waist-up")
     assert updated.camera_motion.startswith("Pull back")
     assert updated.prompt_sections.detailed_description.startswith("0-2 seconds")
@@ -265,6 +312,246 @@ async def test_one_repair_receives_both_binding_and_continuity_errors(tail_hando
     assert "Opening is a low wide view" in provider.text[2][1]
     assert len(provider.text) == 4
     assert updated.camera_motion.startswith("Pull back")
+
+
+@pytest.mark.asyncio
+async def test_tail_repair_explicitly_requests_corrections_and_lists_picture_contract(tail_handoff_shot):
+    _, shot = tail_handoff_shot
+    invalid = candidate()
+    invalid["prompt_sections"]["subject_definitions"] = "The dancer in the studio."
+    provider = Provider([invalid, verdict(), candidate(), verdict()])
+    updated = await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+
+    initial_system, initial_user = provider.text[0]
+    repair_system, repair_user = provider.text[2]
+    assert json.loads(initial_user)["required_picture_bindings"] == ["<Picture 1>"]
+    assert "Return corrected fields in the same JSON envelope" in repair_system
+    assert "A rejected candidate is a draft" in repair_system
+    assert "Repair the listed defects" in repair_system
+    assert "Return corrected fields in the same JSON envelope" not in initial_system
+    assert json.loads(repair_user)["repair"]["rejected_candidate"]
+    assert "<Picture 1>" in updated.prompt_sections.subject_definitions
+
+
+@pytest.mark.asyncio
+async def test_structured_picture_bindings_compile_before_validation_and_review(tail_handoff_shot):
+    _, shot = tail_handoff_shot
+    draft = candidate()
+    draft["prompt_sections"]["subject_definitions"] = "The dancer in the studio."
+    draft["picture_bindings"] = {"<Picture 1>": "defines the dancer's identity and the studio."}
+    provider = Provider([draft, verdict()])
+    updated = await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+    assert "<Picture 1> defines the dancer's identity and the studio." in updated.prompt_sections.subject_definitions
+    reviewed = json.loads(provider.text[1][1])["candidate_prompt"]
+    assert reviewed["subject_definitions"] == updated.prompt_sections.subject_definitions
+    assert len(provider.text) == 2
+
+
+def test_candidate_schema_requires_one_contribution_per_actual_picture():
+    from app.agents.director.tail_prompt_review import candidate_schema
+    schema = candidate_schema(required_picture_indices=[1, 2, 3, 4])
+    assert "picture_bindings" in schema["required"]
+    binding_schema = schema["properties"]["picture_bindings"]
+    assert binding_schema["required"] == [f"<Picture {i}>" for i in range(1, 5)]
+    assert binding_schema["additionalProperties"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bindings", [{}, {"<Picture 2>": "defines an unsubmitted actor."}])
+async def test_structured_bindings_cannot_omit_or_invent_picture_slots(tail_handoff_shot, bindings):
+    project, shot = tail_handoff_shot
+    draft = candidate()
+    draft["picture_bindings"] = bindings
+    provider = Provider([draft, draft])
+    with pytest.raises(ValueError, match="picture_bindings must cover exactly"):
+        await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+    stored = load_shot(project.id, shot.id)
+    assert stored.prompt_sections == shot.prompt_sections
+    assert stored.refs == shot.refs
+
+
+def test_accepted_review_cannot_hide_conflicting_viewpoint_motion():
+    from app.agents.director.tail_prompt_review import PromptVerdict
+    review = verdict()
+    review["viewpoint_motion"] = {
+        "camera_attached_to": "viewer", "viewer_path": "The viewer is led to the sofa.",
+        "camera_path": "The camera remains fixed in place.", "compatible": False,
+        "evidence": "The same POV body cannot walk while its camera stays fixed.",
+    }
+    with pytest.raises(ValueError, match="viewpoint motion"):
+        PromptVerdict.model_validate(review)
+
+
+@pytest.mark.asyncio
+async def test_motion_claim_extraction_blocks_false_positive_full_review(tail_handoff_shot):
+    project, shot = tail_handoff_shot
+    shot = shot.model_copy(update={"script_beat": "The viewer is led across the room.",
+        "camera_angle": "First-person POV, camera is the viewer."})
+    save_shot(shot)
+    bad = candidate("The camera stays fixed while the viewer is led across the room.")
+    good = candidate("The POV camera follows the viewer across the room.")
+    review = verdict()
+    review["viewpoint_motion"] = {"camera_attached_to": "viewer", "viewer_path": "none",
+        "camera_path": "fixed", "compatible": True, "evidence": "A mistaken positive full review."}
+    observation = dict(camera_attachment="viewer", viewer_position_change="moving",
+        camera_position_change="stationary", viewer_quote="viewer is led across the room",
+        camera_quote="camera stays fixed")
+    moving = {**observation, "camera_position_change": "moving", "camera_quote": "camera follows the viewer"}
+    provider = Provider([bad, review, observation, good, review, moving])
+    updated = await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+    assert "follows the viewer" in updated.camera_motion
+    assert "viewpoint owner moves" in provider.text[3][1]
+    assert len(provider.text) == 6
+
+
+@pytest.mark.asyncio
+async def test_motion_review_honors_explicit_action_revision_without_candidate_evidence(tail_handoff_shot):
+    project, shot = tail_handoff_shot
+    shot = shot.model_copy(update={"script_beat": "The viewer waits beside the display.",
+        "camera_angle": "First-person POV, camera is the viewer."})
+    save_shot(shot)
+    revision = "Change the action: the viewer walks across the room; the POV camera moves with the viewer."
+    draft = candidate("The POV camera moves across the room with the viewer.")
+    draft["shot_patch"]["script_beat"] = "The viewer walks across the room."
+    draft["prompt_sections"]["summary"] = "The viewer walks across the room."
+    draft["prompt_sections"]["detailed_description"] = "From the inherited view, the viewer walks across the room with the attached POV camera."
+    review = verdict()
+    review["viewpoint_motion"] = {"camera_attached_to": "viewer", "viewer_path": "moving",
+        "camera_path": "moving", "compatible": True, "evidence": "The revised action and attached camera travel together."}
+
+    class ActionProvider(Provider):
+        async def complete(self, system, user, **kwargs):
+            packet = json.loads(user)
+            if "requested_action" in packet:
+                self.text.append((system, user))
+                source = packet["requested_action"]
+                revised = revision in source
+                # Candidate additions cannot become independent request evidence.
+                assert draft["shot_patch"]["script_beat"] not in source
+                return json.dumps(dict(camera_attachment="viewer",
+                    viewer_position_change="moving" if revised else "stationary",
+                    camera_position_change="moving",
+                    viewer_quote="viewer walks across the room" if revised else "viewer waits beside the display",
+                    camera_quote="camera moves across the room"))
+            return await super().complete(system, user, **kwargs)
+
+    provider = ActionProvider([draft, review, draft, review])
+    updated = await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(
+        shot.id, revision_request=revision)
+    assert len(provider.text) == 3
+    motion = updated.meta["material_review"]["motion_claim_review"]
+    assert motion["viewer_position_change"] == "moving"
+    assert motion["viewer_quote"] in revision
+    assert load_shot(project.id, shot.id) == updated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["automatic", "managed", "camera_only"])
+async def test_motion_review_cannot_replace_authored_action_without_user_revision(tail_handoff_shot, origin):
+    from app.core.managed_runs.context import ManagedTurnScope, managed_turn_scope
+
+    project, shot = tail_handoff_shot
+    shot = shot.model_copy(update={"script_beat": "The viewer waits beside the display.",
+        "camera_angle": "First-person POV, camera is the viewer."})
+    save_shot(shot)
+    revision = ("Change the action: the viewer walks across the room." if origin == "managed" else
+                "Keep the viewer waiting; change only the camera framing." if origin == "camera_only" else "")
+    draft = candidate("The POV camera moves across the room with the viewer.")
+    draft["shot_patch"]["script_beat"] = "The viewer walks across the room."
+    review = verdict()
+    review["viewpoint_motion"] = {"camera_attached_to": "viewer", "viewer_path": "moving",
+        "camera_path": "moving", "compatible": True, "evidence": "A mistaken positive broad review."}
+
+    class AuthoredActionProvider(Provider):
+        async def complete(self, system, user, **kwargs):
+            packet = json.loads(user)
+            if "requested_action" in packet:
+                self.text.append((system, user))
+                source = packet["requested_action"]
+                assert shot.script_beat in source
+                assert draft["shot_patch"]["script_beat"] not in source
+                if origin == "camera_only":
+                    assert revision in source
+                    assert "camera-only or unrelated revision does not change" in system
+                else:
+                    assert source == shot.script_beat
+                return json.dumps(dict(camera_attachment="viewer", viewer_position_change="stationary",
+                    camera_position_change="moving", viewer_quote="viewer waits beside the display",
+                    camera_quote="camera moves across the room"))
+            return await super().complete(system, user, **kwargs)
+
+    provider = AuthoredActionProvider([draft, review, draft, review])
+    token = managed_turn_scope.set(ManagedTurnScope(project.id, "run_fixture", "event_fixture", shot.id)) if origin == "managed" else None
+    try:
+        with pytest.raises(ValueError, match="viewpoint owner moves differently"):
+            await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(
+                shot.id, revision_request=revision)
+    finally:
+        if token is not None:
+            managed_turn_scope.reset(token)
+    stored = load_shot(project.id, shot.id)
+    assert stored.script_beat == shot.script_beat
+    assert stored.prompt_sections == shot.prompt_sections
+
+
+@pytest.mark.asyncio
+async def test_motion_quote_recovery_rechecks_evidence_without_rewriting_prompt(tail_handoff_shot):
+    project, shot = tail_handoff_shot
+    shot = shot.model_copy(update={"script_beat": "The viewer waits beside the display.",
+        "camera_angle": "First-person POV from the visitor."})
+    save_shot(shot)
+    draft = candidate("The camera remains stationary.")
+    review = verdict()
+    review["viewpoint_motion"] = {"camera_attached_to": "viewer", "viewer_path": "stationary",
+        "camera_path": "stationary", "compatible": True, "evidence": "Both positions are fixed."}
+    wrong = dict(camera_attachment="viewer", viewer_position_change="stationary",
+        camera_position_change="stationary", viewer_quote=shot.camera_angle,
+        camera_quote="camera remains stationary")
+    corrected = {**wrong, "viewer_quote": "viewer waits beside the display"}
+    provider = Provider([draft, review, wrong, corrected])
+
+    updated = await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+
+    assert len(provider.text) == 4
+    recovery = json.loads(provider.text[3][1])
+    assert recovery["requested_action"] == shot.script_beat
+    assert "viewer_quote" in recovery["review_repair"]["error"]
+    assert updated.meta["material_review"]["motion_claim_review"] == corrected
+    assert load_shot(project.id, shot.id) == updated
+
+
+@pytest.mark.asyncio
+async def test_exhausted_motion_quote_recovery_is_review_failure_not_prompt_repair(tail_handoff_shot):
+    from app.config import settings
+    project, shot = tail_handoff_shot
+    review = verdict()
+    review["viewpoint_motion"] = {"camera_attached_to": "external", "viewer_path": "unspecified",
+        "camera_path": "moving", "compatible": True, "evidence": "External camera follows the scene."}
+    wrong = dict(camera_attachment="external", viewer_position_change="unspecified",
+        camera_position_change="moving", viewer_quote="An invented action.",
+        camera_quote="Pull back and lower")
+    provider = Provider([candidate(), review, wrong, wrong])
+
+    with pytest.raises(ValueError) as error:
+        await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+
+    assert getattr(error.value, "code", None) == "MOTION_REVIEW_INVALID"
+    assert len(provider.text) == 4
+    assert load_shot(project.id, shot.id).prompt_sections == shot.prompt_sections
+    assert not (settings.projects_dir / project.id / "agent" / "prompt_drafts" / f"{shot.id}.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_ordinary_continuation_review_retains_authored_placement(tail_handoff_shot):
+    _, shot = tail_handoff_shot
+    shot = shot.model_copy(update={"script_beat": "A visitor sits beside the display."})
+    save_shot(shot)
+    provider = Provider([candidate(), verdict()])
+
+    await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+
+    audit = json.loads(provider.text[1][1])
+    assert audit["original_shot"]["script_beat"] == shot.script_beat
 
 
 @pytest.mark.asyncio
@@ -392,6 +679,42 @@ async def test_transport_timeout_stops_without_repair_and_keeps_diagnostics(tail
     assert len(attempts) == 1
     assert attempts[0]["stage"] == "transport"
     assert "timed out" in attempts[0]["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("truncated_stage", ["draft", "prompt_review", "motion_review"])
+async def test_output_truncation_preserves_shot_and_does_not_restart_writer(tail_handoff_shot, truncated_stage):
+    from app.core.prompt_errors import PromptOutputTruncated
+    from app.config import settings
+    project, shot = tail_handoff_shot
+
+    class TruncatedProvider(Provider):
+        async def complete_bounded(self, system, user, **kwargs):
+            self.text.append((system, user))
+            if truncated_stage != "draft" and len(self.text) == 1:
+                return json.dumps(candidate())
+            if truncated_stage == "motion_review" and len(self.text) == 2:
+                review = verdict()
+                review["viewpoint_motion"] = {"camera_attached_to": "external",
+                    "viewer_path": "The performer bends.", "camera_path": "Pull back and lower.",
+                    "compatible": True, "evidence": "Independent camera follows the authored action."}
+                return json.dumps(review)
+            raise PromptOutputTruncated("Output reached its requested limit")
+
+    provider = TruncatedProvider([])
+    with pytest.raises(PromptOutputTruncated):
+        await DirectorService(plan_provider=provider, orchestrator=Orchestrator()).write_prompts_after_layout(shot.id)
+    assert len(provider.text) == {"draft": 1, "prompt_review": 2, "motion_review": 3}[truncated_stage]
+    stored = load_shot(project.id, shot.id)
+    assert stored.prompt_sections == shot.prompt_sections
+    assert stored.camera_motion == shot.camera_motion
+    assert stored.script_beat == shot.script_beat
+    diagnostics = list((settings.projects_dir / project.id / "agent" / "prompt_failures").glob("*.json"))
+    assert len(diagnostics) == 1
+    attempts = json.loads(diagnostics[0].read_text(encoding="utf-8"))["attempts"]
+    assert attempts[-1]["stage"] == "output_budget"
+    assert attempts[-1]["call_stage"] == truncated_stage
+    assert not list((settings.projects_dir / project.id / "agent" / "prompt_drafts").glob("*.json"))
 
 
 @pytest.mark.asyncio

@@ -31,6 +31,8 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "projects_dir", tmp_path / "projects")
     monkeypatch.setattr(settings, "jobs_dir", tmp_path / "jobs")
     monkeypatch.setattr(settings, "video_context_enabled", True)
+    # Source bytes are fixture tokens; media decoding is an external boundary.
+    monkeypatch.setattr("app.core.projects.video_context.probe_video", lambda _: _media())
 
 
 def _shot(project_id: str, shot_id: str, **updates) -> Shot:
@@ -166,9 +168,9 @@ def test_failed_binding_keeps_the_existing_configuration(monkeypatch, tmp_path):
     assert saved["video_context"]["source_shot_id"] == first.id
     before = load_shot(project.id, second.id)
 
-    save_shot(load_shot(project.id, first.id).model_copy(update={"h3_job_id": None}))
-    with pytest.raises(VideoContextError, match="no H3 job"):
-        configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
+    with pytest.raises(VideoContextError, match="does not belong"):
+        configure_video_context(project.id, second.id, ShotVideoContext(
+            mode="previous_shot", source_job_id="job_unknown"))
     assert load_shot(project.id, second.id) == before
 
 
@@ -178,9 +180,10 @@ def test_failed_binding_keeps_the_existing_configuration(monkeypatch, tmp_path):
         ("first", "no previous shot"),
         ("cross", "not found on this project's storyboard"),
         ("future", "earlier shot"),
+        ("self", "earlier shot"),
         ("deleted", "not found"),
-        ("running", "running"),
         ("failed", "failed"),
+        ("cancelled", "cancelled"),
         ("ambiguous", "Select one video"),
         ("missing", "missing"),
     ],
@@ -205,6 +208,8 @@ def test_rejected_sources(monkeypatch, tmp_path, setup, message):
         config = ShotVideoContext(mode="previous_shot", source_shot_id=third.id)
     elif setup == "deleted":
         (tmp_path / "projects" / project.id / "shots" / f"{first.id}.json").unlink()
+    elif setup == "self":
+        config = ShotVideoContext(mode="previous_shot", source_shot_id=second.id)
     else:
         job = _succeed(project.id, first.id)
         if setup == "ambiguous":
@@ -213,12 +218,81 @@ def test_rejected_sources(monkeypatch, tmp_path, setup, message):
             save_job(job)
         elif setup == "missing":
             (tmp_path / "projects" / project.id / "jobs" / job.id / "outputs" / "video.mp4").unlink()
-        elif setup in {"running", "failed"}:
-            job.status = JobStatus.running if setup == "running" else JobStatus.failed
+        elif setup in {"failed", "cancelled"}:
+            job.status = JobStatus(setup)
             save_job(job)
         save_shot(first.model_copy(update={"h3_job_id": job.id}))
     with pytest.raises(VideoContextError, match=message):
         configure_video_context(project.id, target_id, config)
+
+
+@pytest.mark.parametrize("status", [None, JobStatus.queued, JobStatus.uploading, JobStatus.running])
+def test_pending_plan_becomes_ready_when_its_source_finishes(monkeypatch, tmp_path, status):
+    from app.core.projects.video_context import video_context_status
+    project, first, second = _board(monkeypatch, tmp_path)
+    if status is not None:
+        job = _succeed(project.id, first.id)
+        job.status = status
+        save_job(job)
+        save_shot(first.model_copy(update={"h3_job_id": job.id}))
+    configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
+    saved = load_shot(project.id, second.id)
+    assert saved.video_context.source_shot_id == first.id
+    assert saved.video_context.source_output_key is None
+    state = video_context_status(saved)
+    assert state["state"] == "waiting" and state["ready"] is False
+    assert state["blocked_reasons"]
+    with pytest.raises(VideoContextError):
+        resolve_video_context(saved, width=864, height=480)
+    ready_job = _succeed(project.id, first.id)
+    save_shot(load_shot(project.id, first.id).model_copy(update={"h3_job_id": ready_job.id}))
+    monkeypatch.setattr("app.core.projects.video_context.probe_video", lambda _path: _media())
+    ready = video_context_status(load_shot(project.id, second.id))
+    assert ready["state"] == "ready" and ready["ready"] is True
+    assert ready["blocked_reasons"] == [] and ready["source_job_id"] == ready_job.id
+    resolved = resolve_video_context(load_shot(project.id, second.id), width=864, height=480)
+    assert resolved.provenance["source_job_id"] == ready_job.id
+    assert load_shot(project.id, second.id).video_context == saved.video_context
+
+
+def test_pinned_pending_plan_keeps_its_job_and_rejects_wrong_ownership(monkeypatch, tmp_path):
+    from app.core.projects.video_context import video_context_status
+    project, first, second = _board(monkeypatch, tmp_path)
+    job = _succeed(project.id, first.id)
+    job.status = JobStatus.queued
+    save_job(job)
+    configure_video_context(project.id, second.id, ShotVideoContext(
+        mode="previous_shot", source_job_id=job.id,
+    ))
+    assert video_context_status(load_shot(project.id, second.id))["state"] == "waiting"
+    later = _succeed(project.id, first.id)
+    save_shot(first.model_copy(update={"h3_job_id": later.id}))
+    assert video_context_status(load_shot(project.id, second.id))["state"] == "waiting"
+    job.status = JobStatus.succeeded
+    save_job(job)
+    assert video_context_status(load_shot(project.id, second.id))["source_job_id"] == job.id
+    assert video_context_status(load_shot(project.id, second.id))["ready"] is True
+    wrong = _succeed(project.id, second.id)
+    wrong.status = JobStatus.queued
+    save_job(wrong)
+    before = load_shot(project.id, second.id).video_context
+    with pytest.raises(VideoContextError, match="does not belong"):
+        configure_video_context(project.id, second.id, ShotVideoContext(
+            mode="previous_shot", source_job_id=wrong.id,
+        ))
+    assert load_shot(project.id, second.id).video_context == before
+
+
+def test_pending_plan_does_not_silently_select_an_ambiguous_future_output(monkeypatch, tmp_path):
+    project, first, second = _board(monkeypatch, tmp_path)
+    configure_video_context(project.id, second.id, ShotVideoContext(mode="previous_shot"))
+    job = _succeed(project.id, first.id)
+    raw = save_output_file(job.id, "video_raw", "video_raw.mp4", b"raw", project_id=project.id)
+    job.outputs["video_raw"] = OutputSlot(key="video_raw", label="raw", filename=raw.name)
+    save_job(job)
+    save_shot(first.model_copy(update={"h3_job_id": job.id}))
+    with pytest.raises(VideoContextError, match="Select one video"):
+        resolve_video_context(load_shot(project.id, second.id), width=864, height=480)
 
 
 def test_explicit_historical_job_is_used_when_the_current_job_is_running(monkeypatch, tmp_path):

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Shot } from "../../shared/api/types";
 import { listLibraryAssets, type LibraryAsset } from "../library/api";
@@ -100,16 +100,20 @@ describe("ShotMaterialEditor", () => {
   });
 
   it("removes a selected Picture, adds a Library asset, and saves the new inventory", async () => {
-    render(
-      <ShotMaterialEditor
-        shot={selectedShot()}
-        shotNumber={1}
-        onClose={vi.fn()}
-        onOpenImage={vi.fn()}
-      />,
-    );
+    // Resolve the mocked inventory and its React update before editing. A role
+    // lookup's one-second timeout is not a reliable load barrier on CI runners.
+    await act(async () => {
+      render(
+        <ShotMaterialEditor
+          shot={selectedShot()}
+          shotNumber={1}
+          onClose={vi.fn()}
+          onOpenImage={vi.fn()}
+        />,
+      );
+    });
 
-    fireEvent.click(await screen.findByRole("button", { name: "Remove Picture 1 · Agent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove Picture 1 · Agent" }));
     expect(screen.getByText("Pictures 1 / 9")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Add Interview room" }));
     expect(screen.getByText("Pictures 2 / 9")).toBeTruthy();

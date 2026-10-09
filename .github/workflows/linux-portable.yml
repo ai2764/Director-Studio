@@ -30,7 +30,6 @@ jobs:
       - name: Build and verify Linux Portable
         run: ./scripts/build-linux-portable.sh
       - name: Upload Linux Portable
-        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: director-studio-linux-x86_64

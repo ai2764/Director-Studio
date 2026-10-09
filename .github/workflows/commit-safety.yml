@@ -1,0 +1,27 @@
+name: Commit Safety
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Verify scanner behavior
+        run: python -m unittest discover -s scripts/tests -p test_check_staged_secrets.py
+      - name: Check every pull request commit
+        env:
+          SCAN_BASE: ${{ github.event.pull_request.base.sha }}
+          SCAN_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/check_staged_secrets.py --range "$SCAN_BASE..$SCAN_HEAD"

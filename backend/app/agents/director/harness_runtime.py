@@ -21,7 +21,7 @@ from .chat_orchestrator import (
 )
 from .harness_client import HarnessClient, HarnessError
 from .intent import actor_design_intent, explicit_gpt_image_intent
-from .planner import AppendShotSubmission, ShotRevisionSubmission
+from .planner import AppendShotSubmission, AppendShotsSubmission, ShotRevisionSubmission
 from .tool_schema import director_chat_guides, director_tool_schemas, IMAGE_TOOLS
 from .skill_loader import with_director_skill
 from .task_context_runtime import (scoped_task_turn, current_task_context, present_task_tools,
@@ -91,6 +91,7 @@ class BackendTurn:
         self.call_ids: set[str] = set()
         self.calls: set[tuple[str, str]] = set()
         self.successful_prompt_shot_ids: set[str] = set()
+        self.video_authorization_cache: dict = {}
         from .configuration_recovery import ConfigurationRecovery
         self.configuration_recovery = ConfigurationRecovery()
         self.storyboard_failed = False
@@ -355,9 +356,10 @@ class BackendTurn:
         if schema is None:
             return {"ok": False, "error": f"Tool is not currently offered: {name}"}
         raw_fingerprint = fingerprint
-        if name == "append_shot":
+        if name in {"append_shot", "append_shots"}:
             try:
-                args = AppendShotSubmission.model_validate(args).model_dump(mode="json", exclude_unset=True)
+                model = AppendShotSubmission if name == "append_shot" else AppendShotsSubmission
+                args = model.model_validate(args).model_dump(mode="json", exclude_unset=True)
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
             fingerprint = json.dumps([name, args], sort_keys=True, ensure_ascii=False)
@@ -430,6 +432,7 @@ class BackendTurn:
             actions=self.actions, on_progress=self.on_progress, result_payloads=payloads,
             user_feedback=self.message, requested_minimum_duration_s=_requested_minimum_duration_s(self.message),
             user_message_id=self.user_message_id,
+            video_authorization_cache=self.video_authorization_cache,
             previous_assistant=(
                 str(self.seed_history[-1].get("content") or "")
                 if self.seed_history and self.seed_history[-1].get("role") == "assistant"
@@ -522,8 +525,8 @@ class BackendTurn:
             # Keep the model's explanation and partial-work details. A successful
             # save is only one operation, not proof that the entire turn finished.
             reply = f"Storyboard saved: {len(shots)} shots.\n\n" + reply
-        elif "append_shot" in self.actions:
-            count = self.actions.count("append_shot")
+        elif "append_shot" in self.actions or any(a.startswith("append_shots:") for a in self.actions):
+            count = self.actions.count("append_shot") + sum(int(a.split(":")[1]) for a in self.actions if a.startswith("append_shots:"))
             reply = (f"Appended {count} new shot{'s' if count != 1 else ''} at the end."
                      + (f"\n\n{reply}" if reply else ""))
         elif self.storyboard_failed and "append_shot" not in self.actions:

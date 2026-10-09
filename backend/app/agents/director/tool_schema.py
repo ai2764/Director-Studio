@@ -18,6 +18,7 @@ from .intent import (
 )
 from .planner import (
     AppendShotSubmission,
+    AppendShotsSubmission,
     ShotRefsPatchSubmission,
     ShotRevisionSubmission,
     ShotSceneRefSelection,
@@ -386,6 +387,24 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "append_shots",
+            "description": (
+                "Append 1-8 new Shots in one validated batch. Prefer this for multiple end additions. "
+                "Submit only NEW authored shot fields; never existing shots or production state. "
+                "Copy PROJECT_STATE.script_hash and last_shot_id once for the whole batch. "
+                "Python assigns IDs, preserves old Shots, and rejects the whole batch if any item is invalid. "
+                "Set an item's video_context.mode=previous_shot with source_index=1 to continue the first NEW "
+                "batch item; source_index is one-based within this batch and must precede its target. "
+                "Use source_shot_id for an existing earlier Shot, omit both for its adjacent predecessor, "
+                "or mode=off for independent shots. Pending sources are valid saved plans. "
+                "This tool never writes prompts, creates Layouts, or starts video jobs."
+            ),
+            "parameters": _storyboard_schema(AppendShotsSubmission),
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "revise_shot",
             "description": (
                 "Update only explicitly supplied authored fields on exactly one "
@@ -611,7 +630,9 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     function_tool(
         "configure_video_context",
-        "Save how this shot continues from a finished source video. "
+        "Save a plan for how this shot continues from an earlier source shot. "
+        "The source need not be generated yet: a waiting result means the plan was saved successfully. "
+        "Source video readiness is required before writing its continuation prompt or generating. "
         "Pass source_shot_id to select any earlier shot on this project's storyboard; "
         "omit it only when the user means the immediately previous shot. "
         "Use mode=previous_shot when the user asks to continue its action or camera motion; "

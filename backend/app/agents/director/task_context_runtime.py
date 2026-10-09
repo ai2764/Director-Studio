@@ -140,7 +140,7 @@ def build_writer_packet(project, shot_id, revision_request=""):
         overhead += project.script_text
     max_chars = available_packet_chars(
         system=with_director_skill(prompts.H3_PROMPT_INSTRUCTIONS + REFERENCE_WRITER_CONTRACT + WRITER_CONTRACT,
-                                   guides=("h3-prompt-writing",)),
+                                   guides=("h3-prompt-writing",), writer_only=True),
         messages=[{"role": "user", "content": overhead}], tools=[])
     return build_task_packet(snapshot, TaskRequest(kind="shot_prompt", target_shot_id=shot_id,
         objective=state.request.objective if state else revision_request),

@@ -344,6 +344,7 @@ Recommended pipeline; use judgment to decide when to advance:
 2) review_asset_coverage — before first storyboarding or after a script change, inspect the script and available file_keys; recommend only useful missing actor angles, scene angles/zones, props, costumes, or future Layout states. Explain why each would help. This is advisory: the user may skip it, and storyboard tools remain available.
 3) revise_shot — for an authored-field change to exactly one Shot, update only the supplied fields and preserve all other Shots, refs, voices, and Layouts. If the same request also asks for a rewritten production prompt, call revise_shot then write_prompt
    append_shot — when the user asks to add one Shot at the end, submit ONLY the new Shot with expected_script_hash=PROJECT_STATE.script_hash and expected_last_shot_id=PROJECT_STATE.last_shot_id. Python assigns its ID. Never rewrite the script or resubmit existing Shots for this request, even when the old plan is stale. On tail mismatch inspect current state; do not blindly retry with a refreshed tail. Set shot.actor_presence="none" for an intentionally empty shot so automatic casting does not insert a person.
+   append_shots — prefer one batch for multiple NEW shots at the end (up to 8). Copy the script hash and last_shot_id once. Each item contains only new authored fields and optional video_context; source_index refers to an earlier one-based item within this batch, while source_shot_id selects an existing earlier Shot. Pending sources are valid saved plans. Do not call save_storyboard or generate anything to append a batch. On tail mismatch inspect the saved state before any retry.
    save_storyboard — reserve complete storyboard replacement for first authoring, explicit removal/reordering, or coordinated multi-Shot revisions; use append_shot for end additions. Save against PROJECT_STATE.script_hash, copy each existing Shot's id into shot_id unchanged, and omit shot_id only for genuinely new Shots. When Shots already exist, the first call only records the exact replacement proposal and ends the turn with a warning that all Shots will be cleared and rewritten
    confirm_storyboard_replacement — only after a later user message explicitly confirms clearing and rewriting all Shots, execute the exact pending replacement. "ok", "continue", or a reply that changes the proposal is not confirmation
    candidates are checked before replacement; if the tool returns observed issues, revise your own complete payload and resubmit
@@ -395,6 +396,7 @@ Tools (name + args):
 - save_storyboard  {"expected_script_hash":"...","shots":[complete ShotDraft objects]}  // preserve PROJECT_STATE Shot ids in shot_id; omit only for new Shots
 - revise_shot  {"shot_id":"...","script_beat":"..."}  // partial authored fields for exactly one Shot; follow with write_prompt when requested
 - append_shot  {"expected_script_hash":"...","expected_last_shot_id":"...","shot":{...}}  // exactly one NEW Shot at the end; null tail only for an empty board
+- append_shots  {"expected_script_hash":"...","expected_last_shot_id":"...","shots":[{...},{...,"video_context":{"mode":"previous_shot","source_index":1}}]}  // all new items, 1-8; preserve old shots
 - patch_shot_refs  {"updates":[{"shot_id":"...","refs":[complete ordered Picture bindings]}]}
 - set_shot_scene_ref  {"shot_id":"...","scene_asset_id":"...","file_key":"..."}  // exact human override; never infer a replacement file_key
 - plan_shots  {}  // compatibility shortcut; prefer save_storyboard for natural authoring/revision
@@ -534,7 +536,7 @@ def sanitize_tools_for_pipeline(
     if names and set(names) <= {"queue_actor_design", "confirm_actor_design", "accept_actor_design"}:
         return tools, notes
     has_set = any(n in _SCRIPT_TOOLS for n in names)
-    has_plan = any(n in _PLAN_TOOLS or n in _STORYBOARD_TOOLS or n == "append_shot" for n in names)
+    has_plan = any(n in _PLAN_TOOLS or n in _STORYBOARD_TOOLS or n in {"append_shot", "append_shots"} for n in names)
     has_image = any(n in _IMAGE_TOOLS for n in names)
 
     script = (project.script_text or "").strip()
@@ -564,7 +566,7 @@ def sanitize_tools_for_pipeline(
 
     names2 = [_tool_name(t) for t in out]
     has_set = any(n in _SCRIPT_TOOLS for n in names2)
-    has_plan = any(n in _PLAN_TOOLS or n in _STORYBOARD_TOOLS or n == "append_shot" for n in names2)
+    has_plan = any(n in _PLAN_TOOLS or n in _STORYBOARD_TOOLS or n in {"append_shot", "append_shots"} for n in names2)
 
     # After set_script or stale/missing shots, ensure plan_shots runs this turn
     must_inject_plan = (has_set or shots_stale or (bool(script) and not shots)) and not has_plan
@@ -1107,8 +1109,8 @@ async def orchestrate_chat(
         if "save_storyboard" in acts:
             shot_count = len(sh)
             r = f"Storyboard saved: {shot_count} shot{'s' if shot_count != 1 else ''}."
-        elif "append_shot" in acts:
-            count = acts.count("append_shot")
+        elif "append_shot" in acts or any(a.startswith("append_shots:") for a in acts):
+            count = acts.count("append_shot") + sum(int(a.split(":")[1]) for a in acts if a.startswith("append_shots:"))
             r = f"Appended {count} new shot{'s' if count != 1 else ''} at the end."
         elif (
             storyboard_save_attempted
@@ -1308,6 +1310,7 @@ async def orchestrate_chat(
     from .turn_identity import current_user_message_id
     user_message_id = current_user_message_id(project_id, message)
     storyboard_budget = _StoryboardSubmissionBudget()
+    video_authorization_cache: dict = {}
     offered_tool_schemas = tool_schemas_for(project)
     chat_guides = _director_chat_guides(
         project,
@@ -1557,6 +1560,7 @@ async def orchestrate_chat(
                         result_payloads=structured_results,
                         user_feedback=message,
                         user_message_id=user_message_id,
+                        video_authorization_cache=video_authorization_cache,
                         requested_minimum_duration_s=requested_minimum_duration_s,
                         storyboard_budget=storyboard_budget,
                         images=attached_images,
@@ -1731,6 +1735,7 @@ async def orchestrate_chat(
             on_progress=progress_event,
             user_feedback=message,
             user_message_id=user_message_id,
+            video_authorization_cache=video_authorization_cache,
             requested_minimum_duration_s=requested_minimum_duration_s,
             storyboard_budget=storyboard_budget,
             images=attached_images,

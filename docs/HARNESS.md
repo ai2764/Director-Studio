@@ -56,7 +56,8 @@ Stop services from this checkout before switching runtimes:
 
 The launcher's runtime precedence is `-AgentRuntime`, process
 `DS_DIRECTOR_AGENT_RUNTIME`, `backend/.env`, then `harness`. A direct backend
-launch uses the settings default (`legacy`) unless configured explicitly.
+launch also defaults to `harness` and requires a running authenticated sidecar.
+Legacy requires an explicit runtime setting.
 `-FrontendOnly` does not start Harness. Logs and owned process IDs live in `.run/`.
 Concurrent checkouts need separate data directories, backend/frontend/Harness
 ports, and a matching frontend backend URL.

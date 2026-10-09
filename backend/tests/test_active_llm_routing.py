@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -58,8 +59,10 @@ async def test_bounded_prompt_call_cancels_silent_transport_at_deadline(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_bounded_prompt_review_uses_provider_schema_and_rejects_truncation():
+async def test_bounded_prompt_review_uses_provider_schema_and_rejects_truncation(monkeypatch):
     from app.agents.director.llm_plan_provider import DirectorLLMPlanProvider
+    from app.config import settings
+    monkeypatch.setattr(settings, "director_num_predict", 1024)
     requests = []
 
     class Client:
@@ -80,6 +83,62 @@ async def test_bounded_prompt_review_uses_provider_schema_and_rejects_truncation
     client.finish_reason = "length"
     with pytest.raises(ValueError, match="truncated"):
         await adapter.complete_bounded("Review", "Candidate", max_tokens=1024, schema=schema)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage_budget", [1024, 4096, 6144])
+async def test_configured_output_budget_reaches_bounded_writer_and_review(monkeypatch, stage_budget):
+    from app.agents.director.llm_plan_provider import DirectorLLMPlanProvider
+    from app.config import settings
+    monkeypatch.setattr(settings, "director_num_predict", 65536)
+    requests = []
+
+    class Client:
+        async def chat_response(self, model, **kwargs):
+            requests.append(kwargs)
+            return {"content": '{"valid":true}', "finish_reason": "stop"}
+
+    adapter = DirectorLLMPlanProvider(provider=RecordingProvider(Client()))
+    assert await adapter.complete_bounded("Review", "Candidate", max_tokens=stage_budget) == '{"valid":true}'
+    assert len(requests) == 1
+    assert requests[0]["options"]["num_predict"] == 65536
+
+
+@pytest.mark.asyncio
+async def test_bounded_writer_keeps_larger_stage_budget_with_default_config(monkeypatch):
+    from app.agents.director.llm_plan_provider import DirectorLLMPlanProvider
+    from app.config import settings
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(settings, "director_num_predict", 4096)
+    client = SimpleNamespace(chat_response=AsyncMock(return_value={"content": "{}", "finish_reason": "stop"}))
+    adapter = DirectorLLMPlanProvider(provider=RecordingProvider(client))
+    assert await adapter.complete_bounded("Write", "Candidate", max_tokens=6144) == "{}"
+    assert client.chat_response.call_args.kwargs["options"]["num_predict"] == 6144
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason_field", ["finish_reason", "done_reason"])
+async def test_truncation_reports_budget_and_usage_without_response_text(monkeypatch, reason_field, caplog):
+    import logging
+    from app.agents.director.llm_plan_provider import DirectorLLMPlanProvider
+    from app.config import settings
+    from app.core.prompt_errors import PromptOutputTruncated
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(settings, "director_num_predict", 8192)
+    private_text = "private response marker"
+    client = SimpleNamespace(chat_response=AsyncMock(return_value={
+        "content": private_text, "thinking": private_text, reason_field: "length",
+        "usage": {"output_tokens": 8192, "reasoning_tokens": 7000}}))
+    adapter = DirectorLLMPlanProvider(provider=RecordingProvider(client))
+    with caplog.at_level(logging.INFO), pytest.raises(PromptOutputTruncated) as failure:
+        await adapter.complete_bounded("Review", "Candidate", max_tokens=1024)
+    assert "8192" in str(failure.value)
+    assert "7000" in str(failure.value)
+    assert "DS_DIRECTOR_NUM_PREDICT" in str(failure.value)
+    assert "finish_reason=length" in caplog.text
+    assert "output_tokens=8192" in caplog.text
+    assert private_text not in caplog.text + str(failure.value)
+    assert client.chat_response.await_count == 1
 
 
 class RecordingLifecycle:
@@ -113,7 +172,8 @@ async def test_director_plan_provider_uses_injected_active_provider(monkeypatch)
 
     composed: list[tuple[str, tuple[str, ...]]] = []
 
-    def fake_skill(task: str, *, guides=()):
+    def fake_skill(task: str, *, guides=(), writer_only=False):
+        assert writer_only is True
         composed.append((task, tuple(guides)))
         return "SKILLED"
 
@@ -148,6 +208,52 @@ async def test_make_chat_fn_routes_plain_chat_to_injected_provider(monkeypatch):
     assert len(active.client.generate_calls) == 1
     assert active.client.generate_calls[0][0] == "catalog-model"
     assert active.client.generate_calls[0][1].endswith("\n\nUSER")
+
+
+@pytest.mark.asyncio
+async def test_compaction_keeps_summary_internal_without_hiding_next_reply(monkeypatch):
+    from app.api import projects as projects_api
+
+    summary = '## Primary Request and Intent\n- Multi-shot H3 video arc "first"'
+    response = {"content": summary, "thinking": "internal planning", "tool_calls": [],
+                "usage": {"input_tokens": 200, "output_tokens": 30}}
+
+    class SummaryClient(RecordingClient):
+        async def chat_response(self, model, **kwargs):
+            self.chat_calls.append(kwargs)
+            return response
+
+    events = []
+
+    async def progress(event):
+        events.append(event)
+
+    monkeypatch.setattr("app.core.vram.get_orchestrator", lambda: FakeOrchestrator())
+    client = SummaryClient()
+    chat_fn = await projects_api._make_chat_fn(progress, provider=RecordingProvider(client))
+    messages = [{"role": "user", "content": "Summarize the history"}]
+
+    result = await chat_fn("SYSTEM", "USER", messages=messages,
+                           prepared_system=True, inference_purpose="compaction")
+
+    # Harness still needs the full summary to replace history internally.
+    assert result == response
+    assert not any(event["type"] in {"token", "think"} for event in events)
+    assert any(event["type"] == "runtime" and event["text"] == "整理对话上下文…"
+               for event in events)
+    usage = [event["data"] for event in events if event["type"] == "context_usage"]
+    assert [event["status"] for event in usage] == ["running", "completed"]
+    assert all(event["purpose"] == "compaction" for event in usage)
+    assert usage[-1]["output_tokens"] == 30
+
+    # A normal reply can legitimately use the same heading. Filter by purpose,
+    # and do not leave suppression enabled on this shared chat_fn.
+    events.clear()
+    assert await chat_fn("SYSTEM", "USER", messages=messages, prepared_system=True) == response
+    assert {"type": "token", "text": summary} in events
+    assert {"type": "think", "text": response["thinking"]} in events
+    assert all(event["data"]["purpose"] == "turn"
+               for event in events if event["type"] == "context_usage")
 
 
 @pytest.mark.asyncio
