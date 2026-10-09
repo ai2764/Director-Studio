@@ -64,6 +64,49 @@ class Provider:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fail_review", [False, True])
+async def test_tail_writer_reports_live_phases_and_failures(tail_handoff_shot, fail_review):
+    project, shot = tail_handoff_shot
+    events = []
+    async def progress(event): events.append(event)
+    class LiveProvider(Provider):
+        async def complete_with_images(self, *args, **kwargs):
+            assert events[-1]["phase"] == "reference_observation" and events[-1]["state"] == "started"
+            return await super().complete_with_images(*args, **kwargs)
+        async def complete(self, system, user, **kwargs):
+            phase = "tail_draft" if not self.text else "prompt_review"
+            assert events[-1]["phase"] == phase and events[-1]["state"] == "started"
+            if fail_review and self.text:
+                raise RuntimeError("fixture review unavailable")
+            return await super().complete(system, user, **kwargs)
+    service = DirectorService(plan_provider=LiveProvider([candidate(), verdict()]), orchestrator=Orchestrator())
+    if fail_review:
+        with pytest.raises(RuntimeError, match="review unavailable"):
+            await service.write_prompts_after_layout(shot.id, on_progress=progress)
+    else:
+        await service.write_prompts_after_layout(shot.id, on_progress=progress)
+    states = {(e.get("phase"), e.get("state")) for e in events}
+    assert ("tail_draft", "completed") in states
+    assert ("prompt_review", "failed" if fail_review else "completed") in states
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["draft_json", "review_json", "continuity"])
+async def test_tail_validation_failure_is_visible_after_model_returns(tail_handoff_shot, fault):
+    _project, shot = tail_handoff_shot
+    if fault == "draft_json": responses = [{"invalid": "draft"}, {"invalid": "draft"}]
+    elif fault == "review_json": responses = [candidate(), {"invalid": "review"}, candidate(), {"invalid": "review"}]
+    else: responses = [candidate(), verdict(False), candidate(), verdict(False)]
+    events = []
+    async def progress(event): events.append(event)
+    with pytest.raises(ValueError):
+        await DirectorService(plan_provider=Provider(responses), orchestrator=Orchestrator()).write_prompts_after_layout(
+            shot.id, on_progress=progress)
+    phase = "tail_draft" if fault == "draft_json" else "prompt_review"
+    assert any(e.get("phase") == phase and e.get("state") == "failed" for e in events)
+
+
+@pytest.mark.asyncio
 async def test_tail_draft_and_independent_audit_receive_labelled_video_image(tail_handoff_shot, monkeypatch):
     import base64
     from app.agents.director import writer_context
@@ -167,12 +210,15 @@ async def test_managed_tail_checks_actual_evidence_before_drafting(tail_handoff_
     provider = Provider([{"action": action, "reason": "Actual tail is a studio; next beat requires a daylight pier."},
                          candidate(), verdict()])
     svc = DirectorService(plan_provider=provider, orchestrator=Orchestrator())
+    events = []
+    async def progress(event): events.append(event)
     if action == "keep":
-        await svc.write_prompts_after_layout(shot.id)
+        await svc.write_prompts_after_layout(shot.id, on_progress=progress)
         assert len(provider.text) == 3
     else:
         with pytest.raises(CreativeQuestion if action == "needs_decision" else PromptFailureError) as error:
-            await svc.write_prompts_after_layout(shot.id)
+            await svc.write_prompts_after_layout(shot.id, on_progress=progress)
+        assert sum(e.get("phase") == "tail_compatibility" and e.get("state") == "failed" for e in events) == 1
         if action == "drop_optional":
             assert error.value.failure_kind == "tail_incompatible"
         assert len(provider.text) == 1  # No rejected draft/repair loop for an incompatible source.

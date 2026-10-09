@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from ...core.projects.models import RefRole, ShotMusicSegment
+from ...core.projects.models import RefRole, ShotMusicSegment, ShotVideoContext
 from ...core.projects.dialogue import DialogueLanguageUpdate, DialogueLine, validate_authored_dialogue
 
 
@@ -221,6 +221,32 @@ class AppendShotSubmission(BaseModel):
         description="Copy PROJECT_STATE.last_shot_id; null only for an empty storyboard."
     )
     shot: NewShotDraft
+
+
+class BatchVideoContext(ShotVideoContext):
+    """A saved dependency on an existing shot or an earlier new batch item."""
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["off", "previous_shot"]
+    source_index: int | None = Field(default=None, strict=True, ge=1,
+        description="One-based index of an earlier item in this batch; never an existing storyboard number.")
+
+    @model_validator(mode="after")
+    def _source_choice(self):
+        if self.source_index is not None and (self.source_shot_id or self.source_job_id):
+            raise ValueError("Choose source_index or an existing source_shot_id/job, not both")
+        return self
+
+
+class BatchShotDraft(NewShotDraft):
+    video_context: BatchVideoContext | None = None
+
+
+class AppendShotsSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_script_hash: str = Field(min_length=1)
+    expected_last_shot_id: str | None = Field(
+        description="Copy PROJECT_STATE.last_shot_id once for the entire batch; null only for an empty storyboard.")
+    shots: list[BatchShotDraft] = Field(min_length=1, max_length=8)
 
 
 class StoryboardSubmission(BaseModel):

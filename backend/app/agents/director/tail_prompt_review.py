@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from time import monotonic
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
@@ -16,6 +17,7 @@ from .dialogue_preflight import prepare_dialogue, prompt_dialogue_record, WRITER
 from .dialogue_metadata import DialogueMetadataError
 from .reference_facts import reference_context_signature, reference_intent_signature, REFERENCE_WRITER_CONTRACT
 from .material_review import observe_references_cached, tail_frame_review_signature
+from .progress import emit_progress, report_phase
 from .planner import _extract_json_payload
 from .prompts import H3_PROMPT_INSTRUCTIONS
 from .prompt_repair import repair_key, load_repair, save_repair, clear_repair, merge_repair, require_repair_progress, repair_response_instructions
@@ -399,11 +401,23 @@ Do not redesign the shot, enforce aesthetics or reject a feasible camera move.
 
 
 async def draft_and_review(provider, project, shot, records, images, signature,
-                           check_current, save_diagnostics, *, task_packet=None):
+                           check_current, save_diagnostics, *, task_packet=None, on_progress=None):
     from ...core.media.music_segments import music_prompt_context, validate_editorial_music_prompt
     from .brief import directing_requests
+    deliver_progress = on_progress
+    phase_states = {}
+    async def on_progress(event):
+        if event.get("phase"):
+            phase_states[event["phase"]] = event.get("state")
+        await emit_progress(deliver_progress, event)
 
-    references = await observe_references_cached(provider, project.id, records, images, check_current)
+    async def report_validation_failure(stage, started):
+        phase = {"draft": "tail_draft", "prompt_review": "prompt_review", "motion_review": "motion_review"}[stage]
+        if phase_states.get(phase) != "failed":
+            await on_progress({"type": "status", "phase": phase, "state": "failed",
+                "text": "Continuation prompt validation failed.", "elapsed_s": monotonic() - started})
+
+    references = await observe_references_cached(provider, project.id, records, images, check_current, on_progress=on_progress)
     layouts = selected_layout_prompt_context(shot)
     confirmed = project.asset_coverage_review
     from .asset_catalog import _script_hash
@@ -427,9 +441,19 @@ async def draft_and_review(provider, project, shot, records, images, signature,
         "confirmed_project_review": confirmed_data,
     }
     from .writer_context import video_context_writer_view
-    context_view = video_context_writer_view(shot)
+    if shot.video_context is not None and shot.video_context.mode != "off":
+        async with report_phase(on_progress, "source_tail_frame", "Reading the source video tail frame"):
+            context_view = video_context_writer_view(shot)
+            if not context_view or not context_view.get("tail_frame_png"):
+                raise ValueError("The continuation source tail frame could not be read")
+    else:
+        context_view = video_context_writer_view(shot)
     try:
-        source_ending = await observe_source_ending(provider, context_view)
+        if context_view is not None and context_view.get("tail_frame_png"):
+            async with report_phase(on_progress, "source_ending", "Reading the source video ending"):
+                source_ending = await observe_source_ending(provider, context_view)
+        else:
+            source_ending = await observe_source_ending(provider, context_view)
         check_current()
     except Exception as exc:
         save_diagnostics(shot, [{"stage": "source_ending_observation", "error": str(exc)}])
@@ -454,15 +478,16 @@ async def draft_and_review(provider, project, shot, records, images, signature,
         raw = None
         try:
             check_current()
-            raw = await complete_bounded(provider, TAIL_COMPATIBILITY_INSTRUCTIONS,
-                json.dumps(request, ensure_ascii=False), max_tokens=1024,
-                schema=TailCompatibility.model_json_schema())
-            check_current()
-            compatibility = TailCompatibility.model_validate(_extract_json_payload(raw))
-            if compatibility.action == "needs_decision":
-                raise CreativeQuestion("Material review needs your decision: " + compatibility.reason)
-            if compatibility.action == "drop_optional":
-                raise PromptFailureError("tail_incompatible", "Tail compatibility review: " + compatibility.reason)
+            async with report_phase(on_progress, "tail_compatibility", "Checking the inherited framing"):
+                raw = await complete_bounded(provider, TAIL_COMPATIBILITY_INSTRUCTIONS,
+                    json.dumps(request, ensure_ascii=False), max_tokens=1024,
+                    schema=TailCompatibility.model_json_schema())
+                check_current()
+                compatibility = TailCompatibility.model_validate(_extract_json_payload(raw))
+                if compatibility.action == "needs_decision":
+                    raise CreativeQuestion("Material review needs your decision: " + compatibility.reason)
+                if compatibility.action == "drop_optional":
+                    raise PromptFailureError("tail_incompatible", "Tail compatibility review: " + compatibility.reason)
         except Exception as exc:
             save_diagnostics(shot, [{"stage": "tail_compatibility", "raw": raw, "error": str(exc)}])
             raise
@@ -492,6 +517,7 @@ async def draft_and_review(provider, project, shot, records, images, signature,
         audit_raw = None
         motion_raw = None
         call_stage = "draft"
+        call_started = monotonic()
         check_current()
         try:
             attempt_instructions = draft_instructions
@@ -501,11 +527,13 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                     "not an approved response. Use repair.error, repair.issues and repair.review "
                     "to correct it, and check every required_picture_bindings tag.\n"
                     + repair_response_instructions(dialogue_bindings=bool(dialogue_lines)))
-            raw = await complete_bounded(provider, attempt_instructions,
-                json.dumps({**request, "repair": repair}, ensure_ascii=False),
-                max_tokens=6144, guides=("h3-prompt-writing",),
-                schema=candidate_schema(required_picture_indices=[r.picture_index for r in shot.refs]),
-                observation=context_view)
+            async with report_phase(on_progress, "tail_draft",
+                                    f"Writing the continuation prompt (attempt {attempt + 1}/2)"):
+                raw = await complete_bounded(provider, attempt_instructions,
+                    json.dumps({**request, "repair": repair}, ensure_ascii=False),
+                    max_tokens=6144, guides=("h3-prompt-writing",),
+                    schema=candidate_schema(required_picture_indices=[r.picture_index for r in shot.refs]),
+                    observation=context_view)
             if repair:
                 raw = merge_repair(raw, repair["rejected_candidate"], envelope=True)
             check_current()
@@ -605,9 +633,13 @@ async def draft_and_review(provider, project, shot, records, images, signature,
             if source_ending is not None:
                 audit_request["source_ending_observation"] = source_ending
             call_stage = "prompt_review"
-            audit_raw = await complete_bounded(provider, REVIEW_INSTRUCTIONS,
-                json.dumps(audit_request, ensure_ascii=False), max_tokens=4096,
-                schema=review_schema(), observation=context_view)
+            call_started = monotonic()
+            audit_started = call_started
+            async with report_phase(on_progress, "prompt_review",
+                                    f"Reviewing prompt continuity (attempt {attempt + 1}/2)"):
+                audit_raw = await complete_bounded(provider, REVIEW_INSTRUCTIONS,
+                    json.dumps(audit_request, ensure_ascii=False), max_tokens=4096,
+                    schema=review_schema(), observation=context_view)
             check_current()
             verdict = PromptVerdict.model_validate(_extract_json_payload(audit_raw))
             motion_review = None
@@ -621,7 +653,9 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                     "camera_motion_field": changed.camera_motion,
                 }
                 call_stage = "motion_review"
-                motion, motion_raw = await extract_motion_claims(provider, motion_request, check_current)
+                call_started = monotonic()
+                async with report_phase(on_progress, "motion_review", "Checking camera and body movement"):
+                    motion, motion_raw = await extract_motion_claims(provider, motion_request, check_current)
                 motion_review = motion.model_dump()
                 if (motion.camera_attachment == "viewer"
                         and motion.viewer_position_change != "unspecified"
@@ -630,6 +664,8 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                     motion_error = ("The viewpoint owner moves differently from its attached camera: "
                         f"requested body action '{motion.viewer_quote}'; camera claim '{motion.camera_quote}'. "
                         "Reconcile the camera path with the authored POV action.")
+            call_stage = "prompt_review"
+            call_started = audit_started
             if verdict.blocking_question:
                 raise CreativeQuestion(f"Material review needs your decision: {verdict.blocking_question}")
             if managed_tail and not contract_error and not verdict.valid and verdict.failure_kind == "reference_conflict":
@@ -668,21 +704,26 @@ async def draft_and_review(provider, project, shot, records, images, signature,
                     **({"metadata": record["metadata"]} if record.get("metadata") else {})}
             return changed.model_copy(update={"meta": meta})
         except (DialogueMetadataError, PromptContextOverflow):
+            await report_validation_failure(call_stage, call_started)
             raise  # A source problem cannot be repaired by rewriting this candidate.
         except PromptOutputTruncated as exc:
+            await report_validation_failure(call_stage, call_started)
             # An exhausted output budget is not a creative rejection. Rewriting
             # the candidate repeats the same capped call and can alter good work.
             save_diagnostics(shot, [*attempts, {"stage": "output_budget", "call_stage": call_stage,
                 "raw": raw, "review_raw": audit_raw, "error": str(exc)}])
             raise
         except MotionReviewError as exc:
+            await report_validation_failure(call_stage, call_started)
             save_diagnostics(shot, [*attempts, {"stage": "motion_review", "raw": raw,
                 "review_raw": audit_raw, "motion_attempts": exc.attempts, "error": str(exc)}])
             raise
         except CreativeQuestion as exc:
+            await report_validation_failure(call_stage, call_started)
             save_diagnostics(shot, [*attempts, {"stage": "decision", "raw": raw, "review_raw": audit_raw, "error": str(exc)}])
             raise
         except (ValueError, TypeError) as exc:
+            await report_validation_failure(call_stage, call_started)
             # Edits from another request are not repairable by this stale candidate.
             check_current()
             attempts.append({"stage": "initial" if attempt == 0 else "repair",

@@ -28,6 +28,8 @@ Otherwise video submission stays in Production.
 
 ## Core planning and asset casting
 
+For multiple new shots at the end, prefer one `append_shots` call (1-8 items), copying the current script hash and last shot ID once. Submit only new authored fields. An item's `video_context.source_index` selects an earlier one-based item in this batch; use `source_shot_id` for an existing earlier shot. Save pending continuation plans in the same batch instead of generating a source video to make planning succeed. The tool assigns real IDs, preserves old shots, and starts no production jobs. For one new shot, `append_shot` remains available. If the tail changed, inspect the saved state before retrying.
+
 - Decide shot count, duration, framing, action, and reference set from the dramatic beat.
 - Choose how many of the available 1–9 references the shot needs, their exact asset file/angle, and their Picture order. Do not assume Layout is Picture 1 or force a fixed scene/identity pair.
 - Use only real inventory IDs and file keys. Prefer the angle that supports the intended framing and screen direction.

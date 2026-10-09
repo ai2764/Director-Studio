@@ -16,6 +16,7 @@ from ....core.projects.store import project_dir, save_project
 from ..intent import normalize_text
 from ..planner import (
     AppendShotSubmission,
+    AppendShotsSubmission,
     ShotRefsPatchSubmission,
     ShotRevisionSubmission,
     ShotSceneRefSelection,
@@ -162,6 +163,32 @@ async def handle_project_tool(
                 }
             )
         notes.append(f"Appended one Shot ({shot.id}) at the end; all existing Shots and production state were preserved.")
+        return True
+
+    if name == "append_shots":
+        from ..dialogue_authoring import prepare_authored_dialogue
+        from ..planner import BatchShotDraft
+        from ....core.projects.video_context import video_context_status
+        submission = AppendShotsSubmission.model_validate(args)
+        drafts, evidence = [], []
+        for draft in submission.shots:
+            authored, receipt = await prepare_authored_dialogue(project,
+                draft.model_dump(exclude={"video_context"}), current=None,
+                provider=svc.plan_provider, user_message=user_feedback,
+                user_message_id=user_message_id)
+            drafts.append(BatchShotDraft.model_validate({**authored, "video_context": draft.video_context}))
+            evidence.append(receipt)
+        submission = submission.model_copy(update={"shots": drafts})
+        added = svc.append_shots(project_id, submission, dialogue_authoring=evidence)
+        actions.append(f"append_shots:{len(added)}")
+        if result_payloads is not None:
+            result_payloads.append({"ok": True, "created_count": len(added),
+                "shots": [{**storyboard_snapshot([shot])["shots"][0],
+                    "video_context": shot.video_context.model_dump() if shot.video_context else None,
+                    "video_context_status": video_context_status(shot)} for shot in added],
+                "last_shot_id": added[-1].id,
+                "reply": f"Appended {len(added)} new shots at the end. No production jobs were started."})
+        notes.append(f"Appended {len(added)} new Shots in one batch; existing Shots and production state were preserved. No jobs were started.")
         return True
 
     if name == "confirm_storyboard_replacement":

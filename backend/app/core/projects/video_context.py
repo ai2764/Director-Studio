@@ -55,17 +55,24 @@ def configure_video_context(
     shot = load_shot(project_id, shot_id)
     if project is None or shot is None or shot.project_id != project_id:
         raise VideoContextError("Shot not found")
-    prepared = _prepare_config(project, shot, config)
-    if prepared.mode != "off":
-        try:
-            _runtime_options(prepared)
-        except ValueError as exc:
-            raise VideoContextError(str(exc)) from exc
+    prepared = prepare_video_context(project, shot, config)
     saved = shot.model_copy(update={"video_context": prepared})
     save_shot(saved)
     status = video_context_status(saved)
     return {"shot_id": shot.id, "video_context": prepared.model_dump(),
             "state": status["state"], "ready": status["ready"]}
+
+
+def prepare_video_context(project: Project, shot: Shot, config: ShotVideoContext, *,
+                          source_shots: dict[str, Shot] | None = None) -> ShotVideoContext:
+    """Validate a plan without writing; batches can include unpublished sources."""
+    prepared = _prepare_config(project, shot, config, source_shots=source_shots)
+    if prepared.mode != "off":
+        try:
+            _runtime_options(prepared)
+        except ValueError as exc:
+            raise VideoContextError(str(exc)) from exc
+    return prepared
 
 
 def resolve_video_context(
@@ -368,7 +375,8 @@ def probe_video(path: Path) -> MediaInfo:
     )
 
 
-def _prepare_config(project: Project, shot: Shot, config: ShotVideoContext) -> ShotVideoContext:
+def _prepare_config(project: Project, shot: Shot, config: ShotVideoContext, *,
+                    source_shots: dict[str, Shot] | None = None) -> ShotVideoContext:
     if config.audio_context_frames is not None and not 1 <= config.audio_context_frames <= 240:
         raise VideoContextError("Audio context length is out of range")
     if config.mode == "off":
@@ -376,10 +384,10 @@ def _prepare_config(project: Project, shot: Shot, config: ShotVideoContext) -> S
     if config.mode == "external_upload":
         _require_upload(project.id, config.upload_id)
         return config.model_copy(update={"source_shot_id": None, "source_job_id": None})
-    source = _previous_shot(project, shot, config.source_shot_id)
+    source = _previous_shot(project, shot, config.source_shot_id, source_shots=source_shots)
     prepared = config.model_copy(update={"source_shot_id": source.id, "upload_id": None})
     try:
-        _source, _job, output_key, _path = _require_previous_video(project, shot, prepared)
+        _source, _job, output_key, _path = _require_previous_video(project, shot, prepared, source_shots=source_shots)
     except VideoContextPending:
         # Structural validity is already checked. Do not invent a Job or select
         # an output that does not exist; resolution freezes the actual bytes later.
@@ -387,7 +395,8 @@ def _prepare_config(project: Project, shot: Shot, config: ShotVideoContext) -> S
     return prepared.model_copy(update={"source_output_key": output_key})
 
 
-def _previous_shot(project: Project, shot: Shot, requested_id: str | None) -> Shot:
+def _previous_shot(project: Project, shot: Shot, requested_id: str | None, *,
+                   source_shots: dict[str, Shot] | None = None) -> Shot:
     """Resolve a selected earlier shot, defaulting to the adjacent predecessor."""
     ids = list(project.shot_ids)
     if shot.id not in ids:
@@ -400,14 +409,15 @@ def _previous_shot(project: Project, shot: Shot, requested_id: str | None) -> Sh
         raise VideoContextError("Video context source was not found on this project's storyboard")
     if ids.index(source_id) >= index:
         raise VideoContextError("Video context source must be an earlier shot; self and future dependencies are not allowed")
-    source = load_shot(project.id, source_id)
+    source = source_shots.get(source_id) if source_shots is not None else load_shot(project.id, source_id)
     if source is None or source.project_id != project.id:
         raise VideoContextError("Source shot was not found in this project")
     return source
 
 
-def _require_previous_video(project: Project, shot: Shot, config: ShotVideoContext):
-    source = _previous_shot(project, shot, config.source_shot_id)
+def _require_previous_video(project: Project, shot: Shot, config: ShotVideoContext, *,
+                            source_shots: dict[str, Shot] | None = None):
+    source = _previous_shot(project, shot, config.source_shot_id, source_shots=source_shots)
     job_id = config.source_job_id or source.h3_job_id
     if not job_id:
         raise VideoContextPending("Source shot has no H3 job")

@@ -61,6 +61,7 @@ from .context_io import load_agent_context, save_agent_context
 from .visual_direction import analyze_ref_frame
 from .planner import (
     AppendShotSubmission,
+    AppendShotsSubmission,
     AssetMatchDraft,
     PlanProvider,
     ShotSceneRefSelection,
@@ -419,47 +420,82 @@ class DirectorService:
                     *, dialogue_authoring: dict | None = None) -> Shot:
         """Append one new record; never save or replace an existing Shot."""
         validated = AppendShotSubmission.model_validate(submission)
-        project = load_project(project_id)
-        if project is None:
-            raise ValueError(f"project not found: {project_id}")
-        if validated.expected_script_hash != _script_hash(project.script_text or ""):
-            raise ValueError("The script changed; refresh context before appending.")
-        existing = list_shots(project_id)
-        if [shot.id for shot in existing] != project.shot_ids:
-            raise ValueError("Storyboard index is inconsistent; cannot safely append.")
-        tail = project.shot_ids[-1] if project.shot_ids else None
-        if validated.expected_last_shot_id != tail:
-            raise ValueError("Storyboard tail changed; inspect the last Shot before appending again.")
-        inventory = [*_inventory(project_id), *_imported_layout_inventory(project_id)]
-        index = _asset_index(project_id)
-        if validated.shot.music_segment is not None and project.mode != ProjectMode.mv:
-            raise ValueError("music_segment is available only for Music Video projects")
-        _validate_mv_append_timing(project, validated.shot)
-        _validate_storyboard_bindings([validated.shot], inventory=inventory, index=index)
-        shot = _shot_from_draft(project_id, validated.shot, inventory=inventory, index=index,
-                                script_text=project.script_text or "", complete_missing_refs=False)
-        if dialogue_authoring is not None:
-            from ...core.projects.dialogue import revision_digest
-            shot.meta["dialogue_authoring"] = {**dialogue_authoring,
-                "revision_hash": revision_digest(shot.scene_id, shot.dialogue_lines or [])}
-        _validate_materialized_storyboard_bindings([shot], inventory=inventory, index=index)
-        if shot.id in project.shot_ids or load_shot(project_id, shot.id) is not None:
-            raise ValueError("New Shot ID already exists; refusing to overwrite it.")
-        updated = project.model_copy(update={"shot_ids": [*project.shot_ids, shot.id]})
-        context = _build_context(updated, [*existing, shot], phase="planned")
-        # Appending does not certify that old shots match a changed screenplay.
-        old_context = load_agent_context(project_id)
-        if existing:
-            context.script_hash = old_context.script_hash if old_context else ""
-        save_shot(shot)
-        save_project(updated)
-        try:
-            save_agent_context(project_id, context)
-        except OSError:
-            # The authoritative append succeeded. Do not invite a replay because
-            # a derived cache write failed; project context reads actual Shots.
-            logger.exception("Append saved but agent context refresh failed")
-        return shot
+        return self.append_shots(project_id, {"expected_script_hash": validated.expected_script_hash,
+            "expected_last_shot_id": validated.expected_last_shot_id,
+            "shots": [validated.shot.model_dump()]}, dialogue_authoring=[dialogue_authoring])[0]
+
+    def append_shots(self, project_id: str, submission: AppendShotsSubmission | dict,
+                     *, dialogue_authoring: list[dict | None] | None = None) -> list[Shot]:
+        """Validate a bounded batch, then publish its index under the project lock."""
+        from ...core.managed_runs.store import _project_lock
+        from ...core.projects.store import delete_shot
+        from ...core.projects.models import ShotVideoContext
+        from ...core.projects.video_context import prepare_video_context
+        validated = AppendShotsSubmission.model_validate(submission)
+        evidence = dialogue_authoring if dialogue_authoring is not None else [None] * len(validated.shots)
+        if len(evidence) != len(validated.shots):
+            raise ValueError("Dialogue evidence must match the batch length")
+        with _project_lock(project_id):
+            project = load_project(project_id)
+            if project is None:
+                raise ValueError(f"project not found: {project_id}")
+            if validated.expected_script_hash != _script_hash(project.script_text or ""):
+                raise ValueError("The script changed; refresh context before appending.")
+            existing = list_shots(project_id)
+            if [shot.id for shot in existing] != project.shot_ids:
+                raise ValueError("Storyboard index is inconsistent; cannot safely append.")
+            tail = project.shot_ids[-1] if project.shot_ids else None
+            if validated.expected_last_shot_id != tail:
+                raise ValueError("Storyboard tail changed; inspect the last Shot before appending again.")
+            inventory = [*_inventory(project_id), *_imported_layout_inventory(project_id)]
+            index = _asset_index(project_id)
+            _validate_storyboard_bindings(validated.shots, inventory=inventory, index=index)
+            new_shots = []
+            for draft, authored in zip(validated.shots, evidence, strict=True):
+                if draft.music_segment is not None and project.mode != ProjectMode.mv:
+                    raise ValueError("music_segment is available only for Music Video projects")
+                _validate_mv_append_timing(project, draft)
+                shot = _shot_from_draft(project_id, draft, inventory=inventory, index=index,
+                    script_text=project.script_text or "", complete_missing_refs=False)
+                if authored is not None:
+                    from ...core.projects.dialogue import revision_digest
+                    shot.meta["dialogue_authoring"] = {**authored,
+                        "revision_hash": revision_digest(shot.scene_id, shot.dialogue_lines or [])}
+                if shot.id in project.shot_ids or load_shot(project_id, shot.id) is not None or any(s.id == shot.id for s in new_shots):
+                    raise ValueError("New Shot ID already exists; refusing to overwrite it.")
+                new_shots.append(shot)
+            _validate_materialized_storyboard_bindings(new_shots, inventory=inventory, index=index)
+            updated = project.model_copy(update={"shot_ids": [*project.shot_ids, *(s.id for s in new_shots)]})
+            all_shots = {s.id: s for s in [*existing, *new_shots]}
+            for position, (draft, shot) in enumerate(zip(validated.shots, new_shots, strict=True), 1):
+                binding = draft.video_context
+                if binding is None:
+                    continue
+                if binding.mode != "off" and not settings.video_context_enabled:
+                    raise ValueError("Video context is disabled")
+                if binding.source_index is not None and binding.source_index >= position:
+                    raise ValueError("Batch continuation source_index must refer to an earlier new shot")
+                config = ShotVideoContext.model_validate(binding.model_dump(exclude={"source_index"}))
+                if binding.source_index is not None:
+                    config.source_shot_id = new_shots[binding.source_index - 1].id
+                shot.video_context = prepare_video_context(updated, shot, config, source_shots=all_shots)
+            context = _build_context(updated, [*existing, *new_shots], phase="planned")
+            old_context = load_agent_context(project_id)
+            if existing:
+                context.script_hash = old_context.script_hash if old_context else ""
+            try:
+                for shot in new_shots:
+                    save_shot(shot)
+                save_project(updated)
+            except OSError:
+                for shot in new_shots:
+                    delete_shot(project_id, shot.id)
+                raise
+            try:
+                save_agent_context(project_id, context)
+            except OSError:
+                logger.exception("Append saved but agent context refresh failed")
+            return new_shots
 
     def revise_shot(
         self,
@@ -2057,7 +2093,7 @@ class DirectorService:
         self._asset_observations[(project_id, asset_id, record["file_key"])] = observation
         return observation
 
-    async def _write_tail_prompt(self, shot, project, original_shot, revision_request, task_packet=None):
+    async def _write_tail_prompt(self, shot, project, original_shot, revision_request, task_packet=None, on_progress=None):
         from .material_review import capture_references
         from .tail_prompt_review import draft_and_review
         from .brief import directing_requests
@@ -2119,7 +2155,7 @@ class DirectorService:
         async with self.orchestrator.llm_session(release_on_exit=not keep):
             await self.orchestrator.ensure_llm_ready()
             candidate = await draft_and_review(self.plan_provider, project, shot, records, images,
-                signature, check_current, _save_prompt_failure_diagnostics, task_packet=task_packet)
+                signature, check_current, _save_prompt_failure_diagnostics, task_packet=task_packet, on_progress=on_progress)
         check_current()
         meta = dict(candidate.meta)
         layouts = selected_layout_prompt_context(candidate)
@@ -2201,7 +2237,7 @@ class DirectorService:
         active_video_context = (settings.video_context_enabled and shot.video_context is not None
                                 and shot.video_context.mode != "off")
         if active_video_context or any(item["origin_kind"] == "clip_tail_frame" for item in selected_layout_prompt_context(shot)):
-            return await self._write_tail_prompt(shot, project, original_shot, revision_request, task_packet)
+            return await self._write_tail_prompt(shot, project, original_shot, revision_request, task_packet, on_progress=on_progress)
 
         from .material_review import capture_references, review_references, tail_frame_review_signature
         from .brief import directing_requests, shot_execution_intent, SHOT_EXECUTION_INTENT

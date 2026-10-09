@@ -428,7 +428,9 @@ async def test_prompt_progress_is_visible_before_inference_and_reports_elapsed(m
     await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(
         shot.id, on_progress=progress)
     completed = [e for e in events if e.get("state") == "completed"]
-    assert [e["phase"] for e in completed] == ["reference_observation"] * 9 + ["material_review", "prompt_writing"]
+    assert [e["phase"] for e in completed] == ["reference_observation"] * 9 + ["reference_cache", "material_review", "prompt_writing"]
+    cache_summary = next(e for e in completed if e["phase"] == "reference_cache")
+    assert cache_summary["cache_hits"] == 0 and cache_summary["cache_misses"] == 9
     assert all(e["elapsed_s"] >= 0 and "s" in e["text"] for e in completed)
 
 
