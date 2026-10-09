@@ -43,6 +43,9 @@ from app.core.projects.store import (
 )
 
 
+pytestmark = pytest.mark.usefixtures("legacy_chat_runtime")
+
+
 CAMERA_DRAFT = {
     "shot_type": "medium shot",
     "camera_angle": "eye level on the action axis",

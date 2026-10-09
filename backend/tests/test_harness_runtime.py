@@ -18,8 +18,9 @@ from app.core.projects.store import (
 )
 
 
-def test_runtime_defaults_and_loopback_validation():
-    assert Settings(_env_file=None).director_agent_runtime == "legacy"
+def test_runtime_defaults_and_loopback_validation(monkeypatch):
+    monkeypatch.delenv("DS_DIRECTOR_AGENT_RUNTIME", raising=False)
+    assert Settings(_env_file=None).director_agent_runtime == "harness"
     for url in ("http://example.com:8791", "http://127.0.0.1.evil:8791", "http://user@127.0.0.1:8791", "http://127.0.0.1:8791/path"):
         with pytest.raises(ValueError):
             Settings(_env_file=None, harness_base_url=url)
@@ -741,6 +742,31 @@ def test_harness_refreshes_layout_acceptance_after_extraction(tmp_projects_dir):
     validator = Draft202012Validator(after["parameters"])
     assert not list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_real"}))
     assert list(validator.iter_errors({"shot_id": shot.id, "layout_ref_id": "lref_invented"}))
+
+
+@pytest.mark.asyncio
+async def test_default_runtime_dispatch_uses_harness_without_legacy_fallback(monkeypatch):
+    from app.agents.director import chat, harness_runtime
+
+    monkeypatch.delenv("DS_DIRECTOR_AGENT_RUNTIME", raising=False)
+    monkeypatch.setattr(settings, "director_agent_runtime", Settings(_env_file=None).director_agent_runtime)
+
+    async def forbidden_legacy(**kwargs):
+        pytest.fail("Default requests must not enter the legacy tool loop")
+
+    async def harness(**kwargs):
+        return "harness"
+
+    monkeypatch.setattr(chat, "orchestrate_chat", forbidden_legacy)
+    monkeypatch.setattr(harness_runtime, "handle_harness_chat", harness)
+    assert await chat.handle_chat(project_id="p", message="hello", svc=None) == "harness"
+
+    async def unavailable_harness(**kwargs):
+        raise ConnectionError("Harness unavailable")
+
+    monkeypatch.setattr(harness_runtime, "handle_harness_chat", unavailable_harness)
+    with pytest.raises(ConnectionError, match="Harness unavailable"):
+        await chat.handle_chat(project_id="p", message="hello", svc=None)
 
 
 @pytest.mark.asyncio

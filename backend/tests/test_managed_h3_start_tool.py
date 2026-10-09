@@ -392,6 +392,7 @@ async def test_start_h3_video_pauses_stale_selection_before_submit(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("legacy_chat_runtime")
 async def test_managed_native_turn_ends_immediately_after_starting_h3(
     monkeypatch, authorize_managed_turn,
 ) -> None:
@@ -449,6 +450,7 @@ async def test_managed_native_turn_ends_immediately_after_starting_h3(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("legacy_chat_runtime")
 async def test_managed_native_turn_can_reach_h3_start_after_four_preflight_tools(
     monkeypatch, authorize_managed_turn,
 ) -> None:

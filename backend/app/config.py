@@ -95,7 +95,7 @@ class Settings(BaseSettings):
     # Comfy jobs still release local LLMs before taking the GPU.
     llm_keep_loaded: bool = True
 
-    director_agent_runtime: Literal["legacy", "harness"] = "legacy"
+    director_agent_runtime: Literal["legacy", "harness"] = "harness"
     director_task_context_mode: Literal["off", "shadow", "pilot"] = "off"
     director_task_context_projects: list[str] = Field(default_factory=list)
     harness_managed: bool = True

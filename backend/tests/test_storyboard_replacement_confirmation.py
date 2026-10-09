@@ -171,6 +171,7 @@ async def test_storyboard_replacement_requires_explicit_later_confirmation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("legacy_chat_runtime")
 async def test_native_chat_ends_with_the_destructive_replacement_warning(
     tmp_projects_dir,
 ):

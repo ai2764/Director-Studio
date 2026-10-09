@@ -1034,12 +1034,6 @@ def test_director_chat_history_is_persisted_and_reloaded(client, monkeypatch):
     ).json()
     project_id = created["id"]
 
-    first = client.post(
-        f"/api/projects/{project_id}/chat",
-        json={"message": "status"},
-    )
-    assert first.status_code == 200
-
     captured: dict[str, object] = {}
 
     async def fake_handle_chat(*, project_id, message, history, **kwargs):
@@ -1052,6 +1046,12 @@ def test_director_chat_history_is_persisted_and_reloaded(client, monkeypatch):
     import app.agents.director.chat as chat_module
 
     monkeypatch.setattr(chat_module, "handle_chat", fake_handle_chat)
+    first = client.post(
+        f"/api/projects/{project_id}/chat",
+        json={"message": "status"},
+    )
+    assert first.status_code == 200
+
     second = client.post(
         f"/api/projects/{project_id}/chat",
         json={

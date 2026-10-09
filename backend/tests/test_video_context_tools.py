@@ -566,6 +566,7 @@ def test_empty_board_configure_does_not_inject_planning():
 async def test_scripted_phrases_follow_the_tool_trajectory(monkeypatch, tmp_path, message, arguments, mode):
     from app.agents.director.chat import handle_chat
 
+    monkeypatch.setattr(settings, "director_agent_runtime", "legacy")
     project, first, second = _board(monkeypatch, tmp_path)
     job = _succeed(project.id, first.id)
     save_shot(load_shot(project.id, first.id).model_copy(update={"h3_job_id": job.id}))
@@ -613,6 +614,7 @@ async def test_scripted_phrases_follow_the_tool_trajectory(monkeypatch, tmp_path
 async def test_lyric_question_does_not_change_the_shot(monkeypatch, tmp_path):
     from app.agents.director.chat import handle_chat
 
+    monkeypatch.setattr(settings, "director_agent_runtime", "legacy")
     project, _first, second = _board(monkeypatch, tmp_path)
     calls = 0
 

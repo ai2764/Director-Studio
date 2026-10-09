@@ -788,7 +788,7 @@ API: `/api/actors/*` · `GET /api/pipelines`
 | `DS_COMFY_BASE_URL` | `http://127.0.0.1:8188` | ComfyUI |
 | `DS_QWEN_IMAGE_21_COMFY_BASE_URL` | `DS_COMFY_BASE_URL` | Optional separate ComfyUI instance with Qwen Image 2.1 nodes and models for Layout generation; leave empty to use the H3 instance |
 | `DS_VIDEO_CONTEXT_ENABLED` | `false` | Enable experimental local H3 shot continuation; restart after changing |
-| `DS_DIRECTOR_AGENT_RUNTIME` | `harness` in the example `.env` and portable defaults | Director loop; bare source settings default to `legacy` when this value is absent |
+| `DS_DIRECTOR_AGENT_RUNTIME` | `harness` | Default Director loop for source and portable launches; `legacy` requires an explicit compatibility setting |
 | `DS_H3_PROVIDER` | `local` | Initial H3 provider shown in Production and JSON Production; each run can override it |
 | `DS_COMFY_MCP_COMMAND` | `comfy-mcp` | ComfyUI MCP executable; Windows portable defaults to its private Python module |
 | `DS_COMFY_MCP_ARGS` | empty | Optional extra command-line arguments passed to the MCP server process |

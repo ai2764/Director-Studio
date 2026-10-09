@@ -12,6 +12,9 @@ from app.core.library.store import list_assets
 from app.core.projects.store import create_project
 
 
+pytestmark = pytest.mark.usefixtures("legacy_chat_runtime")
+
+
 @pytest.fixture
 def image_library_env(tmp_path, monkeypatch):
     projects = tmp_path / "projects"
