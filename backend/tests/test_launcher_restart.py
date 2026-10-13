@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -37,7 +38,8 @@ def test_installed_paths_expand_placeholders_and_use_ds_home(tmp_path):
     assert paths.install_defaults["DS_X"] == f"{home}/x"
 
 
-def test_installed_default_data_dir_is_xdg(tmp_path):
+def test_installed_default_data_dir_is_xdg(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")  # XDG rule; macOS uses ~/Library/Application Support
     root = _installed(tmp_path, {})
     paths = resolve_runtime_paths(frozen=False, source_root=root, environ={"XDG_DATA_HOME": str(tmp_path / "xdg")})
     assert paths.env_file == tmp_path / "xdg" / "DirectorStudio" / ".env"

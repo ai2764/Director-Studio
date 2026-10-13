@@ -10,6 +10,12 @@ import pytest
 from app.core.process.managed import LaunchSpec, ManagedProcess, reserve_loopback_port
 
 
+# Plain TCPServer: http.server's HTTPServer.server_bind() calls socket.getfqdn(), which can block for
+# tens of seconds on macOS CI runners (reverse DNS) and blow the startup timeout.
+SERVER = ("import http.server, socketserver, sys; socketserver.TCPServer.allow_reuse_address = True; "
+          "socketserver.TCPServer(('127.0.0.1', int(sys.argv[1])), http.server.SimpleHTTPRequestHandler).serve_forever()")
+
+
 def make(tmp_path, port):
     async def health() -> bool:
         try:
@@ -19,7 +25,7 @@ def make(tmp_path, port):
             return False
 
     def build() -> LaunchSpec:
-        return LaunchSpec(argv=[sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+        return LaunchSpec(argv=[sys.executable, "-c", SERVER, str(port)],
                           cwd=tmp_path, env={"PATH": "/usr/bin:/bin"}, health=health, startup_timeout=20)
 
     return ManagedProcess(name="test", build=build, log_path=tmp_path / "log.txt", pid_file=tmp_path / "p.json",
