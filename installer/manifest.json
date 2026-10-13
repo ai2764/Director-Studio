@@ -19,6 +19,22 @@
       "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.13.16%2B20261003-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
       "sha256": "ec43f1a85c29f147d7ae2d13218c52c70b24a983a82ab22d6c607c0593060e10",
       "strip_components": 1
+    },
+    "macos-arm64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.13.16%2B20261003-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "sha256": "9e01f63bbb08576cd9c8bc2d0564d098cb30c8453a0cd4bcf6aef458f6d2a147",
+      "strip_components": 1,
+      "exclude": [
+        "share/terminfo/*"
+      ]
+    },
+    "macos-x86_64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.13.16%2B20261003-x86_64-apple-darwin-install_only_stripped.tar.gz",
+      "sha256": "b4dad38ba6a344555ccb71a1b08caad0a6c0dda88c5803658bc95bd7f04e9f5c",
+      "strip_components": 1,
+      "exclude": [
+        "share/terminfo/*"
+      ]
     }
   },
   "llama_cpp": {
@@ -89,6 +105,27 @@
           ]
         }
       }
+    },
+    "macos-arm64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11429/llama-b11429-bin-macos-arm64.tar.gz",
+      "sha256": "740288ec6887be94280a5dfa25b5e23a78285cab104519e6c7e218904ee82459",
+      "strip_components": 1,
+      "include": [
+        "llama-server",
+        "lib*.dylib",
+        "LICENSE"
+      ],
+      "comment": "official release build, Metal backend"
+    },
+    "macos-x86_64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11429/llama-b11429-bin-macos-x64.tar.gz",
+      "sha256": "29ac3ea02be6bd143e824973f2cc5fa74bc4094393a9eaab0ff6814f19dd8522",
+      "strip_components": 1,
+      "include": [
+        "llama-server",
+        "lib*.dylib",
+        "LICENSE"
+      ]
     }
   },
   "llama_swap": {
@@ -111,6 +148,24 @@
       "strip_components": 0,
       "include": [
         "llama-swap.exe",
+        "LICENSE.md"
+      ]
+    },
+    "macos-arm64": {
+      "url": "https://github.com/mostlygeek/llama-swap/releases/download/v264/llama-swap_264_darwin_arm64.tar.gz",
+      "sha256": "a0beb847db08945dcabe5ee6a9ae7a18876be24d159eaf775679f11a453526dd",
+      "strip_components": 0,
+      "include": [
+        "llama-swap",
+        "LICENSE.md"
+      ]
+    },
+    "macos-x86_64": {
+      "url": "https://github.com/mostlygeek/llama-swap/releases/download/v264/llama-swap_264_darwin_amd64.tar.gz",
+      "sha256": "8a68d20330df73a71a91bbd9e90ab3cf88ff28cc99df1cfe0026eb1354078de8",
+      "strip_components": 0,
+      "include": [
+        "llama-swap",
         "LICENSE.md"
       ]
     }
@@ -221,5 +276,18 @@
     "data_dir": "%LOCALAPPDATA%\\DirectorStudio",
     "inno_setup": "6.4.3",
     "uv_platform": "x86_64-pc-windows-msvc"
+  },
+  "macos": {
+    "comment": "installer/build_macos.py; see docs/installer.md#macos. FFmpeg is not bundled on macOS (no upstream LGPL build): system ffmpeg on PATH or DS_FFMPEG_DIR.",
+    "torch_variants": {
+      "mps": {
+        "index_url": "https://pypi.org/simple",
+        "description": "Apple Silicon: PyTorch with Metal (MPS)"
+      },
+      "nocomfy": {
+        "index_url": null,
+        "description": "Intel Mac: no bundled ComfyUI (no PyTorch wheels for Intel macOS + Python 3.13); use an external or remote ComfyUI"
+      }
+    }
   }
 }

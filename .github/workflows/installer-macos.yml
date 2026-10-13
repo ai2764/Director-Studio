@@ -1,0 +1,74 @@
+name: Installer (macOS)
+
+# Builds the self-contained macOS package (installer/build_macos.py) on each architecture,
+# starts the packaged launcher and checks /api/health, then uploads the .tar.gz.
+
+on:
+  pull_request:
+    paths:
+      - "installer/**"
+      - "backend/**"
+      - "frontend/**"
+      - "harness/**"
+      - "comfy_nodes/**"
+      - "packaging/**"
+      - "scripts/stage_portable_harness.py"
+      - ".github/workflows/installer-macos.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: macOS installer ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            harness/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+      - name: Install build tools
+        run: |
+          python -m pip install -r installer/requirements-build.txt
+          brew install ffmpeg shellcheck
+      - name: Check launch scripts
+        run: shellcheck installer/linux/director-studio "installer/macos/Director Studio.command"
+      - name: Frontend dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Build package
+        run: python installer/build_macos.py build --arch ${{ matrix.arch }} --archive --out dist-installer --cache "$RUNNER_TEMP/ds-cache" --node-bin "$(dirname "$(command -v node)")"
+      - name: Smoke test (launch, /api/health)
+        run: |
+          mkdir -p smoke
+          tar -xzf dist-installer/DirectorStudio-*.tar.gz -C smoke
+          python installer/smoke_test.py smoke/DirectorStudio-*
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: director-studio-installer-macos-${{ matrix.arch }}
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            dist-installer/*.tar.gz
+            dist-installer/*.tar.gz.sha256
+            dist-installer/*.build.json

@@ -180,6 +180,22 @@ python installer/build_windows.py build --variant cu128     # on Windows: stage 
 
 `stage` works on Linux too (wheels are installed for `x86_64-pc-windows-msvc`, npm production deps with `--os=win32 --cpu=x64`); `check` validates the tree statically (required files, PE-only binaries, MAX_PATH budget, CRLF wrappers). CI: `.github/workflows/installer-windows.yml` (manual / tags).
 
+### macOS (Apple Silicon / Intel)
+
+`python installer/build_macos.py build --arch arm64|x86_64 --archive` on a Mac of that architecture
+(CI: `.github/workflows/installer-macos.yml`, runners `macos-15` / `macos-15-intel`) produces
+`DirectorStudio-<version>-macos-<arch>-<variant>.tar.gz`. It reuses the Linux staging steps and layout:
+launcher config UI, Harness + Node 22, official llama.cpp macOS release build (Metal on arm64) + llama-swap,
+workflow dependency downloader. Locks: `installer/locks/macos-*` (`build_macos.py lock`, uv cross-compiles
+for `aarch64-apple-darwin` / `x86_64-apple-darwin`).
+
+* arm64 (`mps`): bundled ComfyUI + ds_nodes, KJNodes, H3-Motion-Context, PyTorch from PyPI (MPS).
+* x86_64 (`nocomfy`): PyTorch has no Intel-macOS wheels for Python 3.13 / current torch, so no local
+  ComfyUI is bundled; the package defaults to `DS_COMFY_MODE=external-local` (connect your own or a remote ComfyUI).
+* FFmpeg is not bundled (no upstream LGPL macOS build): `brew install ffmpeg` or `DS_FFMPEG_DIR`.
+* Start with `Director Studio.command` (double-click) or `./director-studio`. Builds are unsigned and not
+  notarized; the `.command` clears the download quarantine flag on first run.
+
 ### Licensing
 
 Director Studio is planned to be released under Apache-2.0 (the repository has no LICENSE file yet, so the package does not claim one). ComfyUI, ComfyUI-KJNodes, ComfyUI-H3-Motion-Context, comfy-cli (GPL-3.0), comfy-mcp (AGPL-3.0) and FFmpeg (LGPL) are shipped as **separate programs** and only run as separate processes; no DS code links to or includes them. GPU builds also contain NVIDIA CUDA/cuDNN runtime libraries (inside PyTorch and llama.cpp), redistributed unmodified under NVIDIA's EULAs; they are listed in `licenses/VENDOR-RUNTIMES.txt`. See `THIRD_PARTY_NOTICES.txt` and `SOURCE_OFFER.txt`. `H3MemoryOptimization` (Zironic/H3-Optimizations) has no licence and is therefore not bundled; the health check links the repo with a manual install hint (see docs/custom-h3-video-input.md).

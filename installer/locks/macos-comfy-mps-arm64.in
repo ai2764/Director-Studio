@@ -1,0 +1,50 @@
+# ComfyUI v0.39.0 (b0b743566f65daafc423b4fea8a2fbda94b3384a)
+comfyui-frontend-package==1.53.10
+comfyui-workflow-templates==0.11.76
+comfyui-embedded-docs==0.5.13
+torch
+torchsde
+torchvision
+numpy>=1.25.0
+einops
+transformers>=4.50.3
+tokenizers>=0.13.3
+sentencepiece
+safetensors>=0.4.2
+aiohttp>=3.11.8
+yarl>=1.18.0
+pyyaml
+Pillow
+scipy
+tqdm
+psutil
+alembic
+SQLAlchemy>=2.0.0
+filelock
+av>=17.0.0
+comfy-kitchen==0.2.37
+comfy-aimdo==0.5.5
+requests
+simpleeval>=1.0.0
+blake3
+
+#non essential dependencies:
+kornia>=0.7.1
+spandrel
+pydantic~=2.0
+pydantic-settings~=2.0
+PyOpenGL>=3.1.8
+comfy-angle
+
+# matching torch set (installer/manifest.json torch_pins)
+torch==2.11.0
+torchvision==0.26.0
+torchaudio==2.11.0
+# ComfyUI-KJNodes (d3cfe21625e5170126ce06fbfcfe1d88108688c3)
+pillow>=10.3.0
+color-matcher
+matplotlib
+mss
+opencv-python-headless
+
+# ComfyUI-H3-Motion-Context (5335715abe54c1a9bfbe3494da29aae3e8635ce3): no Python requirements
