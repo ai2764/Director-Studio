@@ -29,6 +29,20 @@ CONTENT_RULES = (
 )
 
 
+ALLOWLIST = Path(__file__).with_name("secret_scan_allowlist.txt")
+
+
+def _allowlist() -> set[tuple[str, str]]:
+    """Reviewed false positives: exact Git blob id + path (content-addressed, so any edit re-triggers the scan)."""
+    entries: set[tuple[str, str]] = set()
+    if ALLOWLIST.is_file():
+        for line in ALLOWLIST.read_text(encoding="utf-8").splitlines():
+            fields = line.split("#", 1)[0].split()
+            if len(fields) == 2 and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", fields[0]):
+                entries.add((fields[0], fields[1]))
+    return entries
+
+
 def _git(*args: str) -> bytes:
     return subprocess.run(
         ["git", *args], check=True, capture_output=True,
@@ -80,6 +94,8 @@ def _blob_problems(path: str, mode: str, object_id: str, *, commit: str = "") ->
     if _sensitive_name(path):
         return [f"{label}: sensitive filename or private runtime path"]
     if mode == "160000":  # Git submodule pointer, not a file blob.
+        return []
+    if (object_id, path) in _allowlist():
         return []
     size = int(_git("cat-file", "-s", object_id))
     if size > MAX_SCAN_BYTES:

@@ -182,3 +182,21 @@ class StagedSecretCheckTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AllowlistTests(unittest.TestCase):
+    def test_allowlist_matches_exact_blob_and_path_only(self) -> None:
+        sys.path.insert(0, str(SCANNER.parent))
+        import check_staged_secrets as scanner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            listing = Path(tmp) / "allow.txt"
+            listing.write_text("# comment\n" + "a" * 40 + " tests/x.py  # reviewed\nnot-a-sha other.py\n")
+            original = scanner.ALLOWLIST
+            scanner.ALLOWLIST = listing
+            try:
+                self.assertEqual(scanner._allowlist(), {("a" * 40, "tests/x.py")})
+                self.assertEqual(scanner._blob_problems(".env", "100644", "a" * 40),
+                                 ["'.env': sensitive filename or private runtime path"])
+            finally:
+                scanner.ALLOWLIST = original

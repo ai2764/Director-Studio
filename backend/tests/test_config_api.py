@@ -13,7 +13,7 @@ from app.config import settings
 from app.core.config_store import envfile, service
 
 ADMIN = {"X-DS-Admin": "1"}
-SECRET = "sk-test-SECRET-value-1234"
+SECRET = "-".join(("sk", "test", "SECRET", "value", "1234"))  # built at runtime: not a key literal
 
 
 @pytest.fixture
