@@ -205,7 +205,7 @@ def test_factory_uses_bundled_url_and_remote_base_url(llm_dir, monkeypatch):
 
     monkeypatch.setattr(rt.llama_swap_runtime, "managed", object())
     monkeypatch.setattr(rt.llama_swap_runtime, "effective_url", "http://127.0.0.1:40123/v1")
-    monkeypatch.setattr(settings, "llm_base_url", "http://100.64.0.9:11435/v1")
+    monkeypatch.setattr(settings, "llm_base_url", "http://192.0.2.9:11435/v1")
     factory.reset_llm_provider()
     try:
         provider = factory.get_llm_provider()
@@ -214,7 +214,7 @@ def test_factory_uses_bundled_url_and_remote_base_url(llm_dir, monkeypatch):
         monkeypatch.setattr(settings, "llama_swap_mode", "remote")
         factory.reset_llm_provider()
         provider = factory.get_llm_provider()
-        assert str(provider.lifecycle._client.base_url).startswith("http://100.64.0.9:11435")
+        assert str(provider.lifecycle._client.base_url).startswith("http://192.0.2.9:11435")
     finally:
         factory.reset_llm_provider()
 
@@ -322,8 +322,8 @@ def test_shared_gpu_treats_builtin_llama_as_local(llm_dir, monkeypatch):
 
     monkeypatch.setattr(settings, "vram_shared_gpu", "auto")
     monkeypatch.setattr(settings, "comfy_mode", "remote")
-    monkeypatch.setattr(settings, "comfy_remote_url", "http://100.64.0.5:8188")
-    monkeypatch.setattr(settings, "llm_base_url", "http://100.64.0.5:11435/v1")
+    monkeypatch.setattr(settings, "comfy_remote_url", "http://192.0.2.5:8188")
+    monkeypatch.setattr(settings, "llm_base_url", "http://192.0.2.5:11435/v1")
     assert not shared_gpu.gpu_shared_with_comfy()  # built-in llama.cpp is on this machine
     monkeypatch.setattr(settings, "llama_swap_mode", "remote")
     assert shared_gpu.gpu_shared_with_comfy()  # remote llama-swap on the ComfyUI host

@@ -7,7 +7,7 @@ use), then restore the previous mode.  Requires a running DS backend.
     python scripts/dev/e2e_remote_check.py --ds http://127.0.0.1:8890 \
         --remote http://127.0.0.1:18190 --auth bearer --token s3cret
     # plain http on a non-loopback IP (LAN / Tailscale-style), no auth
-    python scripts/dev/e2e_remote_check.py --remote http://172.30.0.2:8199 --auth none
+    python scripts/dev/e2e_remote_check.py --remote http://192.0.2.10:8199 --auth none
 
 scripts/dev/remote_comfy_e2e.sh runs both scenarios with temporary services.
 """

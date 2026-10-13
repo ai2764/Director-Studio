@@ -22,9 +22,9 @@ def _cfg(**kw):
         ({"comfy_mode": "managed"}, True),
         ({"comfy_mode": "external-local"}, True),
         # forwarders/tunnels to the same PC: indistinguishable -> safe default
-        ({"comfy_remote_url": "http://127.0.0.1:18188", "llm_base_url": "http://127.0.0.1:21435/v1"}, True),
+        ({"comfy_remote_url": "http://127.0.0.1:18000", "llm_base_url": "http://127.0.0.1:18001/v1"}, True),
         ({"comfy_remote_url": "http://100.1.2.3:8188", "llm_base_url": "http://100.1.2.3:11435/v1"}, True),
-        ({"comfy_remote_url": "http://PC.tail.ts.net:8188", "llm_base_url": "http://pc.tail.ts.net:11435/v1"}, True),
+        ({"comfy_remote_url": "http://PC.lan.example:8188", "llm_base_url": "http://pc.lan.example:11435/v1"}, True),
         ({"comfy_remote_url": "http://100.1.2.3:8188", "llm_base_url": "http://100.9.9.9:11435/v1"}, False),
         # local LLM (default llama-swap URL) next to a ComfyUI on another machine
         ({"comfy_remote_url": "https://comfy.example.com"}, False),
@@ -75,9 +75,9 @@ def remote(monkeypatch):
 
     monkeypatch.setattr(director_model, "get_director_model", lambda provider_id=None: "m")
     monkeypatch.setattr(settings, "comfy_mode", "remote")
-    monkeypatch.setattr(settings, "comfy_remote_url", "http://127.0.0.1:18188")
+    monkeypatch.setattr(settings, "comfy_remote_url", "http://127.0.0.1:18000")
     monkeypatch.setattr(settings, "llm_provider", "llama-swap")
-    monkeypatch.setattr(settings, "llm_base_url", "http://127.0.0.1:21435/v1")
+    monkeypatch.setattr(settings, "llm_base_url", "http://127.0.0.1:18001/v1")
     return monkeypatch
 
 

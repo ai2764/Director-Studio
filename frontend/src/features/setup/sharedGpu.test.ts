@@ -12,8 +12,8 @@ describe("sharedGpuAuto (DS_VRAM_SHARED_GPU=auto)", () => {
     expect(sharedGpuAuto(model({ DS_COMFY_MODE: "managed" }))).toBe(true);
   });
   it("two loopback forwards are treated as one GPU", () => {
-    expect(sharedGpuAuto(model({ DS_COMFY_MODE: "remote", DS_COMFY_REMOTE_URL: "http://127.0.0.1:18188",
-      DS_LLM_PROVIDER: "llama-swap", DS_LLM_BASE_URL: "http://127.0.0.1:21435/v1" }))).toBe(true);
+    expect(sharedGpuAuto(model({ DS_COMFY_MODE: "remote", DS_COMFY_REMOTE_URL: "http://127.0.0.1:18000",
+      DS_LLM_PROVIDER: "llama-swap", DS_LLM_BASE_URL: "http://127.0.0.1:18001/v1" }))).toBe(true);
   });
   it("same tailnet host is shared, different hosts are not", () => {
     const base = { DS_COMFY_MODE: "remote", DS_COMFY_REMOTE_URL: "http://100.1.2.3:8188", DS_LLM_PROVIDER: "llama-swap" };
