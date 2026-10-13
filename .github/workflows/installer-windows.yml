@@ -1,0 +1,70 @@
+name: Windows installer
+
+# Builds installer/build_windows.py's staging tree on windows-latest (native uv installs,
+# smoke-imports torch/backend with the bundled interpreters) and compiles the Inno Setup
+# installer (DiskSpanning: setup.exe + setup-N.bin slices). Manual / tag only: the
+# payload is several GB.
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: "torch build (cu128 | cu130 | cpu)"
+        default: cu128
+        required: true
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      VARIANT: ${{ github.event.inputs.variant || 'cu128' }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            harness/package-lock.json
+      - name: Build tools
+        run: python -m pip install -r installer/requirements-build.txt uv
+      - name: Inno Setup
+        run: choco install innosetup --yes --no-progress
+      - name: Frontend dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Stage, check and compile installer
+        shell: pwsh
+        run: |
+          $node = Split-Path (Get-Command node).Source
+          python installer/build_windows.py build --variant $env:VARIANT --out dist-installer-win `
+            --cache "$env:RUNNER_TEMP\ds-cache" --node-bin $node
+      - name: Smoke test the staged tree
+        shell: pwsh
+        run: |
+          $root = Get-ChildItem dist-installer-win/staging -Directory | Select-Object -First 1
+          & "$($root.FullName)\runtime\python\python.exe" -s -c "import sys; sys.path.insert(0, r'$($root.FullName)\backend'); from app.core.process import winjob; j = winjob.contain_current_process(); print('job', bool(j))"
+          & "$($root.FullName)\runtime\comfy-python\python.exe" -c "import torch, comfy_kitchen; print(torch.__version__)"
+          & "$($root.FullName)\runtime\llama-swap\llama-swap.exe" -version
+          & "$($root.FullName)\runtime\llama.cpp\llama-server.exe" --version
+          & "$($root.FullName)\runtime\bin\comfy-mcp.cmd" --help | Out-Null
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: director-studio-windows-x64-${{ env.VARIANT }}
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            dist-installer-win/DirectorStudio-*-setup*
+            dist-installer-win/*.stage.json

@@ -16,6 +16,40 @@ class Settings(BaseSettings):
 
     comfy_base_url: str = "http://127.0.0.1:8188"
     qwen_image_21_comfy_base_url: str = ""
+    # How Director Studio reaches ComfyUI:
+    #   external-local: an already running ComfyUI at DS_COMFY_BASE_URL (legacy default)
+    #   managed:        DS starts/stops a bundled ComfyUI (DS_COMFY_DIR) in the background
+    #   remote:         a remote ComfyUI (tunnel) reached through DS's loopback proxy
+    comfy_mode: Literal["managed", "external-local", "remote"] = "external-local"
+    comfy_dir: str = ""
+    comfy_python: str = ""
+    comfy_models_dir: str = ""
+    comfy_port: int = Field(default=0, ge=0, le=65535)
+    comfy_startup_timeout_sec: float = Field(default=180.0, gt=0)
+    comfy_dev_cpu: bool = False  # internal/dev only: run managed ComfyUI with --cpu
+    comfy_vram_preset: Literal["auto", "high", "save", "extreme"] = "auto"
+    comfy_reserve_vram_gb: float = Field(default=0.0, ge=0, le=256)
+    comfy_cuda_device: str = ""
+    comfy_ram_preset: Literal["auto", "low"] = "auto"
+    comfy_precision_preset: Literal["auto", "fp8"] = "auto"
+    comfy_attention: Literal["auto", "sage", "pytorch", "split", "quad"] = "auto"
+    comfy_unet_precision: Literal["auto", "fp8_e4m3fn", "fp8_e5m2", "fp16", "bf16", "fp32"] = "auto"
+    comfy_text_enc_precision: Literal["auto", "fp8_e4m3fn", "fp8_e5m2", "fp16", "bf16", "fp32"] = "auto"
+    comfy_vae_precision: Literal["auto", "fp16", "bf16", "fp32"] = "auto"
+    comfy_fast: str = ""
+    comfy_preview_method: Literal["default", "none", "auto", "latent2rgb", "taesd"] = "default"
+    comfy_troubleshoot: str = ""
+    comfy_hf_endpoint: str = ""
+    deps_hf_endpoint: str = ""
+    hf_token: str = Field(default="", repr=False)
+    deps_concurrency: int = Field(default=2, ge=1, le=4)
+    comfy_http_proxy: str = ""
+    comfy_extra_args: str = ""
+    comfy_remote_url: str = ""
+    comfy_remote_auth_type: Literal["none", "bearer", "basic", "headers"] = "none"
+    comfy_remote_auth: str = Field(default="", repr=False)
+    comfy_remote_verify_tls: bool = True
+    comfy_proxy_port: int = Field(default=0, ge=0, le=65535)
     host: str = "127.0.0.1"
     port: int = 8790
 
@@ -28,7 +62,7 @@ class Settings(BaseSettings):
     projects_dir: Path = _DEFAULT_DATA_DIR / "projects"
     workflow_profiles_dir: Path = _DEFAULT_DATA_DIR / "workflow_profiles"
     workflows_dir: Path = Path(__file__).resolve().parents[1] / "workflows"
-    h3_builtin_workflow: Literal["h3_ref2va.api.json", "h3_ref2va_fast4.api.json"] = "h3_ref2va.api.json"
+    h3_builtin_workflow: Literal["h3_ref2va_turbo4_video_context.api.json", "h3_ref2va_fast4.api.json", "h3_ref2va.api.json"] = "h3_ref2va_turbo4_video_context.api.json"
 
     # Legacy convenience path (actor pipeline)
     library_dir: Path = _DEFAULT_DATA_DIR / "library" / "actors"
@@ -50,6 +84,7 @@ class Settings(BaseSettings):
     h3_minimax_base_url: str = "https://api.minimax.io"
     h3_minimax_api_key: str | None = Field(
         default=None,
+        repr=False,
         validation_alias=AliasChoices(
             "DS_H3_MINIMAX_API_KEY",
             "MINIMAX_API_KEY",
@@ -78,17 +113,44 @@ class Settings(BaseSettings):
         "ollama", "lm-studio", "llama-swap", "openai-compatible"
     ] = "ollama"
     llm_base_url: str = ""
-    llm_api_key: str | None = None
+    llm_api_key: str | None = Field(default=None, repr=False)
     llm_timeout_sec: float = 600.0
+    # Extra HTTP headers for the Director LLM (tunnels: Cloudflare Access, Basic, ...).
+    # JSON object or "Key: value" / "Key=value" lines. Secret: never returned by the API.
+    llm_extra_headers: str = Field(default="", repr=False)
 
     # Local Ollama / Director agent (VRAM exclusive with Comfy)
     ollama_base_url: str = "http://127.0.0.1:11434"
+    # system:  use the user's own Ollama at DS_OLLAMA_BASE_URL (default, legacy behaviour)
+    # bundled: DS starts its private Ollama (DS_OLLAMA_DIR, default runtime/ollama) on a
+    #          free loopback port with models stored under the DS data directory.
+    ollama_mode: Literal["system", "bundled"] = "system"
+    ollama_dir: str = ""
+    ollama_port: int = Field(default=0, ge=0, le=65535)
+    ollama_models_dir: str = ""
+    # llama-swap (provider=llama-swap):
+    # remote:  the user's own llama-swap at DS_LLM_BASE_URL; DS reads the context capacity
+    # bundled: DS starts its private llama-swap (runtime/llama-swap) + llama-server
+    #          (runtime/llama.cpp) on a loopback port and generates its config.yaml from the
+    #          GGUF files in DS_LLAMA_MODELS_DIR (default <models>/llm).
+    llama_swap_mode: Literal["remote", "bundled"] = "remote"
+    llama_swap_dir: str = ""
+    llama_cpp_dir: str = ""
+    llama_swap_port: int = Field(default=0, ge=0, le=65535)
+    llama_models_dir: str = ""
+    llama_gpu_layers: str = "auto"  # llama-server -ngl: auto | all | <n> (0 = CPU only)
+    llama_mtp: bool = True  # MTP speculative decoding for models that carry MTP layers
+    # Directory holding ffmpeg/ffprobe; empty = bundled runtime/ffmpeg, then PATH.
+    ffmpeg_dir: str = ""
     director_plan_model: str = ""
     # Fallback for generic OpenAI-compatible servers that cannot report capacity.
     # Ollama, LM Studio and llama-swap are discovered from the loaded model.
     director_num_ctx: int = 32768
     director_num_predict: int = 4096
     vram_policy: str = "exclusive"  # exclusive: one of LLM/Comfy at a time, others queue
+    # Does the Director LLM share a GPU with ComfyUI (GPU handoff on/off)? See
+    # app/core/vram/shared_gpu.py. auto: local ComfyUI = shared; remote = decided by host.
+    vram_shared_gpu: Literal["auto", "true", "false"] = "auto"
     # Max seconds to wait in GPU queue (Plan waits for H3, next gen waits for casting, …)
     vram_acquire_timeout_sec: float = 3600.0
     # Multi-turn residency: keep a local LLM loaded between chat/plan turns.
@@ -124,6 +186,11 @@ class Settings(BaseSettings):
         if not isinstance(values, dict):
             return values
         configured = dict(values)
+        for env_key, value in runtime_paths.install_defaults.items():
+            # Package defaults (ds-install.json) sit between .env and code defaults.
+            name = env_key.removeprefix("DS_").lower()
+            if name in cls.model_fields and name not in configured and env_key not in configured:
+                configured[name] = value
         data_root = Path(configured.get("data_dir") or _DEFAULT_DATA_DIR)
         configured.setdefault("data_dir", data_root)
         configured.setdefault("jobs_dir", data_root / "jobs")

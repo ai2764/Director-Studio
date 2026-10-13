@@ -7,6 +7,7 @@ from typing import Any
 
 from ...config import settings
 from ..vram.director_model import model_status, set_director_model
+from .extra_headers import llm_extra_headers
 from .lifecycle import LMStudioLifecycle, RemoteLifecycle
 from .llama_swap import LlamaSwapLifecycle
 from .ollama import OllamaLLMProvider
@@ -45,19 +46,28 @@ def get_llm_provider():
     if provider_id == "lm-studio":
         base_url = base_url or "http://127.0.0.1:1234/v1"
     elif provider_id == "llama-swap":
-        base_url = base_url or "http://127.0.0.1:11435/v1"
+        from .llama_swap_runtime import llama_swap_runtime, wants_bundled
+
+        if wants_bundled():
+            # built-in llama.cpp: the private llama-swap's loopback URL (never persisted)
+            base_url = llama_swap_runtime.base_url() or "http://127.0.0.1:9/v1"
+        else:
+            base_url = base_url or "http://127.0.0.1:11435/v1"
     else:
         base_url = base_url or "https://api.openai.com/v1"
+    extra_headers = llm_extra_headers()
     client = OpenAICompatibleClient(
         base_url=base_url,
         api_key=settings.llm_api_key,
         timeout=settings.llm_timeout_sec,
+        extra_headers=extra_headers,
     )
     if provider_id == "llama-swap":
         lifecycle = LlamaSwapLifecycle(
             base_url,
             api_key=settings.llm_api_key,
             timeout=settings.llm_timeout_sec,
+            extra_headers=extra_headers,
         )
         catalog = lifecycle.list_models
     elif provider_id == "lm-studio":
@@ -65,6 +75,7 @@ def get_llm_provider():
             base_url,
             api_key=settings.llm_api_key,
             timeout=settings.llm_timeout_sec,
+            extra_headers=extra_headers,
         )
         catalog = lifecycle.list_models
     else:

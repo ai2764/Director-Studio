@@ -340,7 +340,9 @@ def ensure_video_context_order(shots: list[Shot]) -> None:
 
 
 def probe_video(path: Path) -> MediaInfo:
-    binary = shutil.which("ffprobe")
+    from ..media.binaries import find_tool
+
+    binary = find_tool("ffprobe")
     if not binary:
         raise VideoContextError("ffprobe is required to inspect a context video")
     try:

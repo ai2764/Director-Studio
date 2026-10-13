@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import os
 import re
 import shlex
@@ -18,6 +19,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ..config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_command(command: str) -> str:
@@ -158,13 +161,18 @@ class PersistentMcpToolSession:
             asyncio.Queue[tuple[str | None, dict[str, Any], asyncio.Future[Any]]] | None
         ) = None
         self._worker: asyncio.Task[None] | None = None
+        # ComfyUI URL the running comfy-mcp child was started against. A Bundled ->
+        # Remote (or any other) switch changes settings.comfy_base_url; the child
+        # must then be restarted or jobs keep targeting the old server.
+        self._url: str | None = None
+        self._failure: BaseException | None = None
 
-    def _server_parameters(self) -> Any:
+    def _server_parameters(self, url: str | None = None) -> Any:
         from mcp import StdioServerParameters
 
         env = dict(os.environ)
         env["COMFY_BIN"] = _resolve_command(settings.comfy_mcp_comfy_bin)
-        env["COMFY_LOCAL_URL"] = settings.comfy_base_url
+        env["COMFY_LOCAL_URL"] = url or settings.comfy_base_url
         env.pop("COMFYUI_URL", None)
         return StdioServerParameters(
             command=_resolve_command(settings.comfy_mcp_command),
@@ -175,14 +183,20 @@ class PersistentMcpToolSession:
     async def _serve(
         self,
         queue: asyncio.Queue[tuple[str | None, dict[str, Any], asyncio.Future[Any]]],
+        url: str | None = None,
     ) -> None:
-        from mcp import ClientSession
-        from mcp.client.stdio import stdio_client
-
         close_future: asyncio.Future[Any] | None = None
         failure: BaseException | None = None
         try:
-            async with stdio_client(self._server_parameters()) as streams:
+            try:
+                from mcp import ClientSession
+                from mcp.client.stdio import stdio_client
+            except ImportError as exc:
+                raise RuntimeError(
+                    "the 'mcp' Python package is missing from the Director Studio runtime "
+                    f"({exc}); reinstall Director Studio or `pip install mcp`"
+                ) from exc
+            async with stdio_client(self._server_parameters(url)) as streams:
                 async with ClientSession(*streams) as client:
                     await client.initialize()
                     while True:
@@ -200,6 +214,8 @@ class PersistentMcpToolSession:
                                 response.set_result(result)
         except BaseException as exc:
             failure = exc
+            self._failure = exc
+            logger.error("comfy-mcp session failed: %s", exc)
         finally:
             if close_future is not None and not close_future.done():
                 if failure is None:
@@ -215,27 +231,55 @@ class PersistentMcpToolSession:
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         async with self._lock:
+            url = settings.comfy_base_url
+            if (
+                self._worker is not None
+                and not self._worker.done()
+                and self._url is not None
+                and self._url.rstrip("/") != url.rstrip("/")
+            ):
+                await self._aclose_locked()
             if self._worker is None or self._worker.done():
                 self._queue = asyncio.Queue()
-                self._worker = asyncio.create_task(self._serve(self._queue))
+                self._url = url
+                self._worker = asyncio.create_task(self._serve(self._queue, url))
             assert self._queue is not None
+            worker = self._worker
             response = asyncio.get_running_loop().create_future()
             await self._queue.put((name, arguments, response))
-            return await response
+        # Never wait on a response the worker can no longer deliver: if the
+        # session dies (import error, child crash) surface that as the error.
+        await asyncio.wait({response, worker}, return_when=asyncio.FIRST_COMPLETED)
+        if not response.done():
+            exc = self._failure
+            response.set_exception(
+                RuntimeError(f"MCP session ended unexpectedly: {exc or 'worker stopped'}")
+            )
+        return await response
 
     async def aclose(self) -> None:
         async with self._lock:
-            worker = self._worker
-            queue = self._queue
-            if worker is None or queue is None:
-                return
-            if not worker.done():
-                response = asyncio.get_running_loop().create_future()
-                await queue.put((None, {}, response))
-                await response
-            await worker
-            self._worker = None
-            self._queue = None
+            await self._aclose_locked()
+
+    async def _aclose_locked(self) -> None:
+        worker = self._worker
+        queue = self._queue
+        if worker is None or queue is None:
+            return
+        if not worker.done():
+            response = asyncio.get_running_loop().create_future()
+            await queue.put((None, {}, response))
+            try:
+                await asyncio.wait_for(response, 15)
+            except Exception:  # noqa: BLE001 - a dead session must not block a reconfigure
+                worker.cancel()
+        try:
+            await asyncio.wait_for(worker, 15)
+        except Exception:  # noqa: BLE001
+            worker.cancel()
+        self._worker = None
+        self._queue = None
+        self._url = None
 
 
 class ComfyMcpClient:

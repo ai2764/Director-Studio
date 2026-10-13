@@ -193,3 +193,23 @@ def test_manifest_is_deterministic_and_contains_lock_digest(tmp_path: Path) -> N
     }
     assert "timestamp" not in manifest
     assert str(REPO_ROOT) not in json.dumps(manifest)
+
+
+def test_harness_stage_cross_platform_installs_target_os_without_scripts(tmp_path: Path) -> None:
+    config = stager.load_runtime_config(CONFIG)
+    commands: list[list[str]] = []
+
+    def fake_run(command, *, cwd, check):
+        cwd = Path(cwd)
+        commands.append(list(command))
+        if command[1:] == ["run", "build"]:
+            (cwd / "dist").mkdir()
+            (cwd / "dist" / "server.js").write_text("// built", encoding="utf-8")
+        if command[1:3] == ["ci", "--omit=dev"]:
+            koffi = cwd / "node_modules" / "@koromix" / "koffi-win32-x64" / "win32_x64" / "koffi.node"
+            koffi.parent.mkdir(parents=True)
+            koffi.write_bytes(b"MZ")
+
+    stager.stage_harness(REPO_ROOT, tmp_path / "package", config, npm="npm", runner=fake_run, cross_platform=True)
+    assert commands[0] == ["npm", "ci"]  # build tree: host platform (tsc)
+    assert commands[2] == ["npm", "ci", "--omit=dev", "--os=win32", "--cpu=x64", "--ignore-scripts"]

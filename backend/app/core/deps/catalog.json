@@ -1,0 +1,699 @@
+{
+  "schema": 1,
+  "comment": "Single source of truth for workflow dependencies. Edit sources/workflows by hand; run backend/scripts/refresh_deps_catalog.py to fill size/sha256/revision/gated/licence; docs/models.md is generated (python -m app.core.deps.docs).",
+  "node_packs": [
+    {
+      "id": "ds_nodes",
+      "name": "Director Studio nodes (ds_nodes)",
+      "repo": null,
+      "ref": null,
+      "commit": null,
+      "license": "Apache-2.0",
+      "unlicensed": false,
+      "provides": [
+        "DS Prompt List",
+        "CR Prompt List"
+      ],
+      "requirements": [],
+      "ships_with": "ds",
+      "installable": false,
+      "note_zh": "DS 自带（Apache-2.0），随程序安装，无需下载",
+      "note_en": "Part of DS (Apache-2.0); installed with the app, nothing to download",
+      "bundled": true
+    },
+    {
+      "id": "ComfyUI-KJNodes",
+      "name": "ComfyUI-KJNodes",
+      "repo": "https://github.com/kijai/ComfyUI-KJNodes",
+      "ref": "d3cfe21625e5170126ce06fbfcfe1d88108688c3",
+      "commit": "d3cfe21625e5170126ce06fbfcfe1d88108688c3",
+      "license": "GPL-3.0",
+      "unlicensed": false,
+      "provides": [
+        "SimpleCalculatorKJ",
+        "ImageConcatMulti",
+        "StringConstantMultiline"
+      ],
+      "requirements": [
+        "requirements.txt"
+      ],
+      "ships_with": "installer",
+      "installable": true,
+      "verified": "2026-10-11",
+      "bundled": true,
+      "note_zh": "安装包已预装（GPL-3.0，固定提交）",
+      "note_en": "Preinstalled by the installer (GPL-3.0, pinned commit)"
+    },
+    {
+      "id": "ComfyUI-H3-Motion-Context",
+      "name": "ComfyUI-H3-Motion-Context",
+      "repo": "https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context",
+      "ref": "v0.6.2",
+      "commit": "5335715abe54c1a9bfbe3494da29aae3e8635ce3",
+      "license": "GPL-3.0",
+      "unlicensed": false,
+      "provides": [
+        "MiniMaxH3MotionContext",
+        "MiniMaxH3MotionContextTrim",
+        "MiniMaxH3MotionContextSaveLatent",
+        "MiniMaxH3MotionContextLoadLatent",
+        "MiniMaxH3MotionContextChain",
+        "MiniMaxH3MotionContextSeamProbe"
+      ],
+      "requirements": [],
+      "ships_with": "installer-optional",
+      "installable": true,
+      "verified": "2026-10-11",
+      "bundled": true,
+      "note_zh": "安装包已预装（可选组件“H3 续写”）；未勾选该组件时可在此下载",
+      "note_en": "Preinstalled by the installer (optional 'H3 continuation' component); download here if it was not selected"
+    },
+    {
+      "id": "H3-Optimizations",
+      "name": "H3 Optimizations",
+      "repo": "https://github.com/Zironic/H3-Optimizations",
+      "ref": "862774944a331bc1a66cee1cf805b94bd138ebbe",
+      "commit": "862774944a331bc1a66cee1cf805b94bd138ebbe",
+      "license": null,
+      "unlicensed": true,
+      "provides": [
+        "H3MemoryOptimization"
+      ],
+      "requirements": [],
+      "ships_with": null,
+      "installable": true,
+      "verified": "2026-10-11",
+      "bundled": false,
+      "note_zh": "无许可证：DS 不内置，只能由你在此从作者处下载",
+      "note_en": "No licence: not bundled; download it yourself from the author here"
+    },
+    {
+      "id": "comfy-core",
+      "name": "ComfyUI core",
+      "repo": "https://github.com/Comfy-Org/ComfyUI",
+      "ref": null,
+      "commit": null,
+      "license": "GPL-3.0",
+      "unlicensed": false,
+      "provides": [
+        "MiniMaxH3ReferenceToVideo",
+        "MiniMaxH3SigmaShift",
+        "ModelAttentionBackend",
+        "QwenImage21Cache",
+        "TextEncodeQwenImage21"
+      ],
+      "requirements": [],
+      "ships_with": "comfyui",
+      "installable": false,
+      "note_zh": "ComfyUI 内置节点：请升级 ComfyUI 到支持 MiniMax H3 / Qwen-Image 2.1 的版本",
+      "note_en": "Built into ComfyUI: update ComfyUI to a version with MiniMax H3 / Qwen-Image 2.1 nodes",
+      "bundled": false
+    }
+  ],
+  "models": [
+    {
+      "file": "qwen_image_edit_2511_fp8mixed.safetensors",
+      "folder": "diffusion_models",
+      "name": "qwen_image_edit_2511_fp8mixed",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "Comfy-Org/Qwen-Image-Edit_ComfyUI",
+          "path": "split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors",
+          "revision": "f68ace85e60b4a02a323e394253731947657b7d2"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "Comfy-Org/Qwen-Image-Edit_ComfyUI",
+          "path": "split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 20533762817,
+      "sha256": "c9fdc158e46d3b61ef75f21ae866ca2fe808bf4a53643120d1c1e87c19280a4e",
+      "license": "apache-2.0",
+      "license_url": "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+      "folder": "loras",
+      "name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "lightx2v/Qwen-Image-Edit-2511-Lightning",
+          "path": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+          "revision": "d74eba145674fd7e31b949324e148e21e7118abd"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "lightx2v/Qwen-Image-Edit-2511-Lightning",
+          "path": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 849608296,
+      "sha256": "22226e8d05d354bb356627d428809f5afd7819399b077238a2b70a82883a904f",
+      "license": "apache-2.0",
+      "license_url": "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
+      "folder": "loras",
+      "name": "qwen-image-edit-2511-multiple-angles-lora",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA",
+          "path": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
+          "revision": "e3066224ab74263f4a5b6179cd1a3b0a15577e44"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA",
+          "path": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 295140688,
+      "sha256": "42426ded4e25fd22879d9e198b857556445ef4ca56e8da3246d0345155bb6765",
+      "license": "apache-2.0",
+      "license_url": "https://huggingface.co/fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "folder": "text_encoders",
+      "name": "qwen_2.5_vl_7b_fp8_scaled",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "Comfy-Org/Qwen-Image_ComfyUI",
+          "path": "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+          "revision": "1f12b17be14c89b026c51a91d67c32f84bb047bc"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "Comfy-Org/Qwen-Image_ComfyUI",
+          "path": "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 9384670680,
+      "sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4",
+      "license": "apache-2.0",
+      "license_url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "qwen_image_vae.safetensors",
+      "folder": "vae",
+      "name": "qwen_image_vae",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "Comfy-Org/Qwen-Image_ComfyUI",
+          "path": "split_files/vae/qwen_image_vae.safetensors",
+          "revision": "1f12b17be14c89b026c51a91d67c32f84bb047bc"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "Comfy-Org/Qwen-Image_ComfyUI",
+          "path": "split_files/vae/qwen_image_vae.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 253806246,
+      "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+      "license": "apache-2.0",
+      "license_url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "folder": "diffusion_models",
+      "name": "minimax_h3_ref2va_pruned_int8_convrot",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "Comfy-Org/MiniMax-H3",
+          "path": "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+          "revision": "e5eb578a89295337b8ff433a035929ce0279e0b6"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "Comfy-Org/MiniMax-H3",
+          "path": "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 20970379616,
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "license": "minimax-h3-community-license-agreement",
+      "license_url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "folder": "text_encoders",
+      "name": "qwen3vl_32b_minimax_h3_nvfp4_awq",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "Comfy-Org/MiniMax-H3",
+          "path": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "revision": "e5eb578a89295337b8ff433a035929ce0279e0b6"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "Comfy-Org/MiniMax-H3",
+          "path": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 15687142551,
+      "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+      "license": "minimax-h3-community-license-agreement",
+      "license_url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "minimax_h3_audio_vae_fp32.safetensors",
+      "folder": "vae",
+      "name": "minimax_h3_audio_vae_fp32",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "Comfy-Org/MiniMax-H3",
+          "path": "vae/minimax_h3_audio_vae_fp32.safetensors",
+          "revision": "e5eb578a89295337b8ff433a035929ce0279e0b6"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "Comfy-Org/MiniMax-H3",
+          "path": "vae/minimax_h3_audio_vae_fp32.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 605254808,
+      "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
+      "license": "minimax-h3-community-license-agreement",
+      "license_url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "minimax_h3_video_vae_int8_convrot.safetensors",
+      "folder": "vae",
+      "name": "minimax_h3_video_vae_int8_convrot",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "Comfy-Org/MiniMax-H3",
+          "path": "vae/minimax_h3_video_vae_int8_convrot.safetensors",
+          "revision": "e5eb578a89295337b8ff433a035929ce0279e0b6"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "Comfy-Org/MiniMax-H3",
+          "path": "vae/minimax_h3_video_vae_int8_convrot.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 2811065184,
+      "sha256": "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e",
+      "license": "minimax-h3-community-license-agreement",
+      "license_url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+      "folder": "diffusion_models",
+      "name": "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8",
+      "community": true,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "WarmBloodAban/Minimax-h3_Singularity",
+          "path": "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+          "revision": "af671d9214a6e41ab8c2f43e9f871ea56246115f"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "WarmBloodAban/Minimax-h3_Singularity",
+          "path": "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 20967647456,
+      "sha256": "412a7b126595a958964193f3b42513d7cf2df4196ef04223a0f05e3622949cce",
+      "license": "apache-2.0",
+      "license_url": "https://huggingface.co/WarmBloodAban/Minimax-h3_Singularity",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+      "folder": "loras",
+      "name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "Comfy-Org/MiniMax-H3",
+          "path": "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+          "revision": "e5eb578a89295337b8ff433a035929ce0279e0b6"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "Comfy-Org/MiniMax-H3",
+          "path": "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 1956193000,
+      "sha256": "5b9ab5ade15d0775676d01a907268a69a1468dc6033b3b0d3ded5502f3ebb84c",
+      "license": "minimax-h3-community-license-agreement",
+      "license_url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "qwen_image_2512_fp8_e4m3fn.safetensors",
+      "folder": "diffusion_models",
+      "name": "qwen_image_2512_fp8_e4m3fn",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "Comfy-Org/Qwen-Image_ComfyUI",
+          "path": "split_files/diffusion_models/qwen_image_2512_fp8_e4m3fn.safetensors",
+          "revision": "1f12b17be14c89b026c51a91d67c32f84bb047bc"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "Comfy-Org/Qwen-Image_ComfyUI",
+          "path": "split_files/diffusion_models/qwen_image_2512_fp8_e4m3fn.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 20430679144,
+      "sha256": "5dc80554d5d83390046a2f4a94ece06afb7700bf7b0aaf8bde9769793875876b",
+      "license": "apache-2.0",
+      "license_url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors",
+      "folder": "loras",
+      "name": "Qwen-Image-2512-Lightning-4steps-V1.0-fp32",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "lightx2v/Qwen-Image-2512-Lightning",
+          "path": "Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors",
+          "revision": "a52649c9d0f6e1a248bff13f0df33bb8a2abdb52"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "lightx2v/Qwen-Image-2512-Lightning",
+          "path": "Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 1698951104,
+      "sha256": "ad12117461cb41e2ea637fec8df6392ce8e8550c47fbe2b829ed3deb98262066",
+      "license": "apache-2.0",
+      "license_url": "https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "qwen_image_2.1_bf16.safetensors",
+      "folder": "diffusion_models",
+      "name": "qwen_image_2.1_bf16",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "Comfy-Org/Qwen-Image-2.1",
+          "path": "diffusion_models/qwen_image_2.1_bf16.safetensors",
+          "revision": "df94239739eef7205973a145ffa6f441f7b64e84"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "Comfy-Org/Qwen-Image-2.1",
+          "path": "diffusion_models/qwen_image_2.1_bf16.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 14230280616,
+      "sha256": "89f4158d066cc33906a199fca85634f766892dd78f49b6698dabf187ac86c4bc",
+      "license": "qwen-research",
+      "license_url": "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "qwen3vl_8b_bf16.safetensors",
+      "folder": "text_encoders",
+      "name": "qwen3vl_8b_bf16",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "Comfy-Org/Qwen-Image-2.1",
+          "path": "text_encoders/qwen3vl_8b_bf16.safetensors",
+          "revision": "df94239739eef7205973a145ffa6f441f7b64e84"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "Comfy-Org/Qwen-Image-2.1",
+          "path": "text_encoders/qwen3vl_8b_bf16.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 17534334616,
+      "sha256": "68bdc82bc1b66851162ae656225e7e2068166b603db19bd5d5a3b90eb12669a9",
+      "license": "qwen-research",
+      "license_url": "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE",
+      "gated": false,
+      "verified": "2026-10-11"
+    },
+    {
+      "file": "qwen_image_2.1_vae_bf16.safetensors",
+      "folder": "vae",
+      "name": "qwen_image_2.1_vae_bf16",
+      "community": false,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "Comfy-Org/Qwen-Image-2.1",
+          "path": "vae/qwen_image_2.1_vae_bf16.safetensors",
+          "revision": "df94239739eef7205973a145ffa6f441f7b64e84"
+        },
+        {
+          "kind": "modelscope",
+          "repo": "Comfy-Org/Qwen-Image-2.1",
+          "path": "vae/qwen_image_2.1_vae_bf16.safetensors",
+          "verified": true
+        }
+      ],
+      "size": 675509688,
+      "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9",
+      "license": "qwen-research",
+      "license_url": "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE",
+      "gated": false,
+      "verified": "2026-10-11"
+    }
+  ],
+  "workflows": [
+    {
+      "file": "QwenEdit2511_MultiAngle_SceneRef.api.json",
+      "zh": "场景",
+      "en": "Scenes",
+      "models": [
+        "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "qwen_image_vae.safetensors",
+        "qwen_image_edit_2511_fp8mixed.safetensors",
+        "qwen-image-edit-2511-multiple-angles-lora.safetensors",
+        "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
+      ],
+      "node_packs": [
+        "ComfyUI-KJNodes",
+        "ds_nodes"
+      ],
+      "doc_zh": "场景多角度参考（Qwen Image Edit 2511）",
+      "doc_en": "Scene multi-angle reference (Qwen Image Edit 2511)"
+    },
+    {
+      "file": "h3_ref2va.api.json",
+      "zh": "H3 视频（标准）",
+      "en": "H3 video (standard)",
+      "models": [
+        "minimax_h3_video_vae_int8_convrot.safetensors",
+        "minimax_h3_audio_vae_fp32.safetensors",
+        "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+        "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+      ],
+      "node_packs": [
+        "comfy-core"
+      ],
+      "doc_zh": "H3 视频（官方标准，8 步）",
+      "doc_en": "H3 video (official standard, 8 steps)"
+    },
+    {
+      "file": "h3_ref2va_fast4.api.json",
+      "zh": "H3 视频（4 步加速）",
+      "en": "H3 video (fast 4-step)",
+      "models": [
+        "minimax_h3_video_vae_int8_convrot.safetensors",
+        "minimax_h3_audio_vae_fp32.safetensors",
+        "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+        "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+      ],
+      "node_packs": [
+        "H3-Optimizations",
+        "comfy-core"
+      ],
+      "doc_zh": "H3 视频 fast-4（社区剪枝模型 + Turbo 4 步）",
+      "doc_en": "H3 video fast-4 (community pruned model + Turbo 4-step)"
+    },
+    {
+      "file": "h3_ref2va_turbo4_video_context.api.json",
+      "zh": "视频续写（实验）",
+      "en": "Video context (experimental)",
+      "models": [
+        "minimax_h3_video_vae_int8_convrot.safetensors",
+        "minimax_h3_audio_vae_fp32.safetensors",
+        "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+        "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+      ],
+      "node_packs": [
+        "ComfyUI-H3-Motion-Context",
+        "H3-Optimizations",
+        "comfy-core"
+      ],
+      "doc_zh": "H3 视频续接 video-context（Turbo 4 步）",
+      "doc_en": "H3 video continuation / video-context (Turbo 4-step)"
+    },
+    {
+      "file": "qwen_actor_asset_workbench.api.json",
+      "zh": "角色",
+      "en": "Characters",
+      "models": [
+        "qwen_image_2512_fp8_e4m3fn.safetensors",
+        "Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors",
+        "qwen_image_edit_2511_fp8mixed.safetensors",
+        "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+        "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "qwen_image_vae.safetensors"
+      ],
+      "node_packs": [
+        "ComfyUI-KJNodes"
+      ],
+      "doc_zh": "演员资产工作台（Qwen Image 2512 + Edit 2511）",
+      "doc_en": "Actor asset workbench (Qwen Image 2512 + Edit 2511)"
+    },
+    {
+      "file": "qwen_image_21_layout.api.json",
+      "zh": "布局（Qwen-Image 2.1）",
+      "en": "Layout (Qwen-Image 2.1)",
+      "models": [
+        "qwen_image_2.1_bf16.safetensors",
+        "qwen3vl_8b_bf16.safetensors",
+        "qwen_image_2.1_vae_bf16.safetensors"
+      ],
+      "node_packs": [
+        "comfy-core"
+      ],
+      "doc_zh": "Layout 构图（Qwen Image 2.1）",
+      "doc_en": "Layout (Qwen Image 2.1)"
+    },
+    {
+      "file": "qwen_prop_master.api.json",
+      "zh": "道具",
+      "en": "Props",
+      "models": [
+        "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "qwen_image_edit_2511_fp8mixed.safetensors",
+        "qwen_image_vae.safetensors",
+        "qwen-image-edit-2511-multiple-angles-lora.safetensors",
+        "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
+      ],
+      "node_packs": [
+        "ComfyUI-KJNodes"
+      ],
+      "doc_zh": "道具（Qwen Image Edit 2511 多角度）",
+      "doc_en": "Prop master (Qwen Image Edit 2511 multi-angle)"
+    },
+    {
+      "file": "ref_frame_layout.api.json",
+      "zh": "布局参考帧",
+      "en": "Layout reference frame",
+      "models": [
+        "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "qwen_image_edit_2511_fp8mixed.safetensors",
+        "qwen_image_vae.safetensors"
+      ],
+      "node_packs": [],
+      "doc_zh": "参考帧构图（Qwen Image Edit 2511）",
+      "doc_en": "Reference-frame layout (Qwen Image Edit 2511)"
+    }
+  ],
+  "llm_models": [
+    {
+      "file": "Qwen3.8-27B-Q4_K_M.gguf",
+      "folder": "llm",
+      "name": "qwen3.8-27b",
+      "model_id": "qwen3.8-27b",
+      "community": true,
+      "sources": [
+        {
+          "kind": "hf",
+          "repo": "ggml-org/Qwen3.8-27B-GGUF",
+          "path": "Qwen3.8-27B-Q4_K_M.gguf",
+          "revision": "71bc7b627595dc8a91039addd9c791ae548d6747"
+        }
+      ],
+      "size": 18973870528,
+      "sha256": "c600de0300ae8a0eb3a6c0b8b5561b8b96f16bd2c863c2a66c42de29d391a747",
+      "license": "apache-2.0",
+      "license_url": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE",
+      "gated": false,
+      "verified": "2026-10-12",
+      "base_model": "Qwen/Qwen3.8-27B",
+      "llm": {
+        "runtime": "llama.cpp",
+        "mtp": false,
+        "vram_gb": 22,
+        "tool_calling": true
+      },
+      "note_en": "Director model: Q4_K_M GGUF of the official Qwen/Qwen3.8-27B (Apache-2.0), converted by ggml-org (the llama.cpp maintainers). Reliable tool calling; needs a ~24 GB GPU for 32k context.",
+      "note_zh": "导演模型：官方 Qwen/Qwen3.8-27B（Apache-2.0）的 Q4_K_M GGUF，由 ggml-org（llama.cpp 维护者）转换。工具调用可靠；32k 上下文约需 24 GB 显卡。"
+    }
+  ]
+}

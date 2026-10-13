@@ -1,0 +1,31 @@
+#!/bin/sh
+# Director Studio launcher (installed package).
+#   ./director-studio            start and open the browser
+#   ./director-studio --no-open  start without opening a browser
+#   ./director-studio stop | status
+# Config + data live in $DS_HOME (default ~/.local/share/DirectorStudio) and survive upgrades.
+set -eu
+self="$0"
+command -v readlink >/dev/null 2>&1 && self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+root="$(cd "$(dirname "$self")" && pwd -P)"
+python="$root/runtime/python/bin/python3"
+if [ ! -x "$python" ]; then
+  echo "Director Studio: bundled Python missing ($python); re-extract the package." >&2
+  exit 1
+fi
+open="--open"
+cmd="run"
+args=""
+for a in "$@"; do
+  case "$a" in
+    --no-open) open="" ;;
+    run|stop|status) cmd="$a" ;;
+    *) args="$args $a" ;;
+  esac
+done
+[ "$cmd" = "run" ] || open=""
+export PYTHONNOUSERSITE=1
+unset PYTHONHOME PYTHONPATH VIRTUAL_ENV
+cd "$root/backend"
+# shellcheck disable=SC2086
+exec "$python" -s -m app.launcher "$cmd" $open $args

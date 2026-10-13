@@ -72,7 +72,25 @@ def get_director_model(provider_id: str | None = None) -> str:
             return persisted_model
     if provider == "ollama":
         return (settings.director_plan_model or "").strip()
+    if provider == "llama-swap" and getattr(settings, "llama_swap_mode", "remote") == "bundled":
+        return _builtin_llama_default()
     return ""
+
+
+def _builtin_llama_default() -> str:
+    """Built-in llama.cpp: DS_DIRECTOR_PLAN_MODEL if it exists, else the first recommended
+    (catalog order) downloaded GGUF, else any GGUF in the LLM folder."""
+    from ..deps import catalog
+    from ..llm.llama_swap_runtime import discover_models
+
+    available = [m["id"] for m in discover_models()]
+    wanted = (settings.director_plan_model or "").strip()
+    if wanted in available:
+        return wanted
+    for entry in catalog.llm_models():
+        if entry.get("model_id") in available:
+            return entry["model_id"]
+    return available[0] if available else ""
 
 
 def set_director_model(

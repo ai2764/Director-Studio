@@ -355,7 +355,9 @@ def _transcode_context_video(
 ) -> bytes:
     from ...core.projects.video_context import VideoContextError
 
-    binary = shutil.which("ffmpeg")
+    from ...core.media.binaries import find_tool, video_encoder_args
+
+    binary = find_tool("ffmpeg")
     if not binary:
         raise VideoContextError("ffmpeg is required to normalize a context video")
     suffix = Path(filename).suffix.lower() or ".mp4"
@@ -374,7 +376,8 @@ def _transcode_context_video(
             binary, "-y", "-v", "error",
             "-i", str(source),
             "-vf", scale,
-            "-c:v", "libx264",
+            # bundled LGPL FFmpeg has no libx264 (libopenh264 instead)
+            *video_encoder_args(binary),
             "-pix_fmt", "yuv420p",
         ]
         if keep_audio:
@@ -465,3 +468,55 @@ def _copy_link(value: Any) -> Any:
     if isinstance(value, list):
         return list(value)
     return value
+
+
+def strip_motion_context(graph: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of a Motion Context graph that runs as a plain Ref2AV shot.
+
+    Used when the built-in Turbo 4 video-context workflow renders a shot without a
+    context video (e.g. the first shot): the context loader, Motion Context, its
+    overlap trim and the delivery crops are removed and their consumers rewired to
+    the plain conditioning / decoded frames / decoded audio.
+    """
+    g = copy.deepcopy(graph)
+    redirect: dict[tuple[str, int], list[Any]] = {}
+    drop: set[str] = set()
+    for nid, node in g.items():
+        cls, inp = node.get("class_type"), node.get("inputs", {})
+        if cls == "MiniMaxH3MotionContext":
+            redirect[(nid, 0)] = inp["conditioning"]
+            drop.add(nid)
+        elif cls == "MiniMaxH3MotionContextTrim":
+            redirect[(nid, 0)] = inp["images"]
+            redirect[(nid, 1)] = inp["audio"]
+            drop.add(nid)
+        elif cls in VIDEO_FILE_FIELDS or cls == "GetVideoComponents":
+            drop.add(nid)
+    trims = {k[0] for k in redirect if g[k[0]]["class_type"] == "MiniMaxH3MotionContextTrim"}
+    for nid, node in g.items():  # delivery crops that only exist to cut the overlap
+        inp = node.get("inputs", {})
+        if node.get("class_type") == "ImageFromBatch" and isinstance(inp.get("image"), list) and inp["image"][0] in trims:
+            redirect[(nid, 0)] = inp["image"]
+            drop.add(nid)
+        elif node.get("class_type") == "TrimAudioDuration" and isinstance(inp.get("audio"), list) and inp["audio"][0] in trims:
+            redirect[(nid, 0)] = inp["audio"]
+            drop.add(nid)
+
+    def resolve(ref: list[Any]) -> list[Any]:
+        seen = 0
+        while isinstance(ref, list) and len(ref) == 2 and (str(ref[0]), int(ref[1])) in redirect and seen < 10:
+            ref = redirect[(str(ref[0]), int(ref[1]))]
+            seen += 1
+        return ref
+
+    for nid in drop:
+        g.pop(nid, None)
+    for node in g.values():
+        inp = node.get("inputs", {})
+        for key, value in list(inp.items()):
+            if isinstance(value, list) and len(value) == 2 and isinstance(value[0], str):
+                new = resolve(value)
+                if str(new[0]) in drop:
+                    raise VideoContextGraphError(f"cannot detach video context from input {key}")
+                inp[key] = new
+    return g

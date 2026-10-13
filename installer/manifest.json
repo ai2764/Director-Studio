@@ -1,0 +1,225 @@
+{
+  "schema": 1,
+  "product": "Director Studio",
+  "comment": "Pinned third-party components for installer/build_linux.py. Every download is verified against sha256. GPL/AGPL components are bundled as separate programs only (never linked into DS code); see SOURCE_OFFER.txt in the package.",
+  "python": {
+    "version": "3.13.16",
+    "release": "20261003",
+    "license": "PSF-2.0",
+    "linux-x86_64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.13.16%2B20261003-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "sha256": "4595c5589fff7bf0cb158d9a88a797e0d791fa33830770fcb7bf3f4b104feeae",
+      "strip_components": 1,
+      "exclude": [
+        "share/terminfo/*"
+      ],
+      "exclude_comment": "PBS terminfo has case-colliding names (e.g. E/e) that make tar/extraction fail on some filesystems; the backend needs no curses."
+    },
+    "windows-x64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.13.16%2B20261003-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+      "sha256": "ec43f1a85c29f147d7ae2d13218c52c70b24a983a82ab22d6c607c0593060e10",
+      "strip_components": 1
+    }
+  },
+  "llama_cpp": {
+    "version": "b11429",
+    "release": "v0.6.0",
+    "commit": "d81235049384534c167caea52b85a694f6103d14",
+    "license": "MIT",
+    "source": "https://github.com/ggml-org/llama.cpp/tree/b11429",
+    "comment": "llama-server only (separate process, spawned by llama-swap). b11429 is the build the v0.6.0 release points at (nightly-tag.txt). Linux ships the CPU build for every variant; Windows ships the CUDA build matching the variant plus NVIDIA's cudart/cuBLAS redistributables from the same release.",
+    "linux-x86_64": {
+      "variants": {
+        "*": {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11429/llama-b11429-bin-ubuntu-x64.tar.gz",
+          "sha256": "f6d25dde8f51133143d1453da4fd5f73b145127177612a283bf7995957af3392",
+          "strip_components": 1,
+          "include": [
+            "llama-server",
+            "lib*.so*",
+            "LICENSE"
+          ]
+        }
+      }
+    },
+    "windows-x64": {
+      "variants": {
+        "cpu": {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11429/llama-b11429-bin-win-cpu-x64.zip",
+          "sha256": "1283323272b04cd07905816a597a0da810918102de958f4ff6f7bbaa70ed2efe",
+          "strip_components": 0,
+          "include": [
+            "llama-server.exe",
+            "*.dll",
+            "LICENSE*"
+          ]
+        },
+        "cu128": {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11429/llama-b11429-bin-win-cuda-12.4-x64.zip",
+          "sha256": "dd6df685c1024e6aa55ca55ad35038692d5e284d4dc895e7a646c3245d3d14ff",
+          "strip_components": 0,
+          "include": [
+            "llama-server.exe",
+            "*.dll",
+            "LICENSE*"
+          ],
+          "extras": [
+            {
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11429/cudart-llama-bin-win-cuda-12.4-x64.zip",
+              "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+              "strip_components": 0
+            }
+          ]
+        },
+        "cu130": {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11429/llama-b11429-bin-win-cuda-13.4-x64.zip",
+          "sha256": "76ddc6eff2389570789ed608881efc6977751a722015d8e8c94f302224ff1a3a",
+          "strip_components": 0,
+          "include": [
+            "llama-server.exe",
+            "*.dll",
+            "LICENSE*"
+          ],
+          "extras": [
+            {
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11429/cudart-llama-bin-win-cuda-13.4-x64.zip",
+              "sha256": "738f8c251ac22b70c3ae6f83a10cf222725df0395246a2cf58f32bdb85fbe668",
+              "strip_components": 0
+            }
+          ]
+        }
+      }
+    }
+  },
+  "llama_swap": {
+    "version": "v264",
+    "commit": "a025e03",
+    "license": "MIT",
+    "source": "https://github.com/mostlygeek/llama-swap/tree/v264",
+    "linux-x86_64": {
+      "url": "https://github.com/mostlygeek/llama-swap/releases/download/v264/llama-swap_264_linux_amd64.tar.gz",
+      "sha256": "ed3569386f0194401b39732e592b881c72223c8a0a49f6a2e1376f1796e3101d",
+      "strip_components": 0,
+      "include": [
+        "llama-swap",
+        "LICENSE.md"
+      ]
+    },
+    "windows-x64": {
+      "url": "https://github.com/mostlygeek/llama-swap/releases/download/v264/llama-swap_264_windows_amd64.zip",
+      "sha256": "cb056e8122db62c4c0914ce0909e2e71ea8d80e9fa8c8ac00186039c2d1882f1",
+      "strip_components": 0,
+      "include": [
+        "llama-swap.exe",
+        "LICENSE.md"
+      ]
+    }
+  },
+  "ffmpeg": {
+    "version": "n8.1.3-14-g330caae0c1",
+    "license": "LGPL-2.1-or-later",
+    "build": "BtbN/FFmpeg-Builds autobuild-2026-10-08-13-05 (linux64-lgpl static)",
+    "source": "https://github.com/FFmpeg/FFmpeg/commit/330caae0c1",
+    "build_scripts": "https://github.com/BtbN/FFmpeg-Builds",
+    "linux-x86_64": {
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-08-13-05/ffmpeg-n8.1.3-14-g330caae0c1-linux64-lgpl-8.1.tar.xz",
+      "sha256": "efc5f0db8b76a2b2dd0bc26feb5ffce38dc252af21fd60457ec6ece62797c930",
+      "strip_components": 1,
+      "include": [
+        "bin/ffmpeg",
+        "bin/ffprobe",
+        "LICENSE.txt"
+      ]
+    },
+    "windows-x64": {
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-08-13-05/ffmpeg-n8.1.3-14-g330caae0c1-win64-lgpl-8.1.zip",
+      "sha256": "293bc44ded938a6900060b7d622dc330675fdec0f028f8b2ea6735c64be02b12",
+      "strip_components": 1,
+      "include": [
+        "bin/ffmpeg.exe",
+        "bin/ffprobe.exe",
+        "LICENSE.txt"
+      ]
+    }
+  },
+  "comfyui": {
+    "repo": "https://github.com/comfyanonymous/ComfyUI.git",
+    "tag": "v0.39.0",
+    "commit": "b0b743566f65daafc423b4fea8a2fbda94b3384a",
+    "license": "GPL-3.0"
+  },
+  "custom_nodes": [
+    {
+      "name": "ComfyUI-KJNodes",
+      "repo": "https://github.com/kijai/ComfyUI-KJNodes.git",
+      "commit": "d3cfe21625e5170126ce06fbfcfe1d88108688c3",
+      "license": "GPL-3.0"
+    },
+    {
+      "name": "ComfyUI-H3-Motion-Context",
+      "repo": "https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context.git",
+      "tag": "v0.6.2",
+      "commit": "5335715abe54c1a9bfbe3494da29aae3e8635ce3",
+      "license": "GPL-3.0",
+      "component": "h3-continuation",
+      "optional": true,
+      "requirements": false,
+      "provides": [
+        "MiniMaxH3MotionContext",
+        "MiniMaxH3MotionContextTrim",
+        "MiniMaxH3MotionContextSaveLatent",
+        "MiniMaxH3MotionContextLoadLatent",
+        "MiniMaxH3MotionContextChain",
+        "MiniMaxH3MotionContextSeamProbe"
+      ],
+      "comment": "Optional 'H3 continuation' component (video-context workflow). GPL-3.0 (LICENSE file + pyproject classifier), runs inside the ComfyUI process only. No requirements.txt and pyproject dependencies=[] (imports only torch/comfy), so the comfy locks are unchanged."
+    }
+  ],
+  "torch_variants": {
+    "cpu": {
+      "index_url": "https://download.pytorch.org/whl/cpu",
+      "description": "CPU only (testing / no NVIDIA GPU)"
+    },
+    "cu128": {
+      "index_url": "https://download.pytorch.org/whl/cu128",
+      "description": "NVIDIA CUDA 12.8 (driver >= 570; RTX 20xx-50xx)"
+    },
+    "cu130": {
+      "index_url": "https://download.pytorch.org/whl/cu130",
+      "description": "NVIDIA CUDA 13.0 (driver >= 580)"
+    }
+  },
+  "comfy_tools": {
+    "comfy-cli": "1.20.0",
+    "comfy-mcp": "0.10.0",
+    "license": "GPL-3.0 (comfy-cli) / see notices (comfy-mcp)"
+  },
+  "torch_pins": {
+    "comment": "torch/torchvision/torchaudio must be a matching set (torchaudio is ABI-bound to torch); same versions for every variant",
+    "torch": "2.11.0",
+    "torchvision": "0.26.0",
+    "torchaudio": "2.11.0"
+  },
+  "unbundled_custom_nodes": [
+    {
+      "name": "H3-Optimizations",
+      "repo": "https://github.com/Zironic/H3-Optimizations",
+      "commit_checked": "862774944a331bc1a66cee1cf805b94bd138ebbe",
+      "version_checked": "0.2.45",
+      "license": null,
+      "provides": [
+        "H3MemoryOptimization"
+      ],
+      "reason": "No LICENSE file, no licence in pyproject or README, Comfy registry licence '{}' (checked 2026-10-08): all rights reserved by default, so it is not redistributed. Doctor links the repo with a manual install hint."
+    }
+  ],
+  "windows": {
+    "comment": "installer/build_windows.py. ComfyUI on Windows uses the same pinned source checkout + python-build-standalone + uv --require-hashes locks (installer/locks/windows-*.txt) as Linux, installed for x86_64-pc-windows-msvc from the Linux/Windows build host, instead of the official ComfyUI_windows_portable 7z; see docs/installer.md#windows.",
+    "app_id": "{0A59C4F5-9743-5BEF-817E-57B843D93A3C}",
+    "publisher": "Director Studio",
+    "install_dir": "{localappdata}\\Programs\\DirectorStudio",
+    "data_dir": "%LOCALAPPDATA%\\DirectorStudio",
+    "inno_setup": "6.4.3",
+    "uv_platform": "x86_64-pc-windows-msvc"
+  }
+}

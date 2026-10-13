@@ -26,6 +26,7 @@ from .errors import (
 from .models import (
     H3BoundaryMapping,
     H3InputMapping,
+    H3ContextVideoInput,
     H3OutputSelection,
     H3WorkflowProfile,
     ResolvedH3Profile,
@@ -64,6 +65,21 @@ _OFFICIAL_MAPPING = H3BoundaryMapping(
     ),
     output=H3OutputSelection(node_id="92"),
 )
+
+TURBO4_VIDEO_CONTEXT_WORKFLOW = "h3_ref2va_turbo4_video_context.api.json"
+_BUILTIN_NAMES = {
+    TURBO4_VIDEO_CONTEXT_WORKFLOW: "Built-in H3 Turbo 4 + video context",
+    "h3_ref2va_fast4.api.json": "Built-in H3 Turbo 4",
+    "h3_ref2va.api.json": "Built-in Official H3",
+}
+
+
+def builtin_mapping(filename: str) -> H3BoundaryMapping:
+    """Built-in mapping; the Turbo 4 video-context graph also maps its source video (142.file)."""
+    if filename == TURBO4_VIDEO_CONTEXT_WORKFLOW:
+        return _OFFICIAL_MAPPING.model_copy(
+            update={"context_video": H3ContextVideoInput(node_id="142", input_name="file")})
+    return _OFFICIAL_MAPPING
 
 
 class H3ProfileStore:
@@ -1079,12 +1095,10 @@ class H3ProfileStore:
         return ResolvedH3Profile(
             profile_id=_BUILTIN_PROFILE_ID,
             workflow=workflow,
-            mapping=_OFFICIAL_MAPPING,
+            mapping=builtin_mapping(settings.h3_builtin_workflow),
             workflow_sha256=workflow_hash,
             source="builtin",
-            display_name=("Built-in H3 Turbo 4 (video-context experiment)"
-                          if settings.h3_builtin_workflow == "h3_ref2va_fast4.api.json"
-                          else "Built-in Official H3"),
+            display_name=_BUILTIN_NAMES.get(settings.h3_builtin_workflow, "Built-in Official H3"),
         )
 
     def _resolve_custom(self, profile_id: str) -> ResolvedH3Profile:

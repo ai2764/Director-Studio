@@ -767,7 +767,7 @@ async def _make_chat_fn(
             plan_model = _selected_model()
             await _refresh_context_capacity(plan_model)
             if compacting:
-                label = "整理对话上下文…"
+                label = "Compacting conversation context…"
             elif use_images:
                 label = f"Thinking with {plan_model} · {len(use_images)} image{'s' if len(use_images) != 1 else ''}…"
             else:

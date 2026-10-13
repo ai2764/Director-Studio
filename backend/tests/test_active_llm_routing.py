@@ -239,7 +239,7 @@ async def test_compaction_keeps_summary_internal_without_hiding_next_reply(monke
     # Harness still needs the full summary to replace history internally.
     assert result == response
     assert not any(event["type"] in {"token", "think"} for event in events)
-    assert any(event["type"] == "runtime" and event["text"] == "整理对话上下文…"
+    assert any(event["type"] == "runtime" and event["text"] == "Compacting conversation context…"
                for event in events)
     usage = [event["data"] for event in events if event["type"] == "context_usage"]
     assert [event["status"] for event in usage] == ["running", "completed"]

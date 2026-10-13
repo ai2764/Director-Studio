@@ -1,3 +1,7 @@
 *.sh text eol=lf
 *.command text eol=lf
 scripts/git-hooks/pre-commit text eol=lf
+*.cmd text eol=crlf
+*.vbs text eol=crlf
+*.iss text eol=crlf
+*.ico binary

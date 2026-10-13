@@ -21,6 +21,8 @@ Download published packages from [Releases](https://github.com/ai2764/Director-S
 
 Director supports Ollama, LM Studio, llama-swap, and OpenAI-compatible providers. The [Harness runtime](docs/HARNESS.md) is selected by the example configuration and portable defaults; source users can also choose Legacy. Portable packages include a private Node runtime and compiled Harness sidecar. Conversation compaction helps manage history, while the model server determines the available context capacity.
 
+**Linux installer package** (bundled ComfyUI, Ollama, FFmpeg, Harness; one `./director-studio` launcher): see [Installer](docs/installer.md) and the per-workflow [model list](docs/models.md) (Hugging Face + ModelScope links). Models and third-party node packs are not shipped: download them per workflow in **Settings → Workflow dependencies** (from the original publishers, under their licences). 安装包说明见 [docs/installer.md](docs/installer.md)，模型清单见 [docs/models.md](docs/models.md)；模型和第三方节点包不随程序分发，请在 **设置 → 工作流依赖** 中按工作流从原作者处下载（适用原作者的许可）。
+
 For implementation details, see [Architecture](docs/ARCHITECTURE.md), [context recovery](docs/HARNESS_CONTEXT_RECOVERY.md), and [Director configuration recovery](docs/director-configuration-recovery.md).
 
 ## Stack

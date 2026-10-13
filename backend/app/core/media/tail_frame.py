@@ -24,6 +24,7 @@ from ..projects.models import Shot, ShotStatus
 from ..projects.store import list_projects, load_shot, save_shot
 from ..schemas import JobStatus, LibraryAsset
 from .clip_generations import ClipGenerationError, resolve_source_clip
+from .binaries import find_tool
 
 _H3_PIPELINE_ID = "h3_ref2va"
 _TAIL_WINDOW_S = 2.0
@@ -39,7 +40,7 @@ def _now() -> str:
 
 
 def _require_binary(name: str) -> str:
-    resolved = shutil.which(name)
+    resolved = find_tool(name)
     if not resolved:
         raise ValueError(f"{name} is required to extract a tail frame")
     return resolved

@@ -25,6 +25,10 @@ def isolate_default_runtime_data(tmp_path, monkeypatch):
     }.items():
         path.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(settings, field, path)
+    # A developer .env may select managed ComfyUI / bundled Ollama; app lifespans in
+    # tests must never spawn those real processes (tests opt in explicitly).
+    monkeypatch.setattr(settings, "comfy_mode", "external-local")
+    monkeypatch.setattr(settings, "ollama_mode", "system")
 
 
 @pytest.fixture

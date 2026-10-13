@@ -455,3 +455,17 @@ async def test_remote_provider_does_not_receive_unload_before_comfy():
 
     assert lifecycle.released == []
     assert orch.owner == "comfy"
+
+
+@pytest.mark.asyncio
+async def test_failed_llm_unload_on_session_exit_does_not_leak_gpu_ownership():
+    provider = FakeProvider(FailingLocalLifecycle(), provider_id="llama-swap")
+    orch = VramOrchestrator(provider=provider, comfy=FakeComfy(), models=["m"], acquire_timeout_sec=1.0)
+
+    with pytest.raises(RuntimeError, match="unload failed"):
+        async with orch.llm_session(release_on_exit=True):
+            pass
+    assert orch.owner is None
+    # a later session must not wait forever behind the leaked "llm" owner
+    async with orch.llm_session(release_on_exit=False):
+        assert orch.owner == "llm"

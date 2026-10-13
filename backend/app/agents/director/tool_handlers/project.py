@@ -26,11 +26,22 @@ from ..service import _script_hash
 
 logger = logging.getLogger("director_studio.director.tool_handlers.project")
 
-_STORYBOARD_REPLACEMENT_WARNING = (
+_STORYBOARD_REPLACEMENT_WARNING_ZH = (
     "保存新的 storyboard 会清除当前全部 {shot_count} 个 shots，并用新计划全量重写。"
     "当前没有修改任何 shot。若要继续，请在下一条消息中明确回复："
     "确认清除并重写全部 shots"
 )
+_STORYBOARD_REPLACEMENT_WARNING_EN = (
+    "Saving the new storyboard will clear all {shot_count} current shots and rewrite them from the new plan. "
+    "No shot has been changed yet. To continue, reply in your next message exactly: "
+    "confirm clear all shots and rewrite the storyboard"
+)
+_CJK = re.compile(r"[\u3400-\u9fff]")
+
+
+def _wants_zh(text: str | None) -> bool:
+    """Reply in Chinese only when the user writes Chinese; English otherwise."""
+    return bool(text and _CJK.search(text))
 
 
 def _storyboard_replacement_path(project_id: str):
@@ -153,6 +164,10 @@ async def handle_project_tool(
             user_message_id=user_message_id)
         submission = AppendShotSubmission.model_validate({**submission.model_dump(), "shot": authored})
         shot = svc.append_shot(project_id, submission, **({"dialogue_authoring": evidence} if evidence else {}))
+        from ..brief import remember_directing_request
+        # The authored request must reach later reviewers (intent.directing_requests);
+        # otherwise an older request looks like the latest explicit requirement.
+        remember_directing_request(project_id, user_feedback)
         actions.append("append_shot")
         if result_payloads is not None:
             result_payloads.append(
@@ -180,6 +195,9 @@ async def handle_project_tool(
             evidence.append(receipt)
         submission = submission.model_copy(update={"shots": drafts})
         added = svc.append_shots(project_id, submission, dialogue_authoring=evidence)
+        from ..brief import remember_directing_request
+        # Same as append_shot: later reviewers must see this batch request as the latest one.
+        remember_directing_request(project_id, user_feedback)
         actions.append(f"append_shots:{len(added)}")
         if result_payloads is not None:
             result_payloads.append({"ok": True, "created_count": len(added),
@@ -211,9 +229,14 @@ async def handle_project_tool(
             not _confirms_storyboard_replacement(user_feedback)
             or user_message_id == pending.get("request_message_id")
         ):
+            if _wants_zh(user_feedback):
+                raise ValueError(
+                    "请在后续消息中明确回复“确认清除并重写全部 shots”；"
+                    "ok、继续或附带修改要求都不会授权全量替换。"
+                )
             raise ValueError(
-                "请在后续消息中明确回复“确认清除并重写全部 shots”；"
-                "ok、继续或附带修改要求都不会授权全量替换。"
+                "Reply in a follow-up message exactly: \"confirm clear all shots and rewrite the storyboard\". "
+                "'ok', 'continue' or a reply with extra changes does not authorize a full replacement."
             )
         current_shots = refresh_shots()
         if _storyboard_state_hash(current_shots) != pending.get("storyboard_state_hash"):
@@ -305,13 +328,14 @@ async def handle_project_tool(
                 proposal["warnings"] = preview_review.get("warnings", [])
                 _save_storyboard_replacement(project_id, proposal)
             remember_directing_request(project_id, user_feedback)
-            warning = _STORYBOARD_REPLACEMENT_WARNING.format(
+            zh = _wants_zh(user_feedback)
+            warning = (_STORYBOARD_REPLACEMENT_WARNING_ZH if zh else _STORYBOARD_REPLACEMENT_WARNING_EN).format(
                 shot_count=len(current_shots)
             )
             if removed_dialogue:
-                warning += "\n将删除或替换的原对白：" + json.dumps(removed_dialogue, ensure_ascii=False)
+                warning += ("\n将删除或替换的原对白：" if zh else "\nDialogue that will be removed or replaced: ") + json.dumps(removed_dialogue, ensure_ascii=False)
             if proposal["warnings"]:
-                warning += "\n生成风险提示（不阻止保存）：\n" + "\n".join(proposal["warnings"])
+                warning += ("\n生成风险提示（不阻止保存）：\n" if zh else "\nGeneration risk notes (do not block saving):\n") + "\n".join(proposal["warnings"])
             actions.append(f"propose_storyboard_replacement:{proposal['id']}")
             if result_payloads is not None:
                 result_payloads.append(
@@ -379,6 +403,11 @@ async def handle_project_tool(
         persisted = svc.revise_shot(project_id, revision, **({"dialogue_authoring": evidence,
             "expected_shot_hash": digest(current.model_dump(mode="json")),
             "expected_script_hash": _script_hash(project.script_text)} if evidence else {}))
+        from ..brief import remember_directing_request
+        # Record the revision request (e.g. "make shot 1 exactly 5 seconds"): material review
+        # checks saved duration against the *latest* directing request; without this it only
+        # sees the original planning request and reports the user's own edit as a conflict.
+        remember_directing_request(project_id, user_feedback)
         actions.append("revise_shot")
         if result_payloads is not None:
             # Report the saved target, not a full board per edit (quadratic in
