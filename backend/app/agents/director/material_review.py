@@ -6,7 +6,7 @@ import json
 import logging
 import uuid
 from time import monotonic
-from typing import Callable, Literal
+from typing import Annotated, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
@@ -62,6 +62,7 @@ class MaterialDecision(BaseModel):
     blocking_question: str | None = Field(max_length=1000)
     tail_frame_handoff: str | None = Field(default=None, max_length=1600)
     configuration_issues: list[ConfigurationIssue] = Field(default_factory=list, max_length=2)
+    reinspect_pictures: list[Annotated[int, Field(strict=True, ge=1, le=9)]] = Field(default_factory=list, max_length=9)
 
     @field_validator("brief", "blocking_question", "tail_frame_handoff")
     @classmethod
@@ -235,8 +236,13 @@ def _save_review_failure(project_id, record, identity, attempts, error):
 
 
 async def observe_references_cached(provider, project_id, records, images, check_current, *,
-                                    inspection_request: str = "", on_progress=None):
-    """Persist shot-independent visual facts even when subsequent prompt writing fails."""
+                                    inspection_request: str = "", refresh_pictures: set[int] | None = None,
+                                    refresh_request: str = "", on_progress=None):
+    """Cache visual evidence separately from shot suitability and directing history.
+
+    inspection_request is an explicit visual reinspection, not a prompt revision.
+    Current directing sources remain in the returned records for suitability review.
+    """
     from ...core.projects.store import load_project
     project = load_project(project_id)
     if project is not None:
@@ -254,7 +260,13 @@ async def observe_references_cached(provider, project_id, records, images, check
     hits, misses = 0, 0
     for record, image in zip(records, images, strict=True):
         check_current()
-        stable_record = {k: v for k, v in record.items()
+        # Story edits do not change pixels. Keep user requirements in the pack
+        # review, rather than invalidating every image or biasing its observation.
+        observation_record = {**record, "sources": [
+            source for source in record.get("sources", [])
+            if source.get("kind") != "user_directing_request"
+        ]}
+        stable_record = {k: v for k, v in observation_record.items()
                          if k not in {"picture_index", "reference_notes"}}
         identity = {
             "version": 5, "fact_policy": REFERENCE_POLICY_VERSION, "record": stable_record,
@@ -264,7 +276,10 @@ async def observe_references_cached(provider, project_id, records, images, check
             "endpoint": str(getattr(getattr(provider, "client", None), "base_url", "")),
         }
         cache = ObservationCache(settings.projects_dir / project_id / "agent" / "reference_observations", identity)
-        observation, reason = cache.load(ReferenceObservation, record.get("sources", []))
+        if record["picture_index"] in (refresh_pictures or set()):
+            observation, reason = None, "requested_reinspection"
+        else:
+            observation, reason = cache.load(ReferenceObservation, observation_record["sources"])
         if observation is not None:
             hits += 1
             await emit_progress(on_progress, {"type": "status", "phase": "reference_cache", "state": "hit",
@@ -279,8 +294,8 @@ async def observe_references_cached(provider, project_id, records, images, check
             try:
                 async with report_phase(on_progress, "reference_observation",
                                         f"Inspecting Picture {record['picture_index']}/{len(records)}"):
-                    result = await observe_reference(provider, record, image,
-                                                     brief=inspection_request, attempts=attempts)
+                    result = await observe_reference(provider, observation_record, image,
+                                                     brief=refresh_request or inspection_request, attempts=attempts)
                 observation = ReferenceObservation.model_validate({k: result[k] for k in ReferenceObservation.model_fields})
             except Exception as exc:
                 _save_review_failure(project_id, record, identity, attempts, exc)
@@ -342,7 +357,6 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
     if not callable(inspect):
         raise MaterialReviewError("Material review requires a vision-capable provider; no text-only fallback")
     reviewed = await observe_references_cached(provider, project.id, records, images, check_current,
-                                               inspection_request=revision_request,
                                                on_progress=on_progress)
     check_current()
     by_picture = {item["picture_index"]: item for item in reviewed}
@@ -368,7 +382,16 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
         "visually inspected. This is reference suitability review, not story approval or authoring. "
         "Return only JSON with fields brief (always null; this review cannot rewrite the shot), "
         "rewrite_prompt (boolean), reason (concise), blocking_question (one "
-        "question or null), tail_frame_handoff (text or null), configuration_issues (array, default []). "
+        "question or null), tail_frame_handoff (text or null), configuration_issues (array, default []), "
+        "reinspect_pictures (array of current Picture numbers, default []). "
+        "The visual observations may be reused from unchanged images. Reuse them for ordinary duration, "
+        "action, camera, dialogue or story edits. If the current user explicitly disputes a visual "
+        "observation, asks to look again, or an essential visual detail is missing from the evidence, "
+        "request only the affected Picture numbers in reinspect_pictures. The backend will inspect those "
+        "images and return the refreshed observations for one final decision. Do not request every "
+        "Picture merely because the shot requirements changed. If reinspected_pictures is present, "
+        "the visual refresh budget is exhausted; use the fresh evidence, retain uncertainty, or ask "
+        "a blocking_question rather than requesting more inspection. "
         "Check saved duration and audio_bindings against the latest explicit requirement for THIS shot. "
         "If a saved duration_s or voice_matches binding contradicts an unambiguous user requirement, "
         "report a configuration_issues item with field (duration_s or voice_matches), requirement "
@@ -424,13 +447,17 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
         request["shot"]["storyboard_duration_s"] = shot.duration_s
     _, request["references"] = project_writer_context({}, request["intent"], reviewed)
     system += "\nReference source text_ref links resolve to intent.directing_requests by id in this request."
-    for attempt in range(2):
+    structure_repairs = 0
+    reinspected = False
+    for attempt in range(3):
         async with report_phase(on_progress, "material_review",
-                                f"Checking reference suitability for {shot.title} (attempt {attempt + 1}/2)"):
+                                f"Checking reference suitability for {shot.title} (attempt {attempt + 1}/3)"):
             raw = await provider.complete(system, json.dumps(request, ensure_ascii=False), guides=())
         check_current()
         try:
             decision = MaterialDecision.model_validate(_extract_json_payload(raw))
+            if not set(decision.reinspect_pictures) <= set(by_picture):
+                raise ValueError("reinspect_pictures must name only current Picture numbers")
             intent = request["intent"]
             sources = [intent["current_request"],
                        (intent.get("authoring_request") or {}).get("text", ""),
@@ -439,16 +466,35 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
                 if not any(issue.requirement in source for source in sources):
                     raise ValueError("configuration_issues.requirement must quote a supplied user request")
         except ValueError as exc:
-            if attempt:
+            if structure_repairs:
                 raise PromptFailureError("candidate", f"material_decision_structure: {exc}") from exc
+            structure_repairs += 1
             request["correction"] = {
                 "instruction": "Repair the decision structure once. Return only the allowed decision fields; "
                                "preserve the evidence and user intent. Do not return prompt_sections.",
                 "validation_error": str(exc), "previous_response": raw,
                 "schema": MaterialDecision.model_json_schema(),
             }
-        else:
-            break
+            continue
+        if decision.reinspect_pictures:
+            if reinspected:
+                raise MaterialReviewError("Reference reinspection exceeded the one-pass budget")
+            reinspected = True
+            pictures = set(decision.reinspect_pictures)
+            reviewed = await observe_references_cached(
+                provider, project.id, records, images, check_current,
+                refresh_pictures=pictures, refresh_request=revision_request or decision.reason,
+                on_progress=on_progress)
+            check_current()
+            by_picture = {item["picture_index"]: item for item in reviewed}
+            request["references"] = project_writer_context({}, request["intent"], reviewed)[1]
+            request["tail_frames"] = [
+                {**item, "visible_observation": by_picture[item["picture_index"]]["description"]}
+                for item in tail_frames]
+            request["reinspected_pictures"] = sorted(pictures)
+            request.pop("correction", None)
+            continue
+        break
     if decision.blocking_question:
         raise ValueError(f"Material review needs your decision: {decision.blocking_question}")
     if decision.configuration_issues:

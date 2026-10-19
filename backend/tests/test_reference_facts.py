@@ -299,7 +299,7 @@ async def test_submission_cannot_bypass_reference_refresh(material_shot, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_directing_change_refreshes_sources_and_prevents_old_observation_reuse(material_shot):
+async def test_directing_change_refreshes_suitability_sources_and_reuses_visual_observations(material_shot):
     from app.agents.director.service import DirectorService
     from app.agents.director.brief import remember_directing_request
     from app.core.projects.store import project_dir
@@ -310,7 +310,11 @@ async def test_directing_change_refreshes_sources_and_prevents_old_observation_r
     await svc.write_prompts_after_layout(shot.id)
     remember_directing_request(project.id, "Use the new violet design, not the earlier silver one.")
     await svc.write_prompts_after_layout(shot.id)
-    assert len(provider.visual) == 18
+    assert len(provider.visual) == 9
+    reviews = [json.loads(user) for system, user in provider.text
+               if "reference review decision" in system.lower()]
+    assert len(reviews) == 2
+    assert any("violet" in source["text"] for source in reviews[-1]["intent"]["directing_requests"])
     ledger = json.loads((project_dir(project.id) / "agent/reference_facts.json").read_text(encoding="utf-8"))
     assert any(s["kind"] == "user_directing_request" and "violet" in s["text"]
         for r in ledger["references"].values() for s in r["sources"])
