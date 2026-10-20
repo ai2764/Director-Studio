@@ -67,16 +67,38 @@ async def test_reviewer_and_writer_share_actual_music_submit_duration(material_s
 async def test_current_visual_correction_reinspects_instead_of_reusing_old_labels(material_shot):
     _, shot, _, _ = material_shot
     orch = Orchestrator()
-    provider = Provider(orch)
+    correction = "This approved image has a hip-length jacket and no backpack. Reinspect those details."
+
+    class CorrectionProvider(Provider):
+        async def complete(self, system, user, **kwargs):
+            result = json.loads(await super().complete(system, user, **kwargs))
+            if "reference review decision" in system.lower():
+                request = json.loads(user)
+                if request["intent"]["current_request"] == correction and not request.get("reinspected_pictures"):
+                    result["reinspect_pictures"] = [3]
+            return json.dumps(result)
+
+        async def complete_with_images(self, system, user, **kwargs):
+            result = json.loads(await super().complete_with_images(system, user, **kwargs))
+            if len(self.visual) > 9:
+                result["description"] = "A hip-length jacket with no backpack."
+            return json.dumps(result)
+
+    provider = CorrectionProvider(orch)
     svc = DirectorService(plan_provider=provider, orchestrator=orch)
     await svc.write_prompts_after_layout(shot.id)
-    correction = "This approved image has a hip-length jacket and no backpack. Reinspect those details."
-    await svc.write_prompts_after_layout(shot.id, revision_request=correction)
-    assert len(provider.visual) == 18
-    assert all(correction in user for user, _ in provider.visual[9:])
+    updated = await svc.write_prompts_after_layout(shot.id, revision_request=correction)
+    assert len(provider.visual) == 10
+    assert "Picture 3" in provider.visual[-1][0]
+    assert correction in provider.visual[-1][0]
+    assert updated.meta["material_review"]["references"][2]["description"] == "A hip-length jacket with no backpack."
     # Identical correction and image bytes can still share the bounded inspection.
     await svc.write_prompts_after_layout(shot.id, revision_request=correction)
-    assert len(provider.visual) == 18
+    assert len(provider.visual) == 10
+    # The corrected observation replaces the base cache, not only a request-specific entry.
+    updated = await svc.write_prompts_after_layout(shot.id, revision_request="Use a steady camera.")
+    assert len(provider.visual) == 10
+    assert updated.meta["material_review"]["references"][2]["description"] == "A hip-length jacket with no backpack."
 
 
 @pytest.mark.asyncio
