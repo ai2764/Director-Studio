@@ -418,7 +418,8 @@ async def test_comfy_does_not_start_when_local_lifecycle_release_fails():
 
 
 @pytest.mark.asyncio
-async def test_remote_llm_session_does_not_free_comfy_or_claim_gpu(monkeypatch):
+@pytest.mark.parametrize("generation_status", ["queued", "running"])
+async def test_remote_llm_session_does_not_free_comfy_or_claim_gpu(monkeypatch, generation_status):
     lifecycle = RecordingRemoteLifecycle()
     comfy = FakeComfy()
     provider = FakeProvider(lifecycle, provider_id="openai-compatible")
@@ -432,13 +433,20 @@ async def test_remote_llm_session_does_not_free_comfy_or_claim_gpu(monkeypatch):
         lambda provider_id=None: "remote-model",
     )
 
-    async with orch.llm_session():
+    await orch.reserve_generation(
+        job_id="job_video", pipeline_id="h3_ref2va", kind="video",
+        status=generation_status, phase="queued" if generation_status == "queued" else "generating",
+        queued_at="2026-08-31T10:00:00+00:00",
+    )
+    await orch.before_comfy_job("h3_ref2va")
+    async with orch.llm_session(fail_if_generation_pending=True):
         await orch.ensure_llm_ready()
-        assert orch.owner is None
+        assert orch.owner == "comfy"
 
     assert comfy.free_calls == 0
     assert lifecycle.prepared == ["remote-model"]
     assert lifecycle.released == []
+    assert len(await orch.generation_reservations()) == 1
 
 
 @pytest.mark.asyncio
