@@ -273,6 +273,48 @@ async def test_chat_preflight_reads_local_provider_context_capacity(monkeypatch)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("meta, expected, source", [
+    ({"n_ctx": 131072}, 131072, "provider_reported"),
+    ({}, 49152, "configured_fallback"),
+])
+async def test_remote_metadata_controls_director_budget(monkeypatch, meta, expected, source):
+    import httpx
+    from app.api import projects as projects_api
+    from app.config import settings
+    from app.core.llm.lifecycle import RemoteLifecycle
+    from app.core.llm.openai_compatible import OpenAICompatibleClient
+    from app.agents.director.harness_runtime import harness_input_budget
+
+    client = OpenAICompatibleClient(
+        base_url="http://localhost:8081/v1", api_key=None, timeout=10,
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "data": [{"id": "catalog-model", "meta": meta}],
+        })),
+    )
+    active = RecordingProvider(client)
+    active.lifecycle = RemoteLifecycle(client, provider_id=active.provider_id)
+    monkeypatch.setattr(settings, "director_num_ctx", 49152)
+    monkeypatch.setattr(settings, "director_num_predict", 8192)
+    monkeypatch.setattr("app.core.vram.get_orchestrator", lambda: FakeOrchestrator())
+    events = []
+
+    async def progress(event):
+        events.append(event)
+
+    try:
+        chat_fn = await projects_api._make_chat_fn(progress, provider=active)
+        capacity = await chat_fn.resolve_context_capacity()
+        assert capacity == expected
+        assert harness_input_budget(capacity) == expected - 8192
+        # The reporter is updated by the same resolver before inference.
+        reporter = next(cell.cell_contents for cell in chat_fn.__closure__
+                        if hasattr(cell.cell_contents, "capacity_source"))
+        assert reporter.capacity_source == source
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_make_chat_fn_retries_tools_only_for_unsupported_feature(monkeypatch):
     from app.api import projects as projects_api
 

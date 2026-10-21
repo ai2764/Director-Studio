@@ -21,6 +21,50 @@ def _client(
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capacity", [65536, 131072])
+async def test_optional_context_capacity_reaches_remote_lifecycle(capacity) -> None:
+    from app.core.llm.lifecycle import RemoteLifecycle
+
+    def handler(request):
+        assert request.url.path == "/v1/models"
+        return httpx.Response(200, json={"object": "list", "data": [
+            {"id": "other-model", "meta": {"n_ctx": 4096}},
+            {"id": "selected-model", "meta": {"n_ctx": capacity}},
+        ]})
+
+    client = _client(handler)
+    try:
+        lifecycle = RemoteLifecycle(client, provider_id="openai-compatible")
+        assert await lifecycle.context_capacity("selected-model") == capacity
+        assert await lifecycle.context_capacity("missing-model") is None
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("meta", [None, {}, {"n_ctx": None}, {"n_ctx": True},
+    {"n_ctx": 0}, {"n_ctx": -1}, {"n_ctx": "65536"}, {"n_ctx": 1.5}, "invalid"])
+async def test_missing_or_invalid_context_capacity_keeps_fallback(meta) -> None:
+    client = _client(lambda request: httpx.Response(200, json={"data": [
+        {"id": "selected-model", "meta": meta},
+    ]}))
+    try:
+        assert await client.context_capacity("selected-model") is None
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [404, 500])
+async def test_context_discovery_failure_is_optional(status) -> None:
+    client = _client(lambda request: httpx.Response(status, json={"error": "unavailable"}))
+    try:
+        assert await client.context_capacity("selected-model") is None
+    finally:
+        await client.close()
+
+
 def _chat_response(
     *,
     content: str = "",
