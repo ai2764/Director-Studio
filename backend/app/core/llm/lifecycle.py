@@ -50,8 +50,8 @@ class RemoteLifecycle:
         }
 
     async def context_capacity(self, model: str) -> int | None:
-        del model
-        return None
+        discover = getattr(self.client, "context_capacity", None)
+        return await discover(model) if discover is not None else None
 
 
 class OllamaLifecycle:

@@ -226,6 +226,22 @@ class OpenAICompatibleClient:
         page = await self._client.models.list()
         return [str(item.id) for item in page.data if getattr(item, "id", None)]
 
+    async def context_capacity(self, model: str) -> int | None:
+        """Read optional serving capacity; absent metadata keeps the configured fallback."""
+        try:
+            page = await self._client.models.list()
+            for item in page.data:
+                if _value(item, "id") != model:
+                    continue
+                value = _value(_value(item, "meta"), "n_ctx")
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                    return value
+                return None
+        except (httpx.HTTPError, APIStatusError, OSError, ValueError, TypeError):
+            # Discovery is optional: an unavailable catalog must not prevent chat.
+            return None
+        return None
+
     async def health(self) -> bool:
         try:
             await self.list_models()
