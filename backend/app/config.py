@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_api_key: str | None = None
     llm_timeout_sec: float = 600.0
+    # Residency API is independent of the inference provider/protocol.
+    llm_runtime: Literal["auto", "strata", "lm-studio", "llama-swap"] = "auto"
+    # Override endpoint-based GPU topology for tunnels, aliases or separate cards.
+    vram_shared_gpu: Literal["auto", "true", "false"] = "auto"
 
     # Local Ollama / Director agent (VRAM exclusive with Comfy)
     ollama_base_url: str = "http://127.0.0.1:11434"

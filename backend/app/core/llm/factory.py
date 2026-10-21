@@ -12,6 +12,7 @@ from .llama_swap import LlamaSwapLifecycle
 from .ollama import OllamaLLMProvider
 from .openai_compatible import OpenAICompatibleClient
 from .provider import LLMClient, LLMLifecycle
+from .gpu_residency import LocatedLifecycle, LocalOpenAILifecycle, StrataLifecycle, resolve_shared_gpu
 
 
 @dataclass
@@ -39,7 +40,11 @@ class ActiveProvider:
 def get_llm_provider():
     provider_id = settings.llm_provider
     if provider_id == "ollama":
-        return OllamaLLMProvider()
+        provider = OllamaLLMProvider()
+        provider.lifecycle = LocatedLifecycle(provider.lifecycle, shared=resolve_shared_gpu(
+            settings.ollama_base_url, settings.comfy_base_url, settings.vram_shared_gpu,
+        ))
+        return provider
 
     base_url = settings.llm_base_url.strip()
     if provider_id == "lm-studio":
@@ -53,23 +58,30 @@ def get_llm_provider():
         api_key=settings.llm_api_key,
         timeout=settings.llm_timeout_sec,
     )
-    if provider_id == "llama-swap":
+    shared = resolve_shared_gpu(base_url, settings.comfy_base_url, settings.vram_shared_gpu)
+    runtime = settings.llm_runtime if settings.llm_runtime != "auto" else provider_id
+    if runtime == "llama-swap":
         lifecycle = LlamaSwapLifecycle(
             base_url,
             api_key=settings.llm_api_key,
             timeout=settings.llm_timeout_sec,
         )
         catalog = lifecycle.list_models
-    elif provider_id == "lm-studio":
+    elif runtime == "lm-studio":
         lifecycle = LMStudioLifecycle(
             base_url,
             api_key=settings.llm_api_key,
             timeout=settings.llm_timeout_sec,
         )
         catalog = lifecycle.list_models
+    elif runtime == "strata" or shared:
+        adapter = StrataLifecycle if runtime == "strata" else LocalOpenAILifecycle
+        lifecycle = adapter(base_url, api_key=settings.llm_api_key, timeout=settings.llm_timeout_sec)
+        catalog = client.list_models
     else:
         lifecycle = RemoteLifecycle(client, provider_id=provider_id)
         catalog = client.list_models
+    lifecycle = LocatedLifecycle(lifecycle, shared=shared)
     return ActiveProvider(
         provider_id=provider_id,
         client=client,
