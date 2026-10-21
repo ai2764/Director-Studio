@@ -166,7 +166,11 @@ def _generation_active_http(error: GenerationActiveError) -> HTTPException:
 async def _assert_chat_available() -> None:
     from ..core.vram import get_orchestrator
 
-    reservations = await get_orchestrator().generation_reservations()
+    orch = get_orchestrator()
+    lifecycle = getattr(getattr(orch, "provider", None), "lifecycle", None)
+    if not getattr(lifecycle, "uses_local_gpu", True):
+        return
+    reservations = await orch.generation_reservations()
     if reservations:
         raise GenerationActiveError(reservations)
 

@@ -368,11 +368,7 @@ class VramOrchestrator:
                 logger.exception("llm_session on_status failed")
 
         if not self.provider.lifecycle.uses_local_gpu:
-            async with self._cv:
-                if fail_if_generation_pending:
-                    reservations = self._generation_snapshot_unlocked()
-                    if reservations:
-                        raise GenerationActiveError(reservations)
+            # Remote inference does not compete with local image/video generation.
             yield self
             return
 
