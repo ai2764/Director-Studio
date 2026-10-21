@@ -4,6 +4,9 @@ from ..pipelines.actor.router import router as actor_router
 from ..pipelines.h3_ref2va.router import router as h3_ref2va_router
 from ..pipelines.prop.router import router as prop_router
 from ..pipelines.scene.router import router as scene_router
+from .config import router as config_router
+from .deps import router as deps_router
+from .ollama import router as ollama_router
 from .director import router as director_router
 from .files import router as files_router
 from .health import router as health_router
@@ -19,6 +22,9 @@ from .song_segments import router as song_segments_router
 def build_api_router() -> APIRouter:
     api = APIRouter(prefix="/api")
     api.include_router(health_router)
+    api.include_router(config_router)
+    api.include_router(deps_router)
+    api.include_router(ollama_router)
     api.include_router(pipelines_router)
     api.include_router(files_router)
     api.include_router(actor_router)

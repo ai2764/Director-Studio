@@ -125,7 +125,9 @@ def _install_profile(store: H3ProfileStore, profile_id: str, *, saver_id: str) -
     )
 
 
-def test_builtin_profile_uses_official_template_defaults() -> None:
+def test_builtin_profile_uses_official_template_defaults(monkeypatch) -> None:
+    from app.config import settings
+    monkeypatch.setattr(settings, "h3_builtin_workflow", "h3_ref2va.api.json")
     profile = H3ProfileStore().resolve_active()
     actual = fill_profile_graph(profile, _job_params())
 

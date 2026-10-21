@@ -44,8 +44,17 @@ def _is_multimodal_rejected(body: str) -> bool:
 class OllamaClient:
     """Minimal async client for Ollama health, unload, generate, and vision chat."""
 
-    def __init__(self, base_url: str | None = None, *, timeout: float = 600.0) -> None:
+    def __init__(
+        self,
+        base_url: str | None = None,
+        *,
+        timeout: float = 600.0,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        from ..llm.extra_headers import llm_extra_headers
+
         self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
+        self._headers = dict(headers) if headers is not None else llm_extra_headers()
         if not _is_loopback(self.base_url):
             pass
         self._timeout = timeout
@@ -61,7 +70,7 @@ class OllamaClient:
 
     async def health(self) -> bool:
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(headers=self._headers, timeout=5.0) as client:
                 r = await client.get(f"{self.base_url}/api/tags")
                 return r.status_code < 400
         except (httpx.HTTPError, OSError):
@@ -69,7 +78,7 @@ class OllamaClient:
 
     async def list_models(self) -> list[str]:
         """Return installed Ollama model tags in server order."""
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(headers=self._headers, timeout=5.0) as client:
             response = await client.get(f"{self.base_url}/api/tags")
             response.raise_for_status()
             names: list[str] = []
@@ -82,7 +91,7 @@ class OllamaClient:
     async def loaded_models(self) -> list[dict[str, Any]]:
         """Return /api/ps models list (includes size_vram)."""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(headers=self._headers, timeout=5.0) as client:
                 r = await client.get(f"{self.base_url}/api/ps")
                 if r.status_code >= 400:
                     return []
@@ -114,7 +123,7 @@ class OllamaClient:
         """Best-effort unload: POST /api/generate with keep_alive=0."""
         timeout = httpx.Timeout(10.0, connect=2.0)
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(headers=self._headers, timeout=timeout) as client:
                 for name in names:
                     if not name:
                         continue
@@ -155,7 +164,7 @@ class OllamaClient:
         if images:
             body["images"] = list(images)
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(headers=self._headers, timeout=self._timeout) as client:
             r = await client.post(f"{self.base_url}/api/generate", json=body)
             if r.status_code >= 400 and images:
                 err = _err_text(r)
@@ -214,7 +223,7 @@ class OllamaClient:
         elif getattr(settings, "llm_keep_loaded", True):
             request["keep_alive"] = "60m"
 
-        client = AsyncClient(host=self.base_url, timeout=self._timeout)
+        client = AsyncClient(host=self.base_url, timeout=self._timeout, headers=self._headers)
         try:
             response = await client.chat(**request)
         except Exception as exc:
@@ -309,7 +318,7 @@ class OllamaClient:
         elif getattr(settings, "llm_keep_loaded", True):
             body["keep_alive"] = "60m"
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(headers=self._headers, timeout=self._timeout) as client:
             r = await client.post(f"{self.base_url}/api/chat", json=body)
             if r.status_code >= 400 and images:
                 err = _err_text(r)
@@ -421,7 +430,7 @@ class OllamaClient:
         elif getattr(settings, "llm_keep_loaded", True):
             body["keep_alive"] = "60m"
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(headers=self._headers, timeout=self._timeout) as client:
             async with client.stream(
                 "POST", f"{self.base_url}/api/generate", json=body
             ) as r:
@@ -474,7 +483,7 @@ class OllamaClient:
         elif getattr(settings, "llm_keep_loaded", True):
             body["keep_alive"] = "60m"
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(headers=self._headers, timeout=self._timeout) as client:
             async with client.stream(
                 "POST", f"{self.base_url}/api/chat", json=body
             ) as r:

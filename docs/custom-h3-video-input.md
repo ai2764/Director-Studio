@@ -51,6 +51,19 @@ This graph is a Director Studio adaptation of the [Comfy-Org MiniMax H3 Ref2AV t
 
 - [NikoDemon80 / ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context): `MiniMaxH3MotionContext` and `MiniMaxH3MotionContextTrim`.
 - [Zironic / H3-Optimizations](https://github.com/Zironic/H3-Optimizations): `H3MemoryOptimization`.
+
+Packaging status (checked 2026-10-08):
+
+| Pack | Licence | Director Studio package |
+| --- | --- | --- |
+| ComfyUI-H3-Motion-Context v0.6.2 (`5335715abe54`) | GPL-3.0 (LICENSE file) | Bundled as the optional **H3 continuation** component (`installer/manifest.json`, leave out with `build_linux.py build --without h3-continuation`). No Python dependencies; runs inside the ComfyUI process only. |
+| H3-Optimizations 0.2.45 (`862774944a33`) | none published (no LICENSE file, no licence in pyproject/README, Comfy registry licence empty) | **Not bundled** — without a licence it cannot be redistributed. Install it yourself into the **user node folder** — with the Director Studio package (managed ComfyUI) that is `<DS data>/comfy/custom_nodes` (Linux `~/.local/share/DirectorStudio/data/comfy/custom_nodes`, Windows `%LOCALAPPDATA%\DirectorStudio\data\comfy\custom_nodes`; the health check shows the exact path), which survives upgrades and uninstall: `cd <that folder> && git clone https://github.com/Zironic/H3-Optimizations`, then restart ComfyUI. With your own ComfyUI use its `custom_nodes` folder. The health check links the repository. Alternatively use the built-in `h3_ref2va.api.json` or remove the `H3MemoryOptimization` node from your variation. |
+
+Both `h3_ref2va_fast4.api.json` and the video-context workflow use `H3MemoryOptimization`.
+
+## Default built-in H3 workflow
+
+`h3_ref2va_turbo4_video_context.api.json` is the default built-in H3 workflow (`DS_H3_BUILTIN_WORKFLOW`, Settings → Generation → advanced). It is used for every shot: a shot with a video context (previous shot or external upload, `DS_VIDEO_CONTEXT_ENABLED=true`) feeds the source video into node 142 and Motion Context; a shot without one runs the same Turbo 4-step graph with the context nodes removed. The health check therefore requires its node packs (ComfyUI-H3-Motion-Context, H3-Optimizations). `h3_ref2va_fast4.api.json` (Turbo 4, no context) and `h3_ref2va.api.json` (official 20-step) remain selectable.
 - A compatible ComfyUI version providing the H3 Ref2AV, Sigma Shift, video/audio loading and decoding, audio trimming, and `ModelAttentionBackend` nodes. The example selects `comfy kitchen attention`; install its requirements or change the attention backend to one supported by your deployment.
 
 Install these exact model filenames, or select compatible alternatives in the visual graph and export a new API variation:

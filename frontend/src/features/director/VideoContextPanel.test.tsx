@@ -305,7 +305,7 @@ describe("VideoContextPanel", () => {
     const window = await screen.findByLabelText("Context window");
     expect(window.tagName).toBe("INPUT");
     expect((window as HTMLInputElement).readOnly).toBe(true);
-    expect((window as HTMLInputElement).value).toBe("工作流配置");
+    expect((window as HTMLInputElement).value).toBe("Workflow config");
     expect(screen.queryByLabelText("Carry source audio")).toBeNull();
   });
 

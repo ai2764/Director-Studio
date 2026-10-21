@@ -186,7 +186,14 @@ def _remove_empty_directories(root: Path) -> None:
             pass
 
 
-def stage_harness(repo_root: Path, destination: Path, config: RuntimeConfig, *, npm: str, runner: Callable[..., object] = subprocess.run) -> None:
+_NPM_OS = {"windows-x64": "win32", "linux-x86_64": "linux", "macos-arm64": "darwin", "macos-x86_64": "darwin"}
+_NPM_CPU = {"x86_64": "x64"}
+
+
+def stage_harness(repo_root: Path, destination: Path, config: RuntimeConfig, *, npm: str, runner: Callable[..., object] = subprocess.run,
+                  cross_platform: bool = False) -> None:
+    """``cross_platform``: install the production node_modules for ``config`` (os/cpu) rather than the
+    build host, so e.g. the Windows Koffi binary is staged when building on Linux (npm >= 10 --os/--cpu)."""
     source = repo_root / "harness"
     target = destination / "harness"
     if target.exists():
@@ -204,7 +211,14 @@ def stage_harness(repo_root: Path, destination: Path, config: RuntimeConfig, *, 
         runtime_root.mkdir()
         shutil.copy2(source / "package.json", runtime_root / "package.json")
         shutil.copy2(source / "package-lock.json", runtime_root / "package-lock.json")
-        runner([npm, "ci", "--omit=dev"], cwd=runtime_root, check=True)
+        runtime_ci = [npm, "ci", "--omit=dev"]
+        if cross_platform:
+            # install scripts would run on the build host (e.g. koffi's cnoke tries to load the
+            # *target* prebuilt and falls back to a CMake build); the target's prebuilt binaries
+            # come from the platform optional packages (@koromix/koffi-<os>-<cpu>) instead.
+            runtime_ci += [f"--os={_NPM_OS.get(config.target, 'linux')}", f"--cpu={_NPM_CPU.get(config.arch, config.arch)}",
+                           "--ignore-scripts"]
+        runner(runtime_ci, cwd=runtime_root, check=True)
         _remove_empty_directories(runtime_root / "node_modules")
         shutil.copytree(build_root / "dist", runtime_root / "dist")
         (runtime_root / "package-lock.json").unlink()
@@ -259,7 +273,8 @@ def _download(url: str, destination: Path) -> None:
         raise StageError(f"Could not download pinned Node archive: {exc}") from exc
 
 
-def stage_portable_harness(repo_root: Path, destination: Path, *, target: str, node_archive: Path | None = None) -> None:
+def stage_portable_harness(repo_root: Path, destination: Path, *, target: str, node_archive: Path | None = None,
+                           cross_platform: bool = False) -> None:
     config = load_runtime_config(target=target)
     npm = shutil.which("npm.cmd") or shutil.which("npm")
     if npm is None:
@@ -272,7 +287,7 @@ def stage_portable_harness(repo_root: Path, destination: Path, *, target: str, n
             downloaded = Path(temporary) / config.archive
             _download(config.url, downloaded)
             extract_node_runtime(downloaded, destination, config)
-    stage_harness(repo_root, destination, config, npm=npm)
+    stage_harness(repo_root, destination, config, npm=npm, cross_platform=cross_platform)
     write_portable_manifest(repo_root, destination, config)
 
 
@@ -282,11 +297,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--target", choices=sorted(load_runtime_configs()), required=True)
     parser.add_argument("--node-archive", type=Path)
+    parser.add_argument("--cross-platform", action="store_true",
+                        help="install production node_modules for --target's os/cpu instead of the build host")
     args = parser.parse_args(argv)
     try:
         stage_portable_harness(
             args.repo_root.resolve(), args.destination.resolve(), target=args.target,
             node_archive=args.node_archive.resolve() if args.node_archive else None,
+            cross_platform=args.cross_platform,
         )
     except (OSError, KeyError, ValueError, subprocess.CalledProcessError, StageError) as exc:
         parser.exit(1, f"Portable Harness staging failed: {exc}\n")

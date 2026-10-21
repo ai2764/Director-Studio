@@ -132,9 +132,10 @@ class LMStudioLifecycle:
         api_key: str | None,
         timeout: float = 600.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> None:
         self.base_url = _server_origin(base_url)
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        headers = {**(extra_headers or {}), **({"Authorization": f"Bearer {api_key}"} if api_key else {})}
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             headers=headers,

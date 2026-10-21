@@ -218,6 +218,14 @@ def fill_profile_graph(
             pattern.fullmatch(key) for pattern in dynamic_patterns
         ) or key.startswith(("ref_videos.", "ref_video_audios.")):
             del h3_inputs[key]
+    if profile.source == "builtin":
+        # template media slots (empty LoadImage/LoadAudio) that lost their only consumer
+        referenced = {str(v[0]) for n in filled.values() for v in n.get("inputs", {}).values()
+                      if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str)}
+        for node_id in [k for k, n in filled.items()
+                        if n.get("class_type") in {"LoadImage", "LoadAudio"} and k not in referenced
+                        and not str(n.get("inputs", {}).get("image", n.get("inputs", {}).get("audio", ""))).strip()]:
+            del filled[node_id]
 
     width = int(job_params.get("width") or DEFAULT_WIDTH)
     height = int(job_params.get("height") or DEFAULT_HEIGHT)
@@ -277,6 +285,9 @@ def fill_profile_graph(
         upstream = _ancestors(profile.mapping.output.node_id, incoming)
         if any(filled[node_id].get("class_type") == "MiniMaxH3MotionContext" for node_id in upstream):
             raise ValueError("This custom workflow has no context video file mapping; reimport and confirm its video input")
+    if context_mapping is not None and not context_name and profile.source == "builtin":
+        from .video_context import strip_motion_context
+        return strip_motion_context(filled)
     if context_mapping is not None:
         if not context_name:
             raise ValueError("A context video source is required for this workflow")
@@ -286,6 +297,13 @@ def fill_profile_graph(
                 f"mapped context video node {context_mapping.node_id} does not exist"
             )
         target.setdefault("inputs", {})[context_mapping.input_name] = context_name
+        if profile.source == "builtin":
+            # the built-in graph's Motion Context window follows the shot's continuation settings
+            source = job_params.get("video_context_source") or {}
+            for node in filled.values():
+                if node.get("class_type") == "MiniMaxH3MotionContext" and isinstance(source, dict):
+                    if source.get("context_frames"):
+                        node["inputs"]["context_length"] = str(int(source["context_frames"]))
         from .video_context import fit_mapped_context_delivery
         fit_mapped_context_delivery(filled, h3_node_id=binding.h3_node_id, delivered_frames=frames,
                                    output_node_id=profile.mapping.output.node_id,

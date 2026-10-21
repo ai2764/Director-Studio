@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Director Studio
+Name[zh_CN]=Director Studio 导演工作室
+Comment=AI short-film director studio (local)
+Exec="@ROOT@/director-studio"
+Icon=@ROOT@/director-studio.svg
+Terminal=false
+Categories=Graphics;Video;AudioVideo;
+StartupNotify=true

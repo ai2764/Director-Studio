@@ -11,6 +11,10 @@ aiofiles>=24.1.0
 comfy-cli>=1.19,<2
 comfy-mcp==0.10.0
 Pillow>=10.0.0
+# launcher/config (batch 1): process supervision + remote ComfyUI WS proxy (BSD-3)
+psutil>=6.0
+websockets>=13.0
+# optional: nvidia-ml-py (GPU info in doctor; falls back to nvidia-smi)
 # local tests
 pytest>=8,<10
 pytest-asyncio>=1.0,<2

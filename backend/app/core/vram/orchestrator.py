@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Literal, Protocol, Sequence
 
 from ...config import settings
 from .ollama_client import OllamaClient
+from .shared_gpu import gpu_shared_with_comfy
 
 if TYPE_CHECKING:
     from ..llm.provider import LLMProvider
@@ -202,7 +203,13 @@ class VramOrchestrator:
         Unload ComfyUI image/video models and free VRAM.
 
         Always attempted before Plan/LLM so image models do not stay resident.
+        Skipped when the LLM does not share ComfyUI's GPU (e.g. a remote ComfyUI on
+        another machine, DS_VRAM_SHARED_GPU): other users of that server may rely on
+        the loaded models and freeing it gains the LLM nothing.
         """
+        if not gpu_shared_with_comfy():
+            self.last_comfy_free_error = None
+            return None
         try:
             stats = await self._get_comfy().free_memory(
                 unload_models=True, free_memory=True
@@ -297,7 +304,8 @@ class VramOrchestrator:
             await self._wait_until_free(want=f"comfy:{pipeline_id}")
             # Local runtimes must release weights before Comfy takes the GPU.
             was_ready = self._llm_ready
-            if self.provider.lifecycle.uses_local_gpu:
+            release = self.provider.lifecycle.uses_local_gpu and gpu_shared_with_comfy()
+            if release:
                 try:
                     await self.release_llm()
                 except Exception:
@@ -308,10 +316,10 @@ class VramOrchestrator:
             self.owner = "comfy"
             self.comfy_pipeline = pipeline_id
             logger.info(
-                "GPU acquired by comfy pipeline=%s (provider=%s released=%s, was_ready=%s)",
+                "GPU acquired by comfy pipeline=%s (provider=%s llm_released=%s, was_ready=%s)",
                 pipeline_id,
                 self.provider.provider_id,
-                self.provider.lifecycle.uses_local_gpu,
+                release,
                 was_ready,
             )
 
@@ -397,10 +405,14 @@ class VramOrchestrator:
         finally:
             if release_on_exit:
                 async with self._cv:
-                    await self.release_llm()
-                    if self.owner == "llm":
-                        self.owner = None
-                    self._cv.notify_all()
+                    try:
+                        await self.release_llm()
+                    finally:
+                        # Never leak ownership: a failed/slow unload must not deadlock every
+                        # later GPU user. Comfy jobs re-check the LLM before they start.
+                        if self.owner == "llm":
+                            self.owner = None
+                        self._cv.notify_all()
                     logger.info("GPU released by llm (unloaded)")
             else:
                 # Keep weights resident; drop exclusive owner so Comfy can queue.
@@ -431,3 +443,19 @@ def get_orchestrator() -> VramOrchestrator:
             policy=settings.vram_policy,
         )
     return _orchestrator
+
+
+def reset_orchestrator(*, force: bool = False) -> bool:
+    """Drop the singleton so it is rebuilt with the current LLM provider.
+
+    Refuses (returns False) while the GPU is owned or generations are queued,
+    unless ``force`` is set.
+    """
+    global _orchestrator
+    orch = _orchestrator
+    if orch is None:
+        return True
+    if not force and (orch.owner is not None or orch._generation_reservations):
+        return False
+    _orchestrator = None
+    return True

@@ -202,6 +202,7 @@ class OpenAICompatibleClient:
         timeout: float = 600.0,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._http_client = (
@@ -215,6 +216,8 @@ class OpenAICompatibleClient:
             "timeout": timeout,
             "max_retries": 0,
         }
+        if extra_headers:
+            kwargs["default_headers"] = dict(extra_headers)
         if self._http_client is not None:
             kwargs["http_client"] = self._http_client
         self._client = AsyncOpenAI(**kwargs)

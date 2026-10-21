@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from ..media.binaries import find_tool
 
 
 @dataclass(frozen=True)
@@ -18,7 +19,7 @@ class VoiceAudioMetadata:
 
 
 def _require_binary(name: str) -> str:
-    resolved = shutil.which(name)
+    resolved = find_tool(name)
     if not resolved:
         raise ValueError(f"{name} is required to prepare voice references")
     return resolved

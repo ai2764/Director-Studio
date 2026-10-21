@@ -1,0 +1,18 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
+httpx>=0.27.0
+jsonschema>=4.23,<5
+openai>=3.9,<4
+ollama>=0.6.0,<1
+pydantic>=2.9.0
+pydantic-settings>=2.6.0
+aiofiles>=24.1.0
+Pillow>=10.0.0
+# launcher/config (batch 1): process supervision + remote ComfyUI WS proxy (BSD-3)
+psutil>=6.0
+websockets>=13.0
+# optional: nvidia-ml-py (GPU info in doctor; falls back to nvidia-smi)
+# local tests
+# MCP client SDK used by the backend (comfy-mcp itself lives in comfy-tools)
+mcp==2.3.0

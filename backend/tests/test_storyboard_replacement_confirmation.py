@@ -106,8 +106,8 @@ async def test_existing_storyboard_save_becomes_a_confirmation_proposal(
     assert actions[0].startswith("propose_storyboard_replacement:")
     assert payloads[-1]["confirmation_required"] is True
     assert payloads[-1]["concludes_turn"] is True
-    assert "清除" in payloads[-1]["reply"]
-    assert "重写" in payloads[-1]["reply"]
+    assert "clear all" in payloads[-1]["reply"]
+    assert "rewrite" in payloads[-1]["reply"]
     context = json.loads(_project_context_blob(project, [old], focused=True))
     assert context["pending_storyboard_replacement"] == {
         "proposal_id": actions[0].split(":", 1)[1],
@@ -149,7 +149,7 @@ async def test_storyboard_replacement_requires_explicit_later_confirmation(
         )
         assert actions == []
         assert service.calls == []
-        assert "明确" in notes[-1]
+        assert "exactly" in notes[-1]
 
     actions = []
     payloads = []
@@ -204,8 +204,8 @@ async def test_native_chat_ends_with_the_destructive_replacement_warning(
     assert model_calls == 1
     assert service.calls == []
     assert list_shots(project.id) == [old]
-    assert "清除" in result.reply
-    assert "确认清除并重写全部 shots" in result.reply
+    assert "clear all" in result.reply
+    assert "confirm clear all shots and rewrite the storyboard" in result.reply
 
 
 @pytest.mark.asyncio
@@ -236,7 +236,7 @@ async def test_harness_backend_returns_a_terminal_confirmation_warning(
     assert result["ok"] is True
     assert result["confirmation_required"] is True
     assert result["concludes_turn"] is True
-    assert "清除" in result["reply"]
+    assert "clear all" in result["reply"]
     assert service.calls == []
     assert list_shots(project.id) == [old]
 
@@ -286,3 +286,12 @@ async def test_storyboard_change_invalidates_the_pending_replacement(
     assert actions == []
     assert "changed after the replacement warning" in notes[-1]
     assert list_shots(project.id) == [old, intervening]
+
+
+def test_replacement_warning_language_follows_the_user():
+    from app.agents.director.tool_handlers import project as handlers
+
+    assert handlers._wants_zh("把分镜全部重写")
+    assert not handlers._wants_zh("rewrite the whole storyboard")
+    assert handlers._confirms_storyboard_replacement("confirm clear all shots and rewrite the storyboard")
+    assert handlers._confirms_storyboard_replacement("确认清除并重写全部 shots")

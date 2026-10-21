@@ -53,3 +53,5 @@ backend/_warm_*
 backend/_backfill_*
 backend/_composite_*
 backend/_hairlock_test/
+dist-installer/
+dist-installer-win/

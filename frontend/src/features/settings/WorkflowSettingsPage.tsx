@@ -1,31 +1,19 @@
-import { PageShell } from "../../shared/components/PageShell";
-import { H3WorkflowSetup } from "./H3WorkflowSetup";
+import { SettingsPage, type SettingsTab } from "./SettingsPage";
 
+/**
+ * Settings container. Kept under its historical name so existing imports keep
+ * working; the H3 workflow setup now lives in the "工作流 / Workflows" tab.
+ */
 export function WorkflowSettingsPage({
   active = true,
   onClose,
+  onRunWizard,
+  initialTab,
 }: {
   active?: boolean;
   onClose?: () => void;
+  onRunWizard?: () => void;
+  initialTab?: SettingsTab;
 }) {
-  return (
-    <PageShell
-      title="Settings"
-      subtitle="Workflows / H3"
-      className="workflow-settings-page"
-      actions={onClose ? (
-        <button
-          type="button"
-          className="settings-close-button"
-          aria-label="Close settings"
-          title="Close settings"
-          onClick={onClose}
-        >
-          ×
-        </button>
-      ) : null}
-    >
-      <H3WorkflowSetup active={active} />
-    </PageShell>
-  );
+  return <SettingsPage active={active} onClose={onClose} onRunWizard={onRunWizard} initialTab={initialTab} />;
 }

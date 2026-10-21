@@ -1,0 +1,4 @@
+# Build-machine tools for installer/build_linux.py (not shipped)
+uv>=0.9
+zstandard>=0.23      # BSD-3-Clause: unpack Ollama .tar.zst
+pip-licenses>=5.0    # MIT: THIRD_PARTY_NOTICES generation

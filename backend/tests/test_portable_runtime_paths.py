@@ -14,11 +14,9 @@ def test_clean_portable_resolves_builtin_official_h3_from_bundle(tmp_path: Path)
     bundle_root = tmp_path / "bundle"
     install_root = tmp_path / "clean-extraction"
     shutil.copytree(REPO_ROOT / "backend" / "app", bundle_root / "app")
-    (bundle_root / "workflows").mkdir()
-    shutil.copy2(
-        REPO_ROOT / "backend" / "workflows" / "h3_ref2va.api.json",
-        bundle_root / "workflows" / "h3_ref2va.api.json",
-    )
+    # Same as the PyInstaller spec: the whole backend/workflows folder is bundled (the default
+    # built-in H3 workflow is h3_ref2va_turbo4_video_context.api.json, not h3_ref2va.api.json).
+    shutil.copytree(REPO_ROOT / "backend" / "workflows", bundle_root / "workflows")
     install_root.mkdir()
     assert not (install_root / "data").exists()
 

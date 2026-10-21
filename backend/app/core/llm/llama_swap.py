@@ -22,14 +22,15 @@ class LlamaSwapLifecycle:
         *,
         api_key: str | None = None,
         timeout: float = 600.0,
-        release_timeout: float = 30.0,
+        release_timeout: float = 90.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> None:
         self.release_timeout = release_timeout
         self._client = httpx.AsyncClient(
             base_url=_server_origin(base_url),
             timeout=timeout,
-            headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
+            headers={**(extra_headers or {}), **({"Authorization": f"Bearer {api_key}"} if api_key else {})},
             transport=transport,
             trust_env=False,
         )

@@ -11,6 +11,8 @@ import { ProjectPicker } from "../shared/project/ProjectPicker";
 import { DirectorStudioMark } from "../shared/components/DirectorStudioMark";
 import { navigationForMode, type DesktopPage } from "./navigation";
 import { WorkflowSettingsPage } from "../features/settings/WorkflowSettingsPage";
+import { OPEN_SETTINGS_EVENT } from "../features/settings/navigation";
+import { SetupGate } from "../features/setup/SetupGate";
 import type { Shot } from "../shared/api/types";
 
 function materialReviewRequest(
@@ -115,6 +117,7 @@ function MobileAppShell() {
 function AppShell() {
   const [page, setPage] = useState<DesktopPage>("director");
   const [settingsVisited, setSettingsVisited] = useState(false);
+  const [wizardRequested, setWizardRequested] = useState(false);
   const settingsReturnPage = useRef<Exclude<DesktopPage, "settings">>("director");
   const [directorRequest, setDirectorRequest] = useState<DirectorChatRequest | null>(null);
   const [jsonProductionToolbarTarget, setJsonProductionToolbarTarget] = useState<HTMLDivElement | null>(null);
@@ -132,6 +135,13 @@ function AppShell() {
     setPage("settings");
   };
   const closeSettings = () => setPage(settingsReturnPage.current);
+  const openSettingsRef = useRef(openSettings);
+  openSettingsRef.current = openSettings;
+  useEffect(() => {
+    const onOpen = () => openSettingsRef.current();
+    window.addEventListener(OPEN_SETTINGS_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, onOpen);
+  }, []);
   const reviewMaterials = (shot: Shot, shotNumber: number, message: string) => {
     requestSequence.current += 1;
     setDirectorRequest(materialReviewRequest(shot, shotNumber, requestSequence.current, message));
@@ -139,9 +149,13 @@ function AppShell() {
   };
 
   useEffect(() => {
-    fetchHealth()
+    // Poll: a DS-managed ComfyUI starts in the background after the UI loads.
+    const load = () => fetchHealth()
       .then((h) => setHealth(h))
       .catch(() => setHealth({ comfy_reachable: false, comfy_error: "unreachable" }));
+    void load();
+    const timer = window.setInterval(load, 15000);
+    return () => window.clearInterval(timer);
   }, []);
 
   return (
@@ -199,8 +213,9 @@ function AppShell() {
         </div>
       </header>
 
+      <SetupGate forceOpen={wizardRequested} onClosed={() => setWizardRequested(false)} />
       {/* Keep pages mounted so in-flight job UI/polling survives tab switches */}
-      {settingsVisited ? <div className={activePage === "settings" ? "page-pane active" : "page-pane"} hidden={activePage !== "settings"}><WorkflowSettingsPage active={activePage === "settings"} onClose={closeSettings} /></div> : null}
+      {settingsVisited ? <div className={activePage === "settings" ? "page-pane active" : "page-pane"} hidden={activePage !== "settings"}><WorkflowSettingsPage active={activePage === "settings"} onClose={closeSettings} onRunWizard={() => setWizardRequested(true)} /></div> : null}
       <div
         className={activePage === "assets" ? "page-pane active" : "page-pane"}
         hidden={activePage !== "assets"}

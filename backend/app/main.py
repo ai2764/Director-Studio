@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 import logging
 
 from fastapi import FastAPI
@@ -9,6 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api import build_api_router
+from .api.security import CORS_ORIGIN_REGEX
 from .config import settings
 from .core.jobs import close_execution_runtimes, recover_interrupted_jobs
 from .runtime_paths import runtime_paths
@@ -18,11 +20,24 @@ from . import pipelines as _pipelines  # noqa: F401
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("director_studio")
+APP_VERSION = "0.2.0"
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    from .core.comfy.runtime import comfy_runtime
+    from .core.llm.llama_swap_runtime import llama_swap_runtime
+    from .core.llm.ollama_runtime import ollama_runtime
+
+    ollama_task = None
+    llama_task = None
     try:
+        ollama_task = asyncio.create_task(ollama_runtime.start())  # bundled Ollama (legacy, if enabled)
+        llama_task = asyncio.create_task(llama_swap_runtime.start())  # built-in llama.cpp (if enabled)
+        try:
+            await comfy_runtime.start()
+        except Exception:  # noqa: BLE001 - never block DS startup on ComfyUI
+            logger.exception("ComfyUI runtime failed to start")
         from .core.managed_runs.continuation import reconcile_stopping_runs, schedule_pending_runs
         await reconcile_stopping_runs()
         recovered = await recover_interrupted_jobs()
@@ -32,18 +47,31 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         await close_execution_runtimes()
+        await comfy_runtime.stop()
+        if ollama_task is not None and not ollama_task.done():
+            ollama_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await ollama_task
+        await ollama_runtime.stop()
+        if llama_task is not None and not llama_task.done():
+            llama_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await llama_task
+        await llama_swap_runtime.stop()
 
 
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Director Studio",
-        version="0.2.0",
+        version=APP_VERSION,
         description="Extensible pre-production asset studio (pipelines + library + jobs).",
         lifespan=lifespan,
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        # Same-origin UI (static build or Vite proxy) needs no CORS; only loopback
+        # origins (dev servers on another port) may make cross-origin calls.
+        allow_origin_regex=CORS_ORIGIN_REGEX,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

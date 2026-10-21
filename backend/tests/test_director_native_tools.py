@@ -2204,7 +2204,7 @@ async def test_storyboard_replacement_warning_concludes_batch_before_layout(
     assert svc.layout_calls == 0
     assert payloads[-1]["confirmation_required"] is True
     assert payloads[-1]["concludes_turn"] is True
-    assert "确认清除并重写全部 shots" in notes[-1]
+    assert "confirm clear all shots and rewrite the storyboard" in notes[-1]
 
 
 @pytest.mark.asyncio
