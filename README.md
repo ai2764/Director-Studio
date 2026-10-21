@@ -110,7 +110,7 @@ or uncommented `.env` MCP command skips automatic setup and uses that override.
 | Ollama | `ollama` | Ollama API | Unloads before local ComfyUI jobs |
 | LM Studio | `lm-studio` | OpenAI-compatible `/v1/models` | Uses LM Studio's native unload endpoint |
 | llama-swap | `llama-swap` | Proxy model catalog | Unloads proxy models before local ComfyUI jobs; failed release stops GPU handoff |
-| OpenAI, llama.cpp, or another compatible service | `openai-compatible` | OpenAI-compatible `/v1/models` | No unload request is assumed |
+| OpenAI, Strata, or another compatible service | `openai-compatible` | OpenAI-compatible `/v1/models` | Location selects GPU coordination; runtime selects the unload API |
 
 Choose one of these configurations. Ollama is the default:
 
@@ -144,8 +144,33 @@ DS_LLM_PROVIDER=llama-swap
 DS_LLM_BASE_URL=http://127.0.0.1:11435/v1
 ```
 
-Use the dedicated `llama-swap` provider when Director should coordinate its local
-GPU lifecycle; selecting generic `openai-compatible` does not enable that behavior.
+GPU coordination follows the LLM and ComfyUI server locations, independently of
+the inference protocol. Matching hostnames or two loopback addresses share the
+GPU by default; different hosts run independently. Set `DS_VRAM_SHARED_GPU=true`
+or `false` to override this for tunnels, LAN aliases or different GPUs on one
+machine. A loopback tunnel cannot be distinguished automatically from a local
+server. Restart Director after changing these settings.
+
+For local Strata serving Flash Next, start Strata separately and configure:
+
+```dotenv
+DS_LLM_PROVIDER=openai-compatible
+DS_LLM_BASE_URL=http://127.0.0.1:8080/v1
+DS_LLM_RUNTIME=strata
+```
+
+`DS_LLM_RUNTIME` selects the residency API, not the inference protocol. Its
+default `auto` uses the dedicated provider's controls, or discovers Strata from
+its `/health` service identity for a shared-GPU OpenAI-compatible endpoint.
+For other supported local endpoints, explicitly select `lm-studio` or
+`llama-swap`. An unknown shared-GPU endpoint is rejected with a configuration
+error; OpenAI-compatible inference alone does not define unloading.
+
+Before ComfyUI starts, Director unloads Strata and verifies `loaded: false`.
+The next LLM turn frees ComfyUI models and reloads Strata. Failed or unconfirmed
+unloads stop GPU handoff. Servers on independent GPUs do not block local chat
+or receive unload requests for local generation. The existing API key also
+authenticates Strata's management calls.
 
 For the OpenAI API:
 

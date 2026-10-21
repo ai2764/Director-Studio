@@ -397,10 +397,12 @@ class VramOrchestrator:
         finally:
             if release_on_exit:
                 async with self._cv:
-                    await self.release_llm()
-                    if self.owner == "llm":
-                        self.owner = None
-                    self._cv.notify_all()
+                    try:
+                        await self.release_llm()
+                    finally:
+                        if self.owner == "llm":
+                            self.owner = None
+                        self._cv.notify_all()
                     logger.info("GPU released by llm (unloaded)")
             else:
                 # Keep weights resident; drop exclusive owner so Comfy can queue.
