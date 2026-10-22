@@ -77,6 +77,8 @@ class BackendTurn:
         self.svc, self.chat_fn, self.on_progress = svc, chat_fn, on_progress
         self.images = list(images or [])
         self.captions = list(captions or [])
+        self.visual_note = ""
+        self.reused_image_count = 0
         self.uploads = [
             {"image_index": i, "filename": self.captions[i-1] if i <= len(self.captions) else f"image-{i}.png", "data_b64": data}
             for i, data in enumerate(self.images, 1)
@@ -163,6 +165,8 @@ class BackendTurn:
                  if explicit_gpt_image_intent(self.message) and not actor_design_intent(self.message)
                  else project_context_blob(project, shots, message=self.message, focused=True))
         system = DIRECTOR_CHAT_SYSTEM
+        if self.visual_note:
+            system += "\nVISION EVIDENCE:\n" + self.visual_note
         if self.budget.repairing:
             system += (
                 "\nThe screenplay is read-only during this turn's storyboard recovery. "
@@ -189,7 +193,7 @@ class BackendTurn:
         elif self.storyboard_failed and self.budget.exhausted:
             system += "\nStoryboard revision budget exhausted after failed saves. Read state if needed, then explain the unresolved issue. No further project changes this turn."
         system = with_director_skill(system, guides=director_chat_guides(
-            project, include_visual_qc=bool(self.images), current_message=self.message,
+            project, include_visual_qc=bool(self.images or self.reused_image_count), current_message=self.message,
         ))
         task_state = current_task_context(project.id)
         if task_state is not None and context_mode(project) != "off":
@@ -301,7 +305,7 @@ class BackendTurn:
                 inference_purpose=purpose,
                 prepared_system=True,
                 **({"max_output_tokens": min(max_output, settings.director_num_predict)} if max_output is not None else {}),
-                guides=() if compacting else director_chat_guides(project, include_visual_qc=bool(self.images), current_message=self.message),
+                guides=() if compacting else director_chat_guides(project, include_visual_qc=bool(self.images or self.reused_image_count), current_message=self.message),
             )
         except GenerationActiveError:
             if compacting or not self.local_generation_receipt:
@@ -566,6 +570,11 @@ async def handle_harness_chat(*, project_id, message, svc, chat_fn=None, history
         if wants_vision(message) or layout_ids:
             pack = collect_vision_attachments(project_id=project_id, shots=shots, message=message, layout_ref_ids=layout_ids or None)
             turn.images = list(pack.get("images_b64") or [])
+            turn.visual_note = str(pack.get("note") or "")
+            turn.reused_image_count = pack.get("reused_image_count", 0)
+            from .progress import emit_progress
+            await emit_progress(on_progress, {"type": "status", "phase": "image_context",
+                "text": f"Visual context: {len(turn.images)} image(s) attached, {pack.get('reused_image_count', 0)} verified observation(s) reused."})
     try:
         result = await HarnessClient(settings.harness_base_url, settings.harness_internal_token,
                                      timeout=settings.harness_turn_timeout_sec).run(

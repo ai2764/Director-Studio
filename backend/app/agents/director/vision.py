@@ -167,6 +167,13 @@ def layout_reference_ids_from_message(
     return list(dict.fromkeys(found))
 
 
+def _layout_context_notes(layout) -> str:
+    if layout is None:
+        return ""
+    return (f"purpose: {layout.purpose}; state_description: {layout.state_description}; "
+            f"time_hint: {layout.time_hint}")
+
+
 def collect_vision_attachments(
     *,
     project_id: str,
@@ -186,6 +193,9 @@ def collect_vision_attachments(
             "captions": [],
             "note": "The project has no shots, so there are no images to review.",
         }
+
+    from .verified_images import VerifiedImages
+    verified = VerifiedImages(project_id, message)
 
     all_layouts = [
         (shot, layout)
@@ -231,6 +241,10 @@ def collect_vision_attachments(
             pair = _read_layout_bytes(layout.asset_id)
             if not pair:
                 continue
+            if verified.reuse(asset=load_asset("layouts", layout.asset_id), role="layout_ref_frame",
+                              file_key=None, data=pair[1], label=f"Shot {shots.index(shot) + 1} · Layout {layout.id}",
+                              reference_notes=_layout_context_notes(layout)):
+                continue
             b64 = image_bytes_to_b64_jpeg(pair[1])
             if not b64:
                 continue
@@ -242,7 +256,7 @@ def collect_vision_attachments(
                 f"state_description: {layout.state_description or '—'}; "
                 f"time_hint: {layout.time_hint or '—'}"
             )
-        if not images_b64:
+        if not images_b64 and not verified.reused:
             return {
                 "images_b64": [],
                 "captions": [],
@@ -253,7 +267,9 @@ def collect_vision_attachments(
             f"{'s' if len(images_b64) != 1 else ''} for visual review:\n"
             + "\n".join(f"- {caption}" for caption in captions)
         )
-        return {"images_b64": images_b64, "captions": captions, "note": note}
+        if not images_b64:
+            note = ""
+        return verified.finish({"images_b64": images_b64, "captions": captions, "note": note})
 
     idx = _shot_index_from_message(message, shots)
     # Default: first shot with a layout, else first shot
@@ -278,7 +294,11 @@ def collect_vision_attachments(
         # 1) layout / reference frame first (what user usually means by 看图)
         if shot.layout_asset_id:
             pair = _read_layout_bytes(shot.layout_asset_id)
-            if pair and len(images_b64) < max_images:
+            layout = next((item for item in shot.layout_refs if item.asset_id == shot.layout_asset_id), None)
+            reused = bool(pair and verified.reuse(asset=load_asset("layouts", shot.layout_asset_id),
+                role="layout_ref_frame", file_key=None, data=pair[1], label=f"{label_prefix} reference frame/layout",
+                reference_notes=_layout_context_notes(layout)))
+            if pair and not reused and len(images_b64) < max_images:
                 b64 = image_bytes_to_b64_jpeg(pair[1])
                 if b64:
                     images_b64.append(b64)
@@ -295,13 +315,19 @@ def collect_vision_attachments(
             if not hit:
                 continue
             _name, data, cap = hit
+            from .planner import role_to_library_kind
+            kind = role_to_library_kind(ref.role.value)
+            if verified.reuse(asset=load_asset(kind, ref.asset_id) if kind else None,
+                              role=ref.role.value, file_key=ref.file_key, data=data,
+                              label=f"{label_prefix} Picture {ref.picture_index}", reference_notes=ref.notes):
+                continue
             b64 = image_bytes_to_b64_jpeg(data)
             if not b64:
                 continue
             images_b64.append(b64)
             captions.append(f"Image {len(images_b64)}: {label_prefix} agent-ref {cap}")
 
-    if not images_b64:
+    if not images_b64 and not verified.reused:
         return {
             "images_b64": [],
             "captions": [],
@@ -312,4 +338,6 @@ def collect_vision_attachments(
         f"Attached {len(images_b64)} thumbnail image{'s' if len(images_b64) != 1 else ''} for visual review:\n"
         + "\n".join(f"- {c}" for c in captions)
     )
-    return {"images_b64": images_b64, "captions": captions, "note": note}
+    if not images_b64:
+        note = ""
+    return verified.finish({"images_b64": images_b64, "captions": captions, "note": note})

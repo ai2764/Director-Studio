@@ -147,6 +147,8 @@ class Settings(BaseSettings):
     # Ollama, LM Studio and llama-swap are discovered from the loaded model.
     director_num_ctx: int = 32768
     director_num_predict: int = 4096
+    # Disable for a same-request before/after image-context benchmark.
+    director_reuse_verified_images: bool = True
     vram_policy: str = "exclusive"  # exclusive: one of LLM/Comfy at a time, others queue
     # Does the Director LLM share a GPU with ComfyUI (GPU handoff on/off)? See
     # app/core/vram/shared_gpu.py. auto: local ComfyUI = shared; remote = decided by host.
