@@ -7,6 +7,7 @@ import math
 import re
 import time
 import uuid
+from .performance import measure_call
 
 
 def _text_tokens(value) -> int:
@@ -30,6 +31,26 @@ class ChatUsageReporter:
         self.capacity_source = source if self.context_window else None
 
     async def call(self, client, model, *, purpose="turn", **request):
+        messages = request["messages"]
+        image_count = sum(len(m.get("images") or []) for m in messages)
+        image_count += sum(
+            sum(part.get("type") in {"image", "image_url"} for part in m["content"])
+            for m in messages if isinstance(m.get("content"), list)
+        )
+        text_chars = 0
+        for message in messages:
+            content = message.get("content") or ""
+            if isinstance(content, str):
+                text_chars += len(content)
+            elif isinstance(content, list):
+                text_chars += sum(len(part.get("text") or "") for part in content if part.get("type") == "text")
+        async with measure_call("chat.compaction" if purpose == "compaction" else "chat.turn",
+                                model=model, image_count=image_count, text_chars=text_chars) as call:
+            result = await self._call(client, model, purpose=purpose, **request)
+            call["result"] = result
+            return result
+
+    async def _call(self, client, model, *, purpose="turn", **request):
         if self.on_progress is None:
             return await client.chat_response(model, **request)
         self.sequence += 1

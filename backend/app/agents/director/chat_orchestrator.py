@@ -1207,6 +1207,7 @@ async def orchestrate_chat(
     vision_b64 = list(user_images_b64 or [])
     captions = list(user_image_captions or [])
     vision_note = ""
+    reused_image_count = 0
     if vision_b64:
         caption_lines = [
             f"User-uploaded image {index}: "
@@ -1246,13 +1247,16 @@ async def orchestrate_chat(
                 )
                 vision_b64 = list(pack.get("images_b64") or [])
                 vision_note = str(pack.get("note") or "")
+                reused_image_count = pack.get("reused_image_count", 0)
                 if vision_b64:
                     actions.append(f"vision:{len(vision_b64)}")
                     await progress(
                         "status", f"Attached {len(vision_b64)} image{'s' if len(vision_b64) != 1 else ''} for the multimodal model"
                     )
                 else:
-                    await progress("status", vision_note or "No viewable images were found")
+                    reused = pack.get("reused_image_count", 0)
+                    await progress("status", f"Reusing {reused} verified image observation(s); no images attached."
+                                   if reused else vision_note or "No viewable images were found")
         except Exception:
             logger.exception("vision pack failed")
 
@@ -1314,7 +1318,7 @@ async def orchestrate_chat(
     offered_tool_schemas = tool_schemas_for(project)
     chat_guides = _director_chat_guides(
         project,
-        include_visual_qc=bool(vision_b64),
+        include_visual_qc=bool(vision_b64 or reused_image_count),
         current_message=message,
     )
 
@@ -1451,7 +1455,7 @@ async def orchestrate_chat(
                             tools=offered_tool_schemas,
                             guides=_director_chat_guides(
                                 project,
-                                include_visual_qc=bool(vision_b64),
+                                include_visual_qc=bool(vision_b64 or reused_image_count),
                                 current_message=message,
                             ),
                         )
@@ -1654,7 +1658,7 @@ async def orchestrate_chat(
                 tools=offered_tool_schemas,
                 guides=_director_chat_guides(
                     project,
-                    include_visual_qc=bool(vision_b64),
+                    include_visual_qc=bool(vision_b64 or reused_image_count),
                     current_message=message,
                 ),
             )

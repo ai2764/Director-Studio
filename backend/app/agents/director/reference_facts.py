@@ -128,6 +128,7 @@ def reference_intent_signature(shot):
 
 def persist_reference_facts(project_id, references, check_current):
     from ...core.projects.store import project_dir
+    from ...core.projects.store import load_project
     from ...core.managed_runs.store import _project_lock
     path = project_dir(project_id) / "agent" / "reference_facts.json"
     with _project_lock(project_id):
@@ -136,10 +137,14 @@ def persist_reference_facts(project_id, references, check_current):
             saved = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             saved = {"version": REFERENCE_POLICY_VERSION, "references": {}}
+        project = load_project(project_id)
         for ref in references:
             # The same asset's views retain asset identity; Picture order is shot-local.
             key = digest([ref["asset_id"], ref.get("file_key", "")])
-            saved["references"][key] = {k: v for k, v in ref.items() if k != "picture_index"}
+            saved["references"][key] = {
+                **{k: v for k, v in ref.items() if k != "picture_index"},
+                "script_signature": digest(project.script_text) if project else None,
+            }
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
         try:
