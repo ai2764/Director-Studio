@@ -46,7 +46,12 @@ async def write_prompt(project_id, shot_id, *, model=None):
         raise ValueError("Add explicit Speaker [Language]: words cues before writing spoken dialogue.")
     payload = {"shot": {key: getattr(shot, key) for key in ("title", "script_beat", "duration_s", "shot_type", "camera_angle", "camera_motion", "composition")},
         "reference_note": shot.meta.get("workspace_reference_note", ""),
-        "references": refs, "continuation": captured["continuation"],
+        "references": [{"picture_tag": f"<Picture {ref['picture_index']}>",
+            "role": ref["role"], "name": ref["name"], "description": ref["description"],
+            "binding_notes": ref["binding_notes"]} for ref in refs],
+        "required_picture_tags": [f"<Picture {ref['picture_index']}>" for ref in refs],
+        "response_rules": "Use every required_picture_tag literally in subject_definitions or retention_analysis beside the matching asset description. Asset names alone are not Picture bindings. Keep tags inside the six prompt section strings, not in metadata.",
+        "continuation": captured["continuation"],
         "dialogue_lines": [line.model_dump(mode="json", exclude={"source"}) for line in shot.dialogue_lines or []],
         "voice_refs": [ref.model_dump(mode="json") for ref in shot.voice_refs]}
     if shot.source_audio_path:
@@ -90,7 +95,7 @@ async def write_prompt(project_id, shot_id, *, model=None):
         # One bounded format repair, without reopening Director chat or vision.
         issues = sorted({getattr(item, "code", "prompt_format") for item in getattr(exc, "issues", [])}) or ["prompt_format"]
         repair = {**payload, "repair": {"issue_codes": issues, "reason": validation_reason(exc, raw, shot),
-            "instruction": "Repair the prior candidate against the response contract. Use every supplied {{speech:line_id}} exactly once in source order. Do not emit literal speech blocks. Preserve the brief and references.",
+            "instruction": "Repair the reported defects in the prior candidate. Every required_picture_tag must occur literally inside the six section strings beside its matching asset. When dialogue_lines are supplied, use each {{speech:line_id}} once in source order. Preserve the brief, all selected references and exact dialogue.",
             "previous_candidate": raw}}
         raw = await (model or WorkspaceModel()).complete(system, repair, schema=schema)
         try:

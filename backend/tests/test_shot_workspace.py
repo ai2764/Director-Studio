@@ -77,6 +77,9 @@ async def test_writer_uses_only_selected_descriptions_and_certifies_current_inpu
     saved = await write_prompt(project.id, shot.id, model=model)
     assert len(model.calls) == 1
     assert model.calls[0][1]["references"][0]["description"] == asset.notes
+    assert model.calls[0][1]["references"][0]["picture_tag"] == "<Picture 1>"
+    assert model.calls[0][1]["required_picture_tags"] == ["<Picture 1>"]
+    assert "content_sha256" not in model.calls[0][1]["references"][0]
     assert prompt_check(saved)["valid"]
     from app.agents.director.reference_facts import require_current_reference_contract
     from app.agents.director.dialogue_preflight import require_current_dialogue_contract
