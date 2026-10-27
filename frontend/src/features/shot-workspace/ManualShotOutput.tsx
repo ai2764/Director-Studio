@@ -8,9 +8,9 @@ import { cancelH3Job, getH3Job, getH3ProviderStatus, getLocalH3Resolutions, getS
 const active = (status?: string) => ["queued", "uploading", "running"].includes(status || "");
 const labels: Record<string, string> = { queued: "Queued", uploading: "Uploading", running: "Generating", succeeded: "Completed", failed: "Failed", cancelled: "Cancelled" };
 
-export function ManualShotOutput({ shot, disabled, onSaved, check }: {
+export function ManualShotOutput({ shot, disabled, onSaved, check, promptWriting = false }: {
   shot: Shot; disabled: boolean; onSaved: (shot: Shot) => void;
-  check?: PromptCheck | null;
+  check?: PromptCheck | null; promptWriting?: boolean;
 }) {
   const [job, setJob] = useState<H3JobRecord | null>(null);
   const [provider, setProvider] = useState<H3Provider>("local");
@@ -93,8 +93,8 @@ export function ManualShotOutput({ shot, disabled, onSaved, check }: {
     {running && <progress aria-label="Generating video" />}
     {job?.error && <p role="alert" className="banner error">{job.error}</p>}
     {error && <p role="alert" className="banner error">{error}</p>}
-    {check?.stale && <p className="manual-prompt-warning" role="alert">This prompt is out of date. Rewrite it before generating a video.</p>}
-    {check && !check.valid && !check.stale && Object.values(shot.prompt_sections).some(Boolean)
+    {!promptWriting && check?.stale && <p className="manual-prompt-warning" role="alert">This prompt is out of date. Rewrite it before generating a video.</p>}
+    {!promptWriting && check && !check.valid && !check.stale && Object.values(shot.prompt_sections).some(Boolean)
       && <p className="manual-prompt-warning" role="alert">Prompt checks failed. See the issues beside the prompt.</p>}
     <label>Provider<select aria-label="Provider" value={provider} disabled={busy || running} onChange={(e) => setProvider(e.target.value as H3Provider)}>
       <option value="local">ComfyUI</option>{minimax && <option value="minimax">MiniMax</option>}

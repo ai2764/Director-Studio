@@ -156,7 +156,8 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
   const effectiveCheck = dirty && hasPrompt
     ? { stale: true, valid: false, errors: [], warnings: [] }
     : checkPending ? null : promptCheck;
-  const promptStatus = !hasPrompt ? "No prompt yet" : effectiveCheck?.stale ? "Prompt out of date"
+  const promptWriting = writing || working === "Write prompt";
+  const promptStatus = promptWriting ? (writing ? "Writing prompt…" : "Preparing prompt…") : !hasPrompt ? "No prompt yet" : effectiveCheck?.stale ? "Prompt out of date"
     : checkError ? "Prompt check unavailable" : checkPending ? "Checking prompt…"
     : effectiveCheck?.valid ? "Prompt up to date" : "Prompt needs attention";
   return <div className={desktopOutput ? "manual-authoring-columns" : "manual-authoring-single"}><article className="manual-shot-editor">
@@ -219,10 +220,10 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     <ManualContinuity shot={shot} shots={shots} disabled={disabled} onSaved={onSaved} />
     </section>
     <strong className="manual-prompt-label">Prompt</strong>
-    <small role="status" aria-label="Prompt status" className={effectiveCheck?.stale ? "manual-prompt-warning" : undefined}>{promptStatus}</small>
-    {dirty && <small role="status">Unsaved shot changes. Save and rewrite the prompt before generating.</small>}
-    {(promptCheck?.stale || Object.values(shot.prompt_sections).some(Boolean)) && promptCheck?.errors?.map((item) => <p className="manual-prompt-warning" role="alert" key={item.code + item.message}>{item.message}</p>)}
-    {promptCheck?.warnings?.map((item) => <small key={item.code}>{item.message}</small>)}
+    <small role="status" aria-label="Prompt status" className={!promptWriting && effectiveCheck?.stale ? "manual-prompt-warning" : undefined}>{promptStatus}</small>
+    {dirty && !promptWriting && <small role="status">Unsaved shot changes. Save and rewrite the prompt before generating.</small>}
+    {!promptWriting && (promptCheck?.stale || hasPrompt) && promptCheck?.errors?.filter((item) => item.code !== "prompt_stale").map((item) => <p className="manual-prompt-warning" role="alert" key={item.code + item.message}>{item.message}</p>)}
+    {!promptWriting && promptCheck?.warnings?.map((item) => <small key={item.code}>{item.message}</small>)}
     {checkError && <p role="alert">Prompt check unavailable: {checkError}</p>}
     <div className="manual-shot-actions">
       <button className="btn secondary" disabled={disabled || !version} onClick={() => void act("save")}>Save</button>
@@ -230,7 +231,6 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
         aria-label={writing ? "Cancel prompt writing" : "Write prompt"}
         onClick={() => { if (writing) void onCancel().catch((cause) => setError(String(cause))); else void act("write"); }}>
         {writing ? `Cancel · ${writeElapsed}s` : working === "Write prompt" ? `Preparing prompt · ${elapsed}s` : "Write prompt"}</button>
-      {writing && <small role="status">Writing prompt</small>}
     </div>
     {Object.values(shot.prompt_sections).some(Boolean) ? <details className="manual-generated-prompt" aria-label="Prompt contents" open={desktopOutput}><summary>Saved prompt</summary><small className="manual-saved-prompt-label">{effectiveCheck?.stale ? "Previously saved prompt · Out of date. Failed writes do not replace this text." : "Saved prompt · Failed writes do not replace this text."}</small>{PROMPT_SECTION_KEYS.map(({ key, label }) => shot.prompt_sections[key]
         ? <label key={key}>{label}<textarea aria-label={label} readOnly rows={4} value={shot.prompt_sections[key]} /></label> : null)}
@@ -247,7 +247,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     <DescriptionAssistant shotId={shot.id} description={description} disabled={disabled} ready={!!version}
       onRequest={assistDescription} onUndo={undoDescriptionChange} canUndo={!!beforeAmendment} />
   </article><ManualShotOutput shot={shot} disabled={disabled || dirty || checkPending || !!checkError}
-    check={effectiveCheck} onSaved={onSaved} /></div>;
+    check={effectiveCheck} promptWriting={promptWriting} onSaved={onSaved} /></div>;
 }
 
 export function ShotWorkspacePage({ desktopOutput = false }: { desktopOutput?: boolean } = {}) {

@@ -126,3 +126,32 @@ it("allows saving a cleared brief without writing a prompt", async () => {
   expect(body.description).toBe(""); expect(body.dialogue).toEqual([]);
   expect(body.camera_motion).toBe(""); expect(onWrite).not.toHaveBeenCalled();
 });
+
+it("replaces the stale notice while writing instead of stacking stale banners", async () => {
+  let valid = false;
+  const warning = "Prompt out of date: the brief, dialogue, references or continuity changed. Write the prompt again.";
+  vi.stubGlobal("fetch",vi.fn(async (url:string) => ({ok:true,json:async () => url.endsWith("prompt-check")
+    ? {valid,stale:!valid,errors:valid ? [] : [{code:"prompt_stale",message:warning},{code:"missing_sections",message:"The saved prompt is incomplete."}],warnings:[]}
+    : {version:"v1"}})));
+  const saved = {...shot,prompt_sections:{...shot.prompt_sections,summary:"An old prompt."}};
+  const props = {shot:saved,shots:[saved],index:0,busy:false,onSaved:vi.fn(),onWrite:vi.fn(),onDelete:vi.fn(),
+    desktopOutput:false,writing:false,writeElapsed:0,onCancel:vi.fn()};
+  const view=render(<ShotEditor {...props} />);
+  await waitFor(() => expect(screen.getByLabelText("Prompt status").textContent).toBe("Prompt out of date"));
+  expect(screen.queryByText(warning)).toBeNull();
+  expect(screen.getByText("The saved prompt is incomplete.")).toBeTruthy();
+  view.rerender(<ShotEditor {...props} writing busy writeElapsed={7} />);
+  expect(screen.getByLabelText("Prompt status").textContent).toBe("Writing prompt…");
+  expect(screen.queryByText("Prompt out of date")).toBeNull();
+  expect(screen.queryByText("The saved prompt is incomplete.")).toBeNull();
+  expect(screen.queryByText(warning)).toBeNull();
+  expect(screen.getByRole("button",{name:"Cancel prompt writing"})).toBeTruthy();
+  view.rerender(<ShotEditor {...props} />);
+  expect(screen.getByLabelText("Prompt status").textContent).toBe("Prompt out of date");
+  expect(screen.getByText("The saved prompt is incomplete.")).toBeTruthy();
+  valid = true;
+  const updated = {...saved,prompt_sections:{...saved.prompt_sections,summary:"A newly written prompt."}};
+  view.rerender(<ShotEditor {...props} shot={updated} />);
+  await waitFor(() => expect(screen.getByLabelText("Prompt status").textContent).toBe("Prompt up to date"));
+  expect(screen.queryByText("The saved prompt is incomplete.")).toBeNull();
+});
