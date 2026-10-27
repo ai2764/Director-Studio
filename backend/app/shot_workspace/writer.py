@@ -52,24 +52,41 @@ async def write_prompt(project_id, shot_id, *, model=None):
     schema = {"type": "object", "properties": {"prompt_sections": PromptSections.model_json_schema()}, "required": ["prompt_sections"], "additionalProperties": False}
     system = H3_PROMPT_INSTRUCTIONS + INSTRUCTIONS + (WRITER_CONTRACT if shot.dialogue_lines else "")
     raw = await (model or WorkspaceModel()).complete(system, payload, schema=schema)
-    draft = None
-    if shot.dialogue_lines:
-        draft = compile_dialogue_draft(parse_dialogue_draft(raw), shot.dialogue_lines)
-        sections = draft.prompt_sections
-    else:
-        value = _extract_json_payload(raw)
-        sections = PromptSections.model_validate(value.get("prompt_sections", value))
-    sections = normalize_reference_tag_delimiters(sections)
-    validate_h3_prompt(sections.as_ordered_text(), shot.dialogue, audio_count=0 if shot.source_audio_path else len(shot.voice_refs),
-        required_picture_indices=[ref.picture_index for ref in shot.refs], submitted_picture_indices=[ref.picture_index for ref in shot.refs])
-    if not shot.dialogue and "<d>" in sections.detailed_description:
-        raise ValueError("The model invented dialogue. The prompt was not saved.")
+    def validate_candidate(raw):
+        draft = None
+        if shot.dialogue_lines:
+            draft = compile_dialogue_draft(parse_dialogue_draft(raw), shot.dialogue_lines)
+            sections = draft.prompt_sections
+        else:
+            value = _extract_json_payload(raw)
+            sections = PromptSections.model_validate(value.get("prompt_sections", value))
+        sections = normalize_reference_tag_delimiters(sections)
+        validate_h3_prompt(sections.as_ordered_text(), shot.dialogue, audio_count=0 if shot.source_audio_path else len(shot.voice_refs),
+            required_picture_indices=[ref.picture_index for ref in shot.refs], submitted_picture_indices=[ref.picture_index for ref in shot.refs])
+        if not shot.dialogue and "<d>" in sections.detailed_description:
+            raise ValueError("The model invented dialogue. The prompt was not saved.")
+        return sections, draft
+    try:
+        sections, draft = validate_candidate(raw)
+    except ValueError as exc:
+        # One bounded format repair, without reopening Director chat or vision.
+        issues = sorted({getattr(item, "code", "prompt_format") for item in getattr(exc, "issues", [])}) or ["prompt_format"]
+        repair = {**payload, "repair": {"issue_codes": issues,
+            "instruction": "Repair the prior candidate against the response contract. Use every supplied {{speech:line_id}} exactly once in source order. Do not emit literal speech blocks. Preserve the brief and references.",
+            "previous_candidate": raw}}
+        raw = await (model or WorkspaceModel()).complete(system, repair, schema=schema)
+        try:
+            sections, draft = validate_candidate(raw)
+        except ValueError as final:
+            raise ValueError("The model returned an invalid prompt format. No new prompt was saved; the previous prompt is still out of date. Retry writing the prompt.") from final
     candidate = shot.model_copy(update={"prompt_sections": sections, "status": ShotStatus.needs_review,
         "meta": {**shot.meta, "workspace_input_version": captured["version"], "prompt_brief_stale": False,
             "material_review_pending": False, "material_review": {"evidence_mode": "saved_library_description", "references": refs},
             "prompt_picture_signature": picture_ref_signature(shot.refs), "prompt_voice_signature": voice_ref_signature(shot.voice_refs),
             "prompt_layout_signature": layout_prompt_signature(shot), "prompt_music_signature": music_prompt_signature(project, shot),
             "prompt_video_context_signature": video_context_prompt_signature(shot)}})
+    from ..core.projects.prompt_checks import stamp_prompt
+    stamp_prompt(candidate)
     candidate.meta["prompt_reference_contract"] = reference_certificate(project, candidate)
     record = prompt_dialogue_record(project, candidate, shot.dialogue_lines, draft)
     if record:

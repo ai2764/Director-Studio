@@ -208,3 +208,27 @@ async def test_workspace_video_submission_keeps_native_preflight_without_agent(b
     result = await api.submit_shot_endpoint(shot.id, svc=NoAgent())
     assert result.h3_job_id and len(staged) == 1
     assert staged[0][0].params["reference_evidence"][0]["evidence_mode"] == "saved_library_description"
+
+@pytest.mark.asyncio
+async def test_rewrite_replaces_legacy_stale_signature(board):
+    project, shot, _ = board
+    shot.meta.update(prompt_brief_signature="older-version", prompt_brief_stale=True, material_review_pending=True)
+    save_shot(shot)
+    saved = await write_prompt(project.id, shot.id, model=Model())
+    assert prompt_check(saved)["valid"]
+    assert not prompt_check(saved)["stale"]
+
+
+@pytest.mark.asyncio
+async def test_dialogue_format_gets_one_bounded_repair(board):
+    project, shot, _ = board
+    shot = await save_brief(shot.id, Brief(description="The guide greets the visitor.", duration_s=5, expected_version=snapshot(shot)["version"],
+        dialogue=["Guide [English]: Welcome.", "Visitor [English]: Thank you."]))
+    class RepairModel(Model):
+        async def complete(self, system, payload, **kwargs):
+            self.dialogue = bool(self.calls)
+            return await super().complete(system, payload, **kwargs)
+    model = RepairModel()
+    saved = await write_prompt(project.id, shot.id, model=model)
+    assert len(model.calls) == 2 and "repair" in model.calls[1][1]
+    assert prompt_check(saved)["valid"]
