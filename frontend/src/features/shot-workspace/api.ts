@@ -52,5 +52,9 @@ export async function replaceShotMaterials(shotId: string, materials: ShotMateri
 }
 
 export function formatDialogue(shot: Shot) {
-  return shot.dialogue_lines?.length ? shot.dialogue_lines.map((line) => `${line.speaker_name} [${line.language}]: ${line.text}`).join("\n") : shot.dialogue.join("\n");
+  const certified = (shot.meta?.prompt_dialogue_contract as { lines?: Array<{ line_id: string; speaker_id: string; text: string; language: string }> } | undefined)?.lines || [];
+  return shot.dialogue_lines?.length ? shot.dialogue_lines.map((line) => {
+    const previous = certified.find((item) => item.line_id === line.line_id && item.speaker_id === line.speaker_id && item.text === line.text);
+    return `${line.speaker_name} [${line.language || previous?.language || ""}]: ${line.text}`;
+  }).join("\n") : shot.dialogue.join("\n");
 }

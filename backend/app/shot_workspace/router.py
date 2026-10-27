@@ -93,7 +93,7 @@ async def save_brief(shot_id: str, body: Brief):
     ensure_shot_idle(shot)
     from .dialogue import parse_cues
     try:
-        lines = parse_cues(body.dialogue, shot.scene_id)
+        lines = parse_cues(body.dialogue, shot.scene_id, shot=shot)
         with _project_lock(shot.project_id):
             shot = find_shot(shot_id)
             if snapshot(shot)["version"] != body.expected_version:

@@ -347,3 +347,21 @@ async def test_legacy_prompt_adoption_requires_unchanged_certified_evidence(boar
     if not changed_description:
         assert not video_context_prompt_is_stale(upgraded)
         assert prompt_check(upgraded)["valid"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("certificate_current", [True, False])
+async def test_legacy_empty_language_reuses_only_matching_current_certificate(board, monkeypatch, certificate_current):
+    from app.shot_workspace.dialogue import parse_cues
+    from app.agents.director import dialogue_preflight
+    _, shot, _ = board
+    shot.meta["prompt_dialogue_contract"] = {"lines": [{"speaker_name": "Guide", "language": "English", "text": "Welcome."}]}
+    monkeypatch.setattr(dialogue_preflight, "dialogue_contract_current", lambda *args: certificate_current)
+    if certificate_current:
+        lines = parse_cues(["Guide []: Welcome."], shot.scene_id, shot=shot)
+        assert lines[0].language == "English" and lines[0].text == "Welcome."
+    else:
+        with pytest.raises(ValueError, match="Dialogue line 1 needs"):
+            parse_cues(["Guide []: Welcome."], shot.scene_id, shot=shot)
+    with pytest.raises(ValueError):
+        parse_cues(["Visitor []: Different words."], shot.scene_id, shot=shot)
