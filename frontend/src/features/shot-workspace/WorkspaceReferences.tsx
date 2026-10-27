@@ -37,8 +37,9 @@ export function ShotMaterialEditor({ shot, onClose, onOpenImage, onSaved }: {
   function move(index: number, delta: number) {
     setMaterials((current) => { const values = [...current]; [values[index], values[index + delta]] = [values[index + delta], values[index]]; return values; });
   }
-  return <div className="shot-material-editor-backdrop"><section role="dialog" aria-modal="true" aria-label="Shot references" className="shot-material-editor">
+  return <div className="shot-material-editor-backdrop workspace-reference-backdrop"><section role="dialog" aria-modal="true" aria-label="Shot references" className="shot-material-editor workspace-reference-dialog">
     <header className="manual-description-label"><h2>References</h2><button type="button" className="mode-chip" disabled={busy} onClick={onClose}>Close</button></header>
+    <div className="workspace-reference-body">
     <section aria-label="Selected references" className="workspace-reference-selection">
       {materials.map((material, index) => { const asset = assets.find((value) => value.id === material.asset_id); const url = asset?.urls[material.file_key || "master"];
         return <article key={identity(material)} className="workspace-reference-row">
@@ -61,6 +62,7 @@ export function ShotMaterialEditor({ shot, onClose, onOpenImage, onSaved }: {
       }))}</div>
     <label>Reference-set note<textarea aria-label="Reference-set note" value={note} rows={2} onChange={(event) => setNote(event.target.value)} /></label>
     {error && <p role="alert" className="banner error">{error}</p>}
+    </div>
     <footer className="manual-shot-actions"><button className="btn secondary" disabled={busy} onClick={() => void save(false)}>Save references</button>
       <button className="btn primary" disabled={busy || !materials.length} onClick={() => void save(true)}>Save & write prompt</button></footer>
   </section></div>;
