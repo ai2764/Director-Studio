@@ -253,3 +253,16 @@ async def test_exact_final_speech_format_uses_saved_sources_only(board, alter_wo
     else:
         saved = await write_prompt(project.id, shot.id, model=model)
         assert len(model.calls) == 1 and prompt_check(saved)["valid"]
+
+@pytest.mark.asyncio
+async def test_continuation_readiness_does_not_invalidate_authored_prompt(board, monkeypatch):
+    from app.shot_workspace import references
+    from app.core.projects.models import ShotVideoContext
+    _, shot, _ = board
+    shot.video_context = ShotVideoContext(mode="previous_shot", source_shot_id="sht_source")
+    monkeypatch.setattr(references, "video_context_status", lambda shot: {"ready": False, "state": "pending"})
+    first = snapshot(shot)
+    monkeypatch.setattr(references, "video_context_status", lambda shot: {"ready": True, "state": "ready"})
+    second = snapshot(shot)
+    assert first["continuation"] != second["continuation"]
+    assert first["version"] == second["version"]

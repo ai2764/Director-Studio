@@ -54,7 +54,7 @@ def snapshot(shot):
             "source_description": ({"title": source.title, "description": source.script_beat} if source else None),
             "evidence_mode": "authored_text_not_observed_video_ending"}
     facts = {"shot": shot.model_dump(mode="json", exclude={"meta", "h3_job_id", "status", "blocked_reasons", "prompt_sections"}),
-             "references": references, "continuation": continuation,
+             "references": references, "continuation": ({key: value for key, value in continuation.items() if key not in {"ready", "source_state"}} if continuation else None),
              "context_signature": video_context_prompt_signature(shot),
              "reference_note": shot.meta.get("workspace_reference_note", ""),
              "authoring_mode": project.authoring_mode if project else None}

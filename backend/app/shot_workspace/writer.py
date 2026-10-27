@@ -95,7 +95,7 @@ async def write_prompt(project_id, shot_id, *, model=None):
         try:
             sections, draft = validate_candidate(raw)
         except ValueError as final:
-            raise ValueError("The model returned an invalid prompt format. No new prompt was saved; the previous prompt is still out of date. Retry writing the prompt.") from final
+            raise ValueError("The model returned an invalid prompt format. No new prompt was saved. Review the saved prompt or retry writing.") from final
     candidate = shot.model_copy(update={"prompt_sections": sections, "status": ShotStatus.needs_review,
         "meta": {**shot.meta, "workspace_input_version": captured["version"], "prompt_brief_stale": False,
             "material_review_pending": False, "material_review": {"evidence_mode": "saved_library_description", "references": refs},
