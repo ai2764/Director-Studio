@@ -269,3 +269,33 @@ async def test_continuation_readiness_does_not_invalidate_authored_prompt(board,
     second = snapshot(shot)
     assert first["continuation"] != second["continuation"]
     assert first["version"] == second["version"]
+
+@pytest.mark.asyncio
+async def test_switching_continuation_variation_keeps_workspace_prompt_current(board):
+    from app.core.projects.models import ShotVideoContext
+    from app.core.projects.video_context import video_context_prompt_is_stale
+    project, shot, _ = board
+    shot.video_context = ShotVideoContext(mode="previous_shot", source_shot_id="sht_source", source_job_id="job_first", source_output_key="video")
+    save_shot(shot)
+    saved = await write_prompt(project.id, shot.id, model=Model())
+    saved.video_context = saved.video_context.model_copy(update={"source_job_id": "job_other_variation", "source_output_key": "video_raw"})
+    save_shot(saved)
+    assert prompt_check(saved)["valid"]
+    assert not video_context_prompt_is_stale(saved)
+    saved.video_context = saved.video_context.model_copy(update={"source_shot_id": "sht_different_story"})
+    save_shot(saved)
+    assert prompt_check(saved)["stale"] and video_context_prompt_is_stale(saved)
+
+
+@pytest.mark.asyncio
+async def test_native_director_retains_video_source_freshness_policy(board):
+    from app.core.projects.models import ShotVideoContext
+    from app.core.projects.video_context import video_context_prompt_is_stale, video_context_prompt_signature
+    project, shot, _ = board
+    project.authoring_mode = "director_agent"
+    save_project(project)
+    shot.video_context = ShotVideoContext(mode="previous_shot", source_shot_id="sht_source", source_job_id="job_first")
+    shot.meta["prompt_video_context_signature"] = video_context_prompt_signature(shot)
+    assert not video_context_prompt_is_stale(shot)
+    shot.video_context.source_job_id = "job_other_variation"
+    assert video_context_prompt_is_stale(shot)

@@ -13,6 +13,10 @@ SECTION_LABELS = dict(zip(SECTION_KEYS, ("Subject definitions", "Summary", "Refe
 
 def brief_signature(shot):
     data = shot.model_dump(mode="json")
+    config = data.get("video_context")
+    if config:
+        data["video_context"] = {key: value for key, value in config.items()
+            if key not in {"source_job_id", "source_output_key", "upload_id"}}
     return digest({key: data.get(key) for key in BRIEF_FIELDS})
 
 

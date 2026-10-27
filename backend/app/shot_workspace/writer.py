@@ -13,7 +13,7 @@ from ..agents.director.dialogue_preflight import WRITER_CONTRACT, parse_dialogue
 from ..agents.director.planner import _extract_json_payload
 from .errors import validation_reason
 from .model import WorkspaceModel
-from .references import snapshot, reference_certificate
+from .references import snapshot, reference_certificate, continuation_intent_signature
 
 INSTRUCTIONS = """
 This is a single saved-shot writing task, not a planning conversation.
@@ -107,6 +107,7 @@ async def write_prompt(project_id, shot_id, *, model=None):
             "material_review_pending": False, "material_review": {"evidence_mode": "saved_library_description", "references": refs},
             "prompt_picture_signature": picture_ref_signature(shot.refs), "prompt_voice_signature": voice_ref_signature(shot.voice_refs),
             "prompt_layout_signature": layout_prompt_signature(shot), "prompt_music_signature": music_prompt_signature(project, shot),
+            "workspace_continuation_intent_signature": continuation_intent_signature(shot),
             "prompt_video_context_signature": video_context_prompt_signature(shot)}})
     from ..core.projects.prompt_checks import stamp_prompt
     stamp_prompt(candidate)

@@ -12,7 +12,7 @@ Shot Workspace is an optional film authoring mode. Director Agent remains availa
 
 Use one dialogue cue per line: `Speaker [Language]: exact spoken words`. Speaker attribution and wording are retained in the generated speech contract.
 
-Changing a brief, selected reference, Library description or continuation setting invalidates the saved prompt. Rule-based checks catch missing sections, reference indices and malformed tags; they do not certify visual quality.
+Changing a brief, selected reference, Library description or continuation intent invalidates the saved prompt. Switching the generated variation or output of the same continuation source does not require rewriting. Video availability, resolution and frame compatibility are still checked before generation. Rule-based checks catch missing sections, reference indices and malformed tags; they do not certify visual quality.
 
 ## Library
 

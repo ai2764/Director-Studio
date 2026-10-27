@@ -37,6 +37,28 @@ def selected_references(shot):
     return result
 
 
+def continuation_intent(shot):
+    """Text-writing inputs, independent of the selected generated variation."""
+    config = shot.video_context
+    if not config or config.mode == "off":
+        return {"mode": "off"}
+    source_id = config.source_shot_id
+    if config.mode == "previous_shot" and not source_id:
+        project = load_project(shot.project_id)
+        if project and shot.id in project.shot_ids:
+            index = project.shot_ids.index(shot.id)
+            source_id = project.shot_ids[index - 1] if index else None
+    source = load_shot(shot.project_id, source_id) if source_id else None
+    return {"mode": config.mode, "source_shot_id": source_id,
+        "source_description": {"title": source.title, "description": source.script_beat} if source else None,
+        "context_frames": config.context_frames, "audio_context_frames": config.audio_context_frames,
+        "carry_audio": config.carry_audio}
+
+
+def continuation_intent_signature(shot):
+    return digest(continuation_intent(shot))
+
+
 def snapshot(shot):
     project = load_project(shot.project_id)
     references = selected_references(shot)
@@ -53,9 +75,8 @@ def snapshot(shot):
             "carry_audio": status.get("carry_audio"),
             "source_description": ({"title": source.title, "description": source.script_beat} if source else None),
             "evidence_mode": "authored_text_not_observed_video_ending"}
-    facts = {"shot": shot.model_dump(mode="json", exclude={"meta", "h3_job_id", "status", "blocked_reasons", "prompt_sections"}),
-             "references": references, "continuation": ({key: value for key, value in continuation.items() if key not in {"ready", "source_state"}} if continuation else None),
-             "context_signature": video_context_prompt_signature(shot),
+    facts = {"shot": shot.model_dump(mode="json", exclude={"meta", "h3_job_id", "status", "blocked_reasons", "prompt_sections", "video_context"}),
+             "references": references, "continuation": continuation_intent(shot),
              "reference_note": shot.meta.get("workspace_reference_note", ""),
              "authoring_mode": project.authoring_mode if project else None}
     return {"version": digest(facts), "shot_id": shot.id, "description": shot.script_beat,
