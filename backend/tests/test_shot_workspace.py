@@ -365,3 +365,35 @@ async def test_legacy_empty_language_reuses_only_matching_current_certificate(bo
             parse_cues(["Guide []: Welcome."], shot.scene_id, shot=shot)
     with pytest.raises(ValueError):
         parse_cues(["Visitor []: Different words."], shot.scene_id, shot=shot)
+
+@pytest.mark.asyncio
+async def test_amendment_rewrites_one_draft_without_saving_or_loading_history(board):
+    from app.shot_workspace.refinement import refine
+    project, shot, _ = board
+    class Refiner:
+        async def complete_shot_description(self, system, user, **kwargs):
+            payload = json.loads(user)
+            assert payload["amendment"] == "Replace rotation with a stationary view."
+            assert payload["user_description"] == shot.script_beat
+            assert "AMENDMENT MODE" in system and "history" not in payload
+            return json.dumps(dict(description="The object remains stationary on the table.", title=shot.title, duration_s=shot.duration_s,
+                shot_type="close-up", camera_angle="eye level", camera_motion="static", composition="centered", dialogue=[], questions=[]))
+    result = await refine(shot, shot.script_beat, snapshot(shot)["version"], Refiner(), amendment="Replace rotation with a stationary view.")
+    assert "stationary" in result["description"]
+    assert load_shot(project.id, shot.id).script_beat == shot.script_beat
+    assert load_shot(project.id, shot.id).refs == shot.refs
+
+
+@pytest.mark.asyncio
+async def test_amendment_allows_only_explicit_new_dialogue(board):
+    from app.shot_workspace.refinement import refine
+    _, shot, _ = board
+    class Refiner:
+        async def complete_shot_description(self, *args, **kwargs):
+            return json.dumps(dict(description="The guide says Ready.", title=shot.title, duration_s=shot.duration_s,
+                shot_type="medium", camera_angle="eye level", camera_motion="static", composition="centered",
+                dialogue=["Guide [English]: Ready."], questions=[]))
+    result = await refine(shot, shot.script_beat, snapshot(shot)["version"], Refiner(), amendment="Add Guide [English]: Ready.")
+    assert result["dialogue"] == ["Guide [English]: Ready."]
+    with pytest.raises(ValueError, match="invented dialogue"):
+        await refine(shot, shot.script_beat, snapshot(shot)["version"], Refiner(), amendment="Keep a silent shot.")

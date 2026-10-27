@@ -35,3 +35,5 @@
 @media(max-width:680px){.workspace-reference-backdrop{padding:8px;padding-top:max(8px,env(safe-area-inset-top));padding-bottom:max(8px,env(safe-area-inset-bottom))}.shot-material-editor.workspace-reference-dialog{height:90dvh;max-height:100%;width:100%}.workspace-reference-dialog>header,.workspace-reference-dialog>footer,.workspace-reference-body{padding:10px}.workspace-reference-row{grid-template-columns:48px minmax(0,1fr) auto;gap:6px}.workspace-reference-row img{width:48px;height:56px}.workspace-reference-row strong{font-size:12px}.workspace-reference-row textarea{font-size:16px}.workspace-reference-library{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.workspace-reference-library img{height:96px}.workspace-reference-dialog>footer button{padding:10px 6px;font-size:13px}}
 
 .workspace-task-error{white-space:pre-wrap;overflow-wrap:anywhere}
+
+.manual-amendment{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border-color,#cbbfae);border-radius:10px;background:rgba(255,255,255,.12)}.manual-amendment small{font-size:12px;line-height:1.5}.manual-description-tools{flex-wrap:wrap;justify-content:flex-end}

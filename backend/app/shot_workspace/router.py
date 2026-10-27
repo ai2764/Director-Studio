@@ -112,6 +112,7 @@ async def save_brief(shot_id: str, body: Brief):
 
 
 class Refine(BaseModel):
+    amendment: str = Field(default="", max_length=4000)
     description: str = Field(min_length=1, max_length=8000)
     title: str = Field(default="", max_length=200)
     suggest_title: bool = False
@@ -131,7 +132,7 @@ async def refine_brief(shot_id: str, body: Refine):
         async with orch.llm_session(release_on_exit=not settings.llm_keep_loaded):
             await orch.ensure_llm_ready()
             return await refine(shot, body.description, body.expected_version, WorkspaceModel(),
-                                title=body.title, suggest_title=body.suggest_title)
+                                title=body.title, suggest_title=body.suggest_title, amendment=body.amendment)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 

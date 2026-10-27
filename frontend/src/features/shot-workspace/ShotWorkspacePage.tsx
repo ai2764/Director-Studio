@@ -34,8 +34,7 @@ function ReferencePreview({ item }: { item: ShotRef }) {
     <img src={url} alt={`Picture ${item.picture_index}`} onError={() => setIndex((current) => current + 1)} />
   </a> : <span className="manual-ref-preview">Preview unavailable</span>;
 }
-
-function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelete, desktopOutput, writing, writeElapsed, onCancel }: {
+export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelete, desktopOutput, writing, writeElapsed, onCancel }: {
   shot: Shot; index: number; shots: Shot[]; busy: boolean;
   onSaved: (shot: Shot) => void; onWrite: (shot: Shot) => Promise<void>;
   onDelete: (shot: Shot) => Promise<void>;
@@ -48,6 +47,9 @@ function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelete, desk
   const [dialogue, setDialogue] = useState(formatDialogue(shot));
   const [camera, setCamera] = useState({ shot_type: shot.shot_type || "", camera_angle: shot.camera_angle || "",
     camera_motion: shot.camera_motion || "", composition: shot.composition || "" });
+  const [amending, setAmending] = useState(false);
+  const [amendment, setAmendment] = useState("");
+  const [beforeAmendment, setBeforeAmendment] = useState<{ title: string; description: string; duration: number; dialogue: string; camera: typeof camera } | null>(null);
   const [original, setOriginal] = useState(shot.script_beat);
   const [version, setVersion] = useState("");
   const [working, setWorking] = useState("");
@@ -110,27 +112,29 @@ function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelete, desk
     onSaved(saved);
     return { saved, version: input.version };
   }
-
-  async function act(action: "save" | "refine" | "write", expectedVersion?: string) {
-    setWorking(action === "refine" ? "Refining brief" : action === "write" ? "Write prompt" : "Saving brief");
+  async function act(action: "save" | "refine" | "amend" | "write", expectedVersion?: string) {
+    if (action === "amend" && !amendment.trim()) return;
+    setWorking(action === "amend" ? "Amending shot" : action === "refine" ? "Refining brief" : action === "write" ? "Write prompt" : "Saving brief");
     setError(""); setMessage("");
     try {
       const result = await save(expectedVersion);
-      if (action === "refine") {
+      if (action === "refine" || action === "amend") {
         const suggestion = await json<Suggestion>(`/api/shot-workspace/shots/${shot.id}/description/refine`, "POST", {
           description, title, suggest_title: titleNeeded, expected_version: result.version,
+          amendment: action === "amend" ? amendment : "",
         });
         if (titleNeeded && suggestion.title?.trim()) setTitle(suggestion.title);
         if (suggestion.questions.length) {
           setMessage(suggestion.questions.join("\n"));
         } else {
+          if (action === "amend") setBeforeAmendment({ title, description, duration, dialogue, camera: { ...camera } });
           setOriginal(description);
           setDescription(suggestion.description);
           setDuration(suggestion.duration_s);
           setDialogue(suggestion.dialogue.join("\n"));
           setCamera({ shot_type: suggestion.shot_type, camera_angle: suggestion.camera_angle,
             camera_motion: suggestion.camera_motion, composition: suggestion.composition });
-          setMessage("Brief and camera fields filled. Duration is unchanged; only explicit dialogue was extracted. Save or write the prompt to apply.");
+          setMessage(action === "amend" ? "Amendment applied to draft. Review the complete brief, then save or write the prompt. References and duration were kept." : "Brief and camera fields filled. Duration is unchanged; only explicit dialogue was extracted. Save or write the prompt to apply.");
         }
       } else if (action === "write") {
         await onWrite(result.saved);
@@ -152,6 +156,8 @@ function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelete, desk
         }}>🗑</button></div>
     <div className="manual-description-label"><label htmlFor={`description-${shot.id}`}>Shot brief</label>
       <div className="manual-description-tools">
+      <button type="button" className="mode-chip" disabled={disabled} aria-expanded={amending}
+        onClick={() => setAmending((value) => !value)}>Amend shot</button>
       <button type="button" className="mode-chip" aria-label="Clear shot brief" disabled={disabled || !description}
         onClick={() => { setDescription(""); setOriginal(""); setCamera({ shot_type: "", camera_angle: "", camera_motion: "", composition: "" });
           setMessage("Brief cleared. Enter a new description and save."); }}>Clear</button>
@@ -159,6 +165,19 @@ function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelete, desk
         aria-busy={working === "Refining brief"}
         disabled={disabled || !version || !description.trim()} onClick={() => void act("refine")}>
         {working === "Refining brief" ? `Refining · ${elapsed}s` : "✦ Refine"}</button></div></div>
+    {amending && <section className="manual-amendment" aria-label="Shot amendment">
+      <label htmlFor={`amendment-${shot.id}`}>What should change?</label>
+      <textarea id={`amendment-${shot.id}`} aria-label="Amendment instructions" rows={3} value={amendment} disabled={disabled}
+        placeholder="Replace walking with sitting down. Keep the outfit, camera and dialogue."
+        onChange={(event) => setAmendment(event.target.value)} />
+      <small>Describe only the change. The agent rewrites conflicting parts of this shot and keeps the rest. Selected references stay unchanged.</small>
+      <div className="manual-shot-actions"><button className="btn secondary" disabled={disabled || !version || !description.trim() || !amendment.trim()}
+        onClick={() => void act("amend")}>{working === "Amending shot" ? `Amending · ${elapsed}s` : "Apply amendment"}</button>
+        {beforeAmendment && <button className="mode-chip" disabled={disabled} onClick={() => {
+          setTitle(beforeAmendment.title); setDescription(beforeAmendment.description); setDuration(beforeAmendment.duration);
+          setDialogue(beforeAmendment.dialogue); setCamera(beforeAmendment.camera); setBeforeAmendment(null); setMessage("Amendment undone in draft.");
+        }}>Undo amendment</button>}</div>
+    </section>}
     <div className="manual-editor-feedback" aria-live="polite">
       {working && <p role="status">{working} · {elapsed}s</p>}
       {message && <p role="status">{message}</p>}
@@ -211,7 +230,7 @@ function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelete, desk
         {writing ? `Cancel · ${writeElapsed}s` : working === "Write prompt" ? `Preparing prompt · ${elapsed}s` : "Write prompt"}</button>
       {writing && <small role="status">Writing prompt</small>}
     </div>
-    {Object.values(shot.prompt_sections).some(Boolean) ? <section className="manual-generated-prompt" aria-label="Prompt contents"><small className="manual-saved-prompt-label">{promptCheck?.stale ? "Previously saved prompt � Out of date. Failed writes do not replace this text." : "Saved prompt � Failed writes do not replace this text."}</small>{PROMPT_SECTION_KEYS.map(({ key, label }) => shot.prompt_sections[key]
+    {Object.values(shot.prompt_sections).some(Boolean) ? <section className="manual-generated-prompt" aria-label="Prompt contents"><small className="manual-saved-prompt-label">{promptCheck?.stale ? "Previously saved prompt · Out of date. Failed writes do not replace this text." : "Saved prompt · Failed writes do not replace this text."}</small>{PROMPT_SECTION_KEYS.map(({ key, label }) => shot.prompt_sections[key]
         ? <label key={key}>{label}<textarea aria-label={label} readOnly rows={4} value={shot.prompt_sections[key]} /></label> : null)}
     </section> : <small>Write from the current brief and selected references. Refinement is optional.</small>}
     {materials && <ShotMaterialEditor shot={shot} shots={shots} shotNumber={index + 1} manualReferences

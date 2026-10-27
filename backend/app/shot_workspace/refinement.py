@@ -67,13 +67,13 @@ def inputs(shot):
     return snapshot(shot)
 
 
-async def refine(shot, description, expected_version, provider, *, title=None, suggest_title=False):
+async def refine(shot, description, expected_version, provider, *, title=None, suggest_title=False, amendment=""):
     captured = inputs(shot)
     if captured["version"] != expected_version:
         raise ValueError("The shot or references changed. Refresh before refining.")
     if not description.strip():
         raise ValueError("Enter a shot brief first.")
-    request = {"user_description": description, "current_dialogue": shot.dialogue,
+    request = {"user_description": description, "amendment": amendment.strip(), "current_dialogue": shot.dialogue,
                "current_dialogue_lines": [line.model_dump(mode="json") for line in shot.dialogue_lines or []],
                "title": shot.title if title is None else title, "title_needed": suggest_title,
                "continuation": captured["continuation"],
@@ -84,7 +84,23 @@ async def refine(shot, description, expected_version, provider, *, title=None, s
     if suggest_title:
         schema["properties"]["title"]["minLength"] = 1
         schema.setdefault("required", []).append("title")
-    raw = await provider.complete_shot_description(INSTRUCTIONS, json.dumps(request, ensure_ascii=False), schema=schema)
+    instructions = INSTRUCTIONS
+    if amendment.strip():
+        instructions += """
+AMENDMENT MODE: apply the amendment to the existing shot, returning a complete
+replacement description, not an appended note or a list of edits. The amendment
+supersedes only the old content it explicitly changes, including action, staging,
+objects, camera choices or dialogue. Explicit requested additions are allowed;
+do not invent additions beyond the request.
+Remove or rewrite superseded passages in ALL returned fields so old and new
+requirements do not coexist. Preserve unrelated intent, exact unchanged dialogue,
+selected reference identities, duration and saved continuation. Do not change other
+shots or select new references. Explicit new spoken words in the amendment may
+replace old dialogue; preserve their exact words and speaker attribution. If a
+requested change conflicts with a selected reference or cannot be attributed,
+return a focused question instead of inventing a resolution.
+"""
+    raw = await provider.complete_shot_description(instructions, json.dumps(request, ensure_ascii=False), schema=schema)
     result = RefinedDescription.model_validate(_extract_json_payload(raw))
     if result.duration_s != shot.duration_s:
         raise ValueError("The refinement changed the saved duration and was not applied. Edit the duration manually and retry.")
@@ -96,7 +112,7 @@ async def refine(shot, description, expected_version, provider, *, title=None, s
         result.title = request["title"]
     from .dialogue import parse_cues
     cues = parse_cues(result.dialogue, shot.scene_id)
-    if any(line.text not in description and line.text not in shot.dialogue for line in cues):
+    if any(line.text not in description and line.text not in amendment and line.text not in shot.dialogue for line in cues):
         raise ValueError("The refinement changed or invented dialogue and was not applied. Retry or edit it manually.")
     if any(line.text not in result.description for line in cues):
         raise ValueError("The refinement omitted dialogue and was not applied.")
