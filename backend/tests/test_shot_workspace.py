@@ -437,9 +437,11 @@ async def test_coordinator_routes_bounded_text_context_without_prompt_writer(boa
             self.calls.append(payload)
             assert not kwargs.get("images")
             if "Classify" in system:
-                assert set(payload) == {"request"}
+                assert set(payload) == {"request", "current_description"}
                 return json.dumps({"intent":"discuss" if intent == "neighbors" else intent,"include_adjacent_descriptions":intent == "neighbors","reply_language":"English","reply":"Hello." if intent == "chat" else ""})
-            assert set(payload) <= {"current_description","request","reply_language","recent_exchange","adjacent_descriptions"}
+            assert set(payload) <= {"current_description","request","reply_language","recent_exchange","adjacent_descriptions","reference_descriptions","previous_shot_description"}
+            assert payload["previous_shot_description"]["description"] == "sht_before description"
+            assert payload["reference_descriptions"]
             assert "PRIVATE_PROMPT" not in json.dumps(payload)
             assert len(payload["recent_exchange"]) == 2
             assert all(len(turn["text"]) <= 600 for turn in payload["recent_exchange"])
@@ -452,7 +454,9 @@ async def test_coordinator_routes_bounded_text_context_without_prompt_writer(boa
             return json.dumps({"reply":"A locked medium shot would keep the action clear.","proposed_change":"Use a locked medium shot."})
         async def complete_shot_description(self, system, user, **kwargs):
             payload = json.loads(user)
-            assert set(payload) == {"previous_description","new_request","duration_s"}
+            assert set(payload) == {"previous_description","new_request","duration_s","reference_descriptions","previous_shot_description"}
+            assert payload["reference_descriptions"]
+            assert payload["previous_shot_description"]["description"] == "sht_before description"
             return json.dumps(dict(description="The object remains still.",title=shot.title,duration_s=5,
                 shot_type="medium",camera_angle="eye level",camera_motion="static",composition="centered",dialogue=[],questions=[]))
     model = CoordinatorModel()
@@ -461,3 +465,211 @@ async def test_coordinator_routes_bounded_text_context_without_prompt_writer(boa
     assert result["kind"] == ("draft" if intent == "amend" else "reply")
     assert len(model.calls) == (1 if intent in {"chat","amend"} else 2)
     assert load_shot(project.id, shot.id).script_beat == shot.script_beat
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intent", ["discuss", "amend"])
+@pytest.mark.parametrize("selected", [True, False])
+async def test_coordinator_reference_text_is_always_available(board, intent, selected):
+    from app.shot_workspace.coordinator import converse
+    project, shot, asset = board
+    if not selected:
+        shot.refs = []
+        save_shot(shot)
+    class ReferenceModel:
+        async def complete(self, system, payload, **kwargs):
+            if "Classify" in system:
+                assert "references" not in payload
+                return json.dumps(dict(intent=intent, include_adjacent_descriptions=False,
+                    include_reference_descriptions=False, reply_language="English"))
+            refs = payload["reference_descriptions"]
+            assert len(refs) == int(selected)
+            if refs:
+                assert set(refs[0]) == {"picture_index", "role", "name", "description", "binding_notes"}
+                assert refs[0]["description"] == asset.notes
+            return json.dumps(dict(reply="Which reference do you mean?", proposed_change=""))
+        async def complete_shot_description(self, system, user, **kwargs):
+            payload = json.loads(user)
+            assert len(payload["reference_descriptions"]) == int(selected)
+            assert "never image pixels" in system
+            return json.dumps(dict(description=shot.script_beat, title=shot.title, duration_s=5,
+                shot_type="medium", camera_angle="eye level", camera_motion="static", composition="centered",
+                dialogue=[], questions=["Which reference do you mean?"]))
+    result = await converse(shot, shot.script_beat, "Use the referenced object's detail.",
+        snapshot(shot)["version"], ReferenceModel())
+    assert result["kind"] == "reply"
+    assert "selected reference descriptions" in result["context_scope"]
+    assert load_shot(project.id, shot.id).script_beat == shot.script_beat
+
+
+@pytest.mark.asyncio
+async def test_coordinator_rejects_reference_description_changed_during_discussion(board):
+    from app.shot_workspace.coordinator import converse
+    _, shot, asset = board
+    class ChangingModel:
+        async def complete(self, system, payload, **kwargs):
+            if "Classify" in system:
+                return json.dumps(dict(intent="discuss", include_adjacent_descriptions=False,
+                    include_reference_descriptions=True, reply_language="English"))
+            asset.notes = "Updated reference details."
+            write_asset(asset)
+            return json.dumps(dict(reply="Use the handle.", proposed_change="Show the handle."))
+    with pytest.raises(ValueError, match="changed"):
+        await converse(shot, shot.script_beat, "What about the reference?", snapshot(shot)["version"], ChangingModel())
+
+
+@pytest.mark.asyncio
+async def test_reference_discussion_retries_failed_runtime_decoder_once(board):
+    from app.shot_workspace.coordinator import converse
+    from openai import InternalServerError
+    _, shot, _ = board
+    class DecoderModel:
+        attempts = 0
+        async def complete(self, system, payload, **kwargs):
+            if "Classify" in system:
+                return json.dumps(dict(intent="chat", include_adjacent_descriptions=False,
+                    include_reference_descriptions=True, reply_language="English"))
+            self.attempts += 1
+            assert payload["reference_descriptions"]
+            if self.attempts == 1:
+                response = httpx.Response(502, request=httpx.Request("POST", "http://localhost/test"))
+                raise InternalServerError("Decoder failed", response=response,
+                    body={"error": {"code": "structured_output_failed"}})
+            assert kwargs["schema"] is None
+            return json.dumps(dict(reply="The reference describes a round handle.", proposed_change=""))
+    model = DecoderModel()
+    result = await converse(shot, shot.script_beat, "Can you read the reference description?",
+        snapshot(shot)["version"], model)
+    assert model.attempts == 2
+    assert result["kind"] == "reply"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intent", ["discuss", "amend"])
+async def test_description_assistant_rejects_previous_shot_context_changed_mid_request(board, intent):
+    from app.shot_workspace.coordinator import converse
+    project, shot, _ = board
+    previous = shot.model_copy(deep=True, update={"id":"sht_previous", "script_beat":"The object is placed on the table."})
+    save_shot(previous)
+    project.shot_ids = [previous.id, shot.id]
+    save_project(project)
+    def change_previous():
+        previous.script_beat = "The object is removed from the table."
+        save_shot(previous)
+    class ContextModel:
+        async def complete(self, system, payload, **kwargs):
+            if "Classify" in system:
+                return json.dumps(dict(intent=intent, include_adjacent_descriptions=False,
+                    include_reference_descriptions=False, reply_language="English"))
+            assert payload["previous_shot_description"]["description"] == "The object is placed on the table."
+            change_previous()
+            return json.dumps(dict(reply="Continue with a medium shot.", proposed_change="Use a medium shot."))
+        async def complete_shot_description(self, system, user, **kwargs):
+            payload = json.loads(user)
+            assert payload["previous_shot_description"]["description"] == "The object is placed on the table."
+            assert payload["reference_descriptions"]
+            change_previous()
+            return json.dumps(dict(description=shot.script_beat,title=shot.title,duration_s=5,
+                shot_type="medium",camera_angle="eye level",camera_motion="static",composition="centered",dialogue=[],questions=[]))
+    with pytest.raises(ValueError, match="Previous shot description changed"):
+        await converse(shot, shot.script_beat, "Make the action clearer.", snapshot(shot)["version"], ContextModel())
+    assert load_shot(project.id, shot.id).script_beat == shot.script_beat
+
+
+@pytest.mark.asyncio
+async def test_new_shot_inherits_previous_bindings_once_and_can_remove_them(board):
+    project, previous, asset = board
+    previous.refs[0].notes = "Keep the handle visible."
+    previous.prompt_sections.summary = "Previous shot prompt."
+    save_shot(previous)
+    created = await add_shot(project.id, CreateShot(request_id="inherit-refs"))
+    assert created.refs == previous.refs
+    assert created.script_beat == ""
+    assert not any(created.prompt_sections.model_dump().values())
+    assert created.h3_job_id is None and created.video_context is None
+    assert snapshot(created)["references"][0]["description"] == asset.notes
+    cleared = await replace_materials(created.id, Materials(materials=[], expected_refs=created.refs))
+    assert cleared.refs == []
+    assert load_shot(project.id, previous.id).refs == previous.refs
+    retried = await add_shot(project.id, CreateShot(request_id="inherit-refs"))
+    assert retried.id == created.id and retried.refs == []
+    following = await add_shot(project.id, CreateShot(request_id="inherit-empty"))
+    assert following.refs == []
+
+
+@pytest.mark.asyncio
+async def test_first_shot_has_no_inherited_bindings():
+    project = create_project("Empty workspace", "", authoring_mode="shot_workspace")
+    created = await add_shot(project.id, CreateShot(request_id="first-shot"))
+    assert created.refs == [] and created.layout_refs == []
+
+
+@pytest.mark.asyncio
+async def test_new_shot_inherits_layout_binding_without_generation_state(board):
+    from app.core.projects.layouts import LayoutReference
+    project, previous, _ = board
+    previous.refs.append(ShotRef(role="layout_ref_frame", asset_id="layout_test", picture_index=2, file_key="master", notes="Use the composition."))
+    previous.layout_refs = [LayoutReference(id="lref_old",asset_id="layout_test",job_id="job_previous",
+        selected_for_h3=True,review_status="usable",state_description="A centered composition.")]
+    save_shot(previous)
+    created = await add_shot(project.id, CreateShot(request_id="inherit-layout"))
+    assert created.refs == previous.refs
+    assert len(created.layout_refs) == 1
+    layout = created.layout_refs[0]
+    assert layout.id != "lref_old" and layout.job_id is None
+    assert layout.asset_id == "layout_test" and layout.selected_for_h3
+    assert layout.review_status == "usable"
+    assert created.ref_frame_job_id is None
+
+
+@pytest.mark.asyncio
+async def test_empty_brief_can_be_saved_without_removing_references(board):
+    project, shot, _ = board
+    shot.prompt_sections.summary = "Previously written prompt."
+    save_shot(shot)
+    saved = await save_brief(shot.id, Brief(description="",title=shot.title,duration_s=5,
+        dialogue=[],expected_version=snapshot(shot)["version"]))
+    reloaded = load_shot(project.id, shot.id)
+    assert saved.script_beat == reloaded.script_beat == ""
+    assert reloaded.refs == shot.refs
+    assert reloaded.dialogue == []
+    assert reloaded.meta["prompt_brief_stale"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True])
+async def test_description_conversation_is_durable_per_shot_and_records_errors(board, monkeypatch, failure):
+    import importlib
+    import app.shot_workspace.conversations as conversations
+    import app.shot_workspace.coordinator as coordinator
+    import app.core.vram as vram
+    from app.shot_workspace.router import assist_description, DescriptionAssist, description_conversation
+    project, shot, _ = board
+    class Orchestrator:
+        @asynccontextmanager
+        async def llm_session(self, **kwargs): yield
+        async def ensure_llm_ready(self): pass
+    async def reply(*args, **kwargs):
+        if failure:
+            raise ValueError("The shot changed. Please retry.")
+        return {"kind":"reply", "reply":"Use a medium shot.", "proposed_change":"Use a medium shot.", "context_scope":"Current description"}
+    monkeypatch.setattr(vram, "get_orchestrator", lambda: Orchestrator())
+    monkeypatch.setattr(coordinator, "converse", reply)
+    version = snapshot(shot)["version"]
+    body = DescriptionAssist(description=shot.script_beat,amendment="How should we frame this?",expected_version=version)
+    if failure:
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException):
+            await assist_description(shot.id, body)
+    else:
+        await assist_description(shot.id, body)
+    importlib.reload(conversations)
+    messages = description_conversation(shot.id)["messages"]
+    assert [message["role"] for message in messages] == ["user", "error" if failure else "assistant"]
+    assert messages[0]["text"] == body.amendment
+    if not failure:
+        assert messages[1]["proposal"] == "Use a medium shot."
+    assert snapshot(load_shot(project.id,shot.id))["version"] == version
+    other = await add_shot(project.id, CreateShot(request_id="new-conversation"))
+    assert description_conversation(other.id)["messages"] == []
+    assert description_conversation(shot.id)["messages"] == messages

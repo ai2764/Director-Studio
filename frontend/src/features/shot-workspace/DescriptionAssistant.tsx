@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
+import { parseError } from "../../shared/api/client";
 import { getDirectorModel, setDirectorModel } from "../director/api";
 
 export type AssistantTurn = {role: "user" | "assistant"; text: string};
 export type AssistantReply = {reply: string; proposed_change?: string; context_scope?: string};
 
-export function DescriptionAssistant({ description, disabled, ready, onRequest, onUndo, canUndo }: {
-  description: string; disabled: boolean; ready: boolean;
+type ConversationMessage = {role: "user" | "assistant" | "error"; text: string; proposal?: string; scope?: string};
+
+export function DescriptionAssistant({ shotId, description, disabled, ready, onRequest, onUndo, canUndo }: {
+  shotId: string; description: string; disabled: boolean; ready: boolean;
   onRequest: (request: string, recentTurns: AssistantTurn[]) => Promise<AssistantReply>; onUndo: () => void; canUndo: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -35,7 +38,21 @@ export function DescriptionAssistant({ description, disabled, ready, onRequest, 
     finally { setModelSwitching(false); }
   }
   const [seconds, setSeconds] = useState(0);
-  const [messages, setMessages] = useState<{role: "user" | "assistant" | "error"; text: string; proposal?: string; scope?: string}[]>([]);
+  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  useEffect(() => {
+    if (!open) return;
+    let current = true;
+    setHistoryLoading(true); setHistoryError(""); setMessages([]);
+    void fetch(`/api/shot-workspace/shots/${shotId}/description/conversation`).then(async (response) => {
+      if (!response.ok) throw new Error(await parseError(response));
+      const data = await response.json() as {messages?: ConversationMessage[]};
+      if (current) setMessages(data.messages || []);
+    }).catch(() => { if (current) setHistoryError("Conversation could not be loaded. Reopen the assistant to retry."); })
+      .finally(() => { if (current) setHistoryLoading(false); });
+    return () => { current = false; };
+  }, [shotId, open]);
   const log = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!busy) return;
@@ -45,7 +62,7 @@ export function DescriptionAssistant({ description, disabled, ready, onRequest, 
   }, [busy]);
   useEffect(() => { if (log.current) log.current.scrollTop = log.current.scrollHeight; }, [messages, busy, open]);
   async function send(override?: string) {
-    const request = (override ?? input).trim(); if (!request || busy || disabled || modelLoading || modelSwitching || !ready) return;
+    const request = (override ?? input).trim(); if (!request || busy || disabled || historyLoading || !!historyError || modelLoading || modelSwitching || !ready) return;
     setBusy(true); setInput(""); setMessages((current) => [...current, {role:"user",text:request}]);
     try {
       const lastAssistant = messages.map((message,index) => ({message,index})).reverse().find(({message}) => message.role === "assistant");
@@ -73,18 +90,20 @@ export function DescriptionAssistant({ description, disabled, ready, onRequest, 
         {models.map((name) => <option key={name} value={name}>{name}</option>)}
       </select>{modelSwitching && <small role="status">Switching model…</small>}</label>
       {modelError && <p className="description-assistant-help" role="alert">Model selection failed: {modelError}</p>}
-      <p className="description-assistant-help">Discuss how to shoot, or ask for an edit. Nearby shot descriptions are loaded only when needed.</p>
+      <p className="description-assistant-help">Discuss how to shoot, or ask for an edit. Reference descriptions and the previous shot description are included. Conversation is saved for this shot.</p>
+      {historyLoading && <p className="description-assistant-help" role="status">Loading conversation…</p>}
+      {historyError && <p className="description-assistant-help" role="alert">{historyError}</p>}
       <div className="description-assistant-log" ref={log} role="log" aria-label="Description conversation">
         <div className="description-assistant-message assistant"><strong>Current description</strong><p>{description || "No description yet. Tell me what happens in this shot."}</p></div>
         {messages.map((message,index) => <div key={index} className={`description-assistant-message ${message.role}`}><strong>{message.role === "user" ? "You" : message.role === "error" ? "Unable to update" : "Assistant"}</strong>{message.scope && <small className="description-context-scope">{message.scope}</small>}<p>{message.text}</p>
-          {message.proposal && <button type="button" className="mode-chip" disabled={disabled || busy || modelSwitching} onClick={() => void send(`Update this shot as follows: ${message.proposal}`)}>Apply suggestion</button>}</div>)}
+          {message.proposal && <button type="button" className="mode-chip" disabled={disabled || busy || historyLoading || !!historyError || modelSwitching} onClick={() => void send(`Update this shot as follows: ${message.proposal}`)}>Apply suggestion</button>}</div>)}
         {busy && <p role="status">Thinking · {seconds}s</p>}
       </div>
       <form onSubmit={(event) => { event.preventDefault(); void send(); }}>
         <textarea aria-label="Description request" rows={2} value={input} disabled={disabled || busy}
           placeholder={description.trim() ? "Discuss a shot or describe a change…" : "Describe a shot or ask for ideas…"} onChange={(event) => setInput(event.target.value)} />
         <div className="manual-shot-actions">{canUndo && <button type="button" className="mode-chip" disabled={disabled || busy} onClick={onUndo}>Undo description change</button>}
-          <button type="submit" className="btn primary" disabled={disabled || busy || modelLoading || modelSwitching || !ready || !input.trim()}>{busy ? `Thinking · ${seconds}s` : "Send"}</button></div>
+          <button type="submit" className="btn primary" disabled={disabled || busy || historyLoading || !!historyError || modelLoading || modelSwitching || !ready || !input.trim()}>{busy ? `Thinking · ${seconds}s` : "Send"}</button></div>
       </form>
     </div>}
   </aside>;

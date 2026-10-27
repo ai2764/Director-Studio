@@ -46,9 +46,7 @@ describe("ProjectPicker", () => {
     fireEvent.change(screen.getByPlaceholderText("Project name"), {
       target: { value: "External board" },
     });
-    fireEvent.change(screen.getByLabelText("Mode"), {
-      target: { value: "json_production" },
-    });
+    fireEvent.click(screen.getByRole("radio", {name:"JSON Production"}));
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() =>
@@ -69,9 +67,8 @@ describe("ProjectPicker", () => {
     fireEvent.change(screen.getByPlaceholderText("Project name"), {
       target: { value: "Song project" },
     });
-    fireEvent.change(screen.getByLabelText("Mode"), {
-      target: { value: "mv" },
-    });
+    fireEvent.click(screen.getByRole("radio", {name:"Music Video"}));
+    expect(screen.getByText("Beta")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() =>
@@ -82,6 +79,18 @@ describe("ProjectPicker", () => {
         "director_agent",
       ),
     );
+  });
+
+  it.each([["AI Assistant","shot_workspace"],["Director","director_agent"]])("creates %s with its existing compatible mode", async (name, mode) => {
+    render(<ProjectPicker />);
+    fireEvent.click(screen.getByRole("button", {name:"New"}));
+    expect(screen.getAllByRole("radio")).toHaveLength(4);
+    expect(screen.queryByLabelText("New project authoring mode")).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("Project name"), {target:{value:"Test film"}});
+    fireEvent.click(screen.getByRole("radio", {name}));
+    expect((screen.getByRole("radio", {name}) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole("button", {name:"Create"}));
+    await waitFor(() => expect(createAndSelect).toHaveBeenCalledWith("Test film","","director",mode));
   });
 
   it("cancels project creation without changing the header controls", () => {

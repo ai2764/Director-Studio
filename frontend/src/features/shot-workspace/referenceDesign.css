@@ -1,0 +1,70 @@
+.workspace-reference-backdrop { background: #18223080; backdrop-filter: blur(5px); padding: 24px; }
+.shot-material-editor.workspace-reference-dialog { width: min(900px,100%); height: min(860px,90dvh); border: 1px solid #d8e0e8; border-radius: 16px; background: #f3f6f9; color: #223247; box-shadow: 0 24px 80px #14213640; font-family: "Segoe UI Variable", "Segoe UI", sans-serif; }
+.shot-material-editor.workspace-reference-dialog > header { padding: 20px 24px; background: #fff; border-color: #d8e0e8; }
+.ref-dialog-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.ref-dialog-mark { display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 10px; background: #eaf0f7; color: #284d78; flex-shrink: 0; }
+.shot-material-editor.workspace-reference-dialog h2 { font-size: 20px; font-weight: 650; letter-spacing: -.4px; }
+.ref-dialog-title p { margin: 5px 0 0; color: #606e7e; font-size: 12px; }
+.ref-close { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border: 1px solid #d8e0e8; border-radius: 8px; background: #fff; color: #606e7e; flex: 0 0 auto; cursor: pointer; }
+.shot-material-editor.workspace-reference-dialog .workspace-reference-body { padding: 20px 24px; }
+.ref-selected-panel { padding: 14px; background: #fff; border: 1px solid #d8e0e8; border-radius: 10px; margin-bottom: 18px; }
+.ref-selected-panel > summary { font-size: 13px; font-weight: 600; cursor: pointer; }
+.ref-selected-panel > summary span { color: #606e7e; font-weight: 400; margin-left: 8px; }
+.shot-material-editor.workspace-reference-dialog .workspace-reference-selection { margin-top: 14px; gap: 12px; }
+.shot-material-editor.workspace-reference-dialog .workspace-reference-row { grid-template-columns: 64px minmax(0,1fr) auto; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid #edf1f6; }
+.shot-material-editor.workspace-reference-dialog .workspace-reference-row:last-child { border: 0; padding-bottom: 0; }
+.shot-material-editor.workspace-reference-dialog .ref-selected-image { display: flex; align-items: center; justify-content: center; padding: 0; border: 1px solid #d8e0e8; border-radius: 7px; overflow: hidden; background: #f1f4f7; min-height: 70px; }
+.shot-material-editor.workspace-reference-dialog .workspace-reference-row strong { display: block; font-size: 13px; margin-bottom: 6px; }
+.shot-material-editor.workspace-reference-dialog textarea { font: inherit; font-size: 13px; line-height: 1.5; padding: 9px 10px; color: #223247; background: #fbfcfe; border: 1px solid #d8e0e8; border-radius: 7px; box-sizing: border-box; resize: vertical; }
+.shot-material-editor.workspace-reference-dialog .workspace-reference-row .mode-chip { display: flex; justify-content: center; align-items: center; width: 30px; min-height: 28px; padding: 2px; border-radius: 5px; }
+.ref-library-toolbar { display: grid; grid-template-columns: minmax(0,1fr) 155px; gap: 12px; align-items: center; }
+.ref-search { display: flex; align-items: center; gap: 9px; background: #fff; padding: 0 12px; border: 1px solid #cbd5e0; border-radius: 8px; color: #606e7e; min-width: 0; }
+.shot-material-editor.workspace-reference-dialog .ref-search input { min-width: 0; width: 100%; background: transparent; border: 0; outline: 0; padding: 12px 0; font: inherit; font-size: 14px; color: #223247; }
+.ref-library-toolbar select { width: 100%; min-width: 0; padding: 11px 9px; border: 1px solid #cbd5e0; border-radius: 8px; font: inherit; font-size: 13px; background: #fff; color: #223247; }
+.ref-search:focus-within { outline: 3px solid #8bb4e3; outline-offset: 2px; }
+.shot-material-editor.workspace-reference-dialog .workspace-reference-library { grid-template-columns: repeat(auto-fill,minmax(170px,1fr)); gap: 14px; margin: 18px 0; }
+.shot-material-editor.workspace-reference-dialog .ref-library-card { position: relative; border: 1px solid #d8e0e8; border-radius: 10px; background: #fff; overflow: hidden; gap: 0; }
+.shot-material-editor.workspace-reference-dialog .ref-library-card.is-selected { border-color: #527ba9; box-shadow: 0 0 0 1px #527ba9; }
+.shot-material-editor.workspace-reference-dialog .ref-library-image { padding: 12px; background: #e9eef3; border: 0; width: 100%; cursor: zoom-in; }
+.shot-material-editor.workspace-reference-dialog .ref-library-image img { display: block; width: 100%; height: 140px; object-fit: contain; }
+.ref-library-meta { display: flex; flex-direction: column; gap: 6px; padding: 12px; flex: 1; }
+.ref-library-meta > strong { font-size: 13px; font-weight: 600; line-height: 1.4; }
+.ref-library-meta > small { color: #718093; font-size: 11px; }
+.ref-asset-description { color: #606e7e; font-size: 11px; }
+.ref-asset-description summary { cursor: pointer; }
+.ref-asset-description p { line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; margin: 7px 0; }
+.ref-add-button { margin-top: auto; display: flex; gap: 6px; align-items: center; justify-content: center; font: inherit; font-size: 12px; min-height: 36px; padding: 7px; border: 1px solid #ccd7e3; border-radius: 6px; background: #fff; color: #284d78; cursor: pointer; }
+.ref-library-card.is-selected .ref-add-button { background: #eaf0f7; color: #284d78; opacity: 1; border-color: transparent; }
+.ref-set-note { padding-top: 14px; border-top: 1px solid #d8e0e8; font-size: 13px; }
+.ref-set-note summary { cursor: pointer; }
+.ref-set-note span { color: #718093; font-size: 11px; margin-left: 6px; }
+.ref-set-note textarea { width: 100%; margin-top: 10px; }
+.ref-empty { font-size: 13px; padding: 24px 8px; text-align: center; color: #606e7e; }
+.shot-material-editor.workspace-reference-dialog > footer { padding: 16px 24px; background: #fff; border-color: #d8e0e8; gap: 12px; }
+.shot-material-editor.workspace-reference-dialog > footer button { min-height: 44px; font-size: 13px; }
+.shot-material-editor.workspace-reference-dialog :is(button,select,textarea):focus-visible { outline: 3px solid #8bb4e3; outline-offset: 2px; }
+.shot-material-editor.workspace-reference-dialog button:disabled { cursor: not-allowed; opacity: .5; }
+@media(max-width:680px) {
+  .workspace-reference-backdrop { padding: 8px; padding-top: max(8px,env(safe-area-inset-top)); padding-bottom: max(8px,env(safe-area-inset-bottom)); }
+  .shot-material-editor.workspace-reference-dialog { height: 92dvh; max-height: 100%; border-radius: 12px; }
+  .shot-material-editor.workspace-reference-dialog > header { padding: 14px; }
+  .shot-material-editor.workspace-reference-dialog h2 { font-size: 18px; }
+  .ref-dialog-mark { width: 34px; height: 34px; border-radius: 8px; }
+  .ref-dialog-title { gap: 9px; }
+  .ref-dialog-title p { font-size: 11px; }
+  .shot-material-editor.workspace-reference-dialog .workspace-reference-body { padding: 14px; }
+  .ref-library-toolbar { grid-template-columns: minmax(0,1fr); gap: 8px; }
+  .ref-library-toolbar select { font-size: 16px; padding: 10px; }
+  .shot-material-editor.workspace-reference-dialog .ref-search input { font-size: 16px; }
+  .shot-material-editor.workspace-reference-dialog .workspace-reference-library { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 14px; }
+  .shot-material-editor.workspace-reference-dialog .ref-library-image { padding: 8px; }
+  .shot-material-editor.workspace-reference-dialog .ref-library-image img { height: 120px; }
+  .ref-library-meta { padding: 10px; }
+  .ref-add-button { min-height: 42px; font-size: 12px; }
+  .shot-material-editor.workspace-reference-dialog .workspace-reference-row { grid-template-columns: 44px minmax(0,1fr) 32px; gap: 8px; }
+  .shot-material-editor.workspace-reference-dialog .workspace-reference-row img { width: 44px; height: 56px; }
+  .shot-material-editor.workspace-reference-dialog .workspace-reference-row textarea { font-size: 16px; }
+  .shot-material-editor.workspace-reference-dialog .workspace-reference-row .mode-chip { min-height: 32px; }
+  .shot-material-editor.workspace-reference-dialog > footer { padding: 12px; gap: 8px; }
+  .shot-material-editor.workspace-reference-dialog > footer button { min-height: 46px; font-size: 12px; padding: 10px 6px; }
+}

@@ -80,7 +80,6 @@ describe("LibraryPage Voices", () => {
 
   it("shows a Voice asset as playable H3-ready audio", async () => {
     const { container } = render(<LibraryPage />);
-    fireEvent.click(screen.getByRole("button", { name: /Voices/ }));
 
     await screen.findByText("Voice sample");
     expect(screen.getByText("8.4s")).toBeTruthy();
@@ -92,9 +91,23 @@ describe("LibraryPage Voices", () => {
     );
   });
 
+  it("shows categories together and searches saved descriptions without expanding them", async () => {
+    vi.mocked(listLibraryAssets).mockImplementation(async (kind) => kind === "voices" ? [voiceAsset] : kind === "layouts" ? [generatedLayout] : []);
+    render(<LibraryPage />);
+    await screen.findByText("Voice sample");
+    expect(screen.getByText("Shot 2 composition")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Actors" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Wardrobe" })).toBeTruthy();
+    expect(screen.queryByText(voiceAsset.notes)).toBeNull();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search assets" }), {target: {value: "neutral English"}});
+    expect(screen.getByText("Voice sample")).toBeTruthy();
+    expect(screen.queryByText("Shot 2 composition")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "View files" }));
+    expect(screen.getByText(voiceAsset.notes)).toBeTruthy();
+  });
+
   it("switches the import form to required Name and Audio file", async () => {
     render(<LibraryPage />);
-    fireEvent.click(screen.getByRole("button", { name: /Voices/ }));
     await waitFor(() =>
       expect(listLibraryAssets).toHaveBeenCalledWith("voices", "prj_test"),
     );
@@ -120,7 +133,6 @@ describe("LibraryPage Voices", () => {
       notes: "Warm cyan smile",
     });
     render(<LibraryPage />);
-    fireEvent.click(screen.getByRole("button", { name: /Voices/ }));
     await screen.findByText("Voice sample");
 
     fireEvent.click(screen.getByRole("button", { name: "Edit Voice sample metadata" }));
@@ -134,6 +146,8 @@ describe("LibraryPage Voices", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(await screen.findByText("Updated voice sample")).toBeTruthy();
+    expect(screen.queryByText("Warm cyan smile")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "View files"}));
     expect(screen.getByText("Warm cyan smile")).toBeTruthy();
     expect(screen.queryByRole("dialog", { name: "Edit Voice sample metadata" })).toBeNull();
   });
@@ -141,7 +155,7 @@ describe("LibraryPage Voices", () => {
   it("closes the dialog and refreshes the category after import", async () => {
     vi.mocked(importExternalAsset).mockResolvedValue({} as never);
     render(<LibraryPage />);
-    await waitFor(() => expect(listLibraryAssets).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(listLibraryAssets).toHaveBeenCalledTimes(6));
 
     fireEvent.click(screen.getByRole("button", { name: "Import Actors" }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Actor sample" } });
@@ -154,7 +168,7 @@ describe("LibraryPage Voices", () => {
       kind: "actors", name: "Actor sample", projectId: "prj_test",
     })));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import Actors" })).toBeNull());
-    expect(listLibraryAssets).toHaveBeenCalledTimes(2);
+    expect(listLibraryAssets).toHaveBeenCalledTimes(12);
   });
 
   it("shows generated Layouts and extracted tail frames and allows manual deletion", async () => {
@@ -164,7 +178,6 @@ describe("LibraryPage Voices", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<LibraryPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Layouts/ }));
     await screen.findByText("Shot 2 composition");
     expect(screen.getByText("Shot 1 tail frame")).toBeTruthy();
 

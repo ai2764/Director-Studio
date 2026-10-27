@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { ShotEditor } from "./ShotWorkspacePage";
 import type { Shot } from "../../shared/api/types";
 vi.mock("./ManualContinuity", () => ({ ManualContinuity: () => null }));
-vi.mock("./ManualShotOutput", () => ({ ManualShotOutput: () => null }));
+vi.mock("./ManualShotOutput", () => ({ ManualShotOutput: () => <aside aria-label="Video output" /> }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const shot: Shot = { id:"sht_test", project_id:"prj_test", scene_id:"scene", title:"Object view", script_beat:"The object rotates on the table.", duration_s:5,
   status:"draft", refs:[], voice_refs:[], dialogue:[], layout_refs:[], layout_asset_id:null, layout_review_status:null, ref_frame_job_id:null,
@@ -73,4 +73,56 @@ it("discusses without editing and applies a suggestion only when selected", asyn
   expect(second.recent_turns).toHaveLength(2);
   expect(second.amendment).toBe("Update this shot as follows: Use a static close-up.");
   expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+});
+
+it("marks a prompt stale immediately for draft edits and rechecks reference changes without writing", async () => {
+  let stale = false;
+  let resolveCheck: ((value: unknown) => void) | undefined;
+  const fetcher = vi.fn(async (url: string) => ({ok:true, json:async () => {
+    if (!url.endsWith("prompt-check")) return {version:"v1"};
+    if (stale) return new Promise((resolve) => { resolveCheck = resolve; });
+    return {valid:true,stale:false,errors:[],warnings:[]};
+  }}));
+  vi.stubGlobal("fetch", fetcher);
+  const saved = {...shot, prompt_sections:{...shot.prompt_sections,summary:"A saved prompt."}};
+  const props = {shot:saved,shots:[saved],index:0,busy:false,onSaved:vi.fn(),onWrite:vi.fn(),onDelete:vi.fn(),
+    desktopOutput:false,writing:false,writeElapsed:0,onCancel:vi.fn()};
+  const view = render(<ShotEditor {...props} />);
+  await waitFor(() => expect(screen.getByLabelText("Prompt status").textContent).toBe("Prompt up to date"));
+  fireEvent.change(screen.getByLabelText("Shot brief"), {target:{value:"A changed action."}});
+  expect(screen.getByLabelText("Prompt status").textContent).toBe("Prompt out of date");
+  fireEvent.change(screen.getByLabelText("Shot brief"), {target:{value:shot.script_beat}});
+  expect(screen.getByLabelText("Prompt status").textContent).toBe("Prompt up to date");
+  stale = true;
+  const updated = {...saved,refs:[{role:"prop",asset_id:"asset_test",picture_index:1,file_key:"master"}] as Shot["refs"]};
+  view.rerender(<ShotEditor {...props} shot={updated} />);
+  expect(screen.getByLabelText("Prompt status").textContent).toBe("Checking prompt…");
+  await waitFor(() => expect(resolveCheck).toBeDefined());
+  resolveCheck!({valid:false,stale:true,errors:[],warnings:[]});
+  await waitFor(() => expect(screen.getByLabelText("Prompt status").textContent).toBe("Prompt out of date"));
+  expect(props.onWrite).not.toHaveBeenCalled();
+});
+
+it("allows saving a cleared brief without writing a prompt", async () => {
+  const saved = {...shot,dialogue:["Welcome."]};
+  const onSaved = vi.fn(); const onWrite = vi.fn();
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => ({ok:true,json:async () => {
+    if (init?.method === "PUT") return {...saved,script_beat:"",dialogue:[]};
+    return url.endsWith("prompt-check") ? {valid:false,stale:false,errors:[],warnings:[]} : {version:"v1"};
+  }}));
+  vi.stubGlobal("fetch", fetcher);
+  render(<ShotEditor shot={saved} shots={[saved]} index={0} busy={false} onSaved={onSaved} onWrite={onWrite}
+    onDelete={vi.fn()} desktopOutput={false} writing={false} writeElapsed={0} onCancel={vi.fn()} />);
+  await waitFor(() => expect((screen.getByRole("button",{name:"Save"}) as HTMLButtonElement).disabled).toBe(false));
+  expect(screen.getByRole("complementary",{name:"Video output"})).toBeTruthy();
+  fireEvent.click(screen.getByRole("button",{name:"Clear shot brief"}));
+  expect((screen.getByLabelText("Shot brief") as HTMLTextAreaElement).value).toBe("");
+  expect((screen.getByLabelText("Dialogue (optional, one cue per line)") as HTMLTextAreaElement).value).toBe("");
+  expect((screen.getByRole("button",{name:"Write prompt"}) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button",{name:"Save"}));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  const request = fetcher.mock.calls.find(([,init]) => init?.method === "PUT");
+  const body = JSON.parse(request![1]!.body as string);
+  expect(body.description).toBe(""); expect(body.dialogue).toEqual([]);
+  expect(body.camera_motion).toBe(""); expect(onWrite).not.toHaveBeenCalled();
 });

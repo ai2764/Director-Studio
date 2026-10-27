@@ -15,7 +15,7 @@ export function AuthoringModeSelector() {
         setBusy(true); setError("");
         void updateProject(project.id, { authoring_mode: mode, expected_authoring_mode: project.authoring_mode || "director_agent" })
           .then(() => refreshProjects()).catch((cause) => setError(String(cause))).finally(() => setBusy(false));
-      }}><option value="shot_workspace">Shot Workspace</option><option value="director_agent">Director Agent</option></select></label>
+      }}><option value="shot_workspace">AI Assistant</option><option value="director_agent">Director</option></select></label>
     {busy && <small role="status">Switching…</small>}
     {error && <small role="alert">{error}</small>}
   </div>;

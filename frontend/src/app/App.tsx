@@ -39,7 +39,7 @@ function MobileAppShell() {
   const requestSequence = useRef(0);
   const { project } = useProject();
   const jsonProductionMode = project?.mode === "json_production";
-  const activePage = jsonProductionMode ? "production" : page;
+  const activePage = jsonProductionMode ? "production" : shotsMode && page === "production" ? "director" : page;
   const reviewMaterials = (shot: Shot, shotNumber: number, message: string) => {
     requestSequence.current += 1;
     setDirectorRequest(materialReviewRequest(shot, shotNumber, requestSequence.current, message));
@@ -65,7 +65,7 @@ function MobileAppShell() {
           </details>
         </div>
 
-        {!jsonProductionMode ? <nav className="mobile-topbar-row mobile-workspace-nav" aria-label="Mobile workspace">
+        {!jsonProductionMode ? <nav className={`mobile-topbar-row mobile-workspace-nav${shotsMode ? " mobile-shots-nav" : ""}`} aria-label="Mobile workspace">
           <button
             type="button"
             className={activePage === "asset" ? "active" : ""}
@@ -82,14 +82,14 @@ function MobileAppShell() {
           >
             {shotsMode ? "Shots" : "Director"}
           </button>
-          <button
+          {!shotsMode && <button
             type="button"
             className={activePage === "production" ? "active" : ""}
             aria-current={activePage === "production" ? "page" : undefined}
             onClick={() => setPage("production")}
           >
             Production
-          </button>
+          </button>}
         </nav> : null}
       </header>
 
@@ -99,7 +99,7 @@ function MobileAppShell() {
       <div className="mobile-page mobile-director-page" hidden={activePage !== "director"}>
         <DirectorPage mobile chatOnly active={activePage === "director"} requestedMessage={directorRequest} />
       </div>
-      <div
+      {(!shotsMode || jsonProductionMode) && <div
         className={`mobile-page mobile-production-page${
           project?.mode === "json_production" ? " mobile-json-production-page" : ""
         }`}
@@ -114,7 +114,7 @@ function MobileAppShell() {
             onReviewMaterials={reviewMaterials}
           />
         )}
-      </div>
+      </div>}
     </div>
   );
 }

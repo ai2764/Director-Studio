@@ -10,6 +10,7 @@ import { formatDialogue } from "./api";
 import type { PromptCheck } from "./promptCheck";
 import { DescriptionAssistant, type AssistantTurn, type AssistantReply } from "./DescriptionAssistant";
 import "./manualShots.css";
+import "./workspaceDesign.css";
 
 async function json<T>(url: string, method = "GET", body?: unknown): Promise<T> {
   const response = await fetch(url, { method, ...(body === undefined ? {} : {
@@ -66,12 +67,13 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
   const [removedRef, setRemovedRef] = useState<{ before: ShotRef[]; after: ShotRef[] } | null>(null);
   const [promptCheck, setPromptCheck] = useState<PromptCheck | null>(null);
   const [checkingPrompt, setCheckingPrompt] = useState(true);
+  const [checkedShot, setCheckedShot] = useState<Shot | null>(null);
   const [checkError, setCheckError] = useState("");
   useEffect(() => {
     let current = true;
     setCheckingPrompt(true); setCheckError("");
     void json<PromptCheck>(`/api/shot-workspace/shots/${shot.id}/prompt-check`).then((result) => {
-      if (current) setPromptCheck(result);
+      if (current) { setPromptCheck(result); setCheckedShot(shot); }
     }).catch((cause) => { if (current) { setPromptCheck(null); setCheckError(String(cause)); } })
       .finally(() => { if (current) setCheckingPrompt(false); });
     return () => { current = false; };
@@ -101,7 +103,6 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
   }
 
   async function save(expectedVersion = version) {
-    if (!description.trim()) throw new Error("Enter a shot brief first.");
     const saved = await json<Shot>(`/api/shot-workspace/shots/${shot.id}/description`, "PUT", {
       description, title, duration_s: duration, dialogue: dialogue.split("\n").map((s) => s.trim()).filter(Boolean),
       ...camera, original_description: original || description, expected_version: expectedVersion,
@@ -115,6 +116,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     setWorking(action === "write" ? "Write prompt" : "Saving brief");
     setError(""); setMessage("");
     try {
+      if (action === "write" && !description.trim()) throw new Error("Enter a shot brief first.");
       const result = await save(expectedVersion);
       if (action === "write") await onWrite(result.saved);
       else setMessage("Shot brief saved.");
@@ -149,6 +151,14 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
 
   const dirty = title !== shot.title || description !== shot.script_beat || duration !== shot.duration_s
     || dialogue !== formatDialogue(shot) || Object.entries(camera).some(([key, value]) => value !== (shot[key as keyof Shot] || ""));
+  const hasPrompt = Object.values(shot.prompt_sections).some(Boolean);
+  const checkPending = checkingPrompt || checkedShot !== shot;
+  const effectiveCheck = dirty && hasPrompt
+    ? { stale: true, valid: false, errors: [], warnings: [] }
+    : checkPending ? null : promptCheck;
+  const promptStatus = !hasPrompt ? "No prompt yet" : effectiveCheck?.stale ? "Prompt out of date"
+    : checkError ? "Prompt check unavailable" : checkPending ? "Checking prompt…"
+    : effectiveCheck?.valid ? "Prompt up to date" : "Prompt needs attention";
   return <div className={desktopOutput ? "manual-authoring-columns" : "manual-authoring-single"}><article className="manual-shot-editor">
     <div className="manual-shot-heading"><input aria-label="Shot title" value={title}
       disabled={disabled} onChange={(event) => setTitle(event.target.value)} />
@@ -160,9 +170,14 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
         }}>🗑</button></div>
     <div className="manual-description-label"><label htmlFor={`description-${shot.id}`}>Shot brief</label>
       <div className="manual-description-tools">
+      <button type="button" className="mode-chip" disabled={disabled || !version || !description.trim()}
+        onClick={() => { void assistDescription("Refine the current shot description. Preserve its intended action and explicit dialogue, clarify the framing and camera movement, and fill the camera fields. Return an updated description draft, not a discussion or prompt.", [])
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }}>
+        {working === "Thinking about shot" ? `Refining · ${elapsed}s` : "✦ Refine"}</button>
       <button type="button" className="mode-chip" aria-label="Clear shot brief" disabled={disabled || !description}
-        onClick={() => { setDescription(""); setOriginal(""); setCamera({ shot_type: "", camera_angle: "", camera_motion: "", composition: "" });
-          setMessage("Brief cleared. Enter a new description and save."); }}>Clear</button>
+        onClick={() => { setBeforeAmendment({ title, description, duration, dialogue, camera: { ...camera } });
+          setError(""); setDescription(""); setOriginal(""); setDialogue(""); setCamera({ shot_type: "", camera_angle: "", camera_motion: "", composition: "" });
+          setMessage("Brief cleared in draft. Save to keep it empty, or enter a new description."); }}>Clear</button>
       </div></div>
     <div className="manual-editor-feedback" aria-live="polite">
       {working && <p role="status">{working} · {elapsed}s</p>}
@@ -204,21 +219,22 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     <ManualContinuity shot={shot} shots={shots} disabled={disabled} onSaved={onSaved} />
     </section>
     <strong className="manual-prompt-label">Prompt</strong>
+    <small role="status" aria-label="Prompt status" className={effectiveCheck?.stale ? "manual-prompt-warning" : undefined}>{promptStatus}</small>
     {dirty && <small role="status">Unsaved shot changes. Save and rewrite the prompt before generating.</small>}
     {(promptCheck?.stale || Object.values(shot.prompt_sections).some(Boolean)) && promptCheck?.errors?.map((item) => <p className="manual-prompt-warning" role="alert" key={item.code + item.message}>{item.message}</p>)}
     {promptCheck?.warnings?.map((item) => <small key={item.code}>{item.message}</small>)}
     {checkError && <p role="alert">Prompt check unavailable: {checkError}</p>}
     <div className="manual-shot-actions">
-      <button className="btn secondary" disabled={disabled || !version || !description.trim()} onClick={() => void act("save")}>Save</button>
+      <button className="btn secondary" disabled={disabled || !version} onClick={() => void act("save")}>Save</button>
       <button className="btn primary" disabled={writing ? false : disabled || !version || !description.trim() || !shot.refs.length}
         aria-label={writing ? "Cancel prompt writing" : "Write prompt"}
         onClick={() => { if (writing) void onCancel().catch((cause) => setError(String(cause))); else void act("write"); }}>
         {writing ? `Cancel · ${writeElapsed}s` : working === "Write prompt" ? `Preparing prompt · ${elapsed}s` : "Write prompt"}</button>
       {writing && <small role="status">Writing prompt</small>}
     </div>
-    {Object.values(shot.prompt_sections).some(Boolean) ? <section className="manual-generated-prompt" aria-label="Prompt contents"><small className="manual-saved-prompt-label">{promptCheck?.stale ? "Previously saved prompt · Out of date. Failed writes do not replace this text." : "Saved prompt · Failed writes do not replace this text."}</small>{PROMPT_SECTION_KEYS.map(({ key, label }) => shot.prompt_sections[key]
+    {Object.values(shot.prompt_sections).some(Boolean) ? <details className="manual-generated-prompt" aria-label="Prompt contents" open={desktopOutput}><summary>Saved prompt</summary><small className="manual-saved-prompt-label">{effectiveCheck?.stale ? "Previously saved prompt · Out of date. Failed writes do not replace this text." : "Saved prompt · Failed writes do not replace this text."}</small>{PROMPT_SECTION_KEYS.map(({ key, label }) => shot.prompt_sections[key]
         ? <label key={key}>{label}<textarea aria-label={label} readOnly rows={4} value={shot.prompt_sections[key]} /></label> : null)}
-    </section> : <small>Write from the current brief and selected references. Refinement is optional.</small>}
+    </details> : <small>Write from the current brief and selected references. Refinement is optional.</small>}
     {materials && <ShotMaterialEditor shot={shot} shots={shots} shotNumber={index + 1} manualReferences
       onClose={() => setMaterials(false)} onOpenImage={(url) => window.open(url, "_blank", "noopener")}
       onSaved={(updated, _note, write) => {
@@ -228,10 +244,10 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
           if (write) void act("write", input.version);
         }).catch((cause) => setError(String(cause)));
       }} />}
-    <DescriptionAssistant description={description} disabled={disabled} ready={!!version}
+    <DescriptionAssistant shotId={shot.id} description={description} disabled={disabled} ready={!!version}
       onRequest={assistDescription} onUndo={undoDescriptionChange} canUndo={!!beforeAmendment} />
-  </article>{desktopOutput && <ManualShotOutput shot={shot} disabled={disabled || dirty || checkingPrompt || !!checkError}
-    check={promptCheck} onSaved={onSaved} />}</div>;
+  </article><ManualShotOutput shot={shot} disabled={disabled || dirty || checkPending || !!checkError}
+    check={effectiveCheck} onSaved={onSaved} /></div>;
 }
 
 export function ShotWorkspacePage({ desktopOutput = false }: { desktopOutput?: boolean } = {}) {
@@ -273,7 +289,7 @@ export function ShotWorkspacePage({ desktopOutput = false }: { desktopOutput?: b
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [writing]);
-  const update = (shot: Shot) => setShots((current) => current.map((s) => s.id === shot.id ? shot : s));
+  const update = (shot: Shot) => { setShots((current) => current.map((s) => s.id === shot.id ? shot : s)); setNotice(""); };
   async function remove(shot: Shot) {
     const index = shots.findIndex((item) => item.id === shot.id);
     const result = await json<{ shots: Shot[]; project_id: string; archive_id: string }>(`/api/shot-workspace/shots/${shot.id}`, "DELETE", { expected_shot: shot });
@@ -328,9 +344,10 @@ export function ShotWorkspacePage({ desktopOutput = false }: { desktopOutput?: b
     setWriting(session.active); if (session.progress) setProgress(session.progress);
   }
   return <main className={`workspace manual-shots${desktopOutput ? " manual-shots-desktop" : ""}`}>
-    <header className="manual-shots-header"><strong>Shots Brief</strong>
+    <header className="manual-shots-header"><div className="workspace-heading"><strong>Shot workspace</strong><small>Shape the shot. Bring it to life.</small></div>
       <button type="button" className="manual-add-shot" aria-label="Add shot" disabled={creating || writing} onClick={() => void add()}>＋</button></header>
     <nav className="manual-shot-nav" aria-label="Shots">{shots.map((shot, index) => <button key={shot.id} className="mode-chip"
+      title={shot.title || `Shot ${index + 1}`} aria-label={`Shot ${index + 1}`}
       aria-current={current?.id === shot.id ? "page" : undefined} onClick={() => setSelected(shot.id)}>{index + 1}</button>)}</nav>
     {error && <p className="banner error workspace-task-error" role="alert">{error}</p>}
     {removedShot && <div className="manual-undo" role="status">Shot deleted

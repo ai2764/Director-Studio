@@ -1,7 +1,16 @@
 import { useState } from "react";
+import { StudioIcon } from "../components/StudioIcon";
 import { createPortal } from "react-dom";
+import "./projectModes.css";
 import type { ProjectMode } from "../api/types";
 import { useProject } from "./ProjectContext";
+
+const PROJECT_MODES = [
+  {id:"assistant",title:"AI Assistant",description:"You direct each shot. AI helps with descriptions and prompts.",image:"/mode-ai-assistant.png",mode:"director",authoring:"shot_workspace"},
+  {id:"director",title:"Director",description:"Work with the agent to plan shots and develop your film.",image:"/director-agent-shot-board.png",mode:"director",authoring:"director_agent"},
+  {id:"music",title:"Music Video",description:"Build a video around your music and its rhythm.",image:"/mode-music-video.png",mode:"mv",authoring:"director_agent",beta:true},
+  {id:"json",title:"JSON Production",description:"Bring a structured shot plan and manage production.",image:"/mode-json-production.png",mode:"json_production",authoring:"director_agent"},
+] as const;
 
 export function ProjectPicker() {
   const {
@@ -24,7 +33,7 @@ export function ProjectPicker() {
   function closeCreateForm() {
     setCreating(false);
     setNewName("");
-    setNewMode("director");
+    setNewMode("director"); setNewAuthoringMode("shot_workspace");
     setLocalError(null);
   }
 
@@ -84,8 +93,9 @@ export function ProjectPicker() {
         disabled={busy || loading}
         onClick={() => void refreshProjects()}
         title="Refresh project list"
+        aria-label="Refresh project list"
       >
-        ↻
+        <StudioIcon name="refresh" size={16} /> Refresh
       </button>
       {error ? <span className="project-picker-error">{error}</span> : null}
     </div>
@@ -127,25 +137,23 @@ export function ProjectPicker() {
                 onChange={(event) => setNewName(event.target.value)}
               />
             </label>
-            <label className="field">
-              <span>Mode</span>
-              <select
-                value={newMode}
-                disabled={busy}
-                onChange={(event) => setNewMode(event.target.value as ProjectMode)}
-              >
-                <option value="director">Film / Video</option>
-                <option value="mv">Music Video</option>
-                <option value="json_production">JSON Production</option>
-              </select>
-            </label>
-            {newMode === "director" && <label className="field"><span>Authoring workflow</span>
-              <select aria-label="New project authoring mode" value={newAuthoringMode} disabled={busy}
-                onChange={(event) => setNewAuthoringMode(event.target.value as "director_agent" | "shot_workspace")}>
-                <option value="shot_workspace">Shot Workspace</option><option value="director_agent">Director Agent</option>
-              </select>
-              <small>{newAuthoringMode === "shot_workspace" ? "Edit shots and select references yourself. Use the model only to refine briefs and write prompts." : "Plan and revise your project through the Director Agent chat."}</small>
-            </label>}
+            <fieldset className="project-mode-picker" disabled={busy}>
+              <legend>Choose how you want to create</legend>
+              <div className="project-mode-grid">
+                {PROJECT_MODES.map((choice) => {
+                  const selected = newMode === choice.mode && (newMode !== "director" || newAuthoringMode === choice.authoring);
+                  return <label key={choice.id} className={`project-mode-card${selected ? " is-selected" : ""}`}>
+                    <input type="radio" name="project-mode" aria-label={choice.title} checked={selected}
+                      onChange={() => { setNewMode(choice.mode); setNewAuthoringMode(choice.authoring); }} />
+                    <span className="project-mode-selection" aria-hidden="true">{selected ? "✓" : ""}</span>
+                    <img src={choice.image} alt="" width={112} height={112} />
+                    <span className="project-mode-title">{choice.title}{"beta" in choice && choice.beta && <span className="project-mode-beta">Beta</span>}</span>
+                    <span className="project-mode-description">{choice.description}</span>
+                  </label>;
+                })}
+              </div>
+              <p className="project-mode-help">AI Assistant and Director can be switched later. Save your edits before switching.</p>
+            </fieldset>
           </div>
           <div className="project-create-actions">
             <button type="button" className="btn secondary" disabled={busy} onClick={closeCreateForm}>

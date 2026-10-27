@@ -60,13 +60,23 @@ async def add_shot(project_id: str, body: CreateShot):
         title = f"Shot {len(shots) + 1}"
         shot = Shot(id=new_shot_id(), project_id=project_id, scene_id="Scene 1", title=title, script_beat="", duration_s=5,
             meta={"workspace_create_request": body.request_id, "manual_default_title": title, "asset_binding_policy": "explicit"})
+        previous = load_shot(project_id, current.shot_ids[-1]) if current.shot_ids else None
+        if previous:
+            # Copy bindings, never the prior shot's prompt, jobs or motion context.
+            shot.refs = [ref.model_copy(deep=True) for ref in previous.refs]
+            from ..core.projects.layouts import LayoutReference
+            selected_layouts = {ref.asset_id for ref in shot.refs if ref.role.value == "layout_ref_frame"}
+            shot.layout_refs = [LayoutReference(id=f"lref_{uuid.uuid4().hex[:12]}", asset_id=layout.asset_id,
+                purpose=layout.purpose, state_description=layout.state_description,
+                review_status=layout.review_status, selected_for_h3=True, activation_mode="append")
+                for layout in previous.layout_refs if layout.asset_id in selected_layouts]
         save_shot(shot)
         save_project(current.model_copy(update={"shot_ids": [*current.shot_ids, shot.id]}))
         return shot
 
 
 class Brief(BaseModel):
-    description: str = Field(min_length=1, max_length=8000)
+    description: str = Field(default="", max_length=8000)
     title: str = Field(default="", max_length=200)
     expected_version: str
     duration_s: float = Field(gt=0, le=120, allow_inf_nan=False)
@@ -148,6 +158,12 @@ class DescriptionAssist(Refine):
     amendment: str = Field(min_length=1, max_length=4000)
 
 
+@router.get("/shots/{shot_id}/description/conversation")
+def description_conversation(shot_id: str):
+    from .conversations import history
+    return {"messages": history(find_shot(shot_id))}
+
+
 @router.post("/shots/{shot_id}/description/assist")
 async def assist_description(shot_id: str, body: DescriptionAssist):
     from ..config import settings
@@ -156,17 +172,29 @@ async def assist_description(shot_id: str, body: DescriptionAssist):
     from .model import WorkspaceModel
     shot = find_shot(shot_id)
     await ensure_idle(shot.project_id)
+    from .conversations import append
+    append(shot, "user", body.amendment)
     try:
         orch = get_orchestrator()
         async with orch.llm_session(release_on_exit=not settings.llm_keep_loaded):
             await orch.ensure_llm_ready()
-            return await converse(shot, body.description, body.amendment, body.expected_version, WorkspaceModel(),
+            result = await converse(shot, body.description, body.amendment, body.expected_version, WorkspaceModel(),
                 title=body.title, suggest_title=body.suggest_title,
                 turns=[turn.model_dump() for turn in body.recent_turns])
+        reply = result["reply"]
+        if result.get("kind") == "draft" and result.get("draft"):
+            reply += "\n\n" + result["draft"]["description"]
+        append(shot, "assistant", reply, proposal=result.get("proposed_change"), scope=result.get("context_scope"))
+        return result
     except TimeoutError as exc:
+        append(shot, "error", "Description assistant timed out. Please retry.")
         raise HTTPException(504, "Description assistant timed out. Your description was kept; retry when ready.") from exc
     except ValueError as exc:
+        append(shot, "error", str(exc))
         raise HTTPException(409, str(exc)) from exc
+    except Exception:
+        append(shot, "error", "The assistant could not complete this request. Please retry.")
+        raise
 
 
 class Material(BaseModel):
