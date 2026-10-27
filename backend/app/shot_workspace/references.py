@@ -85,3 +85,25 @@ def snapshot(shot):
 
 def reference_certificate(project, shot):
     return {"version": "shot-workspace-v1", "signature": digest([selected_references(shot), shot.prompt_sections.model_dump(mode="json")])}
+
+
+def legacy_prompt_evidence_matches(shot):
+    """Accept only a verifiable old certificate with unchanged selected evidence."""
+    certificate = shot.meta.get("prompt_reference_contract") or {}
+    review = shot.meta.get("material_review") or {}
+    records = review.get("references", [])
+    if certificate.get("version") != 2 or shot.meta.get("material_review_pending"):
+        return False
+    if not review.get("facts_signature") or not review.get("intent_signature"):
+        return False
+    expected = digest([review["facts_signature"], review["intent_signature"], records, shot.prompt_sections.model_dump(mode="json")])
+    if certificate.get("signature") != expected:
+        return False
+    current = selected_references(shot)
+    if len(records) != len(current):
+        return False
+    return all(all(old.get(key) == new.get(key) for key in ("asset_id", "role", "file_key", "picture_index", "content_sha256"))
+        and old.get("description") == new["description"]
+        and old.get("asset_name") == new["name"]
+        and old.get("reference_notes") == new["binding_notes"]
+        for old, new in zip(records, current))

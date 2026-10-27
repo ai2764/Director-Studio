@@ -321,3 +321,29 @@ async def test_standalone_shot_is_rejected_before_starting_context_only_workflow
     assert "requires a context video" in error.value.detail
     assert "standalone H3 workflow" in error.value.detail
     assert not load_shot(project.id, shot.id).h3_job_id
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed_description", [False, True])
+async def test_legacy_prompt_adoption_requires_unchanged_certified_evidence(board, changed_description):
+    from app.core.projects.dialogue import digest
+    from app.shot_workspace.references import selected_references
+    from app.shot_workspace.writer import adopt_verified_legacy_prompt
+    from app.core.projects.video_context import video_context_prompt_is_stale
+    project, shot, asset = board
+    shot = await write_prompt(project.id, shot.id, model=Model())
+    records = [{**ref, "asset_name": ref["name"], "reference_notes": ref["binding_notes"]} for ref in selected_references(shot)]
+    review = {"facts_signature": "fixture-facts", "intent_signature": "fixture-intent", "references": records}
+    shot.meta["material_review"] = review
+    shot.meta["prompt_reference_contract"] = {"version": 2, "signature": digest([review["facts_signature"], review["intent_signature"], records, shot.prompt_sections.model_dump(mode="json")])}
+    for key in ["workspace_input_version", "workspace_continuation_intent_signature", "prompt_brief_signature"]:
+        shot.meta.pop(key, None)
+    save_shot(shot)
+    if changed_description:
+        asset.notes = "A different reference description."
+        write_asset(asset)
+    upgraded = adopt_verified_legacy_prompt(shot)
+    assert bool(upgraded.meta.get("workspace_input_version")) == (not changed_description)
+    assert upgraded.prompt_sections == shot.prompt_sections
+    if not changed_description:
+        assert not video_context_prompt_is_stale(upgraded)
+        assert prompt_check(upgraded)["valid"]

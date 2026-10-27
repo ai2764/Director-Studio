@@ -2120,8 +2120,9 @@ async def submit_shot_endpoint(
     if project is None:
         raise HTTPException(404, "Project not found")
     if project.authoring_mode == "shot_workspace":
-        from ..shot_workspace.writer import require_prompt
+        from ..shot_workspace.writer import require_prompt, adopt_verified_legacy_prompt
         try:
+            shot = adopt_verified_legacy_prompt(shot)
             require_prompt(shot)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc

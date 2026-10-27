@@ -146,3 +146,26 @@ def require_prompt(shot):
     result = prompt_check(shot)
     if not result["valid"]:
         raise ValueError("; ".join(item["message"] for item in result["errors"]))
+
+
+def adopt_verified_legacy_prompt(shot):
+    """Upgrade unchanged legacy evidence on explicit submit, without model calls."""
+    from .references import legacy_prompt_evidence_matches
+    from ..core.projects.prompt_checks import stamp_prompt
+    from ..agents.director.dialogue_preflight import require_current_dialogue_contract
+    if shot.meta.get("workspace_input_version") or not prompt_check(shot)["valid"] or not legacy_prompt_evidence_matches(shot):
+        return shot
+    project = load_project(shot.project_id)
+    require_current_dialogue_contract(project, shot)
+    original = shot.model_copy(deep=True)
+    captured = snapshot(shot)
+    shot = shot.model_copy(deep=True)
+    shot.meta["workspace_input_version"] = captured["version"]
+    shot.meta["workspace_continuation_intent_signature"] = continuation_intent_signature(shot)
+    shot.meta["prompt_reference_contract"] = reference_certificate(project, shot)
+    stamp_prompt(shot)
+    def check_current():
+        if load_shot(shot.project_id, shot.id) != original or snapshot(original)["version"] != captured["version"]:
+            raise ValueError("The shot or references changed during compatibility update. Refresh and retry.")
+    save_shot_if_current(shot, check_current=check_current)
+    return shot
