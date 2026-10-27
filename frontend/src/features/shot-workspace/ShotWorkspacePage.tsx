@@ -8,7 +8,7 @@ import { ManualContinuity } from "./ManualContinuity";
 import { ManualShotOutput } from "./ManualShotOutput";
 import { formatDialogue } from "./api";
 import type { PromptCheck } from "./promptCheck";
-import { DescriptionAssistant } from "./DescriptionAssistant";
+import { DescriptionAssistant, type AssistantTurn, type AssistantReply } from "./DescriptionAssistant";
 import "./manualShots.css";
 
 async function json<T>(url: string, method = "GET", body?: unknown): Promise<T> {
@@ -122,21 +122,22 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     finally { setWorking(""); }
   }
 
-  async function assistDescription(request: string) {
-    setWorking(description.trim() ? "Refining description" : "Creating description");
+  async function assistDescription(request: string, recentTurns: AssistantTurn[]): Promise<AssistantReply> {
+    setWorking("Thinking about shot");
     setError(""); setMessage("");
     try {
-      const suggestion = await json<Suggestion>(`/api/shot-workspace/shots/${shot.id}/description/assist`, "POST", {
-        description, amendment: request, title, suggest_title: titleNeeded, expected_version: version,
+      const result = await json<AssistantReply & {kind: "reply" | "draft"; draft?: Suggestion}>(`/api/shot-workspace/shots/${shot.id}/description/assist`, "POST", {
+        description, amendment: request, title, suggest_title: titleNeeded, expected_version: version, recent_turns: recentTurns,
       });
-      if (suggestion.questions.length) return suggestion.questions.join("\n");
+      if (result.kind !== "draft" || !result.draft) return result;
+      const suggestion = result.draft;
       setBeforeAmendment({ title, description, duration, dialogue, camera: { ...camera } });
       if (titleNeeded && suggestion.title?.trim()) setTitle(suggestion.title);
       setOriginal(description); setDescription(suggestion.description);
       setDialogue(suggestion.dialogue.join("\n"));
       setCamera({shot_type:suggestion.shot_type,camera_angle:suggestion.camera_angle,camera_motion:suggestion.camera_motion,composition:suggestion.composition});
       setMessage("Description draft updated. Review it, then save or write the prompt.");
-      return suggestion.description;
+      return {reply: `${result.reply}\n\n${suggestion.description}`, context_scope: result.context_scope};
     } finally { setWorking(""); }
   }
   function undoDescriptionChange() {

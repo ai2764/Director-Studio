@@ -42,3 +42,5 @@
 .manual-description-tools{flex-wrap:wrap;justify-content:flex-end}
 
 .description-assistant-model{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 12px 0;font-size:12px;flex-shrink:0}.description-assistant-model select{min-width:0;flex:1;max-width:100%;font:inherit;padding:7px;border:1px solid #bbae9c;border-radius:7px;background:transparent;color:inherit}.description-assistant-model small{flex-basis:100%}
+
+.description-context-scope{display:block;font-size:10px;opacity:.7;margin-top:3px}.description-assistant-message .mode-chip{margin-top:8px}

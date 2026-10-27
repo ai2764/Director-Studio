@@ -12,8 +12,8 @@ const shot: Shot = { id:"sht_test", project_id:"prj_test", scene_id:"scene", tit
   prompt_sections:{subject_definitions:"",summary:"",retention_analysis:"",detailed_description:"",overall_soundscape:"",non_diegetic_music:""} };
 it("applies an amendment to an editable draft and supports undo without writing a prompt", async () => {
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-    if (url.endsWith("/assist")) return { ok:true, json:async () => ({ description:"The object remains still on the table.",title:shot.title,duration_s:5,
-      shot_type:"close-up",camera_angle:"eye level",camera_motion:"static",composition:"centered",dialogue:[],questions:[] }) };
+    if (url.endsWith("/assist")) return { ok:true, json:async () => ({ kind:"draft", reply:"Draft updated.", draft:{ description:"The object remains still on the table.",title:shot.title,duration_s:5,
+      shot_type:"close-up",camera_angle:"eye level",camera_motion:"static",composition:"centered",dialogue:[],questions:[] } }) };
     return { ok:true, json:async () => init?.method === "PUT" ? shot : url.endsWith("prompt-check") ? {valid:false,stale:false,errors:[],warnings:[]} : {version:"v1"} };
   });
   vi.stubGlobal("fetch", fetcher);
@@ -33,8 +33,8 @@ it("applies an amendment to an editable draft and supports undo without writing 
   expect((screen.getByLabelText("Shot brief") as HTMLTextAreaElement).value).toBe(shot.script_beat);
 });
 it("creates a description from an empty draft without saving an empty brief", async () => {
-  const fetcher = vi.fn(async (url: string, _init?: RequestInit) => ({ ok:true, json:async () => url.endsWith("/assist") ? {
-    description:"A blue box sits on a table.", title:"Box view", duration_s:5, shot_type:"medium", camera_angle:"eye level", camera_motion:"static", composition:"centered", dialogue:[], questions:[]
+  const fetcher = vi.fn(async (url: string, _init?: RequestInit) => ({ ok:true, json:async () => url.endsWith("/assist") ? { kind:"draft", reply:"Draft updated.", draft:{
+    description:"A blue box sits on a table.", title:"Box view", duration_s:5, shot_type:"medium", camera_angle:"eye level", camera_motion:"static", composition:"centered", dialogue:[], questions:[] }
   } : url.endsWith("prompt-check") ? {valid:false,stale:false,errors:[],warnings:[]} : {version:"v1"} }));
   vi.stubGlobal("fetch", fetcher);
   const save=vi.fn(); const write=vi.fn();
@@ -46,5 +46,31 @@ it("creates a description from an empty draft without saving an empty brief", as
   await waitFor(() => expect((screen.getByLabelText("Shot brief") as HTMLTextAreaElement).value).toBe("A blue box sits on a table."));
   const request=fetcher.mock.calls.find(([url])=>url.endsWith("/assist"));
   expect(JSON.parse(request![1]!.body as string).description).toBe("");
+  expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+});
+it("discusses without editing and applies a suggestion only when selected", async () => {
+  let turns=0;
+  const fetcher=vi.fn(async (url:string, _init?:RequestInit) => {
+    if (url.endsWith("/assist")) {
+      turns++;
+      return {ok:true,json:async()=>turns===1 ? {kind:"reply",reply:"A close-up emphasizes the shape.",proposed_change:"Use a static close-up.",context_scope:"Current description"} : {
+        kind:"draft",reply:"Draft updated.",draft:{description:"A static close-up shows the object.",title:shot.title,duration_s:5,shot_type:"close-up",camera_angle:"eye level",camera_motion:"static",composition:"centered",dialogue:[],questions:[]}}};
+    }
+    return {ok:true,json:async()=>url.endsWith("prompt-check") ? {valid:false,stale:false,errors:[],warnings:[]} : {version:"v1"}};
+  });
+  vi.stubGlobal("fetch",fetcher); const save=vi.fn(); const write=vi.fn();
+  render(<ShotEditor shot={shot} shots={[shot]} index={0} busy={false} onSaved={save} onWrite={write} onDelete={vi.fn()} desktopOutput={false} writing={false} writeElapsed={0} onCancel={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button",{name:"✦ Description assistant"}));
+  fireEvent.change(screen.getByLabelText("Description request"),{target:{value:"Would a close-up work better?"}});
+  await waitFor(()=>expect((screen.getByRole("button",{name:"Send"}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button",{name:"Send"}));
+  await screen.findByText("A close-up emphasizes the shape.");
+  expect((screen.getByLabelText("Shot brief") as HTMLTextAreaElement).value).toBe(shot.script_beat);
+  fireEvent.click(screen.getByRole("button",{name:"Apply suggestion"}));
+  await waitFor(()=>expect((screen.getByLabelText("Shot brief") as HTMLTextAreaElement).value).toBe("A static close-up shows the object."));
+  const requests=fetcher.mock.calls.filter(([url])=>url.endsWith("/assist"));
+  const second=JSON.parse(requests[1][1]!.body as string);
+  expect(second.recent_turns).toHaveLength(2);
+  expect(second.amendment).toBe("Update this shot as follows: Use a static close-up.");
   expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
 });

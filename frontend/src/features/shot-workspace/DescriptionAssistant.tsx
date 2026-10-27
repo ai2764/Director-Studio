@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { getDirectorModel, setDirectorModel } from "../director/api";
 
+export type AssistantTurn = {role: "user" | "assistant"; text: string};
+export type AssistantReply = {reply: string; proposed_change?: string; context_scope?: string};
+
 export function DescriptionAssistant({ description, disabled, ready, onRequest, onUndo, canUndo }: {
   description: string; disabled: boolean; ready: boolean;
-  onRequest: (request: string) => Promise<string>; onUndo: () => void; canUndo: boolean;
+  onRequest: (request: string, recentTurns: AssistantTurn[]) => Promise<AssistantReply>; onUndo: () => void; canUndo: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
@@ -32,7 +35,7 @@ export function DescriptionAssistant({ description, disabled, ready, onRequest, 
     finally { setModelSwitching(false); }
   }
   const [seconds, setSeconds] = useState(0);
-  const [messages, setMessages] = useState<{role: "user" | "assistant" | "error"; text: string}[]>([]);
+  const [messages, setMessages] = useState<{role: "user" | "assistant" | "error"; text: string; proposal?: string; scope?: string}[]>([]);
   const log = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!busy) return;
@@ -41,12 +44,17 @@ export function DescriptionAssistant({ description, disabled, ready, onRequest, 
     return () => window.clearInterval(timer);
   }, [busy]);
   useEffect(() => { if (log.current) log.current.scrollTop = log.current.scrollHeight; }, [messages, busy, open]);
-  async function send() {
-    const request = input.trim(); if (!request || busy || disabled || modelLoading || modelSwitching || !ready) return;
+  async function send(override?: string) {
+    const request = (override ?? input).trim(); if (!request || busy || disabled || modelLoading || modelSwitching || !ready) return;
     setBusy(true); setInput(""); setMessages((current) => [...current, {role:"user",text:request}]);
     try {
-      const reply = await onRequest(request);
-      setMessages((current) => [...current, {role:"assistant",text:reply}]);
+      const lastAssistant = messages.map((message,index) => ({message,index})).reverse().find(({message}) => message.role === "assistant");
+      const lastUser = lastAssistant ? messages.slice(0,lastAssistant.index).reverse().find((message) => message.role === "user") : undefined;
+      const recentTurns: AssistantTurn[] = lastAssistant && lastUser ? [
+        {role:"user",text:lastUser.text.slice(0,600)}, {role:"assistant",text:lastAssistant.message.text.slice(0,600)},
+      ] : [];
+      const result = await onRequest(request, recentTurns);
+      setMessages((current) => [...current, {role:"assistant",text:result.reply,proposal:result.proposed_change,scope:result.context_scope}]);
     } catch (error) {
       setInput(request); setMessages((current) => [...current, {role:"error",text:error instanceof Error ? error.message : String(error)}]);
     } finally { setBusy(false); }
@@ -65,17 +73,18 @@ export function DescriptionAssistant({ description, disabled, ready, onRequest, 
         {models.map((name) => <option key={name} value={name}>{name}</option>)}
       </select>{modelSwitching && <small role="status">Switching model…</small>}</label>
       {modelError && <p className="description-assistant-help" role="alert">Model selection failed: {modelError}</p>}
-      <p className="description-assistant-help">Create or refine this description. Only its current version and your latest request are sent.</p>
+      <p className="description-assistant-help">Discuss how to shoot, or ask for an edit. Nearby shot descriptions are loaded only when needed.</p>
       <div className="description-assistant-log" ref={log} role="log" aria-label="Description conversation">
         <div className="description-assistant-message assistant"><strong>Current description</strong><p>{description || "No description yet. Tell me what happens in this shot."}</p></div>
-        {messages.map((message,index) => <div key={index} className={`description-assistant-message ${message.role}`}><strong>{message.role === "user" ? "You" : message.role === "error" ? "Unable to update" : "Assistant"}</strong><p>{message.text}</p></div>)}
-        {busy && <p role="status">Refining description · {seconds}s</p>}
+        {messages.map((message,index) => <div key={index} className={`description-assistant-message ${message.role}`}><strong>{message.role === "user" ? "You" : message.role === "error" ? "Unable to update" : "Assistant"}</strong>{message.scope && <small className="description-context-scope">{message.scope}</small>}<p>{message.text}</p>
+          {message.proposal && <button type="button" className="mode-chip" disabled={disabled || busy || modelSwitching} onClick={() => void send(`Update this shot as follows: ${message.proposal}`)}>Apply suggestion</button>}</div>)}
+        {busy && <p role="status">Thinking · {seconds}s</p>}
       </div>
       <form onSubmit={(event) => { event.preventDefault(); void send(); }}>
         <textarea aria-label="Description request" rows={2} value={input} disabled={disabled || busy}
-          placeholder={description.trim() ? "What would you like to change?" : "Describe this shot…"} onChange={(event) => setInput(event.target.value)} />
+          placeholder={description.trim() ? "Discuss a shot or describe a change…" : "Describe a shot or ask for ideas…"} onChange={(event) => setInput(event.target.value)} />
         <div className="manual-shot-actions">{canUndo && <button type="button" className="mode-chip" disabled={disabled || busy} onClick={onUndo}>Undo description change</button>}
-          <button type="submit" className="btn primary" disabled={disabled || busy || modelLoading || modelSwitching || !ready || !input.trim()}>{busy ? `Refining · ${seconds}s` : "Send"}</button></div>
+          <button type="submit" className="btn primary" disabled={disabled || busy || modelLoading || modelSwitching || !ready || !input.trim()}>{busy ? `Thinking · ${seconds}s` : "Send"}</button></div>
       </form>
     </div>}
   </aside>;

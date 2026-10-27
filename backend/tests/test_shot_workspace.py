@@ -416,3 +416,48 @@ async def test_description_assistant_sends_only_current_text_and_latest_request(
     result = await refine(shot, previous, snapshot(shot)["version"], Assistant(), amendment="Keep the blue box still on the table.", description_only=True)
     assert "remains still" in result["description"]
     assert load_shot(project.id, shot.id).script_beat == shot.script_beat
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intent", ["chat", "discuss", "neighbors", "amend"])
+async def test_coordinator_routes_bounded_text_context_without_prompt_writer(board, intent):
+    from app.shot_workspace.coordinator import converse
+    project, shot, _ = board
+    ids = ["sht_far", "sht_before", shot.id, "sht_after", "sht_far_next"]
+    for identifier in ids:
+        if identifier != shot.id:
+            neighbor = shot.model_copy(deep=True, update={"id":identifier,"script_beat":identifier + " description"})
+            neighbor.prompt_sections.summary = "PRIVATE_PROMPT_MUST_NOT_ENTER_COORDINATOR"
+            save_shot(neighbor)
+    project.shot_ids = ids
+    save_project(project)
+    class CoordinatorModel:
+        calls = []
+        async def complete(self, system, payload, **kwargs):
+            self.calls.append(payload)
+            assert not kwargs.get("images")
+            if "Classify" in system:
+                assert set(payload) == {"request"}
+                return json.dumps({"intent":"discuss" if intent == "neighbors" else intent,"include_adjacent_descriptions":intent == "neighbors","reply_language":"English","reply":"Hello." if intent == "chat" else ""})
+            assert set(payload) <= {"current_description","request","reply_language","recent_exchange","adjacent_descriptions"}
+            assert "PRIVATE_PROMPT" not in json.dumps(payload)
+            assert len(payload["recent_exchange"]) == 2
+            assert all(len(turn["text"]) <= 600 for turn in payload["recent_exchange"])
+            if intent == "neighbors":
+                assert payload["adjacent_descriptions"]["previous"]["description"] == "sht_before description"
+                assert payload["adjacent_descriptions"]["next"]["description"] == "sht_after description"
+                assert "sht_far" not in json.dumps(payload)
+            else:
+                assert "adjacent_descriptions" not in payload
+            return json.dumps({"reply":"A locked medium shot would keep the action clear.","proposed_change":"Use a locked medium shot."})
+        async def complete_shot_description(self, system, user, **kwargs):
+            payload = json.loads(user)
+            assert set(payload) == {"previous_description","new_request","duration_s"}
+            return json.dumps(dict(description="The object remains still.",title=shot.title,duration_s=5,
+                shot_type="medium",camera_angle="eye level",camera_motion="static",composition="centered",dialogue=[],questions=[]))
+    model = CoordinatorModel()
+    result = await converse(shot, shot.script_beat, "Keep the object still.", snapshot(shot)["version"], model,
+        turns=[{"role":"user","text":"x"*1000},{"role":"assistant","text":"y"*1000}])
+    assert result["kind"] == ("draft" if intent == "amend" else "reply")
+    assert len(model.calls) == (1 if intent in {"chat","amend"} else 2)
+    assert load_shot(project.id, shot.id).script_beat == shot.script_beat
