@@ -232,3 +232,24 @@ async def test_dialogue_format_gets_one_bounded_repair(board):
     saved = await write_prompt(project.id, shot.id, model=model)
     assert len(model.calls) == 2 and "repair" in model.calls[1][1]
     assert prompt_check(saved)["valid"]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alter_words", [False, True])
+async def test_exact_final_speech_format_uses_saved_sources_only(board, alter_words):
+    project, shot, _ = board
+    await save_brief(shot.id, Brief(description="A guide greets a visitor.", duration_s=5, expected_version=snapshot(shot)["version"],
+        dialogue=["Guide [English]: Welcome.", "Visitor [English]: Thank you."]))
+    class LiteralModel(Model):
+        async def complete(self, *args, **kwargs):
+            self.dialogue = True
+            result = await super().complete(*args, **kwargs)
+            return result.replace("{{speech:line_1}}", "<d>[English] " + ("Changed words." if alter_words else "Welcome.") + "</d>").replace("{{speech:line_2}}", "<d>[English] Thank you.</d>")
+    model = LiteralModel()
+    if alter_words:
+        with pytest.raises(ValueError, match="No new prompt was saved"):
+            await write_prompt(project.id, shot.id, model=model)
+        assert len(model.calls) == 2
+        assert not load_shot(project.id, shot.id).meta.get("workspace_input_version")
+    else:
+        saved = await write_prompt(project.id, shot.id, model=model)
+        assert len(model.calls) == 1 and prompt_check(saved)["valid"]

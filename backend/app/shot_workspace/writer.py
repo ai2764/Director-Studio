@@ -1,5 +1,6 @@
 """One-shot description-based Writer. No Director chat, automatic casting or vision."""
 import json
+import re
 from ..core.projects.store import load_project, load_shot, save_shot_if_current
 from ..core.projects.models import PromptSections, ShotStatus, picture_ref_signature, voice_ref_signature
 from ..core.projects.layouts import layout_prompt_signature
@@ -55,6 +56,22 @@ async def write_prompt(project_id, shot_id, *, model=None):
     def validate_candidate(raw):
         draft = None
         if shot.dialogue_lines:
+            value = _extract_json_payload(raw)
+            section_data = value.get("prompt_sections", {}) if isinstance(value, dict) else {}
+            detail = section_data.get("detailed_description", "")
+            # Accept the final H3 spelling only when every full source line and
+            # language matches exactly, once and in order. No fuzzy text repair,
+            # speaker inference, reordering, or partial coverage is permitted.
+            if isinstance(detail, str) and "{{speech" not in detail and "dialogue_uses" not in value:
+                blocks = list(re.finditer(r"<d>\[([^\]\n]+)\]\s*(.*?)</d>", detail, re.DOTALL))
+                if len(blocks) == len(shot.dialogue_lines) and detail.count("<d>") == len(blocks) and all(
+                    block.group(1) == line.language and block.group(2) == line.text
+                    for block, line in zip(blocks, shot.dialogue_lines)
+                ):
+                    for block, line in reversed(list(zip(blocks, shot.dialogue_lines))):
+                        detail = detail[:block.start()] + "{{speech:" + line.line_id + "}}" + detail[block.end():]
+                    value["prompt_sections"]["detailed_description"] = detail
+                    raw = json.dumps(value, ensure_ascii=False)
             draft = compile_dialogue_draft(parse_dialogue_draft(raw), shot.dialogue_lines)
             sections = draft.prompt_sections
         else:
