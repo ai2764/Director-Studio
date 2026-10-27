@@ -309,13 +309,15 @@ async def test_standalone_shot_is_rejected_before_starting_context_only_workflow
     from app.workflow_profiles.h3 import store
     project, shot, _ = board
     await write_prompt(project.id, shot.id, model=Model())
-    monkeypatch.setattr(store, "resolve_active_h3_profile", lambda: SimpleNamespace(mapping=SimpleNamespace(context_video=object())))
+    monkeypatch.setattr(store.H3ProfileStore, "resolve_active", lambda self: SimpleNamespace(mapping=SimpleNamespace(context_video=object())))
+    from app.config import settings
+    monkeypatch.setattr(settings, "h3_standalone_profile_id", "")
     async def must_not_start(*args, **kwargs):
         raise AssertionError("No GPU generation should start for a missing continuation source")
     monkeypatch.setattr(api, "start_pipeline_job", must_not_start)
     with pytest.raises(HTTPException) as error:
         await api.submit_shot_endpoint(shot.id, svc=object())
     assert error.value.status_code == 400
-    assert "requires a Motion Context video" in error.value.detail
-    assert "Choose Continue an earlier shot" in error.value.detail
+    assert "requires a context video" in error.value.detail
+    assert "standalone H3 workflow" in error.value.detail
     assert not load_shot(project.id, shot.id).h3_job_id
