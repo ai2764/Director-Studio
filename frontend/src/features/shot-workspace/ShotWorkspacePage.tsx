@@ -8,6 +8,7 @@ import { ManualContinuity } from "./ManualContinuity";
 import { ManualShotOutput } from "./ManualShotOutput";
 import { formatDialogue } from "./api";
 import type { PromptCheck } from "./promptCheck";
+import { DescriptionAssistant } from "./DescriptionAssistant";
 import "./manualShots.css";
 
 async function json<T>(url: string, method = "GET", body?: unknown): Promise<T> {
@@ -47,8 +48,6 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
   const [dialogue, setDialogue] = useState(formatDialogue(shot));
   const [camera, setCamera] = useState({ shot_type: shot.shot_type || "", camera_angle: shot.camera_angle || "",
     camera_motion: shot.camera_motion || "", composition: shot.composition || "" });
-  const [amending, setAmending] = useState(false);
-  const [amendment, setAmendment] = useState("");
   const [beforeAmendment, setBeforeAmendment] = useState<{ title: string; description: string; duration: number; dialogue: string; camera: typeof camera } | null>(null);
   const [original, setOriginal] = useState(shot.script_beat);
   const [version, setVersion] = useState("");
@@ -112,35 +111,39 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     onSaved(saved);
     return { saved, version: input.version };
   }
-  async function act(action: "save" | "refine" | "amend" | "write", expectedVersion?: string) {
-    if (action === "amend" && !amendment.trim()) return;
-    setWorking(action === "amend" ? "Amending shot" : action === "refine" ? "Refining brief" : action === "write" ? "Write prompt" : "Saving brief");
+  async function act(action: "save" | "write", expectedVersion?: string) {
+    setWorking(action === "write" ? "Write prompt" : "Saving brief");
     setError(""); setMessage("");
     try {
       const result = await save(expectedVersion);
-      if (action === "refine" || action === "amend") {
-        const suggestion = await json<Suggestion>(`/api/shot-workspace/shots/${shot.id}/description/refine`, "POST", {
-          description, title, suggest_title: titleNeeded, expected_version: result.version,
-          amendment: action === "amend" ? amendment : "",
-        });
-        if (titleNeeded && suggestion.title?.trim()) setTitle(suggestion.title);
-        if (suggestion.questions.length) {
-          setMessage(suggestion.questions.join("\n"));
-        } else {
-          if (action === "amend") setBeforeAmendment({ title, description, duration, dialogue, camera: { ...camera } });
-          setOriginal(description);
-          setDescription(suggestion.description);
-          setDuration(suggestion.duration_s);
-          setDialogue(suggestion.dialogue.join("\n"));
-          setCamera({ shot_type: suggestion.shot_type, camera_angle: suggestion.camera_angle,
-            camera_motion: suggestion.camera_motion, composition: suggestion.composition });
-          setMessage(action === "amend" ? "Amendment applied to draft. Review the complete brief, then save or write the prompt. References and duration were kept." : "Brief and camera fields filled. Duration is unchanged; only explicit dialogue was extracted. Save or write the prompt to apply.");
-        }
-      } else if (action === "write") {
-        await onWrite(result.saved);
-      } else setMessage("Shot brief saved.");
+      if (action === "write") await onWrite(result.saved);
+      else setMessage("Shot brief saved.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setWorking(""); }
+  }
+
+  async function assistDescription(request: string) {
+    setWorking(description.trim() ? "Refining description" : "Creating description");
+    setError(""); setMessage("");
+    try {
+      const suggestion = await json<Suggestion>(`/api/shot-workspace/shots/${shot.id}/description/assist`, "POST", {
+        description, amendment: request, title, suggest_title: titleNeeded, expected_version: version,
+      });
+      if (suggestion.questions.length) return suggestion.questions.join("\n");
+      setBeforeAmendment({ title, description, duration, dialogue, camera: { ...camera } });
+      if (titleNeeded && suggestion.title?.trim()) setTitle(suggestion.title);
+      setOriginal(description); setDescription(suggestion.description);
+      setDialogue(suggestion.dialogue.join("\n"));
+      setCamera({shot_type:suggestion.shot_type,camera_angle:suggestion.camera_angle,camera_motion:suggestion.camera_motion,composition:suggestion.composition});
+      setMessage("Description draft updated. Review it, then save or write the prompt.");
+      return suggestion.description;
+    } finally { setWorking(""); }
+  }
+  function undoDescriptionChange() {
+    if (!beforeAmendment) return;
+    setTitle(beforeAmendment.title); setDescription(beforeAmendment.description); setDuration(beforeAmendment.duration);
+    setDialogue(beforeAmendment.dialogue); setCamera(beforeAmendment.camera); setBeforeAmendment(null);
+    setMessage("Description change undone in draft.");
   }
 
   const dirty = title !== shot.title || description !== shot.script_beat || duration !== shot.duration_s
@@ -156,40 +159,22 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
         }}>🗑</button></div>
     <div className="manual-description-label"><label htmlFor={`description-${shot.id}`}>Shot brief</label>
       <div className="manual-description-tools">
-      <button type="button" className="mode-chip" disabled={disabled} aria-expanded={amending}
-        onClick={() => setAmending((value) => !value)}>Amend shot</button>
       <button type="button" className="mode-chip" aria-label="Clear shot brief" disabled={disabled || !description}
         onClick={() => { setDescription(""); setOriginal(""); setCamera({ shot_type: "", camera_angle: "", camera_motion: "", composition: "" });
           setMessage("Brief cleared. Enter a new description and save."); }}>Clear</button>
-      <button type="button" className="mode-chip" aria-label="Refine shot brief" title="Refine using this brief and selected references"
-        aria-busy={working === "Refining brief"}
-        disabled={disabled || !version || !description.trim()} onClick={() => void act("refine")}>
-        {working === "Refining brief" ? `Refining · ${elapsed}s` : "✦ Refine"}</button></div></div>
-    {amending && <section className="manual-amendment" aria-label="Shot amendment">
-      <label htmlFor={`amendment-${shot.id}`}>What should change?</label>
-      <textarea id={`amendment-${shot.id}`} aria-label="Amendment instructions" rows={3} value={amendment} disabled={disabled}
-        placeholder="Replace walking with sitting down. Keep the outfit, camera and dialogue."
-        onChange={(event) => setAmendment(event.target.value)} />
-      <small>Describe only the change. The agent rewrites conflicting parts of this shot and keeps the rest. Selected references stay unchanged.</small>
-      <div className="manual-shot-actions"><button className="btn secondary" disabled={disabled || !version || !description.trim() || !amendment.trim()}
-        onClick={() => void act("amend")}>{working === "Amending shot" ? `Amending · ${elapsed}s` : "Apply amendment"}</button>
-        {beforeAmendment && <button className="mode-chip" disabled={disabled} onClick={() => {
-          setTitle(beforeAmendment.title); setDescription(beforeAmendment.description); setDuration(beforeAmendment.duration);
-          setDialogue(beforeAmendment.dialogue); setCamera(beforeAmendment.camera); setBeforeAmendment(null); setMessage("Amendment undone in draft.");
-        }}>Undo amendment</button>}</div>
-    </section>}
+      </div></div>
     <div className="manual-editor-feedback" aria-live="polite">
       {working && <p role="status">{working} · {elapsed}s</p>}
       {message && <p role="status">{message}</p>}
       {error && <p className="banner error workspace-task-error" role="alert">{error}</p>}
     </div>
-    <small className="manual-brief-hint">Write a prompt directly, or use Refine to fill the brief, camera fields and explicit dialogue. Duration stays unchanged.</small>
+    <small className="manual-brief-hint">Use Description assistant to create or revise this brief, or edit it directly. Save the brief before writing its prompt.</small>
     <textarea id={`description-${shot.id}`} rows={6} value={description} disabled={disabled}
       placeholder="Describe the action, framing and camera movement. You can link references first."
       onChange={(event) => { setDescription(event.target.value); setOriginal(event.target.value); setMessage("");
         setCamera({ shot_type: "", camera_angle: "", camera_motion: "", composition: "" }); }} />
     <details className="manual-shot-settings"><summary>Duration and dialogue</summary>
-      <small>Use one cue per line: Guide [English]: Welcome. Include each speaker and language; Refine can extract cues from the brief.</small>
+      <small>Use one cue per line: Guide [English]: Welcome. Include each speaker and language; Description assistant can extract cues from the brief.</small>
       <label>Duration (seconds)<input type="number" min={1} max={120} value={duration} disabled={disabled}
         onChange={(event) => setDuration(Number(event.target.value))} /></label>
       <label>Dialogue (optional, one cue per line)<textarea rows={2} value={dialogue} disabled={disabled} placeholder="Guide [English]: Welcome.\nVisitor [English]: Thank you."
@@ -200,7 +185,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
         <p key={line.line_id}><strong>{line.speaker_name}：</strong>{line.text}</p>)}</div> : null}
     {desktopOutput && <div className="manual-brief-fields">{([
       ["shot_type", "Framing"], ["camera_angle", "Angle"], ["camera_motion", "Camera movement"], ["composition", "Composition"],
-    ] as const).map(([key, label]) => <label key={key}>{label}<textarea rows={2} aria-label={label} placeholder="Enter a value or use Refine" value={camera[key]} disabled={disabled}
+    ] as const).map(([key, label]) => <label key={key}>{label}<textarea rows={2} aria-label={label} placeholder="Enter a value or use Description assistant" value={camera[key]} disabled={disabled}
       onChange={(event) => setCamera((current) => ({ ...current, [key]: event.target.value }))} /></label>)}</div>}
     <section className="manual-reference-section" aria-label="Reference">
       <div className="manual-description-label"><strong>Reference</strong>
@@ -242,6 +227,8 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
           if (write) void act("write", input.version);
         }).catch((cause) => setError(String(cause)));
       }} />}
+    <DescriptionAssistant description={description} disabled={disabled} ready={!!version}
+      onRequest={assistDescription} onUndo={undoDescriptionChange} canUndo={!!beforeAmendment} />
   </article>{desktopOutput && <ManualShotOutput shot={shot} disabled={disabled || dirty || checkingPrompt || !!checkError}
     check={promptCheck} onSaved={onSaved} />}</div>;
 }

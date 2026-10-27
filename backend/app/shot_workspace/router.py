@@ -137,6 +137,31 @@ async def refine_brief(shot_id: str, body: Refine):
         raise HTTPException(409, str(exc)) from exc
 
 
+class DescriptionAssist(Refine):
+    description: str = Field(default="", max_length=8000)
+    amendment: str = Field(min_length=1, max_length=4000)
+
+
+@router.post("/shots/{shot_id}/description/assist")
+async def assist_description(shot_id: str, body: DescriptionAssist):
+    from ..config import settings
+    from ..core.vram import get_orchestrator
+    from .refinement import refine
+    from .model import WorkspaceModel
+    shot = find_shot(shot_id)
+    await ensure_idle(shot.project_id)
+    try:
+        orch = get_orchestrator()
+        async with orch.llm_session(release_on_exit=not settings.llm_keep_loaded):
+            await orch.ensure_llm_ready()
+            return await refine(shot, body.description, body.expected_version, WorkspaceModel(),
+                title=body.title, suggest_title=body.suggest_title, amendment=body.amendment, description_only=True)
+    except TimeoutError as exc:
+        raise HTTPException(504, "Description assistant timed out. Your description was kept; retry when ready.") from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 class Material(BaseModel):
     role: str
     asset_id: str

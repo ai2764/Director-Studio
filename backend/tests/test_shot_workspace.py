@@ -397,3 +397,22 @@ async def test_amendment_allows_only_explicit_new_dialogue(board):
     assert result["dialogue"] == ["Guide [English]: Ready."]
     with pytest.raises(ValueError, match="invented dialogue"):
         await refine(shot, shot.script_beat, snapshot(shot)["version"], Refiner(), amendment="Keep a silent shot.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previous", ["", "A blue box rotates on the table."])
+async def test_description_assistant_sends_only_current_text_and_latest_request(board, previous):
+    from app.shot_workspace.refinement import refine
+    project, shot, _ = board
+    class Assistant:
+        async def complete_shot_description(self, system, user, **kwargs):
+            payload = json.loads(user)
+            assert set(payload) == {"previous_description", "new_request", "duration_s"}
+            assert payload["previous_description"] == previous
+            assert payload["new_request"] == "Keep the blue box still on the table."
+            assert "new request has higher priority" in system
+            return json.dumps(dict(description="A blue box remains still on the table.",title="Box view",duration_s=5,
+                shot_type="medium",camera_angle="eye level",camera_motion="static",composition="centered",dialogue=[],questions=[]))
+    result = await refine(shot, previous, snapshot(shot)["version"], Assistant(), amendment="Keep the blue box still on the table.", description_only=True)
+    assert "remains still" in result["description"]
+    assert load_shot(project.id, shot.id).script_beat == shot.script_beat

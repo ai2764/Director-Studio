@@ -67,11 +67,11 @@ def inputs(shot):
     return snapshot(shot)
 
 
-async def refine(shot, description, expected_version, provider, *, title=None, suggest_title=False, amendment=""):
+async def refine(shot, description, expected_version, provider, *, title=None, suggest_title=False, amendment="", description_only=False):
     captured = inputs(shot)
     if captured["version"] != expected_version:
         raise ValueError("The shot or references changed. Refresh before refining.")
-    if not description.strip():
+    if not description.strip() and not (description_only and amendment.strip()):
         raise ValueError("Enter a shot brief first.")
     request = {"user_description": description, "amendment": amendment.strip(), "current_dialogue": shot.dialogue,
                "current_dialogue_lines": [line.model_dump(mode="json") for line in shot.dialogue_lines or []],
@@ -85,7 +85,22 @@ async def refine(shot, description, expected_version, provider, *, title=None, s
         schema["properties"]["title"]["minLength"] = 1
         schema.setdefault("required", []).append("title")
     instructions = INSTRUCTIONS
-    if amendment.strip():
+    if description_only:
+        request = {"previous_description": description, "new_request": amendment.strip(), "duration_s": shot.duration_s}
+        instructions = """Create or revise ONE editable shot description. Return only the JSON schema.
+The only narrative context is previous_description and new_request. Do not invent chat
+history, reference assets, earlier shots, prompt text or video evidence. If the previous
+description is empty, create a complete description from the new request. Otherwise
+return a complete revised version. The new request has higher priority: replace
+contradicting old content, never append mutually conflicting requirements. Preserve
+unrelated content. Write in the user's language. Fill concise camera fields consistent
+with this description. Return a short title. Keep duration_s unchanged (a host setting).
+Extract only explicitly supplied spoken words, exactly, as Speaker [Language]: words;
+include them in the description. Ask a focused question only for an essential ambiguity
+that cannot be resolved from these two inputs. Normally questions is empty. Do not
+write a generation prompt, select references, modify other shots or execute tools.
+"""
+    if amendment.strip() and not description_only:
         instructions += """
 AMENDMENT MODE: apply the amendment to the existing shot, returning a complete
 replacement description, not an appended note or a list of edits. The amendment
@@ -109,10 +124,10 @@ return a focused question instead of inventing a resolution.
     if suggest_title and not result.title.strip():
         raise ValueError("The refinement omitted a title. Your input is unchanged; retry or enter a title.")
     if not suggest_title:
-        result.title = request["title"]
+        result.title = shot.title if title is None else title
     from .dialogue import parse_cues
     cues = parse_cues(result.dialogue, shot.scene_id)
-    if any(line.text not in description and line.text not in amendment and line.text not in shot.dialogue for line in cues):
+    if any(line.text not in description and line.text not in amendment and (description_only or line.text not in shot.dialogue) for line in cues):
         raise ValueError("The refinement changed or invented dialogue and was not applied. Retry or edit it manually.")
     if any(line.text not in result.description for line in cues):
         raise ValueError("The refinement omitted dialogue and was not applied.")

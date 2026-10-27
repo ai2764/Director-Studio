@@ -6,7 +6,7 @@ Shot Workspace is an optional film authoring mode. Director Agent remains availa
 
 1. Add a shot and edit its brief, duration and camera fields.
 2. Select Library references and add binding notes. References are never selected automatically.
-3. Optionally refine the brief, or use **Amend shot** to describe a targeted change. Amendment returns a complete replacement draft, removes superseded content, and preserves unrelated requirements and selected references. Review it, use **Undo amendment** if needed, then save or write the prompt.
+3. Use the collapsible **Description assistant** to create or revise a description. Each request sends only the current description and the latest user instruction, plus the clip duration as a host constraint. Earlier conversation, Library references and other shots are excluded. The latest instruction takes priority over conflicting old content. Results update the editable draft; **Undo description change** restores its prior version. This assistant never writes generation prompts or saves a draft automatically.
 4. Write the prompt. The writer receives the current shot, selected Library descriptions and saved continuation settings; it does not receive chat history or inspect image pixels.
 5. Review the prompt and generate video. Desktop places output beside the brief; mobile retains the Production view.
 
