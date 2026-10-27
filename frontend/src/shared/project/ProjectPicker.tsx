@@ -17,6 +17,7 @@ export function ProjectPicker() {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newMode, setNewMode] = useState<ProjectMode>("director");
+  const [newAuthoringMode, setNewAuthoringMode] = useState<"director_agent" | "shot_workspace">("shot_workspace");
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -33,7 +34,7 @@ export function ProjectPicker() {
     setBusy(true);
     setLocalError(null);
     try {
-      await createAndSelect(name, "", newMode);
+      await createAndSelect(name, "", newMode, newMode === "director" ? newAuthoringMode : "director_agent");
       closeCreateForm();
     } catch (e) {
       setLocalError(e instanceof Error ? e.message : String(e));
@@ -133,11 +134,18 @@ export function ProjectPicker() {
                 disabled={busy}
                 onChange={(event) => setNewMode(event.target.value as ProjectMode)}
               >
-                <option value="director">Director</option>
+                <option value="director">Film / Video</option>
                 <option value="mv">Music Video</option>
                 <option value="json_production">JSON Production</option>
               </select>
             </label>
+            {newMode === "director" && <label className="field"><span>Authoring workflow</span>
+              <select aria-label="New project authoring mode" value={newAuthoringMode} disabled={busy}
+                onChange={(event) => setNewAuthoringMode(event.target.value as "director_agent" | "shot_workspace")}>
+                <option value="shot_workspace">Shot Workspace</option><option value="director_agent">Director Agent</option>
+              </select>
+              <small>{newAuthoringMode === "shot_workspace" ? "Edit shots and select references yourself. Use the model only to refine briefs and write prompts." : "Plan and revise your project through the Director Agent chat."}</small>
+            </label>}
           </div>
           <div className="project-create-actions">
             <button type="button" className="btn secondary" disabled={busy} onClick={closeCreateForm}>

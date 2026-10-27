@@ -84,3 +84,17 @@ export async function updateLibraryAsset(
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
 }
+
+export async function describeUploadImage(opts: {
+  file: File; name: string; existingDescription?: string; kind: LibraryKind; projectId: string; signal?: AbortSignal;
+}): Promise<{ description: string; language: "en" | "zh"; cached: boolean }> {
+  const body = new FormData();
+  body.append("file", opts.file);
+  body.append("name", opts.name);
+  body.append("existing_description", opts.existingDescription || "");
+  body.append("kind", opts.kind);
+  body.append("project_id", opts.projectId);
+  const response = await fetch("/api/library/describe-image", { method: "POST", body, signal: opts.signal });
+  if (!response.ok) throw new Error(await parseError(response));
+  return response.json();
+}

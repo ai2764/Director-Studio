@@ -19,10 +19,10 @@ vi.mock("./api", () => ({
 }));
 
 const voiceAsset = {
-  id: "voi_mia",
+  id: "voi_sample",
   kind: "voices",
-  name: "Mia",
-  notes: "Warm neutral English, intimate delivery",
+  name: "Voice sample",
+  notes: "Clear neutral English speech",
   pipeline_id: "external",
   job_id: "",
   seed: null,
@@ -31,11 +31,11 @@ const voiceAsset = {
   meta: {
     duration_s: 8.4,
     h3_ready: true,
-    source_filename: "mia.m4a",
+    source_filename: "sample.m4a",
   },
   urls: {
-    source: "/api/files/library/voices/voi_mia/source.m4a",
-    reference: "/api/files/library/voices/voi_mia/reference.wav",
+    source: "/api/files/library/voices/voi_sample/source.m4a",
+    reference: "/api/files/library/voices/voi_sample/reference.wav",
   },
   project_id: "prj_test",
 };
@@ -82,13 +82,13 @@ describe("LibraryPage Voices", () => {
     const { container } = render(<LibraryPage />);
     fireEvent.click(screen.getByRole("button", { name: /Voices/ }));
 
-    await screen.findByText("Mia");
+    await screen.findByText("Voice sample");
     expect(screen.getByText("8.4s")).toBeTruthy();
     expect(screen.getByText("H3 Ready")).toBeTruthy();
     const player = container.querySelector("audio");
     expect(player).toBeTruthy();
     expect(player?.getAttribute("src")).toBe(
-      "/api/files/library/voices/voi_mia/reference.wav",
+      "/api/files/library/voices/voi_sample/reference.wav",
     );
   });
 
@@ -116,26 +116,26 @@ describe("LibraryPage Voices", () => {
   it("edits an asset name and notes from its Library card", async () => {
     updateLibraryAssetMock.mockResolvedValueOnce({
       ...voiceAsset,
-      name: "Mia close-up",
+      name: "Updated voice sample",
       notes: "Warm cyan smile",
     });
     render(<LibraryPage />);
     fireEvent.click(screen.getByRole("button", { name: /Voices/ }));
-    await screen.findByText("Mia");
+    await screen.findByText("Voice sample");
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit Mia metadata" }));
-    expect(screen.getByRole("dialog", { name: "Edit Mia metadata" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Edit Voice sample metadata" }));
+    expect(screen.getByRole("dialog", { name: "Edit Voice sample metadata" })).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Name"), {
-      target: { value: "Mia close-up" },
+      target: { value: "Updated voice sample" },
     });
-    fireEvent.change(screen.getByLabelText("Notes"), {
+    fireEvent.change(screen.getByLabelText("Description"), {
       target: { value: "Warm cyan smile" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
-    expect(await screen.findByText("Mia close-up")).toBeTruthy();
+    expect(await screen.findByText("Updated voice sample")).toBeTruthy();
     expect(screen.getByText("Warm cyan smile")).toBeTruthy();
-    expect(screen.queryByRole("dialog", { name: "Edit Mia metadata" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Edit Voice sample metadata" })).toBeNull();
   });
 
   it("closes the dialog and refreshes the category after import", async () => {
@@ -144,13 +144,14 @@ describe("LibraryPage Voices", () => {
     await waitFor(() => expect(listLibraryAssets).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole("button", { name: "Import Actors" }));
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Mara" } });
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Actor sample" } });
     fireEvent.change(screen.getByLabelText("Image file"), {
-      target: { files: [new File(["image"], "mara.png", { type: "image/png" })] },
+      target: { files: [new File(["image"], "reference.png", { type: "image/png" })] },
     });
 
+    fireEvent.click(screen.getByRole("button", { name: "Import image" }));
     await waitFor(() => expect(importExternalAsset).toHaveBeenCalledWith(expect.objectContaining({
-      kind: "actors", name: "Mara", projectId: "prj_test",
+      kind: "actors", name: "Actor sample", projectId: "prj_test",
     })));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import Actors" })).toBeNull());
     expect(listLibraryAssets).toHaveBeenCalledTimes(2);

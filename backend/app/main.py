@@ -31,6 +31,8 @@ async def lifespan(_app: FastAPI):
         schedule_pending_runs()
         yield
     finally:
+        from .shot_workspace.tasks import close as close_workspace_tasks
+        await close_workspace_tasks()
         await close_execution_runtimes()
 
 

@@ -126,6 +126,28 @@ async def list_library_assets(
     return list_assets(kind, project_id=pid, include_unassigned=include_unassigned)
 
 
+@router.post("/library/describe-image")
+async def describe_library_image(file: UploadFile = File(...), name: str = Form(""),
+                                 existing_description: str = Form(""), kind: str = Form(...), project_id: str = Form(...)):
+    from ..core.projects.store import load_project
+    from ..shot_workspace.library_description import describe_upload
+    if kind not in IMPORT_KINDS or kind == "voices":
+        raise HTTPException(422, "Select an image category.")
+    if load_project(project_id) is None:
+        raise HTTPException(404, "Project not found")
+    if len(name) > 300 or len(existing_description) > 16000:
+        raise HTTPException(422, "The name or description is too long.")
+    data = await file.read(_MAX_IMPORT_BYTES + 1)
+    if len(data) > _MAX_IMPORT_BYTES:
+        raise HTTPException(413, "Image exceeds the upload limit.")
+    try:
+        return await describe_upload(data, name or file.filename or "Reference", existing_description=existing_description)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except TimeoutError as exc:
+        raise HTTPException(504, "Image description timed out. Your edits were kept.") from exc
+
+
 @router.post("/library/import", response_model=LibraryAsset)
 async def import_external_asset(
     file: UploadFile = File(...),

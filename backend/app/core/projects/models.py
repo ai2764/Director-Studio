@@ -266,6 +266,7 @@ class Project(BaseModel):
     script_text: str
     script_locked: bool = False
     mode: ProjectMode = ProjectMode.director
+    authoring_mode: Literal["director_agent", "shot_workspace"] = "director_agent"
     created_at: str
     updated_at: str
     shot_ids: list[str] = Field(default_factory=list)

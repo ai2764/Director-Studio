@@ -209,6 +209,7 @@ export interface AssetCoverageReview {
 }
 
 export interface Project {
+  authoring_mode?: "director_agent" | "shot_workspace";
   id: string;
   name: string;
   script_text: string;

@@ -10,6 +10,7 @@ from .health import router as health_router
 from .h3_workflow_profiles import router as h3_workflow_profiles_router
 from .json_production import router as json_production_router
 from .library import router as library_router
+from ..shot_workspace.router import router as shot_workspace_router
 from .managed_runs import router as managed_runs_router
 from .pipelines import router as pipelines_router
 from .projects import router as projects_router
@@ -32,4 +33,5 @@ def build_api_router() -> APIRouter:
     api.include_router(json_production_router)
     api.include_router(director_router)
     api.include_router(library_router)
+    api.include_router(shot_workspace_router)
     return api

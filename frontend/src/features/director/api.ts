@@ -73,6 +73,7 @@ export async function createProject(body: {
   name: string;
   script_text: string;
   mode?: ProjectMode;
+  authoring_mode?: "director_agent" | "shot_workspace";
 }): Promise<Project> {
   const res = await fetch("/api/projects", {
     method: "POST",
@@ -91,7 +92,7 @@ export async function getProject(projectId: string): Promise<ProjectDetail> {
 
 export async function updateProject(
   projectId: string,
-  body: { name?: string; script_text?: string },
+  body: { name?: string; script_text?: string; authoring_mode?: "director_agent" | "shot_workspace"; expected_authoring_mode?: "director_agent" | "shot_workspace" },
 ): Promise<Project> {
   const res = await fetch(`/api/projects/${projectId}`, {
     method: "PATCH",

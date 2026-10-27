@@ -181,12 +181,15 @@ async def _assert_chat_available() -> None:
 
 
 class CreateProjectBody(BaseModel):
+    authoring_mode: Literal["director_agent", "shot_workspace"] = "director_agent"
     name: str
     script_text: str = ""
     mode: ProjectMode = ProjectMode.director
 
 
 class UpdateProjectBody(BaseModel):
+    authoring_mode: Literal["director_agent", "shot_workspace"] | None = None
+    expected_authoring_mode: Literal["director_agent", "shot_workspace"] | None = None
     name: str | None = None
     script_text: str | None = None
     script_locked: bool | None = None
@@ -542,7 +545,9 @@ async def create_project_endpoint(body: CreateProjectBody) -> Project:
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "name is required")
-    return create_project(name, body.script_text or "", mode=body.mode)
+    if body.authoring_mode == "shot_workspace" and body.mode != ProjectMode.director:
+        raise HTTPException(422, "Shot Workspace is available for film projects.")
+    return create_project(name, body.script_text or "", mode=body.mode, authoring_mode=body.authoring_mode)
 
 
 @router.get("/projects", response_model=list[Project])
@@ -568,6 +573,18 @@ async def update_project_endpoint(
     if project is None:
         raise HTTPException(404, "Project not found")
     updates: dict[str, Any] = {}
+    if body.authoring_mode is not None and body.authoring_mode != project.authoring_mode:
+        from ..shot_workspace.router import ensure_idle
+        await ensure_idle(project_id)
+        if body.expected_authoring_mode is not None and body.expected_authoring_mode != project.authoring_mode:
+            raise HTTPException(409, "The mode changed. Refresh the project before switching.")
+        if body.authoring_mode == "shot_workspace" and project.mode != ProjectMode.director:
+            raise HTTPException(422, "Shot Workspace is available for film projects.")
+        from ..shot_workspace.router import ensure_shot_idle
+        for shot in list_shots(project_id):
+            ensure_shot_idle(shot)
+        updates["authoring_mode"] = body.authoring_mode
+
     if body.name is not None:
         name = body.name.strip()
         if not name:
@@ -602,6 +619,8 @@ async def plan_project_endpoint(
 ) -> ProjectDetailResponse:
     if load_project(project_id) is None:
         raise HTTPException(404, "Project not found")
+    if load_project(project_id).authoring_mode == "shot_workspace":
+        raise HTTPException(409, "Use Shot Workspace controls, or switch to Director Agent for planning and chat.")
     try:
         project = await svc.plan_project(project_id)
     except ValueError as e:
@@ -983,6 +1002,8 @@ async def project_chat_endpoint(
     """
     if load_project(project_id) is None:
         raise HTTPException(404, "Project not found")
+    if load_project(project_id).authoring_mode == "shot_workspace":
+        raise HTTPException(409, "Use Shot Workspace controls, or switch to Director Agent for planning and chat.")
     msg = (body.message or "").strip()
     if not msg:
         raise HTTPException(400, "message is required")
@@ -1193,6 +1214,8 @@ async def _project_chat_stream_response(
 
     if load_project(project_id) is None:
         raise HTTPException(404, "Project not found")
+    if load_project(project_id).authoring_mode == "shot_workspace":
+        raise HTTPException(409, "Use Shot Workspace controls, or switch to Director Agent for planning and chat.")
     msg = (message or "").strip()
     if not msg:
         raise HTTPException(400, "message is required")
@@ -2096,6 +2119,12 @@ async def submit_shot_endpoint(
     project = load_project(shot.project_id)
     if project is None:
         raise HTTPException(404, "Project not found")
+    if project.authoring_mode == "shot_workspace":
+        from ..shot_workspace.writer import require_prompt
+        try:
+            require_prompt(shot)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
     if shot.music_segment is not None and project.mode != ProjectMode.mv:
         raise HTTPException(400, "Music segments require a Music Video project")
     if settings.video_context_enabled:
@@ -2277,6 +2306,8 @@ async def submit_shot_endpoint(
         )
         or video_context_prompt_is_stale(shot)
     ):
+        if project.authoring_mode == "shot_workspace":
+            raise HTTPException(409, "Prompt inputs changed. Rewrite the prompt in Shot Workspace before generating video.")
         try:
             shot = await svc.write_prompts_after_layout(shot.id)
         except ValueError as e:

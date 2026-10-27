@@ -56,6 +56,7 @@ describe("ProjectPicker", () => {
         "External board",
         "",
         "json_production",
+        "director_agent",
       ),
     );
     expect(screen.queryByRole("dialog", { name: "Create project" })).toBeNull();
@@ -78,6 +79,7 @@ describe("ProjectPicker", () => {
         "Song project",
         "",
         "mv",
+        "director_agent",
       ),
     );
   });
