@@ -211,7 +211,7 @@ function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelete, desk
         {writing ? `Cancel Â· ${writeElapsed}s` : working === "Write prompt" ? `Preparing prompt Â· ${elapsed}s` : "Write prompt"}</button>
       {writing && <small role="status">Writing prompt</small>}
     </div>
-    {Object.values(shot.prompt_sections).some(Boolean) ? <section className="manual-generated-prompt" aria-label="Prompt contents">{PROMPT_SECTION_KEYS.map(({ key, label }) => shot.prompt_sections[key]
+    {Object.values(shot.prompt_sections).some(Boolean) ? <section className="manual-generated-prompt" aria-label="Prompt contents"><small className="manual-saved-prompt-label">{promptCheck?.stale ? "Previously saved prompt · Out of date. Failed writes do not replace this text." : "Saved prompt · Failed writes do not replace this text."}</small>{PROMPT_SECTION_KEYS.map(({ key, label }) => shot.prompt_sections[key]
         ? <label key={key}>{label}<textarea aria-label={label} readOnly rows={4} value={shot.prompt_sections[key]} /></label> : null)}
     </section> : <small>Write from the current brief and selected references. Refinement is optional.</small>}
     {materials && <ShotMaterialEditor shot={shot} shots={shots} shotNumber={index + 1} manualReferences

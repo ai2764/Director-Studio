@@ -46,6 +46,21 @@ def validation_reason(error, raw, shot):
             except (ValueError, AttributeError, TypeError):
                 pass
         return "\n".join(dict.fromkeys(reasons))
+    missing = re.findall(r"missing required Picture binding: <Picture (\d+)>", str(error))
+    if missing:
+        from ..agents.director.planner import _extract_json_payload
+        try:
+            from ..core.projects.models import PromptSections
+            from ..core.h3.prompt import normalize_reference_tag_delimiters
+            value = _extract_json_payload(raw)
+            sections = normalize_reference_tag_delimiters(PromptSections.model_validate(value.get("prompt_sections", value)))
+            found = sorted(set(re.findall(r"<Picture\s+(\d+)>", sections.as_ordered_text(), re.IGNORECASE)), key=int)
+            recognized = ", ".join(f"P{index}" for index in found) or "none"
+            return ("The NEW candidate is missing Picture tags: " + ", ".join(f"P{index}" for index in missing)
+                + f". Recognized Picture tags in that candidate: {recognized}. "
+                + "The prompt visible below is the previously saved version, not this rejected candidate.")
+        except (ValueError, AttributeError, TypeError):
+            pass
     # Plain core validators already explain section/tag defects. Bound the text;
     # never render a JSON response, traceback, or provider credential payload.
     text = str(error)

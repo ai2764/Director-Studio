@@ -32,3 +32,10 @@ def test_schema_reason_names_missing_field():
 
 def test_reference_validator_reason_retains_specific_index():
     assert "Picture 3" in validation_reason(ValueError("prompt must reference submitted <Picture 3>"), "", None)
+
+
+def test_missing_picture_error_distinguishes_rejected_candidate_from_saved_prompt():
+    sections = {key: "A generic static object view." for key in PromptSections.model_fields}
+    reason = validation_reason(ValueError("missing required Picture binding: <Picture 1>; missing required Picture binding: <Picture 2>"), json.dumps({"prompt_sections": sections}), None)
+    assert "NEW candidate" in reason and "Recognized Picture tags in that candidate: none" in reason
+    assert "previously saved version" in reason and "P1, P2" in reason
