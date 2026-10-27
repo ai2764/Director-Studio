@@ -20,7 +20,7 @@ const progress = (task: Task): AgentProgress => ({ ...task, current_stage: "prom
 export async function getDirectorChatSession(projectId: string) {
   const task = await json<Task | null>(taskUrl(projectId));
   return { active: task?.status === "running", session_id: task?.run_id || null,
-    started_at: task?.started_at || null, progress: task ? progress(task) : null };
+    started_at: task?.started_at || null, error: task?.status === "failed" || task?.status === "interrupted" ? task.error : "", progress: task ? progress(task) : null };
 }
 
 export async function cancelDirectorChatSession(projectId: string) {

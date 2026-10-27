@@ -64,8 +64,10 @@ async def start(project_id, shot_id, request_id):
             state.update(status="completed")
         except asyncio.CancelledError:
             state.update(status="cancelled", error="Prompt writing cancelled. Saved shot content was kept.")
+        except TimeoutError:
+            state.update(status="failed", error="The model did not finish before the request timeout. No new prompt was saved. Retry writing the prompt.")
         except Exception as exc:
-            state.update(status="failed", error=str(exc))
+            state.update(status="failed", error=str(exc) or f"Prompt writing failed ({type(exc).__name__}). No new prompt was saved.")
         finally:
             state["updated_at"] = _now()
             # A cancellation can release the project before this runner exits.

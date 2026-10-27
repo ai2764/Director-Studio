@@ -11,6 +11,7 @@ from ..core.h3.dialogue_binding import compile_dialogue_draft
 from ..agents.director.prompts import H3_PROMPT_INSTRUCTIONS
 from ..agents.director.dialogue_preflight import WRITER_CONTRACT, parse_dialogue_draft, prompt_dialogue_record
 from ..agents.director.planner import _extract_json_payload
+from .errors import validation_reason
 from .model import WorkspaceModel
 from .references import snapshot, reference_certificate
 
@@ -88,14 +89,14 @@ async def write_prompt(project_id, shot_id, *, model=None):
     except ValueError as exc:
         # One bounded format repair, without reopening Director chat or vision.
         issues = sorted({getattr(item, "code", "prompt_format") for item in getattr(exc, "issues", [])}) or ["prompt_format"]
-        repair = {**payload, "repair": {"issue_codes": issues,
+        repair = {**payload, "repair": {"issue_codes": issues, "reason": validation_reason(exc, raw, shot),
             "instruction": "Repair the prior candidate against the response contract. Use every supplied {{speech:line_id}} exactly once in source order. Do not emit literal speech blocks. Preserve the brief and references.",
             "previous_candidate": raw}}
         raw = await (model or WorkspaceModel()).complete(system, repair, schema=schema)
         try:
             sections, draft = validate_candidate(raw)
         except ValueError as final:
-            raise ValueError("The model returned an invalid prompt format. No new prompt was saved. Review the saved prompt or retry writing.") from final
+            raise ValueError("Prompt writing failed after one automatic repair:\n" + validation_reason(final, raw, shot) + "\nNo new prompt was saved. Your saved shot and previous prompt were kept.") from final
     candidate = shot.model_copy(update={"prompt_sections": sections, "status": ShotStatus.needs_review,
         "meta": {**shot.meta, "workspace_input_version": captured["version"], "prompt_brief_stale": False,
             "material_review_pending": False, "material_review": {"evidence_mode": "saved_library_description", "references": refs},

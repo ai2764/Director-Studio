@@ -162,7 +162,7 @@ function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelete, desk
     <div className="manual-editor-feedback" aria-live="polite">
       {working && <p role="status">{working} · {elapsed}s</p>}
       {message && <p role="status">{message}</p>}
-      {error && <p className="banner error" role="alert">{error}</p>}
+      {error && <p className="banner error workspace-task-error" role="alert">{error}</p>}
     </div>
     <small className="manual-brief-hint">Write a prompt directly, or use Refine to fill the brief, camera fields and explicit dialogue. Duration stays unchanged.</small>
     <textarea id={`description-${shot.id}`} rows={6} value={description} disabled={disabled}
@@ -252,6 +252,7 @@ export function ShotWorkspacePage({ desktopOutput = false }: { desktopOutput?: b
         const [detail, session] = await Promise.all([getProject(projectId!), getDirectorChatSession(projectId!)]);
         if (epoch.current !== id) return;
         setShots(detail.shots); setWriting(session.active);
+        if (session.error) setError(session.error);
         if (session.progress && (session.active || session.progress.action_id)) setProgress(session.progress);
         setSelected((current) => current && detail.shots.some((s) => s.id === current) ? current : detail.shots[0]?.id ?? null);
         if (session.active) timer = setTimeout(refresh, 1200);
@@ -324,7 +325,7 @@ export function ShotWorkspacePage({ desktopOutput = false }: { desktopOutput?: b
       <button type="button" className="manual-add-shot" aria-label="Add shot" disabled={creating || writing} onClick={() => void add()}>＋</button></header>
     <nav className="manual-shot-nav" aria-label="Shots">{shots.map((shot, index) => <button key={shot.id} className="mode-chip"
       aria-current={current?.id === shot.id ? "page" : undefined} onClick={() => setSelected(shot.id)}>{index + 1}</button>)}</nav>
-    {error && <p className="banner error" role="alert">{error}</p>}
+    {error && <p className="banner error workspace-task-error" role="alert">{error}</p>}
     {removedShot && <div className="manual-undo" role="status">Shot deleted
       <button className="mode-chip" disabled={creating || writing} onClick={() => void undoRemove()}>Undo delete</button></div>}
     {notice && <p className="manual-task-status">{notice}</p>}
