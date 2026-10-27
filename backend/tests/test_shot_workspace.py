@@ -299,3 +299,23 @@ async def test_native_director_retains_video_source_freshness_policy(board):
     assert not video_context_prompt_is_stale(shot)
     shot.video_context.source_job_id = "job_other_variation"
     assert video_context_prompt_is_stale(shot)
+
+
+@pytest.mark.asyncio
+async def test_standalone_shot_is_rejected_before_starting_context_only_workflow(board, monkeypatch):
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from app.api import projects as api
+    from app.workflow_profiles.h3 import store
+    project, shot, _ = board
+    await write_prompt(project.id, shot.id, model=Model())
+    monkeypatch.setattr(store, "resolve_active_h3_profile", lambda: SimpleNamespace(mapping=SimpleNamespace(context_video=object())))
+    async def must_not_start(*args, **kwargs):
+        raise AssertionError("No GPU generation should start for a missing continuation source")
+    monkeypatch.setattr(api, "start_pipeline_job", must_not_start)
+    with pytest.raises(HTTPException) as error:
+        await api.submit_shot_endpoint(shot.id, svc=object())
+    assert error.value.status_code == 400
+    assert "requires a Motion Context video" in error.value.detail
+    assert "Choose Continue an earlier shot" in error.value.detail
+    assert not load_shot(project.id, shot.id).h3_job_id

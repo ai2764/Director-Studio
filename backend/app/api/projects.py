@@ -2446,6 +2446,13 @@ async def submit_shot_endpoint(
         )
     except VideoContextError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if h3_provider == "local" and staged_context is None:
+        from ..workflow_profiles.h3.store import resolve_active_h3_profile
+        if resolve_active_h3_profile().mapping.context_video is not None:
+            raise HTTPException(400,
+                "The selected H3 workflow requires a Motion Context video, but this shot has no continuation source. "
+                "Choose Continue an earlier shot and select a source variation, or Continue an uploaded video. "
+                "For a standalone shot, select an H3 workflow that does not require Motion Context. No generation was started.")
     if staged_context is not None:
         images["context_video"] = (staged_context["filename"], staged_context["data"])
     reference_evidence = (latest_shot.meta.get("material_review") or {}).get("references", [])
