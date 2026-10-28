@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { parseError } from "../../shared/api/client";
 import { getDirectorModel, setDirectorModel } from "../director/api";
+import { WorkspaceMascot } from "./WorkspaceMascot";
+import { StudioIcon } from "../../shared/components/StudioIcon";
 
 export type AssistantTurn = {role: "user" | "assistant"; text: string};
 export type AssistantReply = {reply: string; proposed_change?: string; context_scope?: string};
@@ -12,6 +14,8 @@ export function DescriptionAssistant({ shotId, description, disabled, ready, onR
   onRequest: (request: string, recentTurns: AssistantTurn[]) => Promise<AssistantReply>; onUndo: () => void; canUndo: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  function minimize() { setOpen(false); toggleRef.current?.focus(); }
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [model, setModel] = useState("");
@@ -76,9 +80,17 @@ export function DescriptionAssistant({ shotId, description, disabled, ready, onR
       setInput(request); setMessages((current) => [...current, {role:"error",text:error instanceof Error ? error.message : String(error)}]);
     } finally { setBusy(false); }
   }
-  return <aside className={`description-assistant${open ? " is-open" : ""}`} aria-label="Description assistant">
-    <button type="button" className="description-assistant-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-      {open ? "Description assistant · Minimize" : busy ? `Description · ${seconds}s` : "✦ Description assistant"}
+  return <>{open && <button type="button" className="description-assistant-backdrop" aria-label="Minimize assistant"
+    tabIndex={-1} onClick={minimize} />}
+  <aside className={`description-assistant${open ? " is-open" : ""}`} aria-label="Description assistant"
+    onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); minimize(); } }}>
+    <button ref={toggleRef} type="button" className="description-assistant-toggle" aria-expanded={open}
+      aria-label={open ? "Description assistant · Minimize" : busy ? `Description · ${seconds}s` : "✦ Description assistant"}
+      onClick={() => setOpen((value) => !value)}>
+      <WorkspaceMascot /><span className="assistant-mobile-icon"><StudioIcon name="chat" size={18} /></span>
+      <span className="assistant-desktop-label">{open ? "Description assistant · Minimize" : busy ? `Description · ${seconds}s` : "Description assistant"}</span>
+      <span className="assistant-mobile-label">{open ? "Assistant · Minimize" : busy ? `Thinking · ${seconds}s` : "Assistant"}</span>
+      {open && <span className="assistant-window-close"><StudioIcon name="close" size={18} /></span>}
     </button>
     {open && <div className="description-assistant-panel">
       <label className="description-assistant-model">Model<select aria-label="Description assistant model" value={model}
@@ -90,7 +102,7 @@ export function DescriptionAssistant({ shotId, description, disabled, ready, onR
         {models.map((name) => <option key={name} value={name}>{name}</option>)}
       </select>{modelSwitching && <small role="status">Switching model…</small>}</label>
       {modelError && <p className="description-assistant-help" role="alert">Model selection failed: {modelError}</p>}
-      <p className="description-assistant-help">Discuss how to shoot, or ask for an edit. Reference descriptions and the previous shot description are included. Conversation is saved for this shot.</p>
+      <p className="description-assistant-help">Discuss the shot, edit its brief, or ask me to write or revise its prompt. Prompt requests save the current brief and run the prompt writer. Reference descriptions are included. Conversation is saved for this shot.</p>
       {historyLoading && <p className="description-assistant-help" role="status">Loading conversation…</p>}
       {historyError && <p className="description-assistant-help" role="alert">{historyError}</p>}
       <div className="description-assistant-log" ref={log} role="log" aria-label="Description conversation">
@@ -106,5 +118,5 @@ export function DescriptionAssistant({ shotId, description, disabled, ready, onR
           <button type="submit" className="btn primary" disabled={disabled || busy || historyLoading || !!historyError || modelLoading || modelSwitching || !ready || !input.trim()}>{busy ? `Thinking · ${seconds}s` : "Send"}</button></div>
       </form>
     </div>}
-  </aside>;
+  </aside></>;
 }

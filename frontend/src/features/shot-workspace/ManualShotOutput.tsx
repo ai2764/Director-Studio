@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Shot } from "../../shared/api/types";
 import { promptReady } from "../../shared/shotWorkflowStatus";
 import type { PromptCheck } from "./promptCheck";
+import { WorkspaceMascot } from "./WorkspaceMascot";
 import { cancelH3Job, getH3Job, getH3ProviderStatus, getLocalH3Resolutions, getShot, submitShot,
   type H3JobRecord, type H3Provider, type LocalH3Resolution } from "../production/api";
 
@@ -85,7 +86,7 @@ export function ManualShotOutput({ shot, disabled, onSaved, check, promptWriting
     finally { if (mounted.current) setBusy(false); }
   }
   return <aside className="manual-output" aria-label="Video output">
-    <header><strong>Video output</strong><small>{shot.title}</small></header>
+    <header><div className="workspace-output-title"><WorkspaceMascot role="director" /><strong>Video output</strong></div><small>{shot.title}</small></header>
     <div className="manual-output-preview">
       {video ? <video key={video} src={video} controls preload="metadata" /> : <p>{running ? "Generating video. It will appear here when ready." : "Your generated video will appear here."}</p>}
     </div>

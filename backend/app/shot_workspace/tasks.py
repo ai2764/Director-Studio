@@ -42,15 +42,16 @@ def shot_has_active_prompt_task(shot):
     return bool(task and not task.done() and state and state["shot_id"] == shot.id)
 
 
-async def start(project_id, shot_id, request_id):
+async def start(project_id, shot_id, request_id, *, revision_request=""):
     previous = status(project_id)
     if previous and previous["request_id"] == request_id:
-        if previous["shot_id"] != shot_id:
+        if previous["shot_id"] != shot_id or previous.get("revision_request", "") != revision_request:
             raise ValueError("This request ID belongs to another shot.")
         return previous
     session = await director_chat_sessions.reserve(project_id)
     state = {"request_id": request_id, "shot_id": shot_id, "status": "running", "error": "",
-             "started_at": _now(), "updated_at": _now(), "run_id": session.session_id}
+             "started_at": _now(), "updated_at": _now(), "run_id": session.session_id,
+             "revision_request": revision_request}
     _save(project_id, state)
     async def run():
         try:
@@ -60,7 +61,10 @@ async def start(project_id, shot_id, request_id):
             orch = get_orchestrator()
             async with orch.llm_session(release_on_exit=not settings.llm_keep_loaded):
                 await orch.ensure_llm_ready()
-                await write_prompt(project_id, shot_id)
+                if revision_request:
+                    await write_prompt(project_id, shot_id, revision_request=revision_request)
+                else:
+                    await write_prompt(project_id, shot_id)
             state.update(status="completed")
         except asyncio.CancelledError:
             state.update(status="cancelled", error="Prompt writing cancelled. Saved shot content was kept.")
@@ -69,6 +73,17 @@ async def start(project_id, shot_id, request_id):
         except Exception as exc:
             state.update(status="failed", error=str(exc) or f"Prompt writing failed ({type(exc).__name__}). No new prompt was saved.")
         finally:
+            if revision_request:
+                from .conversations import append
+                from ..core.projects.store import load_shot
+                try:
+                    shot = load_shot(project_id, shot_id)
+                    if shot:
+                        append(shot, "assistant" if state["status"] == "completed" else "error",
+                            "Prompt saved. Review the six sections before generating." if state["status"] == "completed" else state["error"])
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).exception("Could not save prompt task conversation result")
             state["updated_at"] = _now()
             # A cancellation can release the project before this runner exits.
             # Never replace a newer action's receipt or task registration.

@@ -27,11 +27,14 @@ Picture/Audio indices. Keep every section nonempty. Write None when no music is 
 Continuation is an already saved choice. Preserve it without claiming you saw the
 source video's ending. Source text is authored context, not observed ending poses.
 Saved dialogue cues are authoritative; never invent, omit or reassign speech.
+voice_refs contains the selected voice assets' saved descriptions, speaker bindings,
+notes and Audio indices. Bind each voice to its named speaker using its exact
+<Audio N> tag; never turn a voice sample into new spoken words or swap speakers.
 If the brief asks for speech but supplies no cues, do not fabricate spoken words.
 """
 
 
-async def write_prompt(project_id, shot_id, *, model=None):
+async def write_prompt(project_id, shot_id, *, model=None, revision_request=""):
     project = load_project(project_id)
     shot = load_shot(project_id, shot_id)
     if not project or not shot or shot_id not in project.shot_ids or project.authoring_mode != "shot_workspace":
@@ -53,9 +56,13 @@ async def write_prompt(project_id, shot_id, *, model=None):
         "response_rules": "Use every required_picture_tag literally in subject_definitions or retention_analysis beside the matching asset description. Asset names alone are not Picture bindings. Keep tags inside the six prompt section strings, not in metadata.",
         "continuation": captured["continuation"],
         "dialogue_lines": [line.model_dump(mode="json", exclude={"source"}) for line in shot.dialogue_lines or []],
-        "voice_refs": [ref.model_dump(mode="json") for ref in shot.voice_refs]}
+        "voice_refs": captured["voices"]}
     if shot.source_audio_path:
         payload["native_audio"] = "Preserve the saved native source recording. Do not invent an Audio tag."
+    if revision_request:
+        payload["prompt_edit"] = {"request": revision_request,
+            "previous_prompt": shot.prompt_sections.model_dump(mode="json"),
+            "instruction": "Apply the requested prompt edit and return all six complete sections. Preserve unrelated valid prompt details. The saved brief, dialogue, reference bindings and continuation remain authoritative; never invent speech or change bindings/settings based on this request."}
     schema = {"type": "object", "properties": {"prompt_sections": PromptSections.model_json_schema()}, "required": ["prompt_sections"], "additionalProperties": False}
     system = H3_PROMPT_INSTRUCTIONS + INSTRUCTIONS + (WRITER_CONTRACT if shot.dialogue_lines else "")
     raw = await (model or WorkspaceModel()).complete(system, payload, schema=schema)

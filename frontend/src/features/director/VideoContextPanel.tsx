@@ -243,7 +243,7 @@ export function VideoContextPanel({
         </label> : null}
         {profile === "custom" ? <label>
           Context window
-          <input aria-label="Context window" readOnly value="工作流配置" />
+          <input aria-label="Context window" readOnly value="Configured by workflow" />
         </label> : null}
         {profile === "builtin" ? <small>{contextWindowLabel(legalWindow(context?.context_frames))}</small> : null}
       </div>

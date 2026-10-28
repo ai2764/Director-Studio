@@ -30,9 +30,9 @@ export async function cancelDirectorChatSession(projectId: string) {
 
 export async function chatWithDirectorStream(projectId: string, _message: string, _history: unknown[],
   handlers: { onAgentProgress?: (value: AgentProgress) => void }, _images: unknown[], _signal?: AbortSignal,
-  _retry?: unknown, _segments?: unknown, action?: { shot_id: string; action_id: string; choice: string }) {
+  _retry?: unknown, _segments?: unknown, action?: { shot_id: string; action_id: string; choice: string; revision_request?: string }) {
   if (!action) throw new Error("Select a shot before writing its prompt.");
-  let task = await json<Task>(`/api/shot-workspace/shots/${action.shot_id}/prompt`, "POST", { request_id: action.action_id });
+  let task = await json<Task>(`/api/shot-workspace/shots/${action.shot_id}/prompt`, "POST", { request_id: action.action_id, revision_request: action.revision_request || "" });
   while (task.status === "running") {
     handlers.onAgentProgress?.(progress(task));
     await new Promise((resolve) => setTimeout(resolve, 1000));

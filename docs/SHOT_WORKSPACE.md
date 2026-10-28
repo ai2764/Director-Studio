@@ -12,6 +12,12 @@ Shot Workspace is an optional film authoring mode. Director Agent remains availa
 
 Use one dialogue cue per line: `Speaker [Language]: exact spoken words`. Speaker attribution and wording are retained in the generated speech contract.
 
+Five seconds is only the initial duration. The assistant can suggest timing from the action, dialogue delivery and camera movement, using the current duration as an editable baseline and honoring explicit timing requests. Applying its brief draft updates the duration field too; Undo restores the previous draft duration, and users can manually override it. Prompt edits that change timing save the revised duration before writing. Changing duration makes an existing prompt stale. Suggestions must remain positive and at most 120 seconds.
+
+The assistant also accepts explicit requests to write or revise the six-section prompt. It saves the current brief before running the same durable, cancellable writer used by **Write prompt**. Requests that change shot action or camera intent first produce a matching brief update; wording-only prompt edits leave the brief intact. The writer receives the previous prompt and the current edit request, without replaying the conversation or re-reading images. Questions about prompts do not trigger writing. Failed or cancelled writing keeps the previous prompt, and any already saved brief remains saved.
+
+Open **Voice references** in the shot to **Import voice**, select an imported sample, enter its **Speaker** name (matching dialogue cues), optionally add voice direction, and **Save voices**. Samples can be previewed before saving. Up to three H3-ready voices may be linked, with a combined duration of at most 15 seconds. Voice bindings and saved asset descriptions are supplied to the writer; changing bindings, descriptions or audio content invalidates its prompt. Rewrite after saving voices. Native source audio cannot be combined with these voice bindings. Save unsaved brief edits before changing voices.
+
 Changing a brief, selected reference, Library description or continuation intent invalidates the saved prompt. Switching the generated variation or output of the same continuation source does not require rewriting. Video availability, resolution and frame compatibility are still checked before generation. Rule-based checks catch missing sections, reference indices and malformed tags; they do not certify visual quality.
 
 ## Library

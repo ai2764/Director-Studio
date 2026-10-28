@@ -62,6 +62,12 @@ def continuation_intent_signature(shot):
 def snapshot(shot):
     project = load_project(shot.project_id)
     references = selected_references(shot)
+    voices = []
+    if shot.voice_refs:
+        from ..api.projects import _validate_voice_refs
+        voices = [{**ref.model_dump(mode="json"), "name": asset.name, "description": asset.notes or "",
+            "content_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            for ref, asset, path in _validate_voice_refs(shot)]
     continuation = None
     if shot.video_context and shot.video_context.mode != "off":
         status = video_context_status(shot)
@@ -79,8 +85,10 @@ def snapshot(shot):
              "references": references, "continuation": continuation_intent(shot),
              "reference_note": shot.meta.get("workspace_reference_note", ""),
              "authoring_mode": project.authoring_mode if project else None}
+    if voices:
+        facts["voices"] = voices
     return {"version": digest(facts), "shot_id": shot.id, "description": shot.script_beat,
-            "references": references, "continuation": continuation}
+            "references": references, "voices": voices, "continuation": continuation}
 
 
 def reference_certificate(project, shot):

@@ -59,6 +59,105 @@ class Model:
 
 
 @pytest.mark.asyncio
+async def test_assistant_prompt_route_does_not_write_or_replay_history(board):
+    from app.shot_workspace.coordinator import converse
+    project, shot, _ = board
+    class RouterModel:
+        async def complete(self, system, payload, **kwargs):
+            assert set(payload) == {"request", "current_description"}
+            return json.dumps({"intent":"prompt", "include_adjacent_descriptions":False,
+                "reply_language":"English", "update_brief":False})
+    result = await converse(shot, shot.script_beat, "Rewrite my prompt more concisely.",
+        snapshot(shot)["version"], RouterModel(), turns=[{"role":"user", "text":"irrelevant"}])
+    assert result["kind"] == "prompt" and result["prompt_request"] == "Rewrite my prompt more concisely."
+    assert not any(load_shot(project.id, shot.id).prompt_sections.model_dump().values())
+
+
+@pytest.mark.asyncio
+async def test_prompt_action_that_changes_shot_routes_brief_update_before_writing(board):
+    from app.shot_workspace.coordinator import converse
+    _, shot, _ = board
+    class EditModel:
+        async def complete(self, *args, **kwargs):
+            return json.dumps({"intent":"prompt", "include_adjacent_descriptions":False,
+                "reply_language":"English", "update_brief":True})
+        async def complete_shot_description(self, system, user, **kwargs):
+            assert json.loads(user)["reference_descriptions"]
+            return json.dumps(dict(description="A locked close-up shows the object.",title=shot.title,duration_s=5,
+                shot_type="close-up",camera_angle="eye level",camera_motion="static",composition="centered",dialogue=[],questions=[]))
+    result = await converse(shot, shot.script_beat, "Rewrite the prompt as a locked close-up.",
+        snapshot(shot)["version"], EditModel())
+    assert result["kind"] == "prompt" and result["update_brief"]
+    assert "draft" not in result  # Refine only after the UI has saved current dialogue/camera edits.
+
+
+@pytest.mark.asyncio
+async def test_prompt_revision_receives_previous_prompt_and_rejects_invalid_replacement(board):
+    project, shot, _ = board
+    saved = await write_prompt(project.id, shot.id, model=Model())
+    model = Model()
+    revised = await write_prompt(project.id, shot.id, model=model, revision_request="Shorten the wording.")
+    assert model.calls[0][1]["prompt_edit"]["previous_prompt"] == saved.prompt_sections.model_dump()
+    assert model.calls[0][1]["prompt_edit"]["request"] == "Shorten the wording."
+    assert revised.script_beat == saved.script_beat
+    class InvalidModel:
+        async def complete(self, *args, **kwargs):
+            return json.dumps({"prompt_sections": {"summary":"Missing five sections."}})
+    with pytest.raises(ValueError):
+        await write_prompt(project.id, shot.id, model=InvalidModel(), revision_request="Shorten again.")
+    assert load_shot(project.id, shot.id).prompt_sections == revised.prompt_sections
+
+
+@pytest.mark.asyncio
+async def test_voice_binding_scope_conflicts_and_description_freshness(board, monkeypatch):
+    from types import SimpleNamespace
+    from app.core.library import store
+    from app.core.projects.models import ShotVoiceRef
+    from app.shot_workspace.router import replace_voice_references, VoiceReferences
+    project, shot, _ = board
+    def normalize(source, target):
+        target.write_bytes(b"synthetic-test-audio")
+        return SimpleNamespace(duration_s=3,source_format="wav",source_sample_rate=24000,
+            source_channels=1,reference_sample_rate=24000,reference_channels=1)
+    monkeypatch.setattr(store, "normalize_voice_reference", normalize)
+    voice = store.create_external_voice_asset(name="Guide sample", notes="A calm speaking voice.",
+        project_id=project.id,audio_bytes=b"synthetic-test-audio",audio_filename="sample.wav")
+    ref = ShotVoiceRef(asset_id=voice.id,audio_index=1,speaker="Guide")
+    saved = await replace_voice_references(shot.id, VoiceReferences(voice_refs=[ref],expected_refs=[]))
+    assert saved.voice_refs == [ref]
+    with pytest.raises(Exception, match="Voice references changed"):
+        await replace_voice_references(shot.id, VoiceReferences(voice_refs=[],expected_refs=[]))
+    captured = snapshot(saved)
+    assert captured["voices"][0]["description"] == voice.notes
+    class VoiceModel(Model):
+        async def complete(self, system, payload, **kwargs):
+            result = json.loads(await super().complete(system, payload, **kwargs))
+            result["prompt_sections"]["subject_definitions"] += " Guide uses <Audio 1>."
+            return json.dumps(result)
+    model = VoiceModel()
+    await write_prompt(project.id, shot.id, model=model)
+    assert model.calls[0][1]["voice_refs"][0]["speaker"] == "Guide"
+    voice.notes = "A newly described delivery."
+    store.write_asset(voice)
+    assert snapshot(saved)["version"] != captured["version"]
+    assert prompt_check(load_shot(project.id, shot.id))["stale"]
+    other = create_project("Other test project", "", authoring_mode="shot_workspace")
+    foreign = store.create_external_voice_asset(name="Foreign sample",project_id=other.id,
+        audio_bytes=b"synthetic",audio_filename="sample.wav")
+    with pytest.raises(Exception, match="another project"):
+        await replace_voice_references(shot.id, VoiceReferences(voice_refs=[ref.model_copy(update={"asset_id":foreign.id})],expected_refs=[ref]))
+    voice.meta["duration_s"] = 16
+    store.write_asset(voice)
+    with pytest.raises(Exception, match="15 seconds"):
+        await replace_voice_references(shot.id, VoiceReferences(voice_refs=[ref],expected_refs=[ref]))
+    current = load_shot(project.id, shot.id)
+    current.source_audio_path = "synthetic-source.wav"
+    save_shot(current)
+    with pytest.raises(Exception, match="native source audio"):
+        await replace_voice_references(shot.id, VoiceReferences(voice_refs=[ref],expected_refs=[ref]))
+
+
+@pytest.mark.asyncio
 async def test_manual_editing_and_reference_notes_use_no_model(board):
     project, shot, asset = board
     body = Brief(description="The object remains still.", title="Object view", duration_s=5, expected_version=snapshot(shot)["version"])
@@ -169,7 +268,8 @@ async def test_layout_selection_matches_native_material_projection(board, image_
 
 
 @pytest.mark.asyncio
-async def test_task_receipt_refresh_and_cancellation(board, monkeypatch):
+@pytest.mark.parametrize("revision", ["", "Use concise prompt wording."])
+async def test_task_receipt_refresh_and_cancellation(board, monkeypatch, revision):
     import asyncio
     from app.shot_workspace import tasks
     from app.core import vram
@@ -182,15 +282,18 @@ async def test_task_receipt_refresh_and_cancellation(board, monkeypatch):
             yield
         async def ensure_llm_ready(self):
             pass
-    async def pending(*args):
+    async def pending(*args, **kwargs):
+        assert kwargs.get("revision_request", "") == revision
         entered.set()
         await asyncio.Event().wait()
     monkeypatch.setattr(vram, "get_orchestrator", lambda: Orchestrator())
     monkeypatch.setattr(writer, "write_prompt", pending)
-    receipt = await tasks.start(project.id, shot.id, "action-1")
+    receipt = await tasks.start(project.id, shot.id, "action-1", revision_request=revision)
     await asyncio.wait_for(entered.wait(), 1)
     assert tasks.status(project.id)["run_id"] == receipt["run_id"]
-    assert (await tasks.start(project.id, shot.id, "action-1"))["run_id"] == receipt["run_id"]
+    assert (await tasks.start(project.id, shot.id, "action-1", revision_request=revision))["run_id"] == receipt["run_id"]
+    with pytest.raises(ValueError):
+        await tasks.start(project.id, shot.id, "action-1", revision_request=revision + " different")
     await tasks.cancel(project.id)
     await asyncio.sleep(0)
     assert tasks.status(project.id)["status"] == "cancelled"
@@ -397,6 +500,75 @@ async def test_amendment_allows_only_explicit_new_dialogue(board):
     assert result["dialogue"] == ["Guide [English]: Ready."]
     with pytest.raises(ValueError, match="invented dialogue"):
         await refine(shot, shot.script_beat, snapshot(shot)["version"], Refiner(), amendment="Keep a silent shot.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("description_only", [False, True])
+async def test_agent_duration_suggestion_is_editable_saved_and_used_by_writer(board, description_only):
+    from app.shot_workspace.refinement import refine
+    project, shot, _ = board
+    saved = await write_prompt(project.id, shot.id, model=Model())
+    class Refiner:
+        async def complete_shot_description(self, system, user, **kwargs):
+            assert json.loads(user)["duration_s"] == 7  # Unsaved current UI value, not the saved default 5.
+            return json.dumps(dict(description="The object turns slowly, then settles.",title=shot.title,duration_s=8,
+                shot_type="medium",camera_angle="eye level",camera_motion="static",composition="centered",dialogue=[],questions=[]))
+    draft = await refine(saved,saved.script_beat,snapshot(saved)["version"],Refiner(),
+        amendment="Allow time for the action to settle.",description_only=description_only,duration_s=7)
+    assert draft["duration_s"] == 8
+    assert load_shot(project.id,shot.id).duration_s == 5  # Suggestion alone does not save.
+    updated = await save_brief(shot.id, Brief(description=draft["description"],duration_s=draft["duration_s"],
+        expected_version=snapshot(saved)["version"]))
+    assert updated.duration_s == 8 and prompt_check(updated)["stale"]
+    model = Model()
+    await write_prompt(project.id,shot.id,model=model)
+    assert model.calls[0][1]["shot"]["duration_s"] == 8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [0, -1, 121, float("inf"), float("nan")])
+async def test_agent_cannot_return_invalid_duration(board, invalid):
+    from app.shot_workspace.refinement import refine
+    _,shot,_ = board
+    class Refiner:
+        async def complete_shot_description(self,*args,**kwargs):
+            return json.dumps(dict(description=shot.script_beat,title=shot.title,duration_s=invalid,
+                shot_type="medium",camera_angle="eye level",camera_motion="static",composition="centered",dialogue=[],questions=[]))
+    with pytest.raises(ValueError):
+        await refine(shot,shot.script_beat,snapshot(shot)["version"],Refiner())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("description_only", [False, True])
+async def test_refinement_keeps_dialogue_in_separate_field_without_requiring_duplicate_prose(board, description_only):
+    from app.shot_workspace.refinement import refine
+    project, shot, _ = board
+    saved = await save_brief(shot.id, Brief(description="A guide gestures toward the object.",title=shot.title,duration_s=5,
+        dialogue=["Guide [English]: Welcome.", "Visitor [English]: Thank you."],expected_version=snapshot(shot)["version"]))
+    class Refiner:
+        speaker = "Guide"
+        text = "Welcome."
+        async def complete_shot_description(self, system, user, **kwargs):
+            context = json.loads(user)
+            assert [line["text"] for line in context["current_dialogue_lines"]] == ["Welcome.","Thank you."]
+            return json.dumps(dict(description="A close-up follows the guide's gesture as the visitor listens.",
+                title=saved.title,duration_s=5,shot_type="close-up",camera_angle="eye level",camera_motion="static",composition="centered",
+                dialogue=[f"{self.speaker} [English]: {self.text}","Visitor [English]: Thank you."],questions=[]))
+    model = Refiner()
+    result = await refine(saved, saved.script_beat,snapshot(saved)["version"],model,
+        amendment="Use a close-up. Keep all dialogue.",description_only=description_only)
+    assert result["dialogue"] == ["Guide [English]: Welcome.","Visitor [English]: Thank you."]
+    assert "Welcome." not in result["description"]
+    assert load_shot(project.id, shot.id).dialogue == saved.dialogue  # Still only a draft.
+    model.text = "New invented speech."
+    with pytest.raises(ValueError,match="invented dialogue"):
+        await refine(saved,saved.script_beat,snapshot(saved)["version"],model,
+            amendment="Use a close-up. Keep all dialogue.",description_only=description_only)
+    model.text = "Welcome."
+    model.speaker = "Unselected speaker"
+    with pytest.raises(ValueError,match="invented dialogue"):
+        await refine(saved,saved.script_beat,snapshot(saved)["version"],model,
+            amendment="Use a close-up. Keep all dialogue.",description_only=description_only)
 
 
 @pytest.mark.asyncio

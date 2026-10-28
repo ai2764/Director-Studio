@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..core.projects.store import load_project, load_shot, list_projects, list_shots, save_project, save_shot, new_shot_id
-from ..core.projects.models import Shot, ShotRef, ShotStatus
+from ..core.projects.models import Shot, ShotRef, ShotVoiceRef, ShotStatus
 from ..core.projects.dialogue import apply_dialogue_update
 from ..core.projects.chat_sessions import director_chat_sessions, DirectorChatSessionConflict
 from ..core.managed_runs.store import _project_lock, active_run_for_project
@@ -127,6 +127,7 @@ class Refine(BaseModel):
     title: str = Field(default="", max_length=200)
     suggest_title: bool = False
     expected_version: str
+    duration_s: float | None = Field(default=None, gt=0, le=120, allow_inf_nan=False)
 
 
 @router.post("/shots/{shot_id}/description/refine")
@@ -142,7 +143,7 @@ async def refine_brief(shot_id: str, body: Refine):
         async with orch.llm_session(release_on_exit=not settings.llm_keep_loaded):
             await orch.ensure_llm_ready()
             return await refine(shot, body.description, body.expected_version, WorkspaceModel(),
-                                title=body.title, suggest_title=body.suggest_title, amendment=body.amendment)
+                                title=body.title, suggest_title=body.suggest_title, amendment=body.amendment, duration_s=body.duration_s)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
@@ -180,10 +181,10 @@ async def assist_description(shot_id: str, body: DescriptionAssist):
             await orch.ensure_llm_ready()
             result = await converse(shot, body.description, body.amendment, body.expected_version, WorkspaceModel(),
                 title=body.title, suggest_title=body.suggest_title,
-                turns=[turn.model_dump() for turn in body.recent_turns])
+                turns=[turn.model_dump() for turn in body.recent_turns], duration_s=body.duration_s)
         reply = result["reply"]
         if result.get("kind") == "draft" and result.get("draft"):
-            reply += "\n\n" + result["draft"]["description"]
+            reply += f"\n\nSuggested duration: {result['draft']['duration_s']:g}s\n\n" + result["draft"]["description"]
         append(shot, "assistant", reply, proposal=result.get("proposed_change"), scope=result.get("context_scope"))
         return result
     except TimeoutError as exc:
@@ -263,8 +264,39 @@ def get_prompt_check(shot_id: str):
     return prompt_check(find_shot(shot_id))
 
 
+class VoiceReferences(BaseModel):
+    voice_refs: list[ShotVoiceRef] = Field(max_length=3)
+    expected_refs: list[ShotVoiceRef] = Field(max_length=3)
+
+
+@router.put("/shots/{shot_id}/voice-references", response_model=Shot)
+async def replace_voice_references(shot_id: str, body: VoiceReferences):
+    shot = find_shot(shot_id)
+    await ensure_idle(shot.project_id)
+    ensure_shot_idle(shot)
+    from ..api.projects import _validate_voice_refs
+    try:
+        with _project_lock(shot.project_id):
+            shot = find_shot(shot_id)
+            if shot.voice_refs != body.expected_refs:
+                raise ValueError("Voice references changed. Refresh before saving.")
+            if shot.source_audio_path and body.voice_refs:
+                raise ValueError("This shot uses native source audio. Remove it before adding Voice references.")
+            if any(not ref.speaker for ref in body.voice_refs):
+                raise ValueError("Enter a speaker name for each Voice reference, matching the dialogue cues.")
+            saved = Shot.model_validate({**shot.model_dump(), "voice_refs": body.voice_refs})
+            _validate_voice_refs(saved)
+            if saved.voice_refs != shot.voice_refs:
+                saved.meta = {**saved.meta, "prompt_voice_signature": "", "prompt_brief_stale": bool(any(shot.prompt_sections.model_dump().values()))}
+                save_shot(saved)
+            return saved
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 class PromptRequest(BaseModel):
     request_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
+    revision_request: str = Field(default="", max_length=4000)
 
 
 @router.post("/shots/{shot_id}/prompt", status_code=202)
@@ -274,7 +306,7 @@ async def write_prompt(shot_id: str, body: PromptRequest):
     if active_run_for_project(shot.project_id):
         raise HTTPException(409, "Finish or cancel the current project task first.")
     try:
-        return await tasks.start(shot.project_id, shot.id, body.request_id)
+        return await tasks.start(shot.project_id, shot.id, body.request_id, revision_request=body.revision_request)
     except (ValueError, DirectorChatSessionConflict) as exc:
         raise HTTPException(409, str(exc)) from exc
 

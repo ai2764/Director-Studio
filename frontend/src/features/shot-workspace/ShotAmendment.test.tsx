@@ -10,9 +10,46 @@ const shot: Shot = { id:"sht_test", project_id:"prj_test", scene_id:"scene", tit
   status:"draft", refs:[], voice_refs:[], dialogue:[], layout_refs:[], layout_asset_id:null, layout_review_status:null, ref_frame_job_id:null,
   h3_job_id:null, source_audio_path:null, feedback:"", blocked_reasons:[],
   prompt_sections:{subject_definitions:"",summary:"",retention_analysis:"",detailed_description:"",overall_soundscape:"",non_diegetic_music:""} };
+
+it("saves an assistant prompt amendment and its matching brief before invoking the writer", async () => {
+  const draft = {description:"A static close-up shows the object.",title:shot.title,duration_s:9,
+    shot_type:"close-up",camera_angle:"eye level",camera_motion:"static",composition:"centered",dialogue:[],questions:[]};
+  const saved = {...shot,script_beat:draft.description,shot_type:draft.shot_type,duration_s:9};
+  const order:string[] = [];
+  const fetcher = vi.fn(async (url:string, init?:RequestInit) => {
+    if (url.endsWith("/assist")) return {ok:true,json:async()=>({kind:"prompt",reply:"Prompt request prepared.",update_brief:true,prompt_request:"Rewrite as a close-up."})};
+    if (url.endsWith("/refine")) {order.push("refine");return {ok:true,json:async()=>draft};}
+    if (init?.method === "PUT") {order.push("save");return {ok:true,json:async()=>saved};}
+    return {ok:true,json:async()=>url.endsWith("prompt-check") ? {valid:false,stale:false,errors:[],warnings:[]} : url.endsWith("/conversation") ? {messages:[]} : {version:"v1"}};
+  });
+  vi.stubGlobal("fetch",fetcher);
+  const write = vi.fn(async () => {order.push("write");});
+  render(<ShotEditor shot={shot} shots={[shot]} index={0} busy={false} onSaved={vi.fn()} onWrite={write} onDelete={vi.fn()} desktopOutput={false} writing={false} writeElapsed={0} onCancel={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button",{name:"✦ Description assistant"}));
+  fireEvent.change(screen.getByLabelText("Description request"),{target:{value:"Rewrite as a close-up."}});
+  await waitFor(()=>expect((screen.getByRole("button",{name:"Send"}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button",{name:"Send"}));
+  await screen.findByText("Prompt saved. Review the six sections before generating.");
+  expect(order).toEqual(["save","refine","save","write"]);
+  expect(write).toHaveBeenCalledWith(saved,"Rewrite as a close-up.");
+  const saveCall = fetcher.mock.calls.filter(([,init])=>init?.method === "PUT").at(-1);
+  expect(JSON.parse(saveCall![1]!.body as string).description).toBe(draft.description);
+  expect(JSON.parse(saveCall![1]!.body as string).duration_s).toBe(9);
+});
+
+it("does not report prompt success when the writer fails", async () => {
+  vi.stubGlobal("fetch",vi.fn(async (url:string,init?:RequestInit)=>({ok:true,json:async()=>url.endsWith("/assist") ? {kind:"prompt",reply:"Prepared.",prompt_request:"Write prompt."} : init?.method === "PUT" ? shot : url.endsWith("prompt-check") ? {valid:false,stale:false,errors:[],warnings:[]} : url.endsWith("/conversation") ? {messages:[]} : {version:"v1"}})));
+  render(<ShotEditor shot={shot} shots={[shot]} index={0} busy={false} onSaved={vi.fn()} onWrite={vi.fn().mockRejectedValue(new Error("Prompt validation failed."))} onDelete={vi.fn()} desktopOutput={false} writing={false} writeElapsed={0} onCancel={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button",{name:"✦ Description assistant"}));
+  fireEvent.change(screen.getByLabelText("Description request"),{target:{value:"Write prompt."}});
+  await waitFor(()=>expect((screen.getByRole("button",{name:"Send"}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button",{name:"Send"}));
+  await screen.findByText("Prompt validation failed.");
+  expect(screen.queryByText("Prompt saved. Review the six sections before generating.")).toBeNull();
+});
 it("applies an amendment to an editable draft and supports undo without writing a prompt", async () => {
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-    if (url.endsWith("/assist")) return { ok:true, json:async () => ({ kind:"draft", reply:"Draft updated.", draft:{ description:"The object remains still on the table.",title:shot.title,duration_s:5,
+    if (url.endsWith("/assist")) return { ok:true, json:async () => ({ kind:"draft", reply:"Draft updated.", draft:{ description:"The object remains still on the table.",title:shot.title,duration_s:8,
       shot_type:"close-up",camera_angle:"eye level",camera_motion:"static",composition:"centered",dialogue:[],questions:[] } }) };
     return { ok:true, json:async () => init?.method === "PUT" ? shot : url.endsWith("prompt-check") ? {valid:false,stale:false,errors:[],warnings:[]} : {version:"v1"} };
   });
@@ -21,16 +58,22 @@ it("applies an amendment to an editable draft and supports undo without writing 
   render(<ShotEditor shot={shot} shots={[shot]} index={0} busy={false} onSaved={save} onWrite={write} onDelete={vi.fn()}
     desktopOutput={false} writing={false} writeElapsed={0} onCancel={vi.fn()} />);
   fireEvent.click(screen.getByRole("button",{name:"✦ Description assistant"}));
+  fireEvent.change(screen.getByLabelText("Duration (seconds)"),{target:{value:"7"}});
   fireEvent.change(screen.getByLabelText("Description request"),{target:{value:"Keep the object stationary."}});
   await waitFor(() => expect((screen.getByRole("button",{name:"Send"}) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole("button",{name:"Send"}));
   await waitFor(() => expect((screen.getByLabelText("Shot brief") as HTMLTextAreaElement).value).toBe("The object remains still on the table."));
+  expect((screen.getByLabelText("Duration (seconds)") as HTMLInputElement).value).toBe("8");
   expect(write).not.toHaveBeenCalled();
   expect(save).not.toHaveBeenCalled();
   const request = fetcher.mock.calls.find(([url])=>url.endsWith("/assist"));
   expect(JSON.parse(request![1]!.body as string).amendment).toBe("Keep the object stationary.");
+  expect(JSON.parse(request![1]!.body as string).duration_s).toBe(7);
+  fireEvent.change(screen.getByLabelText("Duration (seconds)"),{target:{value:"10"}});
+  expect((screen.getByLabelText("Duration (seconds)") as HTMLInputElement).value).toBe("10");
   fireEvent.click(screen.getByRole("button",{name:"Undo description change"}));
   expect((screen.getByLabelText("Shot brief") as HTMLTextAreaElement).value).toBe(shot.script_beat);
+  expect((screen.getByLabelText("Duration (seconds)") as HTMLInputElement).value).toBe("7");
 });
 it("creates a description from an empty draft without saving an empty brief", async () => {
   const fetcher = vi.fn(async (url: string, _init?: RequestInit) => ({ ok:true, json:async () => url.endsWith("/assist") ? { kind:"draft", reply:"Draft updated.", draft:{

@@ -9,7 +9,8 @@ from .refinement import refine, inputs
 
 
 class Intent(BaseModel):
-    intent: Literal["amend", "discuss", "chat"]
+    intent: Literal["amend", "discuss", "chat", "prompt"]
+    update_brief: bool = False
     include_reference_descriptions: bool = False
     include_adjacent_descriptions: bool
     reply_language: str = Field(min_length=1, max_length=40)
@@ -23,9 +24,13 @@ class Discussion(BaseModel):
 
 ROUTER = """You are a friendly shot-description assistant. Classify the latest request
 by meaning, not exact keywords. Return JSON only with intent,
-include_adjacent_descriptions, include_reference_descriptions, reply_language, and reply. reply_language names the
+include_adjacent_descriptions, include_reference_descriptions, update_brief, reply_language, and reply. reply_language names the
 language of the latest user request (for example English or Chinese).
-intent=amend: explicitly create or change shot content.
+intent=prompt: explicitly write, regenerate or edit the video generation prompt.
+Set update_brief=true only when that prompt request also changes shot action, staging,
+lighting, framing, camera intent or duration. Set false for initial writing, regeneration or
+wording/format-only edits. 'Can you write prompts?' is discuss; 'write my prompt' is prompt.
+intent=amend: explicitly create or change shot content without asking to write its prompt.
 intent=discuss: ask for advice, alternatives, camera ideas or discuss a shot,
 including connections between shots, without requesting a rewrite.
 intent=chat: greeting or unrelated conversation; give a natural short reply in the
@@ -44,7 +49,7 @@ Examples: 'How does this follow the previous shot? Discuss only.' -> discuss, tr
 'Close-up or medium shot here?' -> discuss, false.
 'Change this to a close-up.' -> amend, false. 'Hi' -> chat, false.
 Questions such as 'should we change the camera?' are discussion, not permission
-to rewrite. Do not write video-generation prompts or operate tools.
+to rewrite. Route prompt requests to the host writer; do not write prompts yourself.
 """
 DIRECTOR = """You are a concise, collaborative director for shot descriptions. Discuss
 staging, camera language, pacing and transitions with the user. Reply in their language.
@@ -68,7 +73,9 @@ final pose or frames. Do not copy its action into this shot or override the user
 current request. Do not import its dialogue. The current shot's reference identities
 and construction details must constrain your suggestions; do not invent replacements.
 An idea is not approval.
-Never generate H3 prompts, reference tags or submit video. Keep the reply short,
+The host can write and revise prompts on explicit request using a separate validated
+writer. Explain that capability when asked; do not claim prompts cannot be edited.
+Never generate H3 prompts, reference tags or submit video in discussion. Keep the reply short,
 ordinarily within 150 words. You are independent from the prompt writer.
 """
 
@@ -93,7 +100,7 @@ def adjacent_descriptions(shot):
     return {"previous": description(index - 1), "next": description(index + 1)}
 
 
-async def converse(shot, description, request, expected_version, model, *, title="", suggest_title=False, turns=()):
+async def converse(shot, description, request, expected_version, model, *, title="", suggest_title=False, turns=(), duration_s=None):
     if inputs(shot)["version"] != expected_version:
         raise ValueError("The shot or references changed. Refresh before continuing.")
     decision = Intent.model_validate(_extract_json_payload(await model.complete(
@@ -102,6 +109,10 @@ async def converse(shot, description, request, expected_version, model, *, title
         if not decision.reply.strip():
             raise ValueError("The assistant returned an empty reply. Please retry.")
         return {"kind": "reply", "reply": decision.reply, "context_scope": "General conversation"}
+    if decision.intent == "prompt":
+        return {"kind": "prompt", "reply": "Prompt request prepared. Writing will use the current brief and selected references.",
+            "prompt_request": request, "update_brief": decision.update_brief,
+            "context_scope": "Current brief, saved prompt and selected reference descriptions"}
     references = [{key: ref[key] for key in
         ("picture_index", "role", "name", "description", "binding_notes")}
         for ref in inputs(shot)["references"]]
@@ -113,7 +124,7 @@ async def converse(shot, description, request, expected_version, model, *, title
     if decision.intent == "amend":
         # No conversation history, neighbors or other project content enters editing.
         result = await refine(shot, description, expected_version, model, title=title,
-            suggest_title=suggest_title, amendment=request, description_only=True, reference_descriptions=references, previous_shot_description=previous)
+            suggest_title=suggest_title, amendment=request, description_only=True, reference_descriptions=references, previous_shot_description=previous, duration_s=duration_s)
         check_previous()
         if result["questions"]:
             return {"kind": "reply", "reply": "\n".join(result["questions"]), "context_scope": scope}
@@ -121,6 +132,8 @@ async def converse(shot, description, request, expected_version, model, *, title
             "draft": result, "context_scope": scope}
     payload = {"current_description": description, "request": request, "reply_language": decision.reply_language,
         "previous_shot_description": previous}
+    if duration_s is not None:
+        payload["duration_s"] = duration_s
     if references is not None:
         payload["reference_descriptions"] = references
     exchange = recent_exchange(turns)

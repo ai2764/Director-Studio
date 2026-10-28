@@ -37,7 +37,7 @@ def test_harness_never_reports_uncreated_layout_job(tmp_projects_dir):
     })
     assert "已提交生成" not in result.reply
     assert "job_000000000001" not in result.reply
-    assert "不存在" in result.reply
+    assert "does not exist" in result.reply
 
     another = BackendTurn(project.id, "清理地面的纸片", None, None)
     result = another.finish({

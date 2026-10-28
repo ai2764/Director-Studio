@@ -1,6 +1,8 @@
-export type StudioIconName = "library" | "actors" | "scenes" | "props" | "layouts" | "voices" | "upload" | "refresh" | "edit" | "delete" | "search" | "file" | "close" | "check" | "plus";
+export type StudioIconName = "library" | "actors" | "scenes" | "props" | "layouts" | "voices" | "upload" | "refresh" | "edit" | "delete" | "search" | "file" | "close" | "check" | "plus" | "wand" | "chat";
 
 const paths: Record<StudioIconName, string[]> = {
+  wand: ["m4 17 11-11 4 4L8 21H4v-4Z", "m12 9 4 4", "M5 3v4", "M3 5h4", "M18 2v4", "M16 4h4", "M20 18v4", "M18 20h4"],
+  chat: ["M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2V11.5a9.5 9.5 0 0 1 19 0Z", "M7 10h10", "M7 14h6"],
   close: ["m6 6 12 12", "M18 6 6 18"],
   check: ["m5 12 4 4L19 6"],
   plus: ["M12 5v14", "M5 12h14"],
