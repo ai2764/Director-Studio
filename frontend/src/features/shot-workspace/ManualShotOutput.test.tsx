@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import {render,waitFor,cleanup,screen,fireEvent} from "@testing-library/react";
 import {afterEach,it,expect,vi} from "vitest";
+import {createRef} from "react";
 import {ManualShotOutput} from "./ManualShotOutput";
 import type {Shot} from "../../shared/api/types";
 import {getDirectorChatSession} from "./api";
@@ -36,4 +37,24 @@ it("loads and saves a project-wide size selection",async()=>{
  fireEvent.change(size,{target:{value:"portrait-720"}});
  await waitFor(()=>expect(size.value).toBe("portrait-720"));
  expect(fetcher).toHaveBeenCalledWith("/api/shot-workspace/projects/p1/resolution",expect.objectContaining({method:"PUT",body:JSON.stringify({preset:"portrait-720"})}));
+});
+
+it("shows source matching and omits project dimensions in chained continuation generation",async()=>{
+ const shot={id:"s2",project_id:"p1",title:"Continuation",status:"draft",refs:[{}],video_context:{mode:"previous_shot",source_shot_id:"s1"},prompt_sections:{subject_definitions:"A",summary:"B",retention_analysis:"C",detailed_description:"D",overall_soundscape:"E",non_diegetic_music:"F"}} as Shot;
+ const fetcher=vi.fn(async()=>({ok:true,json:async()=>({preset:"landscape-1080"})}));
+ vi.stubGlobal("fetch",fetcher);
+ vi.mocked(getH3ProviderStatus).mockResolvedValue({default_provider:"local",minimax_configured:false} as never);
+ vi.mocked(getLocalH3Resolutions).mockResolvedValue({presets:[{id:"landscape-1080",label:"Landscape 1080",width:1920,height:1088}]} as never);
+ vi.mocked(submitShot).mockResolvedValue(shot);
+ const ref=createRef<{generate:(shot:Shot)=>Promise<void>}>();
+ render(<ManualShotOutput shot={shot} disabled={false} onSaved={vi.fn()} generationRef={ref}/>);
+ await waitFor(()=>expect(fetcher).toHaveBeenCalledOnce());
+ const size=screen.getByLabelText("Video size") as HTMLSelectElement;
+ expect(size.value).toBe("auto");
+ expect(size.selectedOptions[0].textContent).toBe("Match source video");
+ expect(size.disabled).toBe(true);
+ fetcher.mockClear();
+ await ref.current!.generate(shot);
+ expect(fetcher).not.toHaveBeenCalled();
+ expect(submitShot).toHaveBeenCalledExactlyOnceWith("s2","local",undefined);
 });

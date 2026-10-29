@@ -62,3 +62,17 @@ def test_off_status_has_no_resolution_constraint(monkeypatch, tmp_path):
     status = api.get_shot_video_context(shot.id)
     assert status["resolution"] is None
     assert status["mode"] == "off"
+
+
+def test_source_video_size_overrides_different_workspace_default(monkeypatch, tmp_path):
+    from app.api import projects as api
+    from app.core.projects.store import load_project, save_project
+    project, shot, original = _configured(monkeypatch, tmp_path)
+    saved = load_project(project.id)
+    saved.authoring_mode = "shot_workspace"
+    saved.workspace_default_resolution = "landscape-1080"
+    save_project(saved)
+    status = api.get_shot_video_context(shot.id)
+    assert status["resolution"] == {"width":480,"height":864}
+    assert status["source_job_id"] == original.id
+    assert load_project(project.id).workspace_default_resolution == "landscape-1080"

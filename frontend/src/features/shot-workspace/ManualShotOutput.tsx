@@ -130,7 +130,7 @@ export function ManualShotOutput({ shot, disabled, onSaved, check, promptWriting
     try {
       const selectedProvider = options?.provider || provider;
       let selectedResolution = options?.resolution || resolution;
-      if (!options && source) {
+      if (!options && source && target.video_context?.mode !== "previous_shot") {
         const response = await fetch(sizeUrl);
         if (!response.ok) throw new Error("Project size could not be loaded.");
         selectedResolution = (await response.json() as {preset:string}).preset;
@@ -169,7 +169,7 @@ export function ManualShotOutput({ shot, disabled, onSaved, check, promptWriting
     <label>Provider<select aria-label="Provider" value={provider} disabled={busy || running} onChange={(e) => setProvider(e.target.value as H3Provider)}>
       <option value="local">ComfyUI</option>{minimax && <option value="minimax">MiniMax</option>}
     </select></label>
-    {provider === "local" && <label>Project size<select aria-label="Video size" value={resolution} disabled={busy || running || sizeLoading || shot.video_context?.mode === "previous_shot"} onChange={(e) => void changeSize(e.target.value)}>
+    {provider === "local" && <label>Project size<select aria-label="Video size" value={shot.video_context?.mode === "previous_shot" ? "auto" : resolution} disabled={busy || running || sizeLoading || shot.video_context?.mode === "previous_shot"} onChange={(e) => void changeSize(e.target.value)}>
       <option value="auto">{shot.video_context?.mode === "previous_shot" ? "Match source video" : sizeLoading ? "Loading project size…" : "Project default"}</option>
       {resolutions.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
     </select></label>}
