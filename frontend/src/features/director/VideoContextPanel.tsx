@@ -5,6 +5,7 @@ import { VideoDependencyIndicator } from "./VideoDependencyIndicator";
 import {
   getShot,
   getVideoJob,
+  getShotVideoGenerations,
   saveVideoContext,
   uploadVideoContext,
   type VideoContextSave,
@@ -129,7 +130,13 @@ export function VideoContextPanel({
     let cancelled = false;
     void (async () => {
       const loaded: VideoJobRecord[] = [];
+      try {
+        loaded.push(...(await getShotVideoGenerations(previous.id) || []));
+      } catch {
+        // Preserve known versions if the history endpoint is temporarily unavailable.
+      }
       for (const id of ids) {
+        if (loaded.some(job => job.id === id)) continue;
         try {
           const job = await getVideoJob(id);
           if (job) loaded.push(job);

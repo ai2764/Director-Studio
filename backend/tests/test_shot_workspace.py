@@ -1007,3 +1007,16 @@ def test_project_size_seeds_from_first_shot_video(board,monkeypatch):
     assert resolutions.default_resolution(project) == "landscape-720"
     project.workspace_default_resolution = "portrait-480"
     assert resolutions.default_resolution(project) == "portrait-480"
+
+
+def test_speech_protocol_supplies_exact_audio_tags_and_id_placeholders():
+    from types import SimpleNamespace
+    from app.shot_workspace.writer import speech_protocol
+    shot=SimpleNamespace(dialogue_lines=[SimpleNamespace(line_id="line_a",speaker_name="Guide",language="English"),
+        SimpleNamespace(line_id="line_b",speaker_name="Visitor",language="English")])
+    protocol=speech_protocol(shot,[{"speaker":"Guide","audio_index":2}])
+    assert protocol["required_audio_tags"] == ["<Audio 2>"]
+    assert "Guide: use <Audio 2>" in protocol["subject_definitions_voice_bindings"][0]
+    assert [item["placeholder"] for item in protocol["detailed_description_speech_sequence"]] == ["{{speech:line_a}}","{{speech:line_b}}"]
+    assert "Never quote" in protocol["section_rules"]["summary"]
+    assert "Never repeat dialogue" in protocol["section_rules"]["overall_soundscape"]

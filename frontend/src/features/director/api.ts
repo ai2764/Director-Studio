@@ -570,3 +570,10 @@ export async function setDirectorModel(
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
 }
+
+
+export async function getShotVideoGenerations(shotId: string): Promise<VideoJobRecord[]> {
+  const response = await fetch(`/api/shots/${encodeURIComponent(shotId)}/video-generations`, {cache:"no-store"});
+  if (!response.ok) throw new Error(await parseError(response));
+  return response.json();
+}

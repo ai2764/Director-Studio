@@ -34,6 +34,28 @@ If the brief asks for speech but supplies no cues, do not fabricate spoken words
 """
 
 
+def speech_protocol(shot, voices):
+    """Concrete placement scaffold, built from saved IDs rather than copied speech."""
+    return {
+        "required_audio_tags": [f"<Audio {voice['audio_index']}>" for voice in voices],
+        "subject_definitions_voice_bindings": [
+            f"{voice['speaker']}: use <Audio {voice['audio_index']}> as this speaker's voice identity only."
+            for voice in voices],
+        "detailed_description_speech_sequence": [
+            {"speaker":line.speaker_name, "language":line.language,
+             "placeholder":"{{speech:" + line.line_id + "}}"}
+            for line in shot.dialogue_lines or []],
+        "section_rules": {
+            "subject_definitions":"Define identities and include each exact Audio binding above. No spoken words.",
+            "summary":"Describe the visible action only. Never quote, repeat or paraphrase dialogue.",
+            "retention_analysis":"Describe appearance and continuity, not spoken lines.",
+            "detailed_description":"Place every supplied speech placeholder once, in order, beside its named speaker's delivery. Do not type the spoken words yourself.",
+            "overall_soundscape":"Ambience, sound effects and vocal delivery only. Never repeat dialogue.",
+            "non_diegetic_music":"Music direction only, or None. Never repeat dialogue.",
+        },
+    }
+
+
 async def write_prompt(project_id, shot_id, *, model=None, revision_request=""):
     project = load_project(project_id)
     shot = load_shot(project_id, shot_id)
@@ -66,8 +88,22 @@ async def write_prompt(project_id, shot_id, *, model=None, revision_request=""):
         payload["prompt_edit"] = {"request": revision_request,
             "previous_prompt": shot.prompt_sections.model_dump(mode="json"),
             "instruction": "Apply the requested prompt edit and return all six complete sections. Preserve unrelated valid prompt details. The saved brief, dialogue, reference bindings and continuation remain authoritative; never invent speech or change bindings/settings based on this request."}
+    if shot.dialogue_lines or captured["voices"]:
+        payload["speech_protocol"] = speech_protocol(shot, captured["voices"])
     schema = {"type": "object", "properties": {"prompt_sections": PromptSections.model_json_schema()}, "required": ["prompt_sections"], "additionalProperties": False}
     system = H3_PROMPT_INSTRUCTIONS + INSTRUCTIONS + (WRITER_CONTRACT if shot.dialogue_lines else "")
+    if "speech_protocol" in payload:
+        system += """
+SPEECH PLACEMENT TEMPLATE: Follow speech_protocol for this shot. Copy each supplied
+subject_definitions_voice_bindings entry into subject_definitions, alongside the
+matching identity. These are required Audio bindings, not optional metadata.
+Use the detailed_description_speech_sequence placeholders in source order. The
+backend substitutes exact authored words. Do not copy literal speech into summary,
+subject_definitions, retention_analysis, overall_soundscape or non_diegetic_music.
+Even a very short spoken phrase must not occur again in those sections. Describe
+a speaker's reaction or delivery there without quoting their words. Voice samples
+control timbre/identity only and never introduce additional spoken text.
+"""
     raw = await (model or WorkspaceModel()).complete(system, payload, schema=schema)
     def validate_candidate(raw):
         draft = None

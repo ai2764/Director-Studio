@@ -2054,6 +2054,15 @@ async def approve_shot_endpoint(shot_id: str) -> Shot:
     return shot
 
 
+@router.get("/shots/{shot_id}/video-generations")
+def get_shot_video_generations(shot_id: str):
+    """All H3 generations, including older jobs absent from shot metadata."""
+    from ..core.media.clip_generations import list_shot_h3_generations
+    from ..pipelines.h3_ref2va.router import _to_response
+    shot = _find_shot(shot_id)
+    return [_to_response(job) for job in reversed(list_shot_h3_generations(shot.project_id, shot.id))]
+
+
 @router.get("/shots/{shot_id}/video-context")
 def get_shot_video_context(shot_id: str) -> dict:
     """Expose saved continuation and its source-size constraint without host paths."""
