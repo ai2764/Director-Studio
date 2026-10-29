@@ -3,6 +3,7 @@ import type { RefRole, Shot } from "../../shared/api/types";
 import { listLibraryAssets, type LibraryAsset, type LibraryKind } from "../library/api";
 import { replaceShotMaterials, type ShotMaterialSelection } from "./api";
 import { StudioIcon } from "../../shared/components/StudioIcon";
+import { useLibraryRevision } from "../library/libraryChanges";
 import "./referenceDesign.css";
 
 const KINDS: LibraryKind[] = ["actors", "costumes", "scenes", "props", "layouts"];
@@ -23,14 +24,16 @@ export function ShotMaterialEditor({ shot, onClose, onOpenImage, onSaved }: {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const {revision, refresh} = useLibraryRevision();
   useEffect(() => {
     let current = true;
+    setLoading(true); setError("");
     void Promise.all(KINDS.map((kind) => listLibraryAssets(kind, shot.project_id))).then((groups) => {
       if (current) setAssets(groups.flat());
     }).catch((cause) => { if (current) setError(String(cause)); })
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
-  }, [shot.project_id]);
+  }, [shot.project_id, revision]);
   async function save(write: boolean) {
     setBusy(true); setError("");
     try {
@@ -60,7 +63,8 @@ export function ShotMaterialEditor({ shot, onClose, onOpenImage, onSaved }: {
         </article>; })}
     </section></details>
     <div className="ref-library-toolbar"><label className="ref-search"><StudioIcon name="search" /><input type="search" aria-label="Search references" placeholder="Search references" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-    <select aria-label="Reference category" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="all">All images</option>{KINDS.map((kind) => <option key={kind} value={kind}>{LABELS[kind]}</option>)}</select></div>
+    <div className="ref-library-controls"><select aria-label="Reference category" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="all">All images</option>{KINDS.map((kind) => <option key={kind} value={kind}>{LABELS[kind]}</option>)}</select>
+      <button type="button" className="mode-chip" aria-label="Refresh reference library" title="Refresh library" disabled={loading || busy} onClick={refresh}><StudioIcon name="refresh" /></button></div></div>
     {loading && <p role="status" className="ref-empty">Loading library…</p>}
     {!loading && !assets.some((asset) => (filter === "all" || asset.kind === filter) && `${asset.name} ${asset.notes}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()) && Object.keys(asset.files).some((key) => /\.(png|jpe?g|webp|gif)$/i.test(asset.files[key] || "") && asset.urls[key])) && <p className="ref-empty">No matching images. Import images in Assets, or try another search.</p>}
     <div className="workspace-reference-library">{assets.filter((asset) => (filter === "all" || asset.kind === filter) && `${asset.name} ${asset.notes}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).flatMap((asset) => Object.keys(asset.files)

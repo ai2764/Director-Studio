@@ -68,7 +68,10 @@ Return JSON with reply and proposed_change: a short,
 self-contained edit instruction the user can choose to apply. Include it when you
 give a concrete recommendation; use an empty string if there is no proposal.
 previous_shot_description is the immediately preceding shot's authored description.
-Use it for continuity only when relevant. It is not evidence of the generated video's
+It is lower-priority background, not a template for this shot. Only use it for an
+explicitly requested transition. The latest request and CURRENT editable description
+are authoritative; do not undo new details to match the earlier shot. A change in
+action, setting or framing between shots is allowed. It is not evidence of the generated video's
 final pose or frames. Do not copy its action into this shot or override the user's
 current request. Do not import its dialogue. The current shot's reference identities
 and construction details must constrain your suggestions; do not invent replacements.

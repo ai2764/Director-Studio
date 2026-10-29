@@ -183,6 +183,7 @@ export function LibraryPage({
             const duration = Number(a.meta?.duration_s);
             return (
               <article key={a.id} className={`library-card ${isVoice ? "voice-card" : ""}`}>
+                <div className="library-card-tools">
                 <button
                   type="button"
                   className="library-card-edit"
@@ -209,6 +210,7 @@ export function LibraryPage({
                 >
                   <StudioIcon name="delete" />
                 </button>
+                </div>
                 {isVoice ? (
                   <div className="library-card-open voice-card-open">
                     <div className="voice-signal-rail" aria-hidden="true">

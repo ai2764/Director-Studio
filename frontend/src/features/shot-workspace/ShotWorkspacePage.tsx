@@ -12,11 +12,13 @@ import { DescriptionAssistant, type AssistantTurn, type AssistantReply } from ".
 import { VoiceReferences } from "./VoiceReferences";
 import { WorkspaceMascot } from "./WorkspaceMascot";
 import { StudioIcon } from "../../shared/components/StudioIcon";
+import { WorkspaceModelPicker } from "./WorkspaceModelPicker";
+import { TimingNote, useOperationTimings } from "./OperationTimings";
 import "./manualShots.css";
 import "./workspaceDesign.css";
 
-async function json<T>(url: string, method = "GET", body?: unknown): Promise<T> {
-  const response = await fetch(url, { method, ...(body === undefined ? {} : {
+async function json<T>(url: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(url, { method, signal, ...(body === undefined ? {} : {
     headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   }) });
   if (!response.ok) throw new Error(await parseError(response));
@@ -39,13 +41,16 @@ function ReferencePreview({ item }: { item: ShotRef }) {
     <img src={url} alt={`Picture ${item.picture_index}`} onError={() => setIndex((current) => current + 1)} />
   </a> : <span className="manual-ref-preview">Preview unavailable</span>;
 }
-export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelete, desktopOutput, writing, writeElapsed, onCancel }: {
+export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelete, desktopOutput, writing, writeElapsed, onCancel, onAssistingChange }: {
   shot: Shot; index: number; shots: Shot[]; busy: boolean;
-  onSaved: (shot: Shot) => void; onWrite: (shot: Shot, revisionRequest?: string) => Promise<void>;
+  onSaved: (shot: Shot) => void; onWrite: (shot: Shot, revisionRequest?: string) => Promise<Shot | void>;
   onDelete: (shot: Shot) => Promise<void>;
   desktopOutput: boolean;
   writing: boolean; writeElapsed: number; onCancel: () => Promise<void>;
+  onAssistingChange?: (busy:boolean) => void;
 }) {
+  const generationRef = useRef<{generate: (source: Shot) => Promise<void>; prepare?: () => void; clear?: () => void}>(null);
+  const chainPending = useRef(false);
   const [description, setDescription] = useState(shot.script_beat);
   const [title, setTitle] = useState(shot.title);
   const [duration, setDuration] = useState(shot.duration_s);
@@ -56,6 +61,8 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
   const [original, setOriginal] = useState(shot.script_beat);
   const [version, setVersion] = useState("");
   const [working, setWorking] = useState("");
+  const timings = useOperationTimings(shot.id, !!working || writing);
+  const latestTiming = (stage:string) => [...timings].reverse().find(entry=>entry.stage===stage);
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     setElapsed(0);
@@ -114,28 +121,50 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     });
     const input = await json<{ version: string }>(`/api/shot-workspace/shots/${shot.id}/description`);
     setVersion(input.version);
+    // Adopt the server's saved brief, including assistant-generated amendments.
+    // Otherwise old local fields incorrectly make a freshly written prompt stale.
+    setTitle(saved.title); setDescription(saved.script_beat); setDuration(saved.duration_s);
+    setDialogue(formatDialogue(saved));
+    setCamera({shot_type:saved.shot_type || "",camera_angle:saved.camera_angle || "",
+      camera_motion:saved.camera_motion || "",composition:saved.composition || ""});
     onSaved(saved);
     return { saved, version: input.version };
   }
-  async function act(action: "save" | "write", expectedVersion?: string) {
-    setWorking(action === "write" ? "Write prompt" : "Saving brief");
+  async function act(action: "save" | "write" | "write-generate", expectedVersion?: string) {
+    if (chainPending.current) return;
+    chainPending.current = true;
+    setWorking(action !== "save" ? "Write prompt" : "Saving brief");
     setError(""); setMessage("");
     try {
-      if (action === "write" && !description.trim()) throw new Error("Enter a shot brief first.");
+      if (action !== "save" && !description.trim()) throw new Error("Enter a shot brief first.");
       const result = await save(expectedVersion);
-      if (action === "write") await onWrite(result.saved);
+      if (action !== "save") {
+        if (action === "write-generate") generationRef.current?.prepare?.();
+        const written = await onWrite(result.saved);
+        if (action === "write-generate") {
+          if (!written) throw new Error("Prompt writing was interrupted. Video generation was not started.");
+          setWorking("Starting video");
+          if (!generationRef.current) throw new Error("Video output is unavailable.");
+          await generationRef.current.generate(written);
+        }
+      }
       else setMessage("Shot brief saved.");
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setWorking(""); }
+    } catch (cause) { generationRef.current?.clear?.(); setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { chainPending.current = false; setWorking(""); }
   }
 
-  async function assistDescription(request: string, recentTurns: AssistantTurn[]): Promise<AssistantReply> {
+  async function assistDescription(request: string, recentTurns: AssistantTurn[], signal?: AbortSignal): Promise<AssistantReply> {
+    let promptStarted = false;
+    const abortPrompt = () => { if (promptStarted) void onCancel().catch((cause) => setError(String(cause))); };
+    signal?.addEventListener("abort", abortPrompt);
+    onAssistingChange?.(true);
     setWorking("Thinking about shot");
     setError(""); setMessage("");
     try {
-      const result = await json<AssistantReply & {kind: "reply" | "draft" | "prompt"; draft?: Suggestion; prompt_request?: string; update_brief?: boolean}>(`/api/shot-workspace/shots/${shot.id}/description/assist`, "POST", {
+      const result = await json<AssistantReply & {kind: "reply" | "draft" | "updated" | "prompt"; saved_shot?: Shot; version?: string; draft?: Suggestion; prompt_request?: string; update_brief?: boolean}>(`/api/shot-workspace/shots/${shot.id}/description/assist`, "POST", {
         description, amendment: request, title, duration_s: duration, suggest_title: titleNeeded, expected_version: version, recent_turns: recentTurns,
-      });
+      }, signal);
+      signal?.throwIfAborted();
       if (result.kind === "prompt") {
         setWorking("Write prompt");
         let saved = await save(version);
@@ -147,8 +176,23 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
           if (draft.questions.length) throw new Error(draft.questions.join("\n"));
           saved = await save(saved.version, draft);
         }
+        signal?.throwIfAborted();
+        promptStarted = true;
         await onWrite(saved.saved, result.prompt_request || request);
         return {reply: "Prompt saved. Review the six sections before generating.", context_scope: result.context_scope};
+      }
+      if (result.kind === "updated") {
+        if (!result.saved_shot || !result.version) throw new Error("The saved description could not be loaded. Refresh this shot.");
+        const saved = result.saved_shot;
+        setBeforeAmendment({ title, description, duration, dialogue, camera: { ...camera } });
+        setOriginal(description); setVersion(result.version);
+        setTitle(saved.title); setDescription(saved.script_beat); setDuration(saved.duration_s);
+        setDialogue(formatDialogue(saved));
+        setCamera({shot_type:saved.shot_type || "",camera_angle:saved.camera_angle || "",
+          camera_motion:saved.camera_motion || "",composition:saved.composition || ""});
+        onSaved(saved);
+        setMessage("Description updated and saved.");
+        return {reply: `${result.reply}\n\nDuration: ${saved.duration_s}s\n\n${saved.script_beat}`, context_scope: result.context_scope};
       }
       if (result.kind !== "draft" || !result.draft) return result;
       const suggestion = result.draft;
@@ -160,7 +204,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
       setCamera({shot_type:suggestion.shot_type,camera_angle:suggestion.camera_angle,camera_motion:suggestion.camera_motion,composition:suggestion.composition});
       setMessage("Description draft updated. Review it, then save or write the prompt.");
       return {reply: `${result.reply}\n\nSuggested duration: ${suggestion.duration_s}s\n\n${suggestion.description}`, context_scope: result.context_scope};
-    } finally { setWorking(""); }
+    } finally { signal?.removeEventListener("abort", abortPrompt); setWorking(""); onAssistingChange?.(false); }
   }
   function undoDescriptionChange() {
     if (!beforeAmendment) return;
@@ -196,7 +240,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     </div>
     <div className="manual-brief-composer">
       <div className="manual-description-label manual-brief-composer-header"><label htmlFor={`description-${shot.id}`}>Shot brief</label>
-        <button type="button" className="mode-chip workspace-refine-button" aria-label="Refine" title="Refine shot brief" disabled={disabled || !version || !description.trim()}
+        <button type="button" className={`mode-chip workspace-refine-button${working === "Thinking about shot" ? " is-running" : ""}`} aria-label="Refine" title="Refine shot brief" disabled={disabled || !version || !description.trim()}
           onClick={() => { void assistDescription("Refine the current shot description. Preserve its intended action and explicit dialogue, clarify the framing and camera movement, and fill the camera fields. Return an updated description draft, not a discussion or prompt.", [])
             .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }}>
           <StudioIcon name="wand" size={20} /></button>
@@ -206,6 +250,8 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
       onChange={(event) => { setDescription(event.target.value); setOriginal(event.target.value); setMessage("");
         setCamera({ shot_type: "", camera_angle: "", camera_motion: "", composition: "" }); }} />
       <div className="manual-brief-composer-footer">
+        <button type="button" className="mode-chip" disabled={disabled || !version} onClick={() => void act("save")}>Save</button>
+        <div className="workspace-brief-timings"><TimingNote entry={latestTiming("refinement")} /><TimingNote entry={latestTiming("assistant")} /></div>
         <button type="button" className="mode-chip" aria-label="Clear shot brief" disabled={disabled || !description}
           onClick={() => { setBeforeAmendment({ title, description, duration, dialogue, camera: { ...camera } });
             setError(""); setDescription(""); setOriginal(""); setDialogue(""); setCamera({ shot_type: "", camera_angle: "", camera_motion: "", composition: "" });
@@ -248,18 +294,19 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     }} />
     <ManualContinuity shot={shot} shots={shots} disabled={disabled} onSaved={onSaved} />
     </section>
-    <strong className="manual-prompt-label">Prompt</strong>
+    <div className="manual-prompt-heading"><strong className="manual-prompt-label">Prompt</strong><TimingNote entry={latestTiming("prompt")} /></div>
     <small role="status" aria-label="Prompt status" className={!promptWriting && effectiveCheck?.stale ? "manual-prompt-warning" : undefined}>{promptStatus}</small>
     {dirty && !promptWriting && <small role="status">Unsaved shot changes. Save and rewrite the prompt before generating.</small>}
     {!promptWriting && (promptCheck?.stale || hasPrompt) && promptCheck?.errors?.filter((item) => item.code !== "prompt_stale").map((item) => <p className="manual-prompt-warning" role="alert" key={item.code + item.message}>{item.message}</p>)}
     {!promptWriting && promptCheck?.warnings?.map((item) => <small key={item.code}>{item.message}</small>)}
     {checkError && <p role="alert">Prompt check unavailable: {checkError}</p>}
     <div className="manual-shot-actions">
-      <button className="btn secondary" disabled={disabled || !version} onClick={() => void act("save")}>Save</button>
-      <button className="btn primary" disabled={writing ? false : disabled || !version || !description.trim() || !shot.refs.length}
+      <button className={`btn primary${promptWriting ? " is-running" : ""}`} disabled={writing ? false : disabled || !version || !description.trim() || !shot.refs.length}
         aria-label={writing ? "Cancel prompt writing" : "Write prompt"}
         onClick={() => { if (writing) void onCancel().catch((cause) => setError(String(cause))); else void act("write"); }}>
         {!writing && <WorkspaceMascot />}<span>{writing ? `Cancel · ${writeElapsed}s` : working === "Write prompt" ? `Preparing prompt · ${elapsed}s` : "Write prompt"}</span></button>
+      <button type="button" className="btn secondary" disabled={disabled || writing || !version || !description.trim() || !shot.refs.length}
+        onClick={() => void act("write-generate")}>Write prompt &amp; generate</button>
     </div>
     {Object.values(shot.prompt_sections).some(Boolean) ? <details className="manual-generated-prompt" aria-label="Prompt contents" open={desktopOutput}><summary>Saved prompt</summary><small className="manual-saved-prompt-label">{effectiveCheck?.stale ? "Previously saved prompt · Out of date. Failed writes do not replace this text." : "Saved prompt · Failed writes do not replace this text."}</small>{PROMPT_SECTION_KEYS.map(({ key, label }) => shot.prompt_sections[key]
         ? <label key={key}>{label}<textarea aria-label={label} readOnly rows={4} value={shot.prompt_sections[key]} /></label> : null)}
@@ -273,9 +320,9 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
           if (write) void act("write", input.version);
         }).catch((cause) => setError(String(cause)));
       }} />}
-    <DescriptionAssistant shotId={shot.id} description={description} disabled={disabled} ready={!!version}
+    <DescriptionAssistant shotId={shot.id} description={description} savedDescription={shot.script_beat} disabled={disabled} ready={!!version}
       onRequest={assistDescription} onUndo={undoDescriptionChange} canUndo={!!beforeAmendment} />
-  </article><ManualShotOutput shot={shot} disabled={disabled || dirty || checkPending || !!checkError}
+  </article><ManualShotOutput generationRef={generationRef} shot={shot} disabled={disabled || dirty || checkPending || !!checkError}
     check={effectiveCheck} promptWriting={promptWriting} onSaved={onSaved} /></div>;
 }
 
@@ -285,6 +332,8 @@ export function ShotWorkspacePage({ desktopOutput = false }: { desktopOutput?: b
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [writing, setWriting] = useState(false);
+  const [assisting, setAssisting] = useState(false);
+  const [modelSwitching, setModelSwitching] = useState(false);
   const [writeStarted, setWriteStarted] = useState<number | null>(null);
   const [progress, setProgress] = useState<AgentProgress | null>(null);
   const [error, setError] = useState("");
@@ -298,6 +347,8 @@ export function ShotWorkspacePage({ desktopOutput = false }: { desktopOutput?: b
     const id = ++epoch.current;
     setShots([]); setSelected(null); setProgress(null); setError(""); setRemovedShot(null); setWriteStarted(null);
     if (!projectId) return;
+    let remembered: string | null = null;
+    try { remembered = localStorage.getItem(`ds.shotWorkspace.selectedShot.${projectId}`); } catch { /* Storage may be unavailable. */ }
     let timer: ReturnType<typeof setTimeout>;
     async function refresh() {
       try {
@@ -306,13 +357,18 @@ export function ShotWorkspacePage({ desktopOutput = false }: { desktopOutput?: b
         setShots(detail.shots); setWriting(session.active);
         if (session.error) setError(session.error);
         if (session.progress && (session.active || session.progress.action_id)) setProgress(session.progress);
-        setSelected((current) => current && detail.shots.some((s) => s.id === current) ? current : detail.shots[0]?.id ?? null);
+        setSelected((current) => [current, remembered].find((candidate) => candidate && detail.shots.some((s) => s.id === candidate)) ?? detail.shots[0]?.id ?? null);
         if (session.active) timer = setTimeout(refresh, 1200);
       } catch (cause) { if (epoch.current === id) setError(String(cause)); }
     }
     void refresh();
     return () => { epoch.current++; clearTimeout(timer); };
   }, [projectId]);
+  useEffect(() => {
+    // Never store the outgoing project's selection while the next project loads.
+    if (!projectId || !selected || !shots.some((shot) => shot.id === selected && shot.project_id === projectId)) return;
+    try { localStorage.setItem(`ds.shotWorkspace.selectedShot.${projectId}`, selected); } catch { /* Keep editing without storage. */ }
+  }, [projectId, selected, shots]);
   useEffect(() => {
     if (!writing) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -360,7 +416,13 @@ export function ShotWorkspacePage({ desktopOutput = false }: { desktopOutput?: b
       }, [], undefined, undefined, undefined, { shot_id: shot.id, choice: "skip",
         revision_request: revisionRequest,
         action_id: crypto.randomUUID?.() ?? `write-${Date.now()}-${Math.random().toString(36).slice(2)}` });
-      if (epoch.current === id) { setShots(result.shots); setNotice(result.reply); }
+      if (epoch.current === id) {
+        setShots(result.shots); setNotice(result.reply);
+        const written = result.shots.find((item) => item.id === shot.id);
+        if (!written) throw new Error("The written shot could not be found.");
+        return written;
+      }
+      throw new Error("The project changed before prompt writing finished.");
     } catch (cause) { if (epoch.current === id) setError(String(cause)); throw cause; }
     finally { if (epoch.current === id) setWriting(false); }
   }
@@ -375,16 +437,17 @@ export function ShotWorkspacePage({ desktopOutput = false }: { desktopOutput?: b
   }
   return <main className={`workspace manual-shots${desktopOutput ? " manual-shots-desktop" : ""}`}>
     <header className="manual-shots-header"><div className="workspace-heading"><strong>Shot workspace</strong><small>Shape the shot. Bring it to life.</small></div>
-      <button type="button" className="manual-add-shot" aria-label="Add shot" disabled={creating || writing} onClick={() => void add()}>＋</button></header>
+      <div className="workspace-header-tools"><WorkspaceModelPicker disabled={writing || creating || assisting} onSwitching={setModelSwitching} />
+      <button type="button" className="manual-add-shot" aria-label="Add shot" disabled={creating || writing || assisting || modelSwitching} onClick={() => void add()}>＋</button></div></header>
     <nav className="manual-shot-nav" aria-label="Shots">{shots.map((shot, index) => <button key={shot.id} className="mode-chip"
       title={shot.title || `Shot ${index + 1}`} aria-label={`Shot ${index + 1}`}
-      aria-current={current?.id === shot.id ? "page" : undefined} onClick={() => setSelected(shot.id)}>{index + 1}</button>)}</nav>
+      aria-current={current?.id === shot.id ? "page" : undefined} disabled={assisting || modelSwitching} onClick={() => setSelected(shot.id)}>{index + 1}</button>)}</nav>
     {error && <p className="banner error workspace-task-error" role="alert">{error}</p>}
     {removedShot && <div className="manual-undo" role="status">Shot deleted
       <button className="mode-chip" disabled={creating || writing} onClick={() => void undoRemove()}>Undo delete</button></div>}
     {notice && <p className="manual-task-status">{notice}</p>}
     {current ? <ShotEditor key={current.id} shot={current} shots={shots} index={shots.indexOf(current)}
-      busy={writing || creating} onSaved={update} onWrite={write} onDelete={remove} desktopOutput={desktopOutput}
+      busy={writing || creating || modelSwitching} onSaved={update} onWrite={write} onDelete={remove} desktopOutput={desktopOutput} onAssistingChange={setAssisting}
       writing={writing} writeElapsed={elapsed} onCancel={cancelWriting} /> : <p className="empty-copy">Click + to add a shot, write its brief and link references.</p>}
   </main>;
 }

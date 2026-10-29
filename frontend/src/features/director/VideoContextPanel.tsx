@@ -74,11 +74,13 @@ export function VideoContextPanel({
   shot,
   shots,
   expanded = false,
+  showDisableControl = true,
   onShotUpdated,
 }: {
   shot: Shot;
   shots: Shot[];
   expanded?: boolean;
+  showDisableControl?: boolean;
   onShotUpdated?: (shot: Shot) => void;
 }) {
   const context = shot.video_context;
@@ -342,7 +344,7 @@ export function VideoContextPanel({
               Carry source audio
             </label>
           ) : null}
-          <label>
+          {context.mode === "external_upload" && <label>
             Upload continuation video
             <input
               type="file"
@@ -355,8 +357,8 @@ export function VideoContextPanel({
                 void onUpload(file);
               }}
             />
-          </label>
-          {active ? (
+          </label>}
+          {active && showDisableControl ? (
             <button type="button" disabled={busy} onClick={() => void commit({ mode: "off" })}>
               Turn continuation off
             </button>

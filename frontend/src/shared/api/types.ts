@@ -217,6 +217,7 @@ export interface Project {
   created_at: string;
   updated_at: string;
   shot_ids: string[];
+  workspace_default_resolution?: string | null;
   music_master?: ProjectMusicMaster | null;
   asset_coverage_review?: AssetCoverageReview | null;
 }

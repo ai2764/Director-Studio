@@ -1,5 +1,7 @@
 """Selected Library descriptions plus byte hashes. Never decodes images for the LLM."""
 import hashlib
+import re
+from pathlib import PurePosixPath
 from ..core.library.store import load_asset
 from ..core.library.images import resolve_asset_image
 from ..core.projects.dialogue import digest
@@ -7,6 +9,29 @@ from ..core.projects.store import load_project, load_shot
 from ..core.projects.video_context import video_context_prompt_signature, video_context_status
 
 KINDS = {"actor": "actors", "costume": "costumes", "scene": "scenes", "prop": "props", "layout_ref_frame": "layouts"}
+
+
+def infer_voice_speaker(shot, asset):
+    """Use a unique named match, never cast an unnamed sample by elimination."""
+    names = [line.speaker_name for line in shot.dialogue_lines or []]
+    for ref in shot.refs:
+        if ref.role.value == "actor":
+            actor = load_asset("actors", ref.asset_id)
+            if actor:
+                names.append(actor.name)
+    def normalize(value):
+        return re.sub(r"[\W_]+", " ", str(value).casefold()).strip()
+    filename = PurePosixPath(str((asset.meta or {}).get("source_filename", "")).replace("\\", "/")).stem
+    labels = [normalize(asset.name), normalize(filename)]
+    matches = {}
+    for name in names:
+        key = normalize(name)
+        if not key:
+            continue
+        pattern = re.escape(key) if re.search(r"[\u4e00-\u9fff]", key) else r"(?<!\w)" + re.escape(key) + r"(?!\w)"
+        if any(re.search(pattern, label) for label in labels):
+            matches.setdefault(key, name)
+    return next(iter(matches.values())) if len(matches) == 1 else ""
 
 
 def read_asset_description(project_id, asset_id, file_key=None):
@@ -65,7 +90,10 @@ def snapshot(shot):
     voices = []
     if shot.voice_refs:
         from ..api.projects import _validate_voice_refs
-        voices = [{**ref.model_dump(mode="json"), "name": asset.name, "description": asset.notes or "",
+        voices = [{**ref.model_dump(mode="json"), "speaker": ref.speaker or infer_voice_speaker(shot, asset),
+            "source_filename": str((asset.meta or {}).get("source_filename", "")),
+            "binding_mode": "explicit" if ref.speaker else "automatic",
+            "name": asset.name, "description": asset.notes or "",
             "content_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
             for ref, asset, path in _validate_voice_refs(shot)]
     continuation = None

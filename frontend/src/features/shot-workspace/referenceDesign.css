@@ -18,6 +18,9 @@
 .shot-material-editor.workspace-reference-dialog textarea { font: inherit; font-size: 13px; line-height: 1.5; padding: 9px 10px; color: #303b2d; background: #fffdf7; border: 1px solid #d5d3c2; border-radius: 7px; box-sizing: border-box; resize: vertical; }
 .shot-material-editor.workspace-reference-dialog .workspace-reference-row .mode-chip { display: flex; justify-content: center; align-items: center; width: 30px; min-height: 28px; padding: 2px; border-radius: 5px; }
 .ref-library-toolbar { display: grid; grid-template-columns: minmax(0,1fr) 155px; gap: 12px; align-items: center; }
+.ref-library-controls { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ref-library-controls select { flex: 1; }
+.ref-library-controls button { display: grid; place-items: center; min-width: 42px; min-height: 42px; flex-shrink: 0; }
 .ref-search { display: flex; align-items: center; gap: 9px; background: #faf7ef; padding: 0 12px; border: 1px solid #c9cbb8; border-radius: 8px; color: #626958; min-width: 0; }
 .shot-material-editor.workspace-reference-dialog .ref-search input { min-width: 0; width: 100%; background: transparent; border: 0; outline: 0; padding: 12px 0; font: inherit; font-size: 14px; color: #303b2d; }
 .ref-library-toolbar select { width: 100%; min-width: 0; padding: 11px 9px; border: 1px solid #c9cbb8; border-radius: 8px; font: inherit; font-size: 13px; background: #faf7ef; color: #303b2d; }

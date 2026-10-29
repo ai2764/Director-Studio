@@ -131,6 +131,7 @@ describe("VideoContextPanel", () => {
       .toBe(videoOutput("job_first").url));
     expect(screen.getByRole("note", { name: "Video dependency" }).textContent).toContain("Continues Shot 1");
     expect(getVideoJob).not.toHaveBeenCalledWith("job_adjacent");
+    expect(screen.queryByLabelText("Upload continuation video")).toBeNull();
     const framesInput = screen.getByLabelText("Context window");
     fireEvent.change(framesInput, { target: { value: "39" } });
     fireEvent.blur(framesInput);

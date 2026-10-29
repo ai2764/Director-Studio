@@ -3,13 +3,54 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, expect, it, vi } from "vitest";
 import { ShotEditor } from "./ShotWorkspacePage";
 import type { Shot } from "../../shared/api/types";
+import {useState} from "react";
 vi.mock("./ManualContinuity", () => ({ ManualContinuity: () => null }));
-vi.mock("./ManualShotOutput", () => ({ ManualShotOutput: () => <aside aria-label="Video output" /> }));
+const chainGenerate = vi.hoisted(() => vi.fn(async (_shot: Shot) => {}));
+vi.mock("./ManualShotOutput", () => ({ ManualShotOutput: ({generationRef}: {generationRef?: {current: unknown}}) => {
+  if (generationRef) generationRef.current = {generate: chainGenerate};
+  return <aside aria-label="Video output" />;
+} }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const shot: Shot = { id:"sht_test", project_id:"prj_test", scene_id:"scene", title:"Object view", script_beat:"The object rotates on the table.", duration_s:5,
   status:"draft", refs:[], voice_refs:[], dialogue:[], layout_refs:[], layout_asset_id:null, layout_review_status:null, ref_frame_job_id:null,
   h3_job_id:null, source_audio_path:null, feedback:"", blocked_reasons:[],
   prompt_sections:{subject_definitions:"",summary:"",retention_analysis:"",detailed_description:"",overall_soundscape:"",non_diegetic_music:""} };
+
+it("recognizes an assistant-written prompt as current after synchronizing the saved brief",async()=>{
+  let server={...shot,prompt_sections:{...shot.prompt_sections,summary:"Previous prompt."}};
+  const draft={description:"A locked close-up shows the object.",title:"Close-up",duration_s:8,shot_type:"close-up",camera_angle:"eye level",camera_motion:"static",composition:"centered",dialogue:[],questions:[]};
+  vi.stubGlobal("fetch",vi.fn(async(url:string,init?:RequestInit)=>({ok:true,json:async()=>{
+    if(url.endsWith("/assist"))return {kind:"prompt",reply:"Prepared.",update_brief:true};
+    if(url.endsWith("/refine"))return draft;
+    if(init?.method==="PUT"){
+      const body=JSON.parse(init.body as string);
+      server={...server,title:body.title,script_beat:body.description,duration_s:body.duration_s,
+        shot_type:body.shot_type,camera_angle:body.camera_angle,camera_motion:body.camera_motion,composition:body.composition};
+      return server;
+    }
+    if(url.endsWith("prompt-check"))return {valid:true,stale:false,errors:[],warnings:[]};
+    if(url.endsWith("/conversation"))return {messages:[]};
+    if(url.endsWith("/timings"))return {records:[]};
+    return {version:"current"};
+  }})));
+  function Harness(){
+    const [current,setCurrent]=useState<Shot>(server);
+    return <ShotEditor shot={current} shots={[current]} index={0} busy={false} onSaved={setCurrent}
+      onWrite={async()=>{server={...server,prompt_sections:{...server.prompt_sections,summary:"Updated close-up prompt."}};setCurrent(server);}}
+      onDelete={vi.fn()} desktopOutput={false} writing={false} writeElapsed={0} onCancel={vi.fn()}/>;
+  }
+  render(<Harness/>);
+  fireEvent.click(screen.getByRole("button",{name:"✦ Description assistant"}));
+  fireEvent.change(screen.getByLabelText("Description request"),{target:{value:"Update the prompt to a close-up."}});
+  await waitFor(()=>expect((screen.getByRole("button",{name:"Send"}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button",{name:"Send"}));
+  await screen.findByText("Prompt saved. Review the six sections before generating.");
+  await waitFor(()=>expect(screen.getByLabelText("Prompt status").textContent).toBe("Prompt up to date"));
+  expect((screen.getByLabelText("Shot brief") as HTMLTextAreaElement).value).toBe(draft.description);
+  expect((screen.getByLabelText("Duration (seconds)") as HTMLInputElement).value).toBe("8");
+  fireEvent.change(screen.getByLabelText("Shot brief"),{target:{value:"A different action."}});
+  expect(screen.getByLabelText("Prompt status").textContent).toBe("Prompt out of date");
+});
 
 it("saves an assistant prompt amendment and its matching brief before invoking the writer", async () => {
   const draft = {description:"A static close-up shows the object.",title:shot.title,duration_s:9,
@@ -197,4 +238,48 @@ it("replaces the stale notice while writing instead of stacking stale banners", 
   view.rerender(<ShotEditor {...props} shot={updated} />);
   await waitFor(() => expect(screen.getByLabelText("Prompt status").textContent).toBe("Prompt up to date"));
   expect(screen.queryByText("The saved prompt is incomplete.")).toBeNull();
+});
+
+it.each([false,true])("writes before generating and stops on writer failure (%s)", async (failure) => {
+  chainGenerate.mockClear();
+  const saved: Shot = {...shot, refs:[{role:"prop",asset_id:"ref",file_key:"master",picture_index:1}]};
+  const written = {...saved,prompt_sections:{...saved.prompt_sections,summary:"New prompt"}};
+  const order: string[] = [];
+  vi.stubGlobal("fetch",vi.fn(async (url:string,init?:RequestInit) => ({ok:true,json:async()=>{
+    if(init?.method === "PUT") {order.push("save");return saved;}
+    return url.endsWith("prompt-check") ? {valid:true,stale:false,errors:[],warnings:[]} : {version:"v1"};
+  }})));
+  const onWrite = vi.fn(async()=>{order.push("write"); if(failure) throw new Error("Writer failed"); return written;});
+  render(<ShotEditor shot={saved} shots={[saved]} index={0} busy={false} onSaved={vi.fn()} onWrite={onWrite}
+    onDelete={vi.fn()} desktopOutput={false} writing={false} writeElapsed={0} onCancel={vi.fn()}/>);
+  const button = screen.getByRole("button",{name:"Write prompt & generate"});
+  await waitFor(()=>expect((button as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(button);
+  await waitFor(()=>expect(onWrite).toHaveBeenCalledOnce());
+  if(failure) {await screen.findByText("Writer failed");expect(chainGenerate).not.toHaveBeenCalled();}
+  else await waitFor(()=>expect(chainGenerate).toHaveBeenCalledWith(written));
+  expect(order).toEqual(["save","write"]);
+});
+
+it("adopts the server-saved assistant edit immediately without another save request",async()=>{
+ const saved={...shot,script_beat:"The object pauses before rotating.",duration_s:8,camera_motion:"static"};
+ const onSaved=vi.fn();
+ const fetcher=vi.fn(async(url:string,_init?:RequestInit)=>({ok:true,json:async()=>{
+  if(url.endsWith("/assist"))return {kind:"updated",reply:"Description updated and saved.",saved_shot:saved,version:"v2"};
+  if(url.endsWith("/conversation"))return {messages:[]};
+  if(url.endsWith("/timings"))return {records:[]};
+  if(url.endsWith("prompt-check"))return {valid:true,stale:false,errors:[],warnings:[]};
+  return {version:"v1"};
+ }}));
+ vi.stubGlobal("fetch",fetcher);
+ render(<ShotEditor shot={shot} shots={[shot]} index={0} busy={false} onSaved={onSaved} onWrite={vi.fn()}
+  onDelete={vi.fn()} desktopOutput={false} writing={false} writeElapsed={0} onCancel={vi.fn()}/>);
+ fireEvent.click(screen.getByRole("button",{name:"✦ Description assistant"}));
+ fireEvent.change(screen.getByLabelText("Description request"),{target:{value:"Add a pause."}});
+ await waitFor(()=>expect((screen.getByRole("button",{name:"Send"}) as HTMLButtonElement).disabled).toBe(false));
+ fireEvent.click(screen.getByRole("button",{name:"Send"}));
+ await waitFor(()=>expect(onSaved).toHaveBeenCalledWith(saved));
+ expect((screen.getByLabelText("Shot brief") as HTMLTextAreaElement).value).toBe(saved.script_beat);
+ expect((screen.getByLabelText("Duration (seconds)") as HTMLInputElement).value).toBe("8");
+ expect(fetcher.mock.calls.some(([,init])=>init?.method==="PUT")).toBe(false);
 });

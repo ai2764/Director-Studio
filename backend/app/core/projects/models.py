@@ -270,6 +270,7 @@ class Project(BaseModel):
     created_at: str
     updated_at: str
     shot_ids: list[str] = Field(default_factory=list)
+    workspace_default_resolution: str | None = None
     music_master: ProjectMusicMaster | None = None
     asset_coverage_review: AssetCoverageReview | None = None
 

@@ -49,7 +49,7 @@ export function ManualContinuity({ shot, shots, disabled, onSaved }: {
     {busy && <small role="status">Saving continuity…</small>}
     {error && <p role="alert" className="banner error">{error}</p>}
     {mode !== "off" && !uploading && <fieldset disabled={disabled || busy} className="manual-continuity-settings">
-      <VideoContextPanel shot={shot} shots={shots} expanded onShotUpdated={onSaved} />
+      <VideoContextPanel shot={shot} shots={shots} showDisableControl={false} expanded onShotUpdated={onSaved} />
     </fieldset>}
   </section>;
 }

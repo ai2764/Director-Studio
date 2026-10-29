@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import time
 
 from ..core.projects.store import project_dir
 from ..core.projects.chat_sessions import director_chat_sessions
@@ -54,6 +55,7 @@ async def start(project_id, shot_id, request_id, *, revision_request=""):
              "revision_request": revision_request}
     _save(project_id, state)
     async def run():
+        started = time.monotonic()
         try:
             from ..core.vram import get_orchestrator
             from ..config import settings
@@ -73,6 +75,12 @@ async def start(project_id, shot_id, request_id, *, revision_request=""):
         except Exception as exc:
             state.update(status="failed", error=str(exc) or f"Prompt writing failed ({type(exc).__name__}). No new prompt was saved.")
         finally:
+            from .timings import record
+            from ..core.projects.store import load_shot
+            timed_shot = load_shot(project_id, shot_id)
+            if timed_shot:
+                timing = record(timed_shot, "prompt", started, state["status"])
+                state["duration_s"] = timing["duration_s"]
             if revision_request:
                 from .conversations import append
                 from ..core.projects.store import load_shot

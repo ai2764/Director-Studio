@@ -42,6 +42,9 @@ async def write_prompt(project_id, shot_id, *, model=None, revision_request=""):
     if not shot.script_beat.strip():
         raise ValueError("Enter a shot brief first.")
     captured = snapshot(shot)
+    for voice in captured["voices"]:
+        if not voice["speaker"]:
+            raise ValueError(f"Voice '{voice['name']}' does not identify a unique speaker. Name the voice asset or original file after the character, or set an optional Speaker override.")
     refs = captured["references"]
     if not refs or any(not ref["description"].strip() for ref in refs):
         raise ValueError("Select references and add their Library descriptions before writing a prompt.")

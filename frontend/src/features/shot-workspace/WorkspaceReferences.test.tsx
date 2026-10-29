@@ -5,6 +5,7 @@ import type { Shot } from "../../shared/api/types";
 import { ShotMaterialEditor } from "./WorkspaceReferences";
 import { listLibraryAssets } from "../library/api";
 import { replaceShotMaterials } from "./api";
+import { LIBRARY_CHANGED } from "../library/libraryChanges";
 
 vi.mock("../library/api", () => ({ listLibraryAssets: vi.fn() }));
 vi.mock("./api", () => ({ replaceShotMaterials: vi.fn() }));
@@ -16,6 +17,18 @@ beforeEach(() => {
   vi.mocked(replaceShotMaterials).mockResolvedValue(shot);
 });
 afterEach(cleanup);
+
+it("refreshes an open picker after a library change without dropping reference notes", async () => {
+  render(<ShotMaterialEditor shot={shot} onClose={vi.fn()} onOpenImage={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button",{name:"Add Blue mug master"}));
+  fireEvent.change(screen.getByRole("textbox",{name:"Reference 1 note"}),{target:{value:"Keep the handle"}});
+  const added={...image,id:"asset_new",name:"New cup"};
+  vi.mocked(listLibraryAssets).mockImplementation(async(kind)=>kind === "props" ? [image,added] as never : []);
+  fireEvent(window,new Event(LIBRARY_CHANGED));
+  await screen.findByRole("button",{name:"Add New cup master"});
+  expect((screen.getByRole("textbox",{name:"Reference 1 note"}) as HTMLTextAreaElement).value).toBe("Keep the handle");
+  expect(screen.getByText("P1 · Blue mug")).toBeTruthy();
+});
 
 it("keeps selected references and notes when the library search changes", async () => {
   const close = vi.fn(); const saved = vi.fn();

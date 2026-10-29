@@ -2400,15 +2400,22 @@ async def submit_shot_endpoint(
             for marker in ("9:16", "9／16", "竖屏", "vertical")
         )
     )
+    workspace_dimensions = None
+    if project and project.authoring_mode == "shot_workspace":
+        from ..shot_workspace.resolution import default_resolution
+        from ..pipelines.h3_ref2va.resolutions import resolve_local_resolution
+        default_width, default_height = resolve_local_resolution(default_resolution(project))
+        workspace_dimensions = {"width": default_width, "height": default_height}
+    fallback_dimensions = inherited_resolution or workspace_dimensions
     width = (
         int(options.width)
         if options is not None and options.width is not None
-        else (inherited_resolution["width"] if inherited_resolution else (480 if portrait else 864))
+        else (fallback_dimensions["width"] if fallback_dimensions else (480 if portrait else 864))
     )
     height = (
         int(options.height)
         if options is not None and options.height is not None
-        else (inherited_resolution["height"] if inherited_resolution else (864 if portrait else 480))
+        else (fallback_dimensions["height"] if fallback_dimensions else (864 if portrait else 480))
     )
     native_audio_key: str | None = None
     if shot.source_audio_path:

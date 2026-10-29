@@ -59,6 +59,34 @@ class Model:
 
 
 @pytest.mark.asyncio
+async def test_operation_timing_never_overwrites_suggested_clip_duration(board):
+    from app.shot_workspace.timings import timed, history
+    _,shot,_=board
+    @timed("refinement")
+    async def operation(shot_id):
+        return {"duration_s":8,"description":"A slow turn."}
+    result=await operation(shot.id)
+    assert result["duration_s"] == 8
+    assert result["operation_duration_s"] == history(shot)[-1]["duration_s"]
+
+
+@pytest.mark.parametrize("name,filename,expected", [
+    ("Guide voice", "recording.wav", "Guide"),
+    ("Recording", "Guide_sample.wav", "Guide"),
+    ("GUIDE", "Guide.wav", "Guide"),
+    ("Guide", "Visitor.wav", ""),
+    ("Unknown voice", "sample.wav", ""),
+    ("Guideline", "sample.wav", ""),
+])
+def test_automatic_voice_binding_uses_unique_asset_name_or_original_filename(name, filename, expected):
+    from types import SimpleNamespace
+    from app.shot_workspace.references import infer_voice_speaker
+    shot = SimpleNamespace(refs=[],dialogue_lines=[SimpleNamespace(speaker_name="Guide"),SimpleNamespace(speaker_name="Visitor")])
+    asset = SimpleNamespace(name=name,meta={"source_filename":filename})
+    assert infer_voice_speaker(shot,asset) == expected
+
+
+@pytest.mark.asyncio
 async def test_assistant_prompt_route_does_not_write_or_replay_history(board):
     from app.shot_workspace.coordinator import converse
     project, shot, _ = board
@@ -503,6 +531,28 @@ async def test_amendment_allows_only_explicit_new_dialogue(board):
 
 
 @pytest.mark.asyncio
+async def test_silent_shot_repairs_invented_speech_in_both_description_and_dialogue(board):
+    from app.shot_workspace.refinement import refine
+    project,shot,_ = board
+    class Refiner:
+        calls = 0
+        async def complete_shot_description(self,system,user,**kwargs):
+            self.calls += 1
+            context = json.loads(user)
+            if self.calls == 2:
+                assert context["user_description"] == shot.script_beat
+                assert context["repair"]["previous_candidate"]["dialogue"] == ["Guide [English]: Hello there."]
+            return json.dumps(dict(description="The object turns slowly." if self.calls == 2 else 'The guide says Hello there.',
+                title=shot.title,duration_s=5,shot_type="medium",camera_angle="eye level",camera_motion="static",composition="centered",
+                dialogue=[] if self.calls == 2 else ["Guide [English]: Hello there."],questions=[]))
+    model = Refiner()
+    result = await refine(shot,shot.script_beat,snapshot(shot)["version"],model)
+    assert model.calls == 2 and result["dialogue"] == []
+    assert "Hello" not in result["description"]
+    assert load_shot(project.id,shot.id).dialogue == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("description_only", [False, True])
 async def test_agent_duration_suggestion_is_editable_saved_and_used_by_writer(board, description_only):
     from app.shot_workspace.refinement import refine
@@ -511,6 +561,10 @@ async def test_agent_duration_suggestion_is_editable_saved_and_used_by_writer(bo
     class Refiner:
         async def complete_shot_description(self, system, user, **kwargs):
             assert json.loads(user)["duration_s"] == 7  # Unsaved current UI value, not the saved default 5.
+            assert "TIMING POLICY" in system
+            assert "No dialogue is NOT a reason to default" in system
+            assert "re-estimate" in system
+            assert "otherwise keep it if suitable" not in system
             return json.dumps(dict(description="The object turns slowly, then settles.",title=shot.title,duration_s=8,
                 shot_type="medium",camera_angle="eye level",camera_motion="static",composition="centered",dialogue=[],questions=[]))
     draft = await refine(saved,saved.script_beat,snapshot(saved)["version"],Refiner(),
@@ -579,8 +633,8 @@ async def test_description_assistant_sends_only_current_text_and_latest_request(
     class Assistant:
         async def complete_shot_description(self, system, user, **kwargs):
             payload = json.loads(user)
-            assert set(payload) == {"previous_description", "new_request", "duration_s"}
-            assert payload["previous_description"] == previous
+            assert set(payload) == {"current_shot_description", "new_request", "duration_s"}
+            assert payload["current_shot_description"] == previous
             assert payload["new_request"] == "Keep the blue box still on the table."
             assert "new request has higher priority" in system
             return json.dumps(dict(description="A blue box remains still on the table.",title="Box view",duration_s=5,
@@ -626,7 +680,7 @@ async def test_coordinator_routes_bounded_text_context_without_prompt_writer(boa
             return json.dumps({"reply":"A locked medium shot would keep the action clear.","proposed_change":"Use a locked medium shot."})
         async def complete_shot_description(self, system, user, **kwargs):
             payload = json.loads(user)
-            assert set(payload) == {"previous_description","new_request","duration_s","reference_descriptions","previous_shot_description"}
+            assert set(payload) == {"current_shot_description","new_request","duration_s","reference_descriptions","previous_shot_description"}
             assert payload["reference_descriptions"]
             assert payload["previous_shot_description"]["description"] == "sht_before description"
             return json.dumps(dict(description="The object remains still.",title=shot.title,duration_s=5,
@@ -835,13 +889,121 @@ async def test_description_conversation_is_durable_per_shot_and_records_errors(b
             await assist_description(shot.id, body)
     else:
         await assist_description(shot.id, body)
+    import app.shot_workspace.timings as timings
+    importlib.reload(timings)
+    timing_records = timings.history(shot)
+    assert len(timing_records) == 1
+    assert timing_records[0]["stage"] == "assistant"
+    assert timing_records[0]["status"] == ("failed" if failure else "completed")
+    assert timing_records[0]["duration_s"] >= 0
     importlib.reload(conversations)
     messages = description_conversation(shot.id)["messages"]
-    assert [message["role"] for message in messages] == ["user", "error" if failure else "assistant"]
-    assert messages[0]["text"] == body.amendment
+    assert [message["role"] for message in messages] == ["brief", "user", "error" if failure else "assistant"]
+    assert messages[0]["text"] == body.description
+    assert messages[0]["scope"] == "Submitted brief"
+    assert messages[1]["text"] == body.amendment
     if not failure:
-        assert messages[1]["proposal"] == "Use a medium shot."
+        assert messages[2]["proposal"] == "Use a medium shot."
     assert snapshot(load_shot(project.id,shot.id))["version"] == version
     other = await add_shot(project.id, CreateShot(request_id="new-conversation"))
     assert description_conversation(other.id)["messages"] == []
     assert description_conversation(shot.id)["messages"] == messages
+    assert timings.history(other) == []
+    assert timings.history(shot) == timing_records
+
+
+def test_brief_history_keeps_versions_and_deduplicates(board):
+    from app.shot_workspace.conversations import append_brief, history
+    project, shot, _ = board
+    append_brief(shot, "Original idea", "Submitted brief")
+    append_brief(shot, "Original idea", "Submitted brief")
+    append_brief(shot, "Refined idea", "Refined draft")
+    append_brief(shot, "Original idea", "Saved brief")
+    messages = history(shot)
+    assert [m["text"] for m in messages] == ["Original idea", "Refined idea", "Original idea"]
+    assert all(m["role"] == "brief" and m["created_at"] for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_assistant_description_edit_saves_before_acknowledging(board, monkeypatch):
+    import app.shot_workspace.coordinator as coordinator
+    import app.core.vram as vram
+    from app.shot_workspace.router import assist_description, DescriptionAssist, description_conversation
+    project, shot, _ = board
+    class Orchestrator:
+        @asynccontextmanager
+        async def llm_session(self, **kwargs): yield
+        async def ensure_llm_ready(self): pass
+    async def reply(*args, **kwargs):
+        return {"kind":"draft","reply":"Review before saving.","draft":{
+            "description":"The object pauses, then turns slowly.","title":"Slow turn","duration_s":8,
+            "dialogue":[],"shot_type":"close-up","camera_angle":"eye level","camera_motion":"static",
+            "composition":"centered","questions":[]},"context_scope":"Current shot"}
+    monkeypatch.setattr(vram,"get_orchestrator",lambda:Orchestrator())
+    monkeypatch.setattr(coordinator,"converse",reply)
+    result=await assist_description(shot.id,DescriptionAssist(description=shot.script_beat,
+        amendment="Add a pause before turning.",expected_version=snapshot(shot)["version"]))
+    saved=load_shot(project.id,shot.id)
+    assert result["kind"] == "updated"
+    assert result["reply"] == "Description updated and saved."
+    assert saved.script_beat == result["saved_shot"]["script_beat"] == "The object pauses, then turns slowly."
+    assert saved.duration_s == 8 and saved.camera_motion == "static"
+    assert result["version"] == snapshot(saved)["version"]
+    assert description_conversation(shot.id)["messages"][-1]["text"].startswith("Description updated and saved.")
+
+
+@pytest.mark.asyncio
+async def test_cancelled_assistant_does_not_save_description(board, monkeypatch):
+    import asyncio
+    import app.shot_workspace.coordinator as coordinator
+    import app.core.vram as vram
+    from app.shot_workspace.router import assist_description, DescriptionAssist
+    project, shot, _ = board
+    stopped = asyncio.Event()
+    class Orchestrator:
+        @asynccontextmanager
+        async def llm_session(self, **kwargs): yield
+        async def ensure_llm_ready(self): pass
+    class Disconnected:
+        async def is_disconnected(self): return True
+    async def reply(*args, **kwargs):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+    monkeypatch.setattr(vram,"get_orchestrator",lambda:Orchestrator())
+    monkeypatch.setattr(coordinator,"converse",reply)
+    with pytest.raises(asyncio.CancelledError):
+        await assist_description(shot.id,DescriptionAssist(description=shot.script_beat,
+            amendment="Change the action.",expected_version=snapshot(shot)["version"]),request=Disconnected())
+    assert stopped.is_set()
+    assert load_shot(project.id,shot.id).script_beat == shot.script_beat
+
+
+@pytest.mark.asyncio
+async def test_project_size_persists_and_is_shared_by_new_shots(board):
+    from app.shot_workspace.router import get_project_resolution, set_project_resolution, ProjectResolution
+    from app.shot_workspace.resolution import default_resolution
+    from app.core.projects.store import load_project
+    project, shot, _ = board
+    assert get_project_resolution(project.id)["preset"] == "landscape-480"
+    set_project_resolution(project.id, ProjectResolution(preset="portrait-720"))
+    await add_shot(project.id, CreateShot(request_id="shared-size"))
+    assert default_resolution(load_project(project.id)) == "portrait-720"
+    assert get_project_resolution(project.id)["preset"] == "portrait-720"
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException):
+        set_project_resolution(project.id, ProjectResolution(preset="invalid"))
+    assert get_project_resolution(project.id)["preset"] == "portrait-720"
+
+
+def test_project_size_seeds_from_first_shot_video(board,monkeypatch):
+    from types import SimpleNamespace
+    import app.shot_workspace.resolution as resolutions
+    project, shot, _ = board
+    project.shot_ids = [shot.id]
+    monkeypatch.setattr(resolutions,"load_shot",lambda *args:SimpleNamespace(h3_job_id="first-video"))
+    monkeypatch.setattr(resolutions,"load_job",lambda *args:SimpleNamespace(params={"width":1280,"height":704}))
+    assert resolutions.default_resolution(project) == "landscape-720"
+    project.workspace_default_resolution = "portrait-480"
+    assert resolutions.default_resolution(project) == "portrait-480"

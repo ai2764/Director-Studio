@@ -1,6 +1,7 @@
 """Shot Workspace endpoints. They never dispatch a general Director Agent turn."""
 import uuid
-from fastapi import APIRouter, HTTPException
+import asyncio
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..core.projects.store import load_project, load_shot, list_projects, list_shots, save_project, save_shot, new_shot_id
@@ -11,6 +12,7 @@ from ..core.managed_runs.store import _project_lock, active_run_for_project
 from ..core.jobs import load_job
 from .references import snapshot, selected_references
 from . import tasks
+from .timings import timed
 
 router = APIRouter(prefix="/shot-workspace", tags=["shot-workspace"])
 
@@ -116,6 +118,10 @@ async def save_brief(shot_id: str, body: Brief):
             if changed:
                 revised.meta = {**shot.meta, "prompt_brief_stale": bool(any(shot.prompt_sections.model_dump().values()) or shot.meta.get("prompt_brief_stale"))}
                 save_shot(revised)
+            from .conversations import append_brief, history
+            if not history(shot):
+                append_brief(shot, shot.script_beat, "Previous saved brief")
+            append_brief(revised, body.description, "Saved brief")
             return revised if changed else shot
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -131,9 +137,11 @@ class Refine(BaseModel):
 
 
 @router.post("/shots/{shot_id}/description/refine")
+@timed("refinement")
 async def refine_brief(shot_id: str, body: Refine):
     from ..config import settings
     from ..core.vram import get_orchestrator
+    from .conversations import append_brief
     from .refinement import refine
     from .model import WorkspaceModel
     shot = find_shot(shot_id)
@@ -142,8 +150,12 @@ async def refine_brief(shot_id: str, body: Refine):
         orch = get_orchestrator()
         async with orch.llm_session(release_on_exit=not settings.llm_keep_loaded):
             await orch.ensure_llm_ready()
-            return await refine(shot, body.description, body.expected_version, WorkspaceModel(),
+            append_brief(shot, body.description, "Before refinement")
+            result = await refine(shot, body.description, body.expected_version, WorkspaceModel(),
                                 title=body.title, suggest_title=body.suggest_title, amendment=body.amendment, duration_s=body.duration_s)
+            if result.get("description"):
+                append_brief(shot, result["description"], "Refined draft")
+            return result
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
@@ -161,32 +173,63 @@ class DescriptionAssist(Refine):
 
 @router.get("/shots/{shot_id}/description/conversation")
 def description_conversation(shot_id: str):
-    from .conversations import history
-    return {"messages": history(find_shot(shot_id))}
+    from .conversations import history, append_brief
+    shot = find_shot(shot_id)
+    if not history(shot):
+        append_brief(shot, shot.script_beat, "Initial saved brief")
+    return {"messages": history(shot)}
 
 
 @router.post("/shots/{shot_id}/description/assist")
-async def assist_description(shot_id: str, body: DescriptionAssist):
+@timed("assistant")
+async def assist_description(shot_id: str, body: DescriptionAssist, request: Request = None):
     from ..config import settings
     from ..core.vram import get_orchestrator
     from .coordinator import converse
     from .model import WorkspaceModel
     shot = find_shot(shot_id)
     await ensure_idle(shot.project_id)
-    from .conversations import append
+    from .conversations import append, append_brief
+    append_brief(shot, body.description, "Submitted brief")
     append(shot, "user", body.amendment)
     try:
         orch = get_orchestrator()
         async with orch.llm_session(release_on_exit=not settings.llm_keep_loaded):
             await orch.ensure_llm_ready()
-            result = await converse(shot, body.description, body.amendment, body.expected_version, WorkspaceModel(),
+            pending = asyncio.create_task(converse(shot, body.description, body.amendment, body.expected_version, WorkspaceModel(),
                 title=body.title, suggest_title=body.suggest_title,
-                turns=[turn.model_dump() for turn in body.recent_turns], duration_s=body.duration_s)
-        reply = result["reply"]
+                turns=[turn.model_dump() for turn in body.recent_turns], duration_s=body.duration_s))
+            try:
+                while not pending.done():
+                    await asyncio.wait({pending}, timeout=0.25)
+                    if request is not None and await request.is_disconnected():
+                        raise asyncio.CancelledError()
+                result = await pending
+                if request is not None and await request.is_disconnected():
+                    raise asyncio.CancelledError()
+            finally:
+                if not pending.done():
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
         if result.get("kind") == "draft" and result.get("draft"):
-            reply += f"\n\nSuggested duration: {result['draft']['duration_s']:g}s\n\n" + result["draft"]["description"]
+            draft = result["draft"]
+            if draft.get("questions"):
+                raise ValueError("The assistant returned unresolved questions. No description was saved.")
+            saved = await save_brief(shot_id, Brief(
+                expected_version=body.expected_version,
+                **{key: draft[key] for key in ("description", "title", "duration_s", "dialogue",
+                    "shot_type", "camera_angle", "camera_motion", "composition")},
+            ))
+            result = {**result, "kind": "updated", "reply": "Description updated and saved.",
+                      "saved_shot": saved.model_dump(mode="json"), "version": snapshot(saved)["version"]}
+        reply = result["reply"]
+        if result.get("kind") == "updated":
+            reply += f"\n\nDuration: {result['draft']['duration_s']:g}s\n\n" + result["draft"]["description"]
         append(shot, "assistant", reply, proposal=result.get("proposed_change"), scope=result.get("context_scope"))
         return result
+    except asyncio.CancelledError:
+        append(shot, "error", "Request cancelled. Any changes already saved are kept.")
+        raise
     except TimeoutError as exc:
         append(shot, "error", "Description assistant timed out. Please retry.")
         raise HTTPException(504, "Description assistant timed out. Your description was kept; retry when ready.") from exc
@@ -196,6 +239,12 @@ async def assist_description(shot_id: str, body: DescriptionAssist):
     except Exception:
         append(shot, "error", "The assistant could not complete this request. Please retry.")
         raise
+
+
+@router.get("/shots/{shot_id}/timings")
+def operation_timings(shot_id: str):
+    from .timings import history
+    return {"records": history(find_shot(shot_id))}
 
 
 class Material(BaseModel):
@@ -282,8 +331,6 @@ async def replace_voice_references(shot_id: str, body: VoiceReferences):
                 raise ValueError("Voice references changed. Refresh before saving.")
             if shot.source_audio_path and body.voice_refs:
                 raise ValueError("This shot uses native source audio. Remove it before adding Voice references.")
-            if any(not ref.speaker for ref in body.voice_refs):
-                raise ValueError("Enter a speaker name for each Voice reference, matching the dialogue cues.")
             saved = Shot.model_validate({**shot.model_dump(), "voice_refs": body.voice_refs})
             _validate_voice_refs(saved)
             if saved.voice_refs != shot.voice_refs:
@@ -347,3 +394,25 @@ async def undo_delete(project_id: str, archive_id: str):
         return restore_shot(project_id, archive_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+class ProjectResolution(BaseModel):
+    preset: str
+
+
+@router.get("/projects/{project_id}/resolution")
+def get_project_resolution(project_id: str):
+    from .resolution import default_resolution
+    return {"preset": default_resolution(project(project_id))}
+
+
+@router.put("/projects/{project_id}/resolution")
+def set_project_resolution(project_id: str, body: ProjectResolution):
+    from ..pipelines.h3_ref2va.resolutions import LOCAL_H3_PRESETS
+    if body.preset not in LOCAL_H3_PRESETS:
+        raise HTTPException(400, "Unknown video size")
+    with _project_lock(project_id):
+        current = project(project_id)
+        current.workspace_default_resolution = body.preset
+        save_project(current)
+    return {"preset": body.preset}

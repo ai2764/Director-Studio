@@ -35,3 +35,14 @@ def append(shot, role, text, *, proposal=None, scope=None):
         finally:
             temporary.unlink(missing_ok=True)
         return message
+
+
+def append_brief(shot, description, source):
+    """Persist submitted versions separately from model context."""
+    if not description.strip():
+        return
+    with _project_lock(shot.project_id):
+        previous = next((m for m in reversed(history(shot)) if m["role"] == "brief"), None)
+        if previous and previous["text"] == description:
+            return
+        return append(shot, "brief", description, scope=source)
