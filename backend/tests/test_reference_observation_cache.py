@@ -7,6 +7,41 @@ from test_reference_facts import Vision, observation
 
 
 @pytest.mark.asyncio
+async def test_pixel_cache_reuses_facts_but_keeps_current_sources(material_shot, monkeypatch):
+    from app.config import settings
+    from app.agents.director import material_review
+    monkeypatch.setattr(settings, "director_visual_facts_cache", True)
+    project, shot, _, _ = material_shot
+    records, images, _ = capture_references(shot)
+    source = {"id": "old", "kind": "directing_request", "text": "Old scene intent."}
+    monkeypatch.setattr(material_review, "sourced_records",
+                        lambda _p, rs: [{**r, "sources": [source.copy()]} for r in rs])
+    provider = Vision(observation(), observation(), observation())
+    await observe_references_cached(provider, project.id, records[:1], images[:1], lambda: None)
+    source.update(id="new", text="A different scene intent.")
+    updated = [{**records[0], "approved_notes": "New authoritative notes", "picture_index": 3}]
+    result = await observe_references_cached(provider, project.id, updated, images[:1], lambda: None)
+    assert len(provider.calls) == 1
+    assert result[0]["sources"][0]["id"] == "new"
+    assert result[0]["approved_notes"] == "New authoritative notes"
+    assert result[0]["picture_index"] == 3
+    # Image changes still invalidate pixel facts.
+    updated[0]["content_sha256"] = "different-image"
+    await observe_references_cached(provider, project.id, updated, images[:1], lambda: None)
+    assert len(provider.calls) == 2
+    # A prompt-writing request changes intent, not image bytes. It must be
+    # available to review without triggering another pixel extraction.
+    result = await observe_references_cached(provider, project.id, updated, images[:1], lambda: None,
+                                    inspection_request="Write the current shot prompt.")
+    assert len(provider.calls) == 2
+    assert result[0]["sources"][-1]["text"] == "Write the current shot prompt."
+    # Explicit image-inspection tools may still force a fresh pixel read.
+    await observe_references_cached(provider, project.id, updated, images[:1], lambda: None,
+                                    force_reinspect=True)
+    assert len(provider.calls) == 3
+
+
+@pytest.mark.asyncio
 async def test_renamed_delivery_and_picture_order_reuse_observation(material_shot):
     project, shot, _, _ = material_shot
     records, images, _ = capture_references(shot)

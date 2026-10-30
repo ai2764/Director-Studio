@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     llm_runtime: Literal["auto", "strata", "lm-studio", "llama-swap"] = "auto"
     # Override endpoint-based GPU topology for tunnels, aliases or separate cards.
     vram_shared_gpu: Literal["auto", "true", "false"] = "auto"
+    # Optional role routing. Text/native tools keep the active provider/model.
+    director_vision_base_url: str = ""
+    director_vision_model: str = ""
+    director_compact_vision_prompt: bool = False
+    director_visual_facts_cache: bool = False
 
     # Local Ollama / Director agent (VRAM exclusive with Comfy)
     ollama_base_url: str = "http://127.0.0.1:11434"

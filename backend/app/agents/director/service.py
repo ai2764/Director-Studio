@@ -2067,7 +2067,7 @@ class DirectorService:
 
     async def inspect_asset(self, project_id: str, asset_id: str, file_key: str) -> dict:
         """Read one exact inventory image without changing assets or the storyboard."""
-        from .material_review import capture_asset_image, observe_reference
+        from .material_review import capture_asset_image, observe_reference, observe_references_cached
         item = next((item for item in _inventory(project_id) if item["id"] == asset_id), None)
         if item is None:
             layout = next((asset for asset in list_assets(
@@ -2086,7 +2086,17 @@ class DirectorService:
         keep = bool(getattr(settings, "llm_keep_loaded", True))
         async with self.orchestrator.llm_session(release_on_exit=not keep):
             await self.orchestrator.ensure_llm_ready()
-            observation = await observe_reference(self.plan_provider, record, image)
+            if settings.director_visual_facts_cache:
+                def check_current():
+                    latest = load_asset(item["kind"], asset_id)
+                    if latest is None or capture_asset_image(latest, role, file_key)[0] != record:
+                        raise ValueError("Asset changed during inspection; inspect the current file again")
+                reviewed = await observe_references_cached(
+                    self.plan_provider, project_id, [{**record, "picture_index": 1}], [image], check_current,
+                    force_reinspect=True)
+                observation = {k: v for k, v in reviewed[0].items() if k != "picture_index"}
+            else:
+                observation = await observe_reference(self.plan_provider, record, image)
         current = load_asset(item["kind"], asset_id)
         if current is None or capture_asset_image(current, role, file_key)[0] != record:
             raise ValueError("Asset changed during inspection; inspect the current file again")

@@ -237,7 +237,7 @@ def _save_review_failure(project_id, record, identity, attempts, error):
 
 async def observe_references_cached(provider, project_id, records, images, check_current, *,
                                     inspection_request: str = "", refresh_pictures: set[int] | None = None,
-                                    refresh_request: str = "", on_progress=None):
+                                    refresh_request: str = "", on_progress=None, force_reinspect: bool = False):
     """Cache visual evidence separately from shot suitability and directing history.
 
     inspection_request is an explicit visual reinspection, not a prompt revision.
@@ -260,26 +260,31 @@ async def observe_references_cached(provider, project_id, records, images, check
     hits, misses = 0, 0
     for record, image in zip(records, images, strict=True):
         check_current()
+        pixel_only = settings.director_visual_facts_cache
         # Story edits do not change pixels. Keep user requirements in the pack
         # review, rather than invalidating every image or biasing its observation.
         observation_record = {**record, "sources": [
             source for source in record.get("sources", [])
             if source.get("kind") != "user_directing_request"
         ]}
+        if pixel_only:
+            observation_record = {k: record[k] for k in ("asset_id", "role", "file_key", "content_sha256")}
         stable_record = {k: v for k, v in observation_record.items()
                          if k not in {"picture_index", "reference_notes"}}
         identity = {
             "version": 5, "fact_policy": REFERENCE_POLICY_VERSION, "record": stable_record,
-            "inspection_request": inspection_request,
-            "model": str(getattr(provider, "model", "")),
+            "inspection_request": "" if pixel_only else inspection_request,
+            "model": str(getattr(provider, "vision_model", getattr(provider, "model", ""))),
             "provider": type(provider).__qualname__,
-            "endpoint": str(getattr(getattr(provider, "client", None), "base_url", "")),
+            "endpoint": str(getattr(getattr(provider, "vision_client", getattr(provider, "client", None)), "base_url", "")),
         }
+        if pixel_only:
+            identity["visual_scope"] = "pixels-only-v1"
         cache = ObservationCache(settings.projects_dir / project_id / "agent" / "reference_observations", identity)
-        if record["picture_index"] in (refresh_pictures or set()):
+        if force_reinspect or record["picture_index"] in (refresh_pictures or set()):
             observation, reason = None, "requested_reinspection"
         else:
-            observation, reason = cache.load(ReferenceObservation, observation_record["sources"])
+            observation, reason = cache.load(ReferenceObservation, observation_record.get("sources", []))
         if observation is not None:
             hits += 1
             await emit_progress(on_progress, {"type": "status", "phase": "reference_cache", "state": "hit",
@@ -295,7 +300,7 @@ async def observe_references_cached(provider, project_id, records, images, check
                 async with report_phase(on_progress, "reference_observation",
                                         f"Inspecting Picture {record['picture_index']}/{len(records)}"):
                     result = await observe_reference(provider, observation_record, image,
-                                                     brief=refresh_request or inspection_request, attempts=attempts)
+                                                     brief=(refresh_request or "") if pixel_only else (refresh_request or inspection_request), attempts=attempts)
                 observation = ReferenceObservation.model_validate({k: result[k] for k in ReferenceObservation.model_fields})
             except Exception as exc:
                 _save_review_failure(project_id, record, identity, attempts, exc)

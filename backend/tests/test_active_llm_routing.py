@@ -35,6 +35,40 @@ class RecordingProvider:
 
 
 @pytest.mark.asyncio
+async def test_vision_role_routes_images_without_changing_text_model(monkeypatch):
+    from app.agents.director import llm_plan_provider as module
+    from app.config import settings
+    class VisionClient:
+        calls = []
+        finish_reason = "stop"
+        async def chat_response(self, model, **kwargs):
+            self.calls.append({"model": model, **kwargs})
+            return {"content": "{}", "finish_reason": self.finish_reason}
+    text, vision = RecordingClient(), VisionClient()
+    monkeypatch.setattr(settings, "director_vision_model", "vision27b")
+    monkeypatch.setattr(settings, "director_vision_base_url", "http://vision:8082/v1")
+    monkeypatch.setattr(settings, "director_compact_vision_prompt", True)
+    monkeypatch.setattr(module, "_vision_client", lambda *_: vision)
+    adapter = module.DirectorLLMPlanProvider(provider=RecordingProvider(text))
+    await adapter.complete("Write", "One shot")
+    await adapter.complete_with_images("Inspect exactly one reference image. Return JSON.",
+                                       "pixels", images=["image"])
+    assert text.generate_calls[0][0] == "catalog-model"
+    assert not text.chat_calls
+    assert vision.calls[0]["model"] == "vision27b"
+    assert vision.calls[0]["require_vision"] is True
+    prompt = vision.calls[0]["messages"][0]["content"]
+    assert "DIRECTOR_SKILL" not in prompt
+    assert "Return JSON" in prompt
+    assert vision.calls[0]["options"]["num_predict"] == 2048
+    assert vision.calls[0]["format"]["properties"]["facts"]["maxItems"] == 8
+    vision.finish_reason = "length"
+    from app.core.prompt_errors import PromptOutputTruncated
+    with pytest.raises(PromptOutputTruncated):
+        await adapter.complete_with_images("Inspect exactly one reference image.", "pixels", images=["image"])
+
+
+@pytest.mark.asyncio
 async def test_bounded_prompt_call_cancels_silent_transport_at_deadline(monkeypatch):
     import asyncio
 

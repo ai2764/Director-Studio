@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from functools import lru_cache
 from contextlib import asynccontextmanager
 from collections.abc import Iterable
 
@@ -12,6 +13,12 @@ from .context_metrics import observe_request
 from ...core.prompt_errors import PromptContextOverflow, PromptOutputTruncated, is_context_overflow
 
 PROMPT_CALL_TIMEOUT_SEC = 180.0
+
+
+@lru_cache(maxsize=4)
+def _vision_client(base_url: str, api_key: str | None, timeout: float):
+    from ...core.llm import OpenAICompatibleClient
+    return OpenAICompatibleClient(base_url, api_key, timeout)
 
 
 class DirectorLLMPlanProvider:
@@ -31,6 +38,16 @@ class DirectorLLMPlanProvider:
         if self._fixed_model:
             return self._fixed_model
         return str(self.provider.model_status().get("model") or "").strip()
+
+    @property
+    def vision_model(self) -> str:
+        return settings.director_vision_model.strip() or self.model
+
+    @property
+    def vision_client(self):
+        endpoint = settings.director_vision_base_url.strip()
+        return (_vision_client(endpoint, settings.llm_api_key, settings.llm_timeout_sec)
+                if endpoint else self.client)
 
     @asynccontextmanager
     async def _input_budget(self, prompt: str, *, output_tokens: int | None = None, images=False):
@@ -79,11 +96,29 @@ class DirectorLLMPlanProvider:
         images: list[str],
         guides: Iterable[str] = (),
     ) -> str:
-        prompt = with_director_skill(f"{system}\n\n{user}", guides=guides, writer_only=True)
+        if settings.director_compact_vision_prompt and system.startswith("Inspect exactly one reference image"):
+            # Pixel extraction already has a complete provenance/JSON contract.
+            # Tool, soundtrack and production instructions do not belong here.
+            prompt = (f"{system}\n\nKeep the description under 120 words and return at most 8 salient facts. "
+                      f"Use concise evidence; do not enumerate repetitive details.\n\n{user}")
+            observe_request("writer.vision", [{"role": "user", "content": prompt}], image_count=len(images))
+            from .material_review import ReferenceObservation
+            schema = ReferenceObservation.model_json_schema()
+            schema["properties"]["facts"]["maxItems"] = 8
+            async with asyncio.timeout(150), self._input_budget(prompt, output_tokens=2048, images=True):
+                response = await self.vision_client.chat_response(
+                    self.vision_model, messages=[{"role": "user", "content": prompt, "images": images}],
+                    format=schema, require_vision=True,
+                    options={"num_predict": 2048, "temperature": 0.3})
+            if (response.get("finish_reason") or response.get("done_reason")) in {"length", "max_tokens"}:
+                raise PromptOutputTruncated("Visual observation exceeded 2048 tokens; no partial observation accepted")
+            return str(response.get("content") or "")
+        else:
+            prompt = with_director_skill(f"{system}\n\n{user}", guides=guides, writer_only=True)
         observe_request("writer.vision", [{"role": "user", "content": prompt}], image_count=len(images))
         async with self._input_budget(prompt, images=True):
-            return await self.client.chat(
-                self.model, prompt, images=images, require_vision=True,
+            return await self.vision_client.chat(
+                self.vision_model, prompt, images=images, require_vision=True,
             )
 
     async def complete_bounded(self, system: str, user: str, *, max_tokens: int,
@@ -99,7 +134,9 @@ class DirectorLLMPlanProvider:
         deadline = min(PROMPT_CALL_TIMEOUT_SEC, settings.llm_timeout_sec)
         try:
             async with asyncio.timeout(deadline), self._input_budget(prompt, output_tokens=output_budget, images=bool(images)):
-                response = await self.client.chat_response(self.model,
+                client = self.vision_client if images else self.client
+                model = self.vision_model if images else self.model
+                response = await client.chat_response(model,
                     messages=[message], format=schema,
                     options={"num_predict": output_budget, "temperature": 0.1},
                     **({"require_vision": True} if images else {}))
