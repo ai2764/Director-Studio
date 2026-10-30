@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { parseError } from "../api/client";
 import { StudioIcon } from "../components/StudioIcon";
 import { createPortal } from "react-dom";
 import "./projectModes.css";
@@ -12,7 +13,7 @@ const PROJECT_MODES = [
   {id:"json",title:"JSON Production",description:"Bring a structured shot plan and manage production.",image:"/mode-json-production.png",mode:"json_production",authoring:"director_agent"},
 ] as const;
 
-export function ProjectPicker() {
+export function ProjectPicker({allowDelete = false}: {allowDelete?: boolean}) {
   const {
     projects,
     projectId,
@@ -23,6 +24,8 @@ export function ProjectPicker() {
     createAndSelect,
     refreshProjects,
   } = useProject();
+  const [deleting, setDeleting] = useState<{id:string;name:string} | null>(null);
+  const [confirmation, setConfirmation] = useState("");
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newMode, setNewMode] = useState<ProjectMode>("director");
@@ -52,6 +55,19 @@ export function ProjectPicker() {
     }
   }
 
+  async function onDelete() {
+    if (!deleting || confirmation !== deleting.name || busy) return;
+    setBusy(true); setLocalError(null);
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(deleting.id)}`, {
+        method:"DELETE", headers:{"Content-Type":"application/json"}, body:JSON.stringify({confirmation}),
+      });
+      if (!response.ok) throw new Error(await parseError(response));
+      setDeleting(null); setConfirmation("");
+      await refreshProjects();
+    } catch (cause) {setLocalError(cause instanceof Error ? cause.message : String(cause));}
+    finally {setBusy(false);}
+  }
   return (
     <>
     <div className="project-picker">
@@ -97,8 +113,24 @@ export function ProjectPicker() {
       >
         <StudioIcon name="refresh" size={16} /> Refresh
       </button>
+      {allowDelete && <button type="button" className="btn secondary btn-sm project-delete-button" aria-label="Delete project"
+        title="Permanently delete project" disabled={busy || loading || !project}
+        onClick={() => {if(project) {setDeleting({id:project.id,name:project.name});setConfirmation("");setLocalError(null);}}}>
+        <StudioIcon name="delete" size={16} /> Delete
+      </button>}
       {error ? <span className="project-picker-error">{error}</span> : null}
     </div>
+    {deleting && createPortal(<div className="folder-modal project-create-modal" role="alertdialog" aria-modal="true" aria-labelledby="project-delete-title"
+      onClick={() => {if(!busy)setDeleting(null);}} onKeyDown={event => {if(event.key === "Escape" && !busy)setDeleting(null);}}>
+      <form className="folder-modal-panel project-create-modal-panel" onClick={event=>event.stopPropagation()} onSubmit={event=>{event.preventDefault();void onDelete();}}>
+        <h2 id="project-delete-title">Permanently delete project?</h2>
+        <p><strong>{deleting.name}</strong></p>
+        <p>This permanently deletes this project's shots, project assets, conversations, and generated files. This cannot be undone. Shared Library assets are kept.</p>
+        <label className="field">Type the project name to confirm<input autoFocus aria-label="Confirm project name" value={confirmation} disabled={busy} onChange={event=>setConfirmation(event.target.value)}/></label>
+        {localError && <p className="banner error" role="alert">{localError}</p>}
+        <div className="project-create-actions"><button type="button" className="btn secondary" disabled={busy} onClick={()=>setDeleting(null)}>Cancel</button>
+          <button type="submit" className="btn project-delete-confirm" disabled={busy || confirmation !== deleting.name}>{busy ? "Deleting…" : "Delete permanently"}</button></div>
+      </form></div>, document.body)}
     {creating ? createPortal(
       <div
         className="folder-modal project-create-modal"

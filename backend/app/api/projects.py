@@ -2537,3 +2537,22 @@ async def submit_shot_endpoint(
     save_shot(submitted)
     shot = submitted
     return shot
+
+
+class DeleteProjectBody(BaseModel):
+    confirmation: str
+
+
+@router.delete("/projects/{project_id}")
+async def delete_project_endpoint(project_id: str, body: DeleteProjectBody):
+    from ..core.projects.deletion import delete_project
+    # Do not interrupt an active agent to satisfy a destructive operation.
+    if (await director_chat_sessions.snapshot(project_id)).active:
+        raise HTTPException(409, "Finish or cancel the active assistant before deleting this project.")
+    try:
+        delete_project(project_id, body.confirmation)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"deleted": project_id}

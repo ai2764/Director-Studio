@@ -170,7 +170,7 @@ function AppShell() {
           </div>
 
           <div className="topbar-project">
-            <ProjectPicker />
+            <ProjectPicker allowDelete />
           </div>
 
           {jsonProductionMode ? (

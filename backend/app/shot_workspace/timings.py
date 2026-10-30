@@ -10,6 +10,13 @@ from ..core.projects.store import project_dir
 from ..core.managed_runs.store import _project_lock
 
 
+_active_operations = {}
+
+
+def has_active_operation(project_id):
+    return _active_operations.get(project_id, 0) > 0
+
+
 def history(shot):
     path = project_dir(shot.project_id) / "shot_workspace" / "timings" / f"{shot.id}.json"
     with _project_lock(shot.project_id):
@@ -46,6 +53,7 @@ def timed(stage):
             status = "failed"
             operation = stage
             result = None
+            _active_operations[shot.project_id] = _active_operations.get(shot.project_id, 0) + 1
             try:
                 result = await fn(shot_id, *args, **kwargs)
                 status = "completed"
@@ -58,5 +66,8 @@ def timed(stage):
             finally:
                 entry = record(shot, operation, started, status)
                 if isinstance(result, dict): result["operation_duration_s"] = entry["duration_s"]
+                _active_operations[shot.project_id] -= 1
+                if not _active_operations[shot.project_id]:
+                    _active_operations.pop(shot.project_id, None)
         return run
     return decorate

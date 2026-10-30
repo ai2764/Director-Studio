@@ -21,3 +21,8 @@
 .project-create-modal .project-create-fields{min-height:0;overflow-y:auto;padding:3px}
 .project-create-modal .project-create-actions{padding-top:12px;margin-top:12px;border-top:1px solid var(--border,#cbbfae)}
 .project-mode-card img{width:84px;height:84px}
+
+.project-picker .project-delete-button { color: #99483e; border-color: #d5b8ac; }
+.project-picker .project-delete-button:hover:not(:disabled) { background: #f3e4de; }
+.project-delete-confirm { background: #99483e; border: 1px solid #99483e; color: #fffdf7; }
+.project-delete-confirm:disabled { opacity: .45; cursor: not-allowed; }
