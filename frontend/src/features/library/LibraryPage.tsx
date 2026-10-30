@@ -10,11 +10,14 @@ import {
 import { AssetImportDialog, libraryKindLabel } from "./AssetImportDialog";
 import { AssetDetailDialog, assetPreviewUrl } from "./AssetDetailDialog";
 import { AssetMetadataDialog } from "./AssetMetadataDialog";
+import { StudioIcon } from "../../shared/components/StudioIcon";
+import "./libraryDesign.css";
 
 const KINDS: { id: LibraryKind; label: string }[] = [
   { id: "actors", label: "Actors" },
   { id: "scenes", label: "Scenes" },
   { id: "props", label: "Props" },
+  { id: "costumes", label: "Wardrobe" },
   { id: "layouts", label: "Layouts" },
   { id: "voices", label: "Voices" },
 ];
@@ -38,6 +41,8 @@ export function LibraryPage({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [query, setQuery] = useState("");
+  const visibleAssets = assets.filter((asset) => `${asset.name} ${asset.notes || ""}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const isVoicePage = kind === "voices";
   const kindLabel = libraryKindLabel(kind);
   /** Folder popup: all outputs of one library asset. */
@@ -56,13 +61,16 @@ export function LibraryPage({
       setAssets([]);
       return;
     }
-    listLibraryAssets(kind, projectId)
-      .then(setAssets)
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, [projectId, kind]);
+    let current = true;
+    setAssets([]);
+    Promise.all((lockedKind ? [lockedKind] : KINDS.map((item) => item.id)).map((category) => listLibraryAssets(category, projectId)))
+      .then((groups) => { if (current) setAssets(groups.flat()); })
+      .catch((e) => { if (current) setError(e instanceof Error ? e.message : String(e)); });
+    return () => { current = false; };
+  }, [projectId, lockedKind]);
 
   useEffect(() => {
-    refresh();
+    return refresh();
   }, [refresh]);
 
   const onDeleteAsset = async (a: LibraryAsset) => {
@@ -86,7 +94,8 @@ export function LibraryPage({
 
   return (
     <PageShell
-      title={lockedKind === "voices" ? "Voice" : mobile || lockedKind ? kindLabel : "Library"}
+      hideHeader={!lockedKind}
+      title={lockedKind === "voices" ? "Voice" : lockedKind ? kindLabel : "Project assets"}
       subtitle={
         projectId ? (
           isVoicePage ? (
@@ -107,7 +116,7 @@ export function LibraryPage({
       actions={
         projectId ? (
           <>
-            {!mobile && !importOwnedByParent ? (
+            {lockedKind && !mobile && !importOwnedByParent ? (
               <button
                 type="button"
                 className="asset-import-button"
@@ -115,7 +124,7 @@ export function LibraryPage({
                 title={`Import ${kindLabel}`}
                 onClick={() => setShowImport(true)}
               >
-                +
+                <StudioIcon name="upload" /><span>Import</span>
               </button>
             ) : null}
             <button
@@ -124,7 +133,7 @@ export function LibraryPage({
               onClick={refresh}
               disabled={!projectId}
             >
-              Refresh
+              <StudioIcon name="refresh" /><span>Refresh</span>
             </button>
           </>
         ) : null
@@ -133,7 +142,7 @@ export function LibraryPage({
     >
       {error ? <div className="banner error">{error}</div> : null}
 
-      {mobile && projectId && !importOwnedByParent ? (
+      {lockedKind && mobile && projectId && !importOwnedByParent ? (
         <div className="mobile-library-toolbar">
           <span>{assets.length} in this category</span>
           <div>
@@ -144,44 +153,28 @@ export function LibraryPage({
               title={`Import ${kindLabel}`}
               onClick={() => setShowImport(true)}
             >
-              +
+              <StudioIcon name="upload" /><span>Import</span>
             </button>
-            <button type="button" className="btn secondary sm" onClick={refresh}>Refresh</button>
+            <button type="button" className="btn secondary sm" onClick={refresh}><StudioIcon name="refresh" />Refresh</button>
           </div>
         </div>
       ) : null}
 
-      {lockedKind ? null : (
-      <div className="kind-tabs">
-        {KINDS.map((k) => (
-          <button
-            key={k.id}
-            type="button"
-            className={`kind-tab ${kind === k.id ? "active" : ""}`}
-            onClick={() => setKind(k.id)}
-          >
-            {k.label}
-            {kind === k.id ? (
-              <span className="kind-count">{assets.length}</span>
-            ) : null}
-          </button>
-        ))}
-      </div>
-      )}
+      {projectId && <div className="library-search-row"><label className="library-search"><StudioIcon name="search" />
+        <input type="search" aria-label="Search assets" placeholder="Search names and descriptions" value={query} onChange={(event) => setQuery(event.target.value)} />
+      </label><span>{visibleAssets.length} {visibleAssets.length === 1 ? "asset" : "assets"}</span>
+        {!lockedKind && <button type="button" className="library-refresh" aria-label="Refresh library" title="Refresh library" onClick={refresh}><StudioIcon name="refresh" /></button>}
+      </div>}
 
-      {!projectId ? (
-        <p className="empty-copy">No project selected.</p>
-      ) : assets.length === 0 ? (
-        <div className="section-card empty-state-card">
-          <p className="empty-copy">
-            {isVoicePage
-              ? "No voices yet. Use + to upload a 2–15 second sample."
-              : `No ${kind} yet. Use + to import, or generate it with the preparation workflow.`}
-          </p>
-        </div>
-      ) : (
-        <div className="library-grid">
-          {assets.map((a) => {
+      {!projectId ? <p className="empty-copy">Select a project to browse its library.</p> :
+        (lockedKind ? KINDS.filter((item) => item.id === lockedKind) : KINDS).map((category) => <section className="library-category-section" key={category.id} aria-label={category.label}>
+          <header className="library-category-heading"><div><span className="library-category-icon"><StudioIcon name={category.id === "costumes" ? "props" : category.id} size={20} /></span>
+            <h2>{category.label}</h2><span className="library-category-count">{visibleAssets.filter((asset) => asset.kind === category.id).length}</span></div>
+            {!lockedKind && !importOwnedByParent && <button type="button" className="asset-section-import" aria-label={`Import ${category.label}`} onClick={() => { setKind(category.id); setShowImport(true); }}><StudioIcon name="upload" /><span>Import</span></button>}
+          </header>
+          {!visibleAssets.some((asset) => asset.kind === category.id) && <p className="library-category-empty">{query.trim() ? "No matches in this section." : "No assets yet. Import a reference to get started."}</p>}
+          <div className="library-grid">
+          {visibleAssets.filter((asset) => asset.kind === category.id).map((a) => {
             const thumb = previewUrl(a);
             const srcFn = (a.meta?.source_filename as string) || "";
             const external = a.pipeline_id === "external" || a.meta?.external;
@@ -190,6 +183,7 @@ export function LibraryPage({
             const duration = Number(a.meta?.duration_s);
             return (
               <article key={a.id} className={`library-card ${isVoice ? "voice-card" : ""}`}>
+                <div className="library-card-tools">
                 <button
                   type="button"
                   className="library-card-edit"
@@ -201,11 +195,12 @@ export function LibraryPage({
                     setEditingAsset(a);
                   }}
                 >
-                  Edit
+                  <StudioIcon name="edit" />
                 </button>
                 <button
                   type="button"
                   className="library-card-delete"
+                  aria-label={`Delete ${a.name}`}
                   disabled={busy}
                   title="Delete this asset"
                   onClick={(e) => {
@@ -213,8 +208,9 @@ export function LibraryPage({
                     void onDeleteAsset(a);
                   }}
                 >
-                  Delete
+                  <StudioIcon name="delete" />
                 </button>
+                </div>
                 {isVoice ? (
                   <div className="library-card-open voice-card-open">
                     <div className="voice-signal-rail" aria-hidden="true">
@@ -234,7 +230,7 @@ export function LibraryPage({
                       {a.meta?.h3_ready ? <span className="voice-ready">H3 Ready</span> : null}
                     </div>
                     <audio controls preload="metadata" src={a.urls?.reference || undefined} />
-                    {a.notes ? <p className="notes">{a.notes}</p> : null}
+                    <span className={`library-description-status${a.notes ? " has-description" : ""}`}>{a.notes ? "Description saved" : "Add description"}</span>
                     <button
                       type="button"
                       className="btn secondary sm voice-details-button"
@@ -248,7 +244,7 @@ export function LibraryPage({
                     type="button"
                     className="library-card-open"
                     onClick={() => setFolderAsset(a)}
-                    title="Open asset folder"
+                    title="View image and description"
                   >
                   <div className="library-thumb">
                     {thumb ? (
@@ -266,17 +262,18 @@ export function LibraryPage({
                       {external ? "external" : a.pipeline_id}
                     </div>
                     {srcFn ? (
-                      <div className="muted tiny ellipsis">📄 {srcFn}</div>
+                      <div className="muted tiny ellipsis library-source-file"><StudioIcon name="file" size={13} /> {srcFn}</div>
                     ) : null}
-                    {a.notes ? <p className="notes">{a.notes}</p> : null}
+                    <span className={`library-description-status${a.notes ? " has-description" : ""}`}>{a.notes ? "Description saved" : "Add description"}</span>
                   </div>
                   </button>
                 )}
               </article>
             );
           })}
-        </div>
-      )}
+        </div></section>)}
+
+      {assets.length > 0 && !visibleAssets.length && <p className="empty-copy">No matching assets. Try another name or description.</p>}
 
       {folderAsset ? (
         <AssetDetailDialog

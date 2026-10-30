@@ -12,6 +12,12 @@ import { DirectorStudioMark } from "../shared/components/DirectorStudioMark";
 import { navigationForMode, type DesktopPage } from "./navigation";
 import { WorkflowSettingsPage } from "../features/settings/WorkflowSettingsPage";
 import type { Shot } from "../shared/api/types";
+import { AuthoringModeSelector } from "../shared/project/AuthoringModeSelector";
+
+function useShotsMode() {
+  const { project } = useProject();
+  return project?.mode === "director" && project.authoring_mode === "shot_workspace";
+}
 
 function materialReviewRequest(
   shot: Shot,
@@ -27,12 +33,13 @@ function materialReviewRequest(
 }
 
 function MobileAppShell() {
+  const shotsMode = useShotsMode();
   const [page, setPage] = useState<"asset" | "director" | "production">("director");
   const [directorRequest, setDirectorRequest] = useState<DirectorChatRequest | null>(null);
   const requestSequence = useRef(0);
   const { project } = useProject();
   const jsonProductionMode = project?.mode === "json_production";
-  const activePage = jsonProductionMode ? "production" : page;
+  const activePage = jsonProductionMode ? "production" : shotsMode && page === "production" ? "director" : page;
   const reviewMaterials = (shot: Shot, shotNumber: number, message: string) => {
     requestSequence.current += 1;
     setDirectorRequest(materialReviewRequest(shot, shotNumber, requestSequence.current, message));
@@ -54,11 +61,11 @@ function MobileAppShell() {
           </div>
           <details className="mobile-project-menu">
             <summary aria-label="Change project">{project?.name || "Project"}</summary>
-            <div className="mobile-project-popover"><ProjectPicker /></div>
+            <div className="mobile-project-popover"><ProjectPicker /><AuthoringModeSelector /></div>
           </details>
         </div>
 
-        {!jsonProductionMode ? <nav className="mobile-topbar-row mobile-workspace-nav" aria-label="Mobile workspace">
+        {!jsonProductionMode ? <nav className={`mobile-topbar-row mobile-workspace-nav${shotsMode ? " mobile-shots-nav" : ""}`} aria-label="Mobile workspace">
           <button
             type="button"
             className={activePage === "asset" ? "active" : ""}
@@ -73,16 +80,16 @@ function MobileAppShell() {
             aria-current={activePage === "director" ? "page" : undefined}
             onClick={() => setPage("director")}
           >
-            Director
+            {shotsMode ? "Shots" : "Director"}
           </button>
-          <button
+          {!shotsMode && <button
             type="button"
             className={activePage === "production" ? "active" : ""}
             aria-current={activePage === "production" ? "page" : undefined}
             onClick={() => setPage("production")}
           >
             Production
-          </button>
+          </button>}
         </nav> : null}
       </header>
 
@@ -92,7 +99,7 @@ function MobileAppShell() {
       <div className="mobile-page mobile-director-page" hidden={activePage !== "director"}>
         <DirectorPage mobile chatOnly active={activePage === "director"} requestedMessage={directorRequest} />
       </div>
-      <div
+      {(!shotsMode || jsonProductionMode) && <div
         className={`mobile-page mobile-production-page${
           project?.mode === "json_production" ? " mobile-json-production-page" : ""
         }`}
@@ -107,12 +114,13 @@ function MobileAppShell() {
             onReviewMaterials={reviewMaterials}
           />
         )}
-      </div>
+      </div>}
     </div>
   );
 }
 
 function AppShell() {
+  const shotsMode = useShotsMode();
   const [page, setPage] = useState<DesktopPage>("director");
   const [settingsVisited, setSettingsVisited] = useState(false);
   const settingsReturnPage = useRef<Exclude<DesktopPage, "settings">>("director");
@@ -125,7 +133,8 @@ function AppShell() {
   } | null>(null);
   const { project } = useProject();
   const jsonProductionMode = project?.mode === "json_production";
-  const activePage = jsonProductionMode && page !== "settings" ? "production" : page;
+  const activePage = jsonProductionMode && page !== "settings" ? "production"
+    : shotsMode && page === "production" ? "director" : page;
   const openSettings = () => {
     if (activePage !== "settings") settingsReturnPage.current = activePage;
     setSettingsVisited(true);
@@ -161,7 +170,7 @@ function AppShell() {
           </div>
 
           <div className="topbar-project">
-            <ProjectPicker />
+            <ProjectPicker allowDelete />
           </div>
 
           {jsonProductionMode ? (
@@ -173,19 +182,21 @@ function AppShell() {
           ) : null}
 
           {!jsonProductionMode ? <nav className="workflow-nav" aria-label="Project workflow">
-            {navigationForMode(project?.mode).map((item) => (
+            {navigationForMode(project?.mode).filter((item) => !shotsMode || item.id !== "production").map((item) => (
               <button
                 key={item.id}
                 type="button"
                 className={activePage === item.id ? "active" : ""}
-                aria-label={item.label}
+                aria-label={shotsMode && item.id === "director" ? "Shots" : item.label}
                 aria-current={activePage === item.id ? "page" : undefined}
                 onClick={() => setPage(item.id)}
               >
-                {item.label}
+                {shotsMode && item.id === "director" ? "Shots" : item.label}
               </button>
             ))}
           </nav> : null}
+
+          <AuthoringModeSelector />
 
           <div
             className={`health ${health?.comfy_reachable ? "ok" : "bad"}`}
@@ -213,7 +224,7 @@ function AppShell() {
       >
         <DirectorPage active={activePage === "director"} requestedMessage={directorRequest} />
       </div>
-      <div
+      {(!shotsMode || jsonProductionMode) && <div
         className={activePage === "production" ? "page-pane active" : "page-pane"}
         hidden={activePage !== "production"}
       >
@@ -228,7 +239,7 @@ function AppShell() {
             onReviewMaterials={reviewMaterials}
           />
         )}
-      </div>
+      </div>}
     </div>
   );
 }

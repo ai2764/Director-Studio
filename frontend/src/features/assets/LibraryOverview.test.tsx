@@ -19,9 +19,9 @@ vi.mock("../library/api", () => ({
 }));
 
 const actor = {
-  id: "act_mara",
+  id: "act_sample",
   kind: "actors",
-  name: "Mara",
+  name: "Actor sample",
   notes: "Lead performer identity set",
   pipeline_id: "gpt_actor",
   job_id: "job_actor",
@@ -33,8 +33,8 @@ const actor = {
   },
   meta: {},
   urls: {
-    master: "/assets/mara-master.png",
-    fullbody_threeview: "/assets/mara-fullbody.png",
+    master: "/assets/sample-master.png",
+    fullbody_threeview: "/assets/sample-fullbody.png",
   },
   project_id: "prj_test",
 };
@@ -55,16 +55,16 @@ describe("LibraryOverview asset details", () => {
   it("opens the complete asset set when a Library thumbnail is clicked", async () => {
     render(<LibraryOverview onSelectKind={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "View Mara asset set" }));
+    fireEvent.click(await screen.findByRole("button", { name: "View Actor sample asset set" }));
 
-    expect(screen.getByRole("dialog", { name: "Mara assets" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Actor sample assets" })).toBeTruthy();
     expect(screen.getByText("Master")).toBeTruthy();
     expect(screen.getByText("Full-body three-view")).toBeTruthy();
     expect(screen.getByText("Lead performer identity set")).toBeTruthy();
   });
 
   it("renders every asset when a Library group contains more than six", async () => {
-    const actors = ["Mara", "Tao", "Mia", "Noah", "June", "Iris", "Omar"].map((name, index) => ({
+    const actors = ["Actor sample", "Tao", "Mia", "Noah", "June", "Iris", "Omar"].map((name, index) => ({
       ...actor,
       id: `act_${index + 1}`,
       name,
@@ -83,12 +83,12 @@ describe("LibraryOverview asset details", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<LibraryOverview onSelectKind={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "View Mara asset set" }));
+    fireEvent.click(await screen.findByRole("button", { name: "View Actor sample asset set" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     await waitFor(() => {
-      expect(deleteLibraryAsset).toHaveBeenCalledWith("actors", "act_mara");
-      expect(screen.queryByRole("dialog", { name: "Mara assets" })).toBeNull();
+      expect(deleteLibraryAsset).toHaveBeenCalledWith("actors", "act_sample");
+      expect(screen.queryByRole("dialog", { name: "Actor sample assets" })).toBeNull();
     });
     expect(vi.mocked(listLibraryAssets).mock.calls.filter(([kind]) => kind === "actors")).toHaveLength(2);
   });
@@ -96,22 +96,22 @@ describe("LibraryOverview asset details", () => {
   it("edits asset metadata from the mobile overview detail", async () => {
     updateLibraryAssetMock.mockResolvedValueOnce({
       ...actor,
-      name: "Mara profile",
+      name: "Actor sample profile",
       notes: "Right-facing continuity angle",
     });
     render(<LibraryOverview onSelectKind={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "View Mara asset set" }));
+    fireEvent.click(await screen.findByRole("button", { name: "View Actor sample asset set" }));
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(screen.getByLabelText("Name"), {
-      target: { value: "Mara profile" },
+      target: { value: "Actor sample profile" },
     });
-    fireEvent.change(screen.getByLabelText("Notes"), {
+    fireEvent.change(screen.getByLabelText("Description"), {
       target: { value: "Right-facing continuity angle" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
-    expect(await screen.findByRole("dialog", { name: "Mara profile assets" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "Actor sample profile assets" })).toBeTruthy();
     expect(screen.getByText("Right-facing continuity angle")).toBeTruthy();
   });
 });

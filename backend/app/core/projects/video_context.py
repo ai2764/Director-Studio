@@ -204,6 +204,12 @@ def video_context_prompt_is_stale(shot: Shot) -> bool:
     config = shot.video_context
     active = config is not None and config.mode != "off"
     meta = shot.meta or {}
+    project = load_project(shot.project_id)
+    if project and project.authoring_mode == "shot_workspace":
+        from ...shot_workspace.references import continuation_intent_signature
+        stored_intent = meta.get("workspace_continuation_intent_signature")
+        if stored_intent:
+            return stored_intent != continuation_intent_signature(shot)
     if not active and "prompt_video_context_signature" not in meta:
         return False
     stored = str(meta.get("prompt_video_context_signature") or "")

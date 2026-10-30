@@ -28,6 +28,7 @@ type ProjectContextValue = {
     name: string,
     scriptText?: string,
     mode?: ProjectMode,
+    authoringMode?: "director_agent" | "shot_workspace",
   ) => Promise<Project>;
 };
 
@@ -83,11 +84,12 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const createAndSelect = useCallback(
-    async (name: string, scriptText = "", mode: ProjectMode = "director") => {
+    async (name: string, scriptText = "", mode: ProjectMode = "director", authoringMode?: "director_agent" | "shot_workspace") => {
       const p = await createProject({
         name: name.trim() || "Untitled Project",
         script_text: scriptText,
         mode,
+        ...(authoringMode ? { authoring_mode: authoringMode } : {}),
       });
       await refreshProjects();
       setProjectId(p.id);

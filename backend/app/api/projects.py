@@ -181,12 +181,15 @@ async def _assert_chat_available() -> None:
 
 
 class CreateProjectBody(BaseModel):
+    authoring_mode: Literal["director_agent", "shot_workspace"] = "director_agent"
     name: str
     script_text: str = ""
     mode: ProjectMode = ProjectMode.director
 
 
 class UpdateProjectBody(BaseModel):
+    authoring_mode: Literal["director_agent", "shot_workspace"] | None = None
+    expected_authoring_mode: Literal["director_agent", "shot_workspace"] | None = None
     name: str | None = None
     script_text: str | None = None
     script_locked: bool | None = None
@@ -542,7 +545,9 @@ async def create_project_endpoint(body: CreateProjectBody) -> Project:
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "name is required")
-    return create_project(name, body.script_text or "", mode=body.mode)
+    if body.authoring_mode == "shot_workspace" and body.mode != ProjectMode.director:
+        raise HTTPException(422, "Shot Workspace is available for film projects.")
+    return create_project(name, body.script_text or "", mode=body.mode, authoring_mode=body.authoring_mode)
 
 
 @router.get("/projects", response_model=list[Project])
@@ -568,6 +573,18 @@ async def update_project_endpoint(
     if project is None:
         raise HTTPException(404, "Project not found")
     updates: dict[str, Any] = {}
+    if body.authoring_mode is not None and body.authoring_mode != project.authoring_mode:
+        from ..shot_workspace.router import ensure_idle
+        await ensure_idle(project_id)
+        if body.expected_authoring_mode is not None and body.expected_authoring_mode != project.authoring_mode:
+            raise HTTPException(409, "The mode changed. Refresh the project before switching.")
+        if body.authoring_mode == "shot_workspace" and project.mode != ProjectMode.director:
+            raise HTTPException(422, "Shot Workspace is available for film projects.")
+        from ..shot_workspace.router import ensure_shot_idle
+        for shot in list_shots(project_id):
+            ensure_shot_idle(shot)
+        updates["authoring_mode"] = body.authoring_mode
+
     if body.name is not None:
         name = body.name.strip()
         if not name:
@@ -602,6 +619,8 @@ async def plan_project_endpoint(
 ) -> ProjectDetailResponse:
     if load_project(project_id) is None:
         raise HTTPException(404, "Project not found")
+    if load_project(project_id).authoring_mode == "shot_workspace":
+        raise HTTPException(409, "Use Shot Workspace controls, or switch to Director Agent for planning and chat.")
     try:
         project = await svc.plan_project(project_id)
     except ValueError as e:
@@ -771,7 +790,7 @@ async def _make_chat_fn(
             plan_model = _selected_model()
             await _refresh_context_capacity(plan_model)
             if compacting:
-                label = "整理对话上下文…"
+                label = "Compacting conversation context…"
             elif use_images:
                 label = f"Thinking with {plan_model} · {len(use_images)} image{'s' if len(use_images) != 1 else ''}…"
             else:
@@ -983,6 +1002,8 @@ async def project_chat_endpoint(
     """
     if load_project(project_id) is None:
         raise HTTPException(404, "Project not found")
+    if load_project(project_id).authoring_mode == "shot_workspace":
+        raise HTTPException(409, "Use Shot Workspace controls, or switch to Director Agent for planning and chat.")
     msg = (body.message or "").strip()
     if not msg:
         raise HTTPException(400, "message is required")
@@ -1193,6 +1214,8 @@ async def _project_chat_stream_response(
 
     if load_project(project_id) is None:
         raise HTTPException(404, "Project not found")
+    if load_project(project_id).authoring_mode == "shot_workspace":
+        raise HTTPException(409, "Use Shot Workspace controls, or switch to Director Agent for planning and chat.")
     msg = (message or "").strip()
     if not msg:
         raise HTTPException(400, "message is required")
@@ -2031,6 +2054,15 @@ async def approve_shot_endpoint(shot_id: str) -> Shot:
     return shot
 
 
+@router.get("/shots/{shot_id}/video-generations")
+def get_shot_video_generations(shot_id: str):
+    """All H3 generations, including older jobs absent from shot metadata."""
+    from ..core.media.clip_generations import list_shot_h3_generations
+    from ..pipelines.h3_ref2va.router import _to_response
+    shot = _find_shot(shot_id)
+    return [_to_response(job) for job in reversed(list_shot_h3_generations(shot.project_id, shot.id))]
+
+
 @router.get("/shots/{shot_id}/video-context")
 def get_shot_video_context(shot_id: str) -> dict:
     """Expose saved continuation and its source-size constraint without host paths."""
@@ -2096,6 +2128,13 @@ async def submit_shot_endpoint(
     project = load_project(shot.project_id)
     if project is None:
         raise HTTPException(404, "Project not found")
+    if project.authoring_mode == "shot_workspace":
+        from ..shot_workspace.writer import require_prompt, adopt_verified_legacy_prompt
+        try:
+            shot = adopt_verified_legacy_prompt(shot)
+            require_prompt(shot)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
     if shot.music_segment is not None and project.mode != ProjectMode.mv:
         raise HTTPException(400, "Music segments require a Music Video project")
     if settings.video_context_enabled:
@@ -2277,6 +2316,8 @@ async def submit_shot_endpoint(
         )
         or video_context_prompt_is_stale(shot)
     ):
+        if project.authoring_mode == "shot_workspace":
+            raise HTTPException(409, "Prompt inputs changed. Rewrite the prompt in Shot Workspace before generating video.")
         try:
             shot = await svc.write_prompts_after_layout(shot.id)
         except ValueError as e:
@@ -2368,15 +2409,22 @@ async def submit_shot_endpoint(
             for marker in ("9:16", "9／16", "竖屏", "vertical")
         )
     )
+    workspace_dimensions = None
+    if project and project.authoring_mode == "shot_workspace":
+        from ..shot_workspace.resolution import default_resolution
+        from ..pipelines.h3_ref2va.resolutions import resolve_local_resolution
+        default_width, default_height = resolve_local_resolution(default_resolution(project))
+        workspace_dimensions = {"width": default_width, "height": default_height}
+    fallback_dimensions = inherited_resolution or workspace_dimensions
     width = (
         int(options.width)
         if options is not None and options.width is not None
-        else (inherited_resolution["width"] if inherited_resolution else (480 if portrait else 864))
+        else (fallback_dimensions["width"] if fallback_dimensions else (480 if portrait else 864))
     )
     height = (
         int(options.height)
         if options is not None and options.height is not None
-        else (inherited_resolution["height"] if inherited_resolution else (864 if portrait else 480))
+        else (fallback_dimensions["height"] if fallback_dimensions else (864 if portrait else 480))
     )
     native_audio_key: str | None = None
     if shot.source_audio_path:
@@ -2415,6 +2463,13 @@ async def submit_shot_endpoint(
         )
     except VideoContextError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if h3_provider == "local":
+        from ..workflow_profiles.h3.store import H3ProfileStore
+        from ..workflow_profiles.h3.errors import ProfileStorageError
+        try:
+            H3ProfileStore().resolve_for_submission(has_context=staged_context is not None)
+        except ProfileStorageError as exc:
+            raise HTTPException(400, str(exc)) from exc
     if staged_context is not None:
         images["context_video"] = (staged_context["filename"], staged_context["data"])
     reference_evidence = (latest_shot.meta.get("material_review") or {}).get("references", [])
@@ -2482,3 +2537,22 @@ async def submit_shot_endpoint(
     save_shot(submitted)
     shot = submitted
     return shot
+
+
+class DeleteProjectBody(BaseModel):
+    confirmation: str
+
+
+@router.delete("/projects/{project_id}")
+async def delete_project_endpoint(project_id: str, body: DeleteProjectBody):
+    from ..core.projects.deletion import delete_project
+    # Do not interrupt an active agent to satisfy a destructive operation.
+    if (await director_chat_sessions.snapshot(project_id)).active:
+        raise HTTPException(409, "Finish or cancel the active assistant before deleting this project.")
+    try:
+        delete_project(project_id, body.confirmation)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"deleted": project_id}

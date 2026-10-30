@@ -538,9 +538,9 @@ class BackendTurn:
             from ...core.jobs.store import load_job
             if any((job := load_job(job_id)) is None or job.project_id != project.id
                    for job_id in referenced_jobs):
-                reply = "回复引用了不存在的项目 Job。本轮没有可核实的任务回执；请重新读取状态或调用生成工具。"
+                reply = "The reply referenced a job that does not exist in this project. No verifiable task receipt is available; refresh the status or use a generation tool."
             elif not referenced_jobs <= (self.tool_exposed_job_ids | self.context_exposed_job_ids):
-                reply = "回复引用了未经本轮项目状态或工具核实的 Job。请先读取状态或调用生成工具。"
+                reply = "The reply referenced a job not verified by this turn's project state or tools. Read the status or use a generation tool first."
         images = self.result_images + _layout_images(shots, only_shot_ids=self.touched) if self.touched else self.result_images
         return ChatResult(reply=reply, project=project, shots=shots, actions=self.actions,
                           failure_code=self.terminal_failure_code if self.terminal_failure else "",

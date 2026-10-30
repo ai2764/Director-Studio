@@ -5,12 +5,13 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Shot, ShotVideoContext } from "../../shared/api/types";
 import { fetchH3Profiles } from "../../shared/api/client";
-import { getShot, getVideoJob, saveVideoContext, uploadVideoContext } from "./api";
+import { getShot, getVideoJob, getShotVideoGenerations, saveVideoContext, uploadVideoContext } from "./api";
 import { continuationFocus, VideoContextPanel } from "./VideoContextPanel";
 
 vi.mock("./api", () => ({
   getShot: vi.fn(),
   getVideoJob: vi.fn(),
+  getShotVideoGenerations: vi.fn(),
   saveVideoContext: vi.fn(),
   uploadVideoContext: vi.fn(),
 }));
@@ -131,6 +132,7 @@ describe("VideoContextPanel", () => {
       .toBe(videoOutput("job_first").url));
     expect(screen.getByRole("note", { name: "Video dependency" }).textContent).toContain("Continues Shot 1");
     expect(getVideoJob).not.toHaveBeenCalledWith("job_adjacent");
+    expect(screen.queryByLabelText("Upload continuation video")).toBeNull();
     const framesInput = screen.getByLabelText("Context window");
     fireEvent.change(framesInput, { target: { value: "39" } });
     fireEvent.blur(framesInput);
@@ -305,7 +307,7 @@ describe("VideoContextPanel", () => {
     const window = await screen.findByLabelText("Context window");
     expect(window.tagName).toBe("INPUT");
     expect((window as HTMLInputElement).readOnly).toBe(true);
-    expect((window as HTMLInputElement).value).toBe("工作流配置");
+    expect((window as HTMLInputElement).value).toBe("Configured by workflow");
     expect(screen.queryByLabelText("Carry source audio")).toBeNull();
   });
 
@@ -451,4 +453,16 @@ describe("VideoContextPanel", () => {
 
     expect(await screen.findByText("Select one video artifact from the source shot")).toBeTruthy();
   });
+});
+
+it("includes successful historical clips missing from superseded metadata",async()=>{
+ const first=makeShot("s1","Source",{h3_job_id:"current"});
+ const target=makeShot("s2","Continue",{video_context:{mode:"previous_shot",source_shot_id:"s1"}});
+ vi.mocked(getShotVideoGenerations).mockResolvedValue([
+   succeededJob("older-unlisted",{video:videoOutput("older-unlisted")}),
+   succeededJob("current",{video:videoOutput("current")}),
+ ]);
+ render(<VideoContextPanel shot={target} shots={[first,target]} expanded/>);
+ await waitFor(()=>expect(screen.getByLabelText("Source video version").textContent).toContain("older-unlisted"));
+ expect(getShotVideoGenerations).toHaveBeenCalledWith("s1");
 });

@@ -1,3 +1,4 @@
+import { ShotWorkspacePage } from "../shot-workspace/ShotWorkspacePage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   layoutPreviewUrl,
@@ -167,6 +168,7 @@ export function DirectorPage({
   segmentSelection?: SegmentSelection;
 } = {}) {
   const { project } = useProject();
+  if (project?.authoring_mode === "shot_workspace") return <ShotWorkspacePage desktopOutput={!mobile} />;
   if (project?.mode === "json_production") {
     return <JsonModeDirectorNotice />;
   }

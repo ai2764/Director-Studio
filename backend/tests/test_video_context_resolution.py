@@ -62,3 +62,32 @@ def test_off_status_has_no_resolution_constraint(monkeypatch, tmp_path):
     status = api.get_shot_video_context(shot.id)
     assert status["resolution"] is None
     assert status["mode"] == "off"
+
+
+def test_source_video_size_overrides_different_workspace_default(monkeypatch, tmp_path):
+    from app.api import projects as api
+    from app.core.projects.store import load_project, save_project
+    project, shot, original = _configured(monkeypatch, tmp_path)
+    saved = load_project(project.id)
+    saved.authoring_mode = "shot_workspace"
+    saved.workspace_default_resolution = "landscape-1080"
+    save_project(saved)
+    status = api.get_shot_video_context(shot.id)
+    assert status["resolution"] == {"width":480,"height":864}
+    assert status["source_job_id"] == original.id
+    assert load_project(project.id).workspace_default_resolution == "landscape-1080"
+
+
+def test_video_generation_menu_includes_all_source_jobs_without_history_metadata(monkeypatch,tmp_path):
+    from app.api.projects import get_shot_video_generations
+    project, first, second = _board(monkeypatch,tmp_path)
+    original = _succeed(project.id,first.id)
+    latest = _succeed(project.id,first.id,b"another-video")
+    unrelated = _succeed(project.id,second.id,b"other-shot")
+    first.h3_job_id = latest.id
+    first.meta = {}
+    save_shot(first)
+    versions = get_shot_video_generations(first.id)
+    assert {v.id for v in versions} == {original.id,latest.id}
+    assert unrelated.id not in {v.id for v in versions}
+    assert all(v.outputs["video"].url for v in versions)

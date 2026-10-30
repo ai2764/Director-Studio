@@ -377,6 +377,19 @@ describe("App mode routing", () => {
     expect(screen.getByTestId("asset-workspace").closest("[hidden]")).not.toBeNull();
   });
 
+  it("keeps mobile Shot Workspace on Shots without a separate Production page", () => {
+    window.history.replaceState({}, "", "/mobile");
+    projectState.project = {...projectState.project!,mode:"director",authoring_mode:"shot_workspace"};
+    render(<App />);
+    expect(screen.getByRole("button", {name:"Shots"})).toBeTruthy();
+    expect(screen.queryByRole("button", {name:"Production"})).toBeNull();
+    expect(screen.queryByTestId("production-page")).toBeNull();
+    expect(screen.getByTestId("director-page").closest("[hidden]")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name:"Asset"}));
+    fireEvent.click(screen.getByRole("button", {name:"Shots"}));
+    expect(screen.getByTestId("director-page").closest("[hidden]")).toBeNull();
+  });
+
   it("puts three mobile workspace tabs in the second header row", () => {
     window.history.replaceState({}, "", "/mobile");
     render(<App />);

@@ -213,7 +213,7 @@ async def handle_actor_tool(
             )
         notes.append(
             f"Actor design job {terminal.id} is ready for review. "
-            "Say ‘这张可以’ to save it to the Actor library."
+            "Say 'Save this image' to save it to the Actor library."
         )
         return True
 

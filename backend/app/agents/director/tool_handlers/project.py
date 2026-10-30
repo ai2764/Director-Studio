@@ -27,9 +27,9 @@ from ..service import _script_hash
 logger = logging.getLogger("director_studio.director.tool_handlers.project")
 
 _STORYBOARD_REPLACEMENT_WARNING = (
-    "保存新的 storyboard 会清除当前全部 {shot_count} 个 shots，并用新计划全量重写。"
-    "当前没有修改任何 shot。若要继续，请在下一条消息中明确回复："
-    "确认清除并重写全部 shots"
+    "Saving this storyboard will clear all {shot_count} existing shots and replace them with the new plan. "
+    "No shots have been changed. To proceed, reply in your next message: "
+    "Confirm clear all shots and rewrite the storyboard"
 )
 
 
@@ -212,8 +212,8 @@ async def handle_project_tool(
             or user_message_id == pending.get("request_message_id")
         ):
             raise ValueError(
-                "请在后续消息中明确回复“确认清除并重写全部 shots”；"
-                "ok、继续或附带修改要求都不会授权全量替换。"
+                "Reply in a subsequent message: 'Confirm clear all shots and rewrite the storyboard'. "
+                "A generic 'OK', 'continue', or a message with additional edits does not authorize full replacement."
             )
         current_shots = refresh_shots()
         if _storyboard_state_hash(current_shots) != pending.get("storyboard_state_hash"):
@@ -309,9 +309,9 @@ async def handle_project_tool(
                 shot_count=len(current_shots)
             )
             if removed_dialogue:
-                warning += "\n将删除或替换的原对白：" + json.dumps(removed_dialogue, ensure_ascii=False)
+                warning += "\nOriginal dialogue to be removed or replaced: " + json.dumps(removed_dialogue, ensure_ascii=False)
             if proposal["warnings"]:
-                warning += "\n生成风险提示（不阻止保存）：\n" + "\n".join(proposal["warnings"])
+                warning += "\nGeneration warnings (saving is still allowed):\n" + "\n".join(proposal["warnings"])
             actions.append(f"propose_storyboard_replacement:{proposal['id']}")
             if result_payloads is not None:
                 result_payloads.append(
