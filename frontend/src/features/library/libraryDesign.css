@@ -79,6 +79,17 @@
 :is(.asset-workspace,.mobile-asset-workspace) { --text: #303b2d; --muted: #626958; --border: #d5d3c2; --bg-panel: #faf7ef; --bg-elev: #eeeee2; --accent: #56694f; color-scheme: light; }
 .library-page .folder-modal-panel :is(input,textarea,select) { color: #303b2d; background: #fffdf7; border-color: #d5d3c2; }
 .library-page .library-card-open.voice-card-open { box-sizing: border-box; }
+.asset-detail-content { display: grid; gap: 28px; align-items: start; }
+.asset-detail-content.has-description { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
+.asset-detail-content > .folder-file-grid { min-width: 0; margin-top: 0; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); }
+.asset-detail-content .folder-file-thumb { height: auto; aspect-ratio: 1; }
+.asset-detail-content .folder-file-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.asset-detail-description { min-width: 0; padding: 4px 0; }
+.asset-detail-description h3 { margin: 0 0 12px; font-size: 16px; }
+.library-page .asset-detail-description .folder-modal-notes { margin: 0; max-width: none; font-size: 15px; line-height: 1.7; }
+@media(max-width:720px) {
+  .asset-detail-content.has-description { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+}
 @media(max-width:680px) {
   .library-card-tools { padding: 6px 8px; }
   .library-page .library-card-tools :is(.library-card-edit,.library-card-delete) { width: 40px; height: 40px; }

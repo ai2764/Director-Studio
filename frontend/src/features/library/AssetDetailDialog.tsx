@@ -84,7 +84,7 @@ export function AssetDetailDialog({
   return (
     <>
       <div
-        className="folder-modal"
+        className="folder-modal asset-detail-modal"
         role="dialog"
         aria-modal="true"
         aria-label={`${asset.name} assets`}
@@ -99,7 +99,6 @@ export function AssetDetailDialog({
                 {asset.job_id ? ` · ${asset.job_id}` : ""}
                 {asset.seed != null ? ` · seed ${asset.seed}` : ""}
               </p>
-              {asset.notes ? <p className="folder-modal-notes">{asset.notes}</p> : null}
             </div>
             <div className="folder-modal-actions">
               {onEdit ? (
@@ -118,6 +117,7 @@ export function AssetDetailDialog({
             </div>
           </div>
 
+          <div className={`asset-detail-content${asset.notes ? " has-description" : ""}`}>
           {slots.length === 0 ? (
             <p className="empty-copy">No files in this asset.</p>
           ) : (
@@ -146,6 +146,13 @@ export function AssetDetailDialog({
               )}
             </div>
           )}
+          {asset.notes ? (
+            <section className="asset-detail-description" aria-label="Asset description">
+              <h3>Description</h3>
+              <p className="folder-modal-notes">{asset.notes}</p>
+            </section>
+          ) : null}
+          </div>
         </div>
       </div>
 
