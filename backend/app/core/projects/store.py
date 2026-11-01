@@ -33,6 +33,7 @@ def create_project(
     name: str,
     script_text: str,
     mode: ProjectMode = ProjectMode.director,
+    authoring_mode: str = "director_agent",
 ) -> Project:
     project_id = new_project_id()
     now = _now()
@@ -41,6 +42,7 @@ def create_project(
         name=name.strip(),
         script_text=script_text,
         mode=mode,
+        authoring_mode=authoring_mode,
         created_at=now,
         updated_at=now,
         shot_ids=[],
@@ -192,5 +194,6 @@ def list_shots(project_id: str) -> list[Shot]:
                 ordered.append(by_id[sid])
         return ordered
     # No shot_ids yet: return whatever files exist (legacy / mid-create)
+    if project and (project_dir(project_id) / "removed_shots").is_dir():
+        return []
     return [by_id[k] for k in sorted(by_id)]
-

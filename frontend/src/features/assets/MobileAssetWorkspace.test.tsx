@@ -1,160 +1,18 @@
 // @vitest-environment jsdom
-
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Project } from "../../shared/api/types";
-import { listLibraryAssets } from "../library/api";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, expect, it, vi } from "vitest";
 import { MobileAssetWorkspace } from "./MobileAssetWorkspace";
-
-const state = vi.hoisted(() => ({
-  project: {
-    id: "prj_1", name: "Night film", script_text: "", mode: "director",
-    created_at: "2026-01-01", updated_at: "2026-01-01", shot_ids: [],
-  } as Project | null,
-}));
-
-vi.mock("../music/api", () => ({ getSongSegments: vi.fn(async () => ({ document: null, master_stale: false })) }));
-vi.mock("../../shared/project/ProjectContext", () => ({
-  useProject: () => ({ project: state.project, projectId: state.project?.id ?? null, refreshProjects: vi.fn(async () => {}) }),
-}));
-vi.mock("../library/LibraryPage", () => ({
-  LibraryPage: ({ lockedKind, mobile }: { lockedKind?: string; mobile?: boolean }) => (
-    <div data-testid="mobile-library" data-kind={lockedKind} data-mobile={String(Boolean(mobile))} />
-  ),
-}));
-vi.mock("../library/api", () => ({
-  importExternalAsset: vi.fn(),
-  listLibraryAssets: vi.fn(async (kind: string) => kind === "actors" ? [{
-    id: "actor_1", kind: "actors", name: "Mara", notes: "Lead", pipeline_id: "external",
-    job_id: "", seed: null, created_at: "2026-01-01", files: {}, meta: {},
-    urls: { master: "/mara.png" }, project_id: "prj_1",
-  }] : []),
-}));
-vi.mock("../casting/CastingPage", () => ({
-  CastingPage: () => <label>Actor generator<input aria-label="Mobile actor draft" /></label>,
-}));
-vi.mock("../set/SetDesignPage", () => ({ SetDesignPage: () => <div>Scene generator</div> }));
-vi.mock("../props/PropsPage", () => ({ PropsPage: () => <div>Prop generator</div> }));
-
-describe("MobileAssetWorkspace", () => {
-  afterEach(cleanup);
-  beforeEach(() => {
-    state.project = {
-      id: "prj_1", name: "Night film", script_text: "", mode: "director",
-      created_at: "2026-01-01", updated_at: "2026-01-01", shot_ids: [],
-    };
-  });
-
-  it("shows the library when switching from MV Music to a regular project", () => {
-    state.project = { ...state.project!, id: "prj_mv", mode: "mv" };
-    const view = render(<MobileAssetWorkspace />);
-    fireEvent.click(screen.getByRole("button", { name: "Music" }));
-    expect(screen.getByLabelText("Lyrics and time notes")).toBeTruthy();
-    state.project = { ...state.project, id: "prj_film", mode: "director" };
-    view.rerender(<MobileAssetWorkspace />);
-    expect(screen.queryByRole("button", { name: "Music" })).toBeNull();
-    expect(screen.getByRole("heading", { name: "Project library" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Library" }).className).toContain("active");
-  });
-
-  it("offers the MV song master upload inside mobile Assets Music", () => {
-    state.project = {
-      id: "prj_mv", name: "Song film", script_text: "", mode: "mv",
-      created_at: "2026-01-01", updated_at: "2026-01-01", shot_ids: [], music_master: null,
-    };
-    render(<MobileAssetWorkspace />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Music" }));
-    expect(screen.getByLabelText("Song master")).toBeTruthy();
-    expect(screen.getByText("Import song")).toBeTruthy();
-    expect(screen.getByLabelText("Lyrics and time notes")).toBeTruthy();
-  });
-
-  it("opens on a cross-category Library overview", async () => {
-    render(<MobileAssetWorkspace />);
-
-    for (const category of ["Library", "Actors", "Scenes", "Props", "Voices"]) {
-      expect(screen.getByRole("button", { name: category })).toBeTruthy();
-    }
-    expect(screen.queryByRole("button", { name: "Costumes" })).toBeNull();
-    expect(screen.queryByText("No wardrobe prepared")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Layouts" })).toBeNull();
-    expect(screen.getByRole("heading", { name: "Project library" })).toBeTruthy();
-    await waitFor(() => expect(screen.getByText("Mara")).toBeTruthy());
-    expect(screen.queryByTestId("mobile-library")).toBeNull();
-  });
-
-  it("reloads the project library after saving from a mobile preparation workflow", async () => {
-    const mara = {
-      id: "actor_1", kind: "actors", name: "Mara", notes: "Lead", pipeline_id: "actor",
-      job_id: "job_1", seed: null, created_at: "2026-01-01", files: {}, meta: {},
-      urls: { master: "/mara.png" }, project_id: "prj_1",
-    };
-    let actors: typeof mara[] = [];
-    vi.mocked(listLibraryAssets).mockImplementation(async (kind: string) =>
-      kind === "actors" ? actors : [],
-    );
-    render(<MobileAssetWorkspace />);
-
-    await waitFor(() => expect(listLibraryAssets).toHaveBeenCalled());
-    expect(screen.queryByText("Mara")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Actors" }));
-    actors = [mara];
-    fireEvent.click(screen.getByRole("button", { name: "Library" }));
-
-    expect(await screen.findByText("Mara")).toBeTruthy();
-  });
-
-  it("shows the preparation input directly without a category library", () => {
-    render(<MobileAssetWorkspace />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Actors" }));
-    expect(screen.getByRole("heading", { name: "Actor workflow" })).toBeTruthy();
-    expect(screen.getByText("Actor generator")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Import actor" })).toBeTruthy();
-    expect(screen.queryByTestId("mobile-library")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Voices" }));
-    expect(screen.getByRole("heading", { name: "Voice workflow" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Import voice" })).toBeTruthy();
-    expect(screen.queryByTestId("mobile-library")).toBeNull();
-  });
-
-  it("does not show legacy coverage state", () => {
-    state.project = {
-      id: "prj_1", name: "Night film", script_text: "", mode: "director",
-      created_at: "2026-01-01", updated_at: "2026-01-01", shot_ids: [],
-      asset_coverage_review: { script_hash: "abc", status: "reviewed", recommendations: [], notes: "Ready" },
-    };
-    render(<MobileAssetWorkspace />);
-
-    expect(screen.queryByText("Coverage reviewed")).toBeNull();
-    expect(screen.queryByText("Coverage not reviewed")).toBeNull();
-  });
-
-  it("opens import from the labeled action inside a mobile category", () => {
-    render(<MobileAssetWorkspace />);
-
-    const categories = screen.getByRole("navigation", { name: "Asset categories" });
-    expect(within(categories).queryByRole("button", { name: /Import/i })).toBeNull();
-    fireEvent.click(within(categories).getByRole("button", { name: "Props" }));
-    fireEvent.click(screen.getByRole("button", { name: "Import prop" }));
-
-    expect(screen.getByRole("dialog", { name: "Import Props" })).toBeTruthy();
-    expect(screen.queryByTestId("mobile-library")).toBeNull();
-  });
-
-  it("preserves an asset draft while switching mobile preparation categories", () => {
-    render(<MobileAssetWorkspace />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Actors" }));
-    const draft = screen.getByRole("textbox", { name: "Mobile actor draft" });
-    fireEvent.change(draft, { target: { value: "Keep this mobile reference" } });
-
-    fireEvent.click(screen.getByRole("button", { name: "Props" }));
-    fireEvent.click(screen.getByRole("button", { name: "Actors" }));
-
-    expect((screen.getByRole("textbox", { name: "Mobile actor draft" }) as HTMLInputElement).value).toBe("Keep this mobile reference");
-  });
+const generators = vi.hoisted(() => ({ actor: vi.fn(), scene: vi.fn(), prop: vi.fn() }));
+vi.mock("../casting/CastingPage", () => ({ CastingPage: generators.actor }));
+vi.mock("../set/SetDesignPage", () => ({ SetDesignPage: generators.scene }));
+vi.mock("../props/PropsPage", () => ({ PropsPage: generators.prop }));
+vi.mock("../library/LibraryPage", () => ({ LibraryPage: ({ mobile }: { mobile?: boolean }) => <section aria-label="Reusable Library">{mobile ? "Mobile Library" : "Desktop Library"}</section> }));
+afterEach(cleanup);
+it("shows only the reusable Library and never mounts image generation workflows", () => {
+  render(<MobileAssetWorkspace />);
+  expect(screen.getByRole("region", { name: "Reusable Library" })).toBeTruthy();
+  expect(screen.getByText("Mobile Library")).toBeTruthy();
+  expect(generators.actor).not.toHaveBeenCalled();
+  expect(generators.scene).not.toHaveBeenCalled();
+  expect(generators.prop).not.toHaveBeenCalled();
 });

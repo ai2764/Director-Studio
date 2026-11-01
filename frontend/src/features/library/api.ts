@@ -1,4 +1,5 @@
 import { parseError } from "../../shared/api/client";
+import { notifyLibraryChanged } from "./libraryChanges";
 
 export type LibraryKind =
   | "actors"
@@ -34,7 +35,7 @@ export async function listLibraryAssets(
     project_id: projectId,
     include_unassigned: includeUnassigned ? "true" : "false",
   });
-  const res = await fetch(`/api/library?${qs}`);
+  const res = await fetch(`/api/library?${qs}`, {cache:"no-store"});
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
 }
@@ -54,7 +55,9 @@ export async function importExternalAsset(opts: {
   fd.append("project_id", opts.projectId);
   const res = await fetch("/api/library/import", { method: "POST", body: fd });
   if (!res.ok) throw new Error(await parseError(res));
-  return res.json();
+  const asset = await res.json();
+  notifyLibraryChanged();
+  return asset;
 }
 
 export async function deleteLibraryAsset(
@@ -66,6 +69,7 @@ export async function deleteLibraryAsset(
     { method: "DELETE" },
   );
   if (!res.ok) throw new Error(await parseError(res));
+  notifyLibraryChanged();
 }
 
 export async function updateLibraryAsset(
@@ -82,5 +86,21 @@ export async function updateLibraryAsset(
     },
   );
   if (!res.ok) throw new Error(await parseError(res));
-  return res.json();
+  const asset = await res.json();
+  notifyLibraryChanged();
+  return asset;
+}
+
+export async function describeUploadImage(opts: {
+  file: File; name: string; existingDescription?: string; kind: LibraryKind; projectId: string; signal?: AbortSignal;
+}): Promise<{ description: string; language: "en" | "zh"; cached: boolean }> {
+  const body = new FormData();
+  body.append("file", opts.file);
+  body.append("name", opts.name);
+  body.append("existing_description", opts.existingDescription || "");
+  body.append("kind", opts.kind);
+  body.append("project_id", opts.projectId);
+  const response = await fetch("/api/library/describe-image", { method: "POST", body, signal: opts.signal });
+  if (!response.ok) throw new Error(await parseError(response));
+  return response.json();
 }

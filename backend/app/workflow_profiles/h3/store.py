@@ -890,7 +890,8 @@ class H3ProfileStore:
                 )
             return snapshot
 
-        resolved = self.resolve_active()
+        resolved = self.resolve_for_submission(has_context=bool(
+            params.get("context_video_key") or params.get("context_video")))
         if resolved.source == "builtin":
             workflow_path = Path(settings.workflows_dir) / settings.h3_builtin_workflow
             profile = H3WorkflowProfile(
@@ -947,6 +948,24 @@ class H3ProfileStore:
                 "h3_contract_version": contract_version_for(resolved.mapping),
             }
         )
+        return resolved
+
+    def resolve_for_submission(self, *, has_context: bool) -> ResolvedH3Profile:
+        """Use an explicitly configured standalone graph for shots without video."""
+        resolved = self.resolve_active()
+        if resolved.mapping.context_video is not None and not has_context:
+            standalone = settings.h3_standalone_profile_id.strip()
+            if not standalone:
+                raise ProfileStateError("context_video_required",
+                    "The selected H3 workflow requires a context video. Enable Motion Context "
+                    "and choose a source, or configure a standalone H3 workflow for this shot.")
+            resolved = self.resolve_profile(standalone)
+            if resolved.mapping.context_video is not None:
+                raise ProfileStateError("standalone_profile_invalid",
+                    "The configured standalone H3 workflow also requires a context video.")
+        if has_context and resolved.source == "custom" and resolved.mapping.context_video is None:
+            raise ProfileStateError("context_video_unsupported",
+                "The selected custom H3 workflow has no mapped context video input.")
         return resolved
 
     def snapshot_import_for_job(self, job: JobRecord) -> ResolvedH3Profile:

@@ -5,6 +5,7 @@ import { VideoDependencyIndicator } from "./VideoDependencyIndicator";
 import {
   getShot,
   getVideoJob,
+  getShotVideoGenerations,
   saveVideoContext,
   uploadVideoContext,
   type VideoContextSave,
@@ -74,11 +75,13 @@ export function VideoContextPanel({
   shot,
   shots,
   expanded = false,
+  showDisableControl = true,
   onShotUpdated,
 }: {
   shot: Shot;
   shots: Shot[];
   expanded?: boolean;
+  showDisableControl?: boolean;
   onShotUpdated?: (shot: Shot) => void;
 }) {
   const context = shot.video_context;
@@ -127,7 +130,13 @@ export function VideoContextPanel({
     let cancelled = false;
     void (async () => {
       const loaded: VideoJobRecord[] = [];
+      try {
+        loaded.push(...(await getShotVideoGenerations(previous.id) || []));
+      } catch {
+        // Preserve known versions if the history endpoint is temporarily unavailable.
+      }
       for (const id of ids) {
+        if (loaded.some(job => job.id === id)) continue;
         try {
           const job = await getVideoJob(id);
           if (job) loaded.push(job);
@@ -243,7 +252,7 @@ export function VideoContextPanel({
         </label> : null}
         {profile === "custom" ? <label>
           Context window
-          <input aria-label="Context window" readOnly value="工作流配置" />
+          <input aria-label="Context window" readOnly value="Configured by workflow" />
         </label> : null}
         {profile === "builtin" ? <small>{contextWindowLabel(legalWindow(context?.context_frames))}</small> : null}
       </div>
@@ -342,7 +351,7 @@ export function VideoContextPanel({
               Carry source audio
             </label>
           ) : null}
-          <label>
+          {context.mode === "external_upload" && <label>
             Upload continuation video
             <input
               type="file"
@@ -355,8 +364,8 @@ export function VideoContextPanel({
                 void onUpload(file);
               }}
             />
-          </label>
-          {active ? (
+          </label>}
+          {active && showDisableControl ? (
             <button type="button" disabled={busy} onClick={() => void commit({ mode: "off" })}>
               Turn continuation off
             </button>

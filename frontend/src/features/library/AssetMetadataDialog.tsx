@@ -1,6 +1,8 @@
 import { useState } from "react";
 import type { LibraryAsset } from "./api";
 import { updateLibraryAsset } from "./api";
+import { LibraryDescriptionWand } from "./LibraryDescriptionWand";
+import { useProject } from "../../shared/project/ProjectContext";
 
 export function AssetMetadataDialog({
   asset,
@@ -11,6 +13,7 @@ export function AssetMetadataDialog({
   onClose: () => void;
   onSaved: (asset: LibraryAsset) => void;
 }) {
+  const { projectId } = useProject();
   const [name, setName] = useState(asset.name);
   const [notes, setNotes] = useState(asset.notes || "");
   const [saving, setSaving] = useState(false);
@@ -64,15 +67,17 @@ export function AssetMetadataDialog({
             />
           </label>
           <label>
-            <span>Notes</span>
+            <span>Description</span>
             <textarea
-              aria-label="Notes"
+              aria-label="Description"
               value={notes}
               rows={5}
               placeholder="Identity, continuity, wardrobe, location, prop, or voice guidance"
               onChange={(event) => setNotes(event.target.value)}
             />
           </label>
+          <LibraryDescriptionWand asset={asset} name={name} description={notes} projectId={asset.project_id || projectId}
+            disabled={saving} onDescription={setNotes} />
         </div>
         <p className="asset-metadata-impact">
           Shots using this asset will need their H3 prompt reviewed again.

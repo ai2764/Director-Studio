@@ -73,6 +73,7 @@ export async function createProject(body: {
   name: string;
   script_text: string;
   mode?: ProjectMode;
+  authoring_mode?: "director_agent" | "shot_workspace";
 }): Promise<Project> {
   const res = await fetch("/api/projects", {
     method: "POST",
@@ -91,7 +92,7 @@ export async function getProject(projectId: string): Promise<ProjectDetail> {
 
 export async function updateProject(
   projectId: string,
-  body: { name?: string; script_text?: string },
+  body: { name?: string; script_text?: string; authoring_mode?: "director_agent" | "shot_workspace"; expected_authoring_mode?: "director_agent" | "shot_workspace" },
 ): Promise<Project> {
   const res = await fetch(`/api/projects/${projectId}`, {
     method: "PATCH",
@@ -568,4 +569,11 @@ export async function setDirectorModel(
   });
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
+}
+
+
+export async function getShotVideoGenerations(shotId: string): Promise<VideoJobRecord[]> {
+  const response = await fetch(`/api/shots/${encodeURIComponent(shotId)}/video-generations`, {cache:"no-store"});
+  if (!response.ok) throw new Error(await parseError(response));
+  return response.json();
 }

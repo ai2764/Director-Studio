@@ -156,6 +156,9 @@ def reference_review_current(project, shot, records):
 
 
 def certify_reference_prompt(project, shot):
+    if getattr(project, "authoring_mode", "director_agent") == "shot_workspace":
+        from ...shot_workspace.references import reference_certificate
+        return reference_certificate(project, shot)
     if project.mode.value != "director" or not shot.refs:
         return None
     from .material_review import capture_references

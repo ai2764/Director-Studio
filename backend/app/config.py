@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     workflows_dir: Path = Path(__file__).resolve().parents[1] / "workflows"
     h3_builtin_workflow: Literal["h3_ref2va.api.json", "h3_ref2va_fast4.api.json"] = "h3_ref2va.api.json"
 
+    # Explicit standalone route when the active graph requires Motion Context.
+    h3_standalone_profile_id: str = ""
+
     # Legacy convenience path (actor pipeline)
     library_dir: Path = _DEFAULT_DATA_DIR / "library" / "actors"
     workflow_path: Path = workflows_dir / "qwen_actor_asset_workbench.api.json"
