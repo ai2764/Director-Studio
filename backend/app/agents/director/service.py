@@ -2256,6 +2256,8 @@ class DirectorService:
         directing_snapshot = directing_requests(project)
         music_signature = music_prompt_signature(project, shot)
         review = (shot.meta or {}).get("material_review")
+        from .execution_context import focused_execution_enabled
+        focused_execution = focused_execution_enabled(project)
         from .reference_facts import (reference_review_current,
             certify_reference_prompt, REFERENCE_WRITER_CONTRACT)
         review_signature = None
@@ -2304,6 +2306,15 @@ class DirectorService:
                 not review or review.get("handoff_signature") != handoff_signature
                 or not (review.get("decision") or {}).get("tail_frame_handoff")
             ))
+            if focused_execution and not was_pending and not needs_handoff_review:
+                from .execution_context import reusable_execution_review
+                reused = reusable_execution_review(project, shot, records, review, revision_request)
+                if reused is not None:
+                    review = reused
+                    shot = shot.model_copy(update={"meta": {**shot.meta, "material_review": review}})
+                    from .progress import emit_progress
+                    await emit_progress(on_progress, {"type": "status", "phase": "material_review",
+                        "state": "reused", "text": "Reusing current material evidence for a camera-speed edit."})
             if (was_pending or not review or review.get("signature") != review_signature
                     or "configuration_issues" not in (review.get("decision") or {})
                     or (revision_request.strip() and review.get("revision_request") != revision_request)
@@ -2466,6 +2477,9 @@ class DirectorService:
             from .writer_context import project_writer_context
             intent = shot_execution_intent(project, shot, revision_request)
             writer_context, writer_refs = project_writer_context(json.loads(context_json), intent, prompt_refs)
+            if focused_execution and task_packet is None:
+                from .execution_context import focused_writer_context
+                writer_context = focused_writer_context(writer_context, project, shot)
             context_json = json.dumps(writer_context, ensure_ascii=False)
             refs_json = json.dumps(writer_refs, ensure_ascii=False)
             user = prompt_text.PROMPT_SECTIONS_USER_TEMPLATE.format(
@@ -2537,6 +2551,7 @@ class DirectorService:
                         writer_instructions,
                         repair_request(user, previous_repair, dialogue_bindings=bool(dialogue_lines)) if previous_repair else user,
                         context_observation,
+                        allow_focused=focused_execution,
                     )
             if previous_repair:
                 raw = merge_repair(raw, previous_repair["rejected_candidate"])
@@ -2599,6 +2614,7 @@ class DirectorService:
                             writer_instructions,
                             repair,
                             context_observation,
+                            allow_focused=focused_execution,
                         )
                     raw2 = merge_repair(raw2, raw)
                     prompt_sections = parse_and_validate(raw2)

@@ -13,6 +13,22 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("delivers structured execution progress without dropping ordinary status", async () => {
+  const execution = { run_id: "run", status: "running", current_stage: "prompt" };
+  const stream = new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode(
+      'data: {"type":"status","text":"Writing"}\n\n' +
+      `data: ${JSON.stringify({ type: "execution_progress", data: execution })}\n\n` +
+      'data: {"type":"result","data":{"reply":"Ready"}}\n\n'));
+    controller.close();
+  } });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, body: stream }));
+  const progress = vi.fn(), status = vi.fn();
+  await chatWithDirectorStream("p", "Write", [], { onExecutionProgress: progress, onStatus: status });
+  expect(progress).toHaveBeenCalledWith(execution);
+  expect(status).toHaveBeenCalledWith("Writing");
+});
+
 it("delivers usage before a terminal SSE error", async () => {
   const usage = { call_id: "call-1", status: "output_truncated", input_tokens: 28939, output_tokens: 4096 };
   const stream = new ReadableStream({

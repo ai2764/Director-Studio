@@ -1,7 +1,9 @@
 """Observable inference phases using the existing chat progress channel."""
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from time import monotonic
+from ...core.llm.performance import phase_scope, record_performance
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +26,18 @@ async def report_phase(on_progress, phase, label):
         text = f"{label}…" if state == "started" else f"{label}: {state} ({elapsed:.1f}s)"
         if state != "started":
             logger.info("%s %s in %.1fs", phase, state, elapsed)
+            record_performance({"kind": "phase", "phase": phase, "path": "phase_total",
+                "status": state, "elapsed_ms": round(elapsed * 1000)})
         await emit_progress(on_progress, {"type": "status", "text": text, "phase": phase,
                                          "state": state, "elapsed_s": elapsed})
 
     await emit("started")
     try:
-        yield
+        with phase_scope(phase, on_progress):
+            yield
+    except asyncio.CancelledError:
+        await emit("cancelled")
+        raise
     except BaseException:
         await emit("failed")
         raise

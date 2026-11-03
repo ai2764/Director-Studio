@@ -70,7 +70,8 @@ def _custom_additions(custom: str, bundled: str) -> str:
     return "\n\n".join(additions)
 
 
-def with_director_skill(task_instructions: str, *, guides: Iterable[str] = (), writer_only: bool = False) -> str:
+def with_director_skill(task_instructions: str, *, guides: Iterable[str] = (), writer_only: bool = False,
+                        execution_only: bool = False) -> str:
     """Always include runtime rules; personal skills add creative guidance."""
     bundled_path = Path(__file__).with_name("DIRECTOR_SKILL.md")
     bundled = _read_skill(bundled_path)
@@ -80,6 +81,8 @@ def with_director_skill(task_instructions: str, *, guides: Iterable[str] = (), w
         f"{core}\n"
         "</DIRECTOR_SKILL>"
     )
+    if execution_only:
+        core_block = ""  # Tool-free execution receives the task's own full contract.
     custom_block = ""
     if _skill_path().resolve() != bundled_path.resolve():
         additions = _custom_additions(load_director_skill(), bundled)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -164,6 +165,21 @@ async def execute_tools(
 
         await runtime.emit(on_progress, "tool", f"Executing tool: {name} {json.dumps(args, ensure_ascii=False)[:200]}")
         await runtime.emit(on_progress, "status", f"Executing: {name}…")
+        from .progress import emit_progress
+        try:
+            target = resolve_shot(shots, shot_id=args.get("shot_id"),
+                shot_index=args.get("shot_index") or args.get("index"), title=args.get("title"))
+        except (TypeError, ValueError):
+            target = None  # The actual handler below owns validation and failure receipts.
+        if not target and len(shots) == 1 and name in {
+                "write_prompt", "rewrite_prompt", "write_prompts", "queue_ref_frame"}:
+            target = shots[0]
+        previous_frame_job = target.ref_frame_job_id if target else None
+        operation = {"type": "execution_operation", "tool": name,
+                     "shot_id": target.id if target else args.get("shot_id")}
+        payload_start, actions_start = len(result_payloads), len(actions)
+        operation_error = None
+        await emit_progress(on_progress, {**operation, "state": "started"})
 
         try:
             from .tool_handlers.context import handle_context_tool
@@ -279,7 +295,11 @@ async def execute_tools(
             ):
                 continue
             notes.append(f"Unknown tool: {name}")
+        except asyncio.CancelledError:
+            operation_error = "cancelled"
+            raise
         except Exception as e:
+            operation_error = "failed"
             logger.exception("tool %s failed", name)
             notes.append(f"{name} failed: {e}")
             failure: dict[str, Any] = {"ok": False, "error": str(e)}
@@ -304,5 +324,21 @@ async def execute_tools(
                 budget.repairing = True
             if result_payloads is not None:
                 result_payloads.append(failure)
+        finally:
+            receipts = result_payloads[payload_start:]
+            receipt = receipts[-1] if receipts else {}
+            outcome = operation_error or (
+                "failed" if any(item.get("ok") is False for item in receipts) else
+                "completed" if receipt.get("ok") is True else "unconfirmed")
+            job_id = receipt.get("job_id")
+            if name in {"queue_ref_frame", "queue_gpt_ref_frame"} and operation_error is None:
+                current_target = next((item for item in refresh_shots() if item.id == operation["shot_id"]), None)
+                if current_target and current_target.ref_frame_job_id != previous_frame_job and current_target.ref_frame_job_id:
+                    outcome, job_id = "submitted", current_target.ref_frame_job_id
+                else:
+                    outcome = "unconfirmed"
+            await emit_progress(on_progress, {**operation, "state": outcome,
+                "shot_id": receipt.get("shot_id") or operation["shot_id"],
+                "job_id": job_id})
 
     return notes, touched
