@@ -508,6 +508,7 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
         raise ValueError("Material review missing tail-frame handoff for selected clip tail")
     # Ignore unsolicited authoring proposals instead of granting this reviewer write authority.
     decision.brief = None
+    from .execution_context import review_execution_snapshot
     return {
         "signature": signature,
         "revision_request": revision_request,
@@ -516,4 +517,5 @@ async def review_references(provider, project: Project, shot: Shot, records: lis
         "handoff_signature": tail_frame_review_signature(project, shot, signature),
         "references": reviewed,
         "decision": decision.model_dump(),
+        "execution_input": review_execution_snapshot(shot),
     }

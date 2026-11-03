@@ -10,6 +10,8 @@ import type { SegmentSelection } from "../music/api";
 import { SongTransport } from "../music/SongTransport";
 import { ShotWorkspace } from "./ShotWorkspace";
 import { ContextUsagePanel } from "./ContextUsage";
+import { ExecutionProgress } from "./ExecutionProgress";
+import { acceptExecutionProgress } from "./executionProgressState";
 import { ContextCompaction } from "./ContextCompaction";
 import { MobileShotDrawer } from "./MobileShotDrawer";
 import { continuationFocus } from "./VideoContextPanel";
@@ -27,6 +29,7 @@ import {
   type PromptRetryRequest,
   type ContextUsage,
   type DirectorChatSessionStatus,
+  type DirectorExecutionProgress,
 } from "./api";
 import {
   generationStatusText,
@@ -224,6 +227,25 @@ function DirectorAgentWorkspace({
   const [llmReachable, setLlmReachable] = useState(false);
   const [llmBusy, setLlmBusy] = useState(false);
   const [chatSession, setChatSession] = useState<DirectorChatSessionStatus>(IDLE_CHAT_SESSION);
+  const [executionProgress, setExecutionProgress] = useState<DirectorExecutionProgress | null>(null);
+  const pendingExecutionVideo = !!executionProgress && (["generation", "materials"] as const)
+    .some(stage => !!executionProgress.stages[stage].job_id
+      && ["submitted", "running"].includes(executionProgress.stages[stage].status));
+  useEffect(() => {
+    if (!projectId || !pendingExecutionVideo) return;
+    let disposed = false;
+    const refresh = async () => {
+      try {
+        const session = await getDirectorChatSession(projectId);
+        if (!disposed && session.execution_progress) {
+          const progress = session.execution_progress;
+          setExecutionProgress(previous => acceptExecutionProgress(previous, progress));
+        }
+      } catch { /* Existing generation status surfaces connection failures. */ }
+    };
+    const timer = window.setInterval(() => void refresh(), 2500);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [projectId, pendingExecutionVideo]);
   const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
   const chatAbortRef = useRef<AbortController | null>(null);
   const usageProjectRef = useRef(projectId);
@@ -325,10 +347,10 @@ function DirectorAgentWorkspace({
   }, [projectId, refreshVramStatus]);
 
   useEffect(() => {
-    if (!generationLocked) return;
+    if (!generationLocked && executionProgress?.status !== "running" && !pendingExecutionVideo) return;
     const timer = window.setInterval(() => setClockNow(new Date()), 1000);
     return () => window.clearInterval(timer);
-  }, [generationLocked]);
+  }, [generationLocked, executionProgress?.status, pendingExecutionVideo]);
 
   const onChangeLlm = async (model: string) => {
     if (!model || model === llmModel) return;
@@ -357,6 +379,7 @@ function DirectorAgentWorkspace({
     setLoadedProjectId(null);
     setContextUsage([]);
     setChatSession(IDLE_CHAT_SESSION);
+    setExecutionProgress(null);
     if (!projectId) {
       replaceShots([]);
       setMessages([
@@ -397,6 +420,10 @@ function DirectorAgentWorkspace({
             },
           ]);
         setChatSession(session);
+        if (session.execution_progress && usageProjectRef.current === projectId) {
+          const progress = session.execution_progress;
+          setExecutionProgress(previous => acceptExecutionProgress(previous, progress));
+        }
         if (session.active) {
           setLiveRuntime("LLM busy — response is still running");
         }
@@ -413,6 +440,10 @@ function DirectorAgentWorkspace({
       try {
         const session = await getDirectorChatSession(projectId);
         if (disposed) return;
+        if (session.execution_progress) {
+          const progress = session.execution_progress;
+          setExecutionProgress(previous => acceptExecutionProgress(previous, progress));
+        }
         if (session.active) {
           setChatSession(session);
           setLiveRuntime("LLM busy — response is still running");
@@ -560,6 +591,10 @@ function DirectorAgentWorkspace({
     });
     try {
       const handlers = {
+        onExecutionProgress: (value: DirectorExecutionProgress) => {
+          if (chatAbortRef.current !== controller || controller.signal.aborted || usageProjectRef.current !== projectId) return;
+          setExecutionProgress(previous => acceptExecutionProgress(previous, value));
+        },
         onContextUsage: (usage: ContextUsage) => {
           if (chatAbortRef.current !== controller || controller.signal.aborted || usageProjectRef.current !== projectId) return;
           setContextUsage((calls) => {
@@ -689,7 +724,11 @@ function DirectorAgentWorkspace({
     setError(null);
     try {
       chatAbortRef.current?.abort();
-      await cancelDirectorChatSession(projectId);
+      const cancelled = await cancelDirectorChatSession(projectId);
+      if (cancelled.execution_progress) {
+        const progress = cancelled.execution_progress;
+        setExecutionProgress(previous => acceptExecutionProgress(previous, progress));
+      }
       setChatSession(IDLE_CHAT_SESSION);
       setMessages(await getDirectorChatHistory(projectId));
       setLiveStatus([]);
@@ -805,6 +844,7 @@ function DirectorAgentWorkspace({
           </div>
         ) : null}
 
+        {executionProgress && <ExecutionProgress progress={executionProgress} now={clockNow.getTime()} />}
         <div className="chat-log" ref={chatLogRef}>
           {messages.map((m, i) => {
             const images = visibleChatImages(m.images, shots);

@@ -16,6 +16,7 @@ import logging
 import re
 import shutil
 import uuid
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Literal
@@ -238,6 +239,7 @@ class ChatSessionStatus(BaseModel):
     active: bool
     session_id: str | None = None
     started_at: str | None = None
+    execution_progress: dict | None = None
 
 
 class RejectLayoutBody(BaseModel):
@@ -1110,9 +1112,14 @@ async def compact_project_chat_endpoint(project_id: str) -> ChatCompactionResult
 async def project_chat_session_endpoint(project_id: str) -> ChatSessionStatus:
     if load_project(project_id) is None:
         raise HTTPException(404, "Project not found")
-    return ChatSessionStatus.model_validate(
-        asdict(await director_chat_sessions.snapshot(project_id))
-    )
+    from ..agents.director.execution_progress import load_execution_progress, ExecutionProgress, refresh_generation_progress
+    snapshot = asdict(await director_chat_sessions.snapshot(project_id))
+    progress = load_execution_progress(project_id)
+    if progress and progress.get("status") == "running" and not snapshot["active"]:
+        ExecutionProgress(project_id, progress).finish("interrupted")
+        progress = load_execution_progress(project_id)
+    progress = refresh_generation_progress(project_id, progress)
+    return ChatSessionStatus.model_validate({**snapshot, "execution_progress": progress})
 
 
 @router.post(
@@ -1123,7 +1130,7 @@ async def cancel_project_chat_session_endpoint(project_id: str) -> ChatSessionSt
     if load_project(project_id) is None:
         raise HTTPException(404, "Project not found")
     await director_chat_sessions.cancel(project_id)
-    return ChatSessionStatus(active=False)
+    return await project_chat_session_endpoint(project_id)
 
 
 async def _persist_chat_images(
@@ -1236,9 +1243,17 @@ async def _project_chat_stream_response(
             for item in request_history
         ]
     queue: asyncio.Queue = asyncio.Queue()
+    execution = None
+    execution_announced = False
 
     async def on_progress(ev: dict) -> None:
+        nonlocal execution_announced
         await queue.put(ev)
+        if execution is not None and not execution_announced:
+            await queue.put({"type": "execution_progress", "data": deepcopy(execution.state)})
+            execution_announced = True
+        if execution is not None and execution.apply_event(ev):
+            await queue.put({"type": "execution_progress", "data": deepcopy(execution.state)})
 
     chat_fn = None if prompt_retry else await _make_chat_fn(on_progress=on_progress)
     try:
@@ -1250,6 +1265,8 @@ async def _project_chat_stream_response(
             "Director chat is already running for this project",
         ) from exc
 
+    from ..agents.director.execution_progress import ExecutionProgress
+    execution = ExecutionProgress.start(project_id, session.session_id)
     append_chat_message(
         project_id,
         role="user",
@@ -1258,6 +1275,8 @@ async def _project_chat_stream_response(
     )
 
     async def runner() -> None:
+        execution_status = "completed"
+        terminal_event = None
         try:
             result = await _run_scoped_prompt_retry(project_id, prompt_retry, svc, on_progress) if prompt_retry else await handle_chat(
                 project_id=project_id,
@@ -1280,28 +1299,30 @@ async def _project_chat_stream_response(
                 ],
                 prompt_retry=response.prompt_retry.model_dump() if response.prompt_retry else None,
             )
-            await queue.put(
-                {"type": "result", "data": response.model_dump(mode="json")}
-            )
+            terminal_event = {"type": "result", "data": response.model_dump(mode="json")}
         except asyncio.CancelledError:
+            execution_status = "cancelled"
             raise
         except GenerationActiveError as exc:
-            await queue.put(
-                {
+            execution_status = "failed"
+            terminal_event = {
                     "type": "error",
                     "code": exc.code,
                     "message": "Local image or video generation is using the GPU.",
                     "generation_count": len(exc.reservations),
                 }
-            )
         except ValueError as exc:
-            await queue.put({"type": "error", "message": str(exc)})
+            execution_status = "failed"
+            terminal_event = {"type": "error", "message": str(exc)}
         except Exception as exc:
+            execution_status = "failed"
             logger.exception("project chat stream failed for %s", project_id)
-            await queue.put(
-                {"type": "error", "message": f"Director chat failed: {exc}"}
-            )
+            terminal_event = {"type": "error", "message": f"Director chat failed: {exc}"}
         finally:
+            if execution.finish(execution_status):
+                await queue.put({"type": "execution_progress", "data": deepcopy(execution.state)})
+            if terminal_event is not None:
+                await queue.put(terminal_event)
             await director_chat_sessions.finish(project_id, session.session_id or "")
             await queue.put(None)
 
