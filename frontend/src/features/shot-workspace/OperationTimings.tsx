@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 export type OperationTiming = {id:string;stage:string;duration_s:number;status:string;finished_at:string};
-export const timingLabel:Record<string,string> = {refinement:"Refine",assistant:"Assistant",prompt_planning:"Prompt planning",prompt:"Write prompt"};
+export const timingLabel:Record<string,string> = {refinement:"Refine",assistant:"Assistant",prompt_planning:"Prompt planning",prompt:"Write prompt",reference_selection:"Select references"};
 export function useOperationTimings(shotId:string,active:boolean){
   const [records,setRecords]=useState<OperationTiming[]>([]);
   useEffect(()=>{

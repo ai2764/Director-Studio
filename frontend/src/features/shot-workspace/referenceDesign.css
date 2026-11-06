@@ -71,3 +71,7 @@
   .shot-material-editor.workspace-reference-dialog > footer { padding: 12px; gap: 8px; }
   .shot-material-editor.workspace-reference-dialog > footer button { min-height: 46px; font-size: 12px; padding: 10px 6px; }
 }
+.ref-assistant-selection { margin: 0 0 16px; }
+.ref-assistant-selection > button { display: inline-flex; align-items: center; gap: 8px; }
+.ref-assistant-selection [role="status"] { margin-top: 10px; padding: 10px 12px; border: 1px solid #d5d3c2; border-radius: 8px; font-size: 13px; }
+.ref-assistant-selection p { margin: 4px 0; }

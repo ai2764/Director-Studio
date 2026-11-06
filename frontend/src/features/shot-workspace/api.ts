@@ -46,6 +46,15 @@ export async function chatWithDirectorStream(projectId: string, _message: string
 }
 
 export type ShotMaterialSelection = Pick<ShotRef, "role" | "asset_id" | "file_key" | "notes">;
+export interface ReferenceSuggestion {
+  materials: ShotMaterialSelection[];
+  reasons: Array<{ asset_id: string; file_key: string; reason: string }>;
+  warnings: string[]; candidate_count: number;
+  model_duration_s: number; operation_duration_s: number;
+}
+export async function suggestShotMaterials(shotId: string, expectedRefs: ShotRef[], description?: string) {
+  return json<ReferenceSuggestion>(`/api/shot-workspace/shots/${shotId}/materials/suggest`, "POST", { expected_refs: expectedRefs, description });
+}
 export async function replaceShotMaterials(shotId: string, materials: ShotMaterialSelection[], opts: { expectedRefs: ShotRef[]; revisionRequest?: string }) {
   return json<Shot>(`/api/shot-workspace/shots/${shotId}/materials`, "PUT", { materials,
     expected_refs: opts.expectedRefs, revision_request: opts.revisionRequest || "" });

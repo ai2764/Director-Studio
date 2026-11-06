@@ -260,6 +260,30 @@ class Materials(BaseModel):
     revision_request: str = Field(default="", max_length=4000)
 
 
+class SuggestReferences(BaseModel):
+    expected_refs: list[ShotRef] = Field(max_length=9)
+    description: str | None = Field(default=None, max_length=8000)
+
+
+@router.post("/shots/{shot_id}/materials/suggest")
+@timed("reference_selection")
+async def suggest_materials(shot_id: str, body: SuggestReferences):
+    from ..config import settings
+    from ..core.vram import get_orchestrator
+    from .model import WorkspaceModel
+    from .reference_selection import suggest
+    shot = find_shot(shot_id)
+    await ensure_idle(shot.project_id)
+    ensure_shot_idle(shot)
+    try:
+        orch = get_orchestrator()
+        async with orch.llm_session(release_on_exit=not settings.llm_keep_loaded):
+            await orch.ensure_llm_ready()
+            return await suggest(shot, body.expected_refs, WorkspaceModel(), description=body.description)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.put("/shots/{shot_id}/materials", response_model=Shot)
 async def replace_materials(shot_id: str, body: Materials):
     shot = find_shot(shot_id)

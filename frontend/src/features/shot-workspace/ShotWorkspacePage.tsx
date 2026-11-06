@@ -311,7 +311,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     {Object.values(shot.prompt_sections).some(Boolean) ? <details className="manual-generated-prompt" aria-label="Prompt contents" open={desktopOutput}><summary>Saved prompt</summary><small className="manual-saved-prompt-label">{effectiveCheck?.stale ? "Previously saved prompt · Out of date. Failed writes do not replace this text." : "Saved prompt · Failed writes do not replace this text."}</small>{PROMPT_SECTION_KEYS.map(({ key, label }) => shot.prompt_sections[key]
         ? <label key={key}>{label}<textarea aria-label={label} readOnly rows={4} value={shot.prompt_sections[key]} /></label> : null)}
     </details> : <small>Write from the current brief and selected references. Refinement is optional.</small>}
-    {materials && <ShotMaterialEditor shot={shot} shots={shots} shotNumber={index + 1} manualReferences
+    {materials && <ShotMaterialEditor shot={shot} description={description} shots={shots} shotNumber={index + 1} manualReferences
       onClose={() => setMaterials(false)} onOpenImage={(url) => window.open(url, "_blank", "noopener")}
       onSaved={(updated, _note, write) => {
         onSaved(updated);
