@@ -176,7 +176,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
       setMessage("Video queued. Progress is shown in Video output.");
     } catch (cause) {
       generationRef.current?.clear?.();
-      setError(`Auto shot stopped at ${stage}: ${cause instanceof Error ? cause.message : String(cause)}`);
+      setError(`Shot creation stopped at ${stage}: ${cause instanceof Error ? cause.message : String(cause)}`);
     } finally { chainPending.current = false; setAutoStage(null); setWorking(""); onAssistingChange?.(false); }
   }
 
@@ -296,10 +296,10 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     <div className="manual-shot-heading"><input aria-label="Shot title" value={title}
       disabled={disabled} onChange={(event) => setTitle(event.target.value)} />
 
-      <button type="button" className="btn secondary compact manual-auto-shot" aria-label="Run full shot"
-        title="Refine brief, select references, write prompt and generate this shot"
+      <button type="button" className="btn secondary compact manual-auto-shot" aria-label="Create shot"
+        title="Refine the brief, choose references, write the prompt, then generate video"
         disabled={disabled || !version || !description.trim() || ["queued", "running"].includes(shot.status)}
-        onClick={() => void runFullShot()}>▶ Auto shot</button>
+        onClick={() => void runFullShot()}><StudioIcon name="play" size={16} />Create shot</button>
 
       <button type="button" className="mode-chip manual-delete-shot" aria-label="Delete shot" title="Delete shot (undo available)"
         disabled={disabled} onClick={() => {
@@ -351,8 +351,8 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
       <div className="manual-description-label"><strong>Reference</strong>
         <div className="manual-reference-actions"><button className="btn secondary compact" disabled={disabled} onClick={() => setMaterials(true)}>Link ref</button>
           <button type="button" className={`mode-chip manual-auto-refs${working === "Selecting references" ? " is-running" : ""}`}
-            aria-label="Auto-select references" title="Auto-select references from this shot brief" aria-busy={working === "Selecting references"}
-            disabled={disabled || !description.trim()} onClick={() => void autoSelectReferences()}><StudioIcon name="wand" size={19} /></button></div></div>
+            aria-label="Choose references with AI" title="Choose references that match this shot brief" aria-busy={working === "Selecting references"}
+            disabled={disabled || !description.trim()} onClick={() => void autoSelectReferences()}><StudioIcon name="assist-references" size={22} /></button></div></div>
     <div className="manual-reference-strip" aria-label="Selected references">
       {shot.refs.map((ref) => <figure key={`${ref.asset_id}:${ref.file_key}`}>
         <ReferencePreview item={ref} />

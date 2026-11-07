@@ -38,7 +38,7 @@ it("runs the stages in order, highlights each region and generates only the comp
  const refine=deferred<typeof draft>();const select=deferred<Awaited<ReturnType<typeof suggestShotMaterials>>>();const writing=deferred<Shot>();
  vi.mocked(suggestShotMaterials).mockImplementation(()=>select.promise);generation.generate.mockResolvedValue(undefined);
  const writer=vi.fn(()=>writing.promise);const order=setup(()=>refine.promise,writer);
- const button=screen.getByRole("button",{name:"Run full shot"});await waitFor(()=>expect((button as HTMLButtonElement).disabled).toBe(false));
+ const button=screen.getByRole("button",{name:"Create shot"});await waitFor(()=>expect((button as HTMLButtonElement).disabled).toBe(false));
  fireEvent.click(button);fireEvent.click(button);
  await waitFor(()=>expect(document.querySelector('[data-workflow-stage="brief"]')?.getAttribute("data-active")).toBe("true"));
  refine.resolve(draft);await waitFor(()=>expect(suggestShotMaterials).toHaveBeenCalledOnce());
@@ -56,14 +56,14 @@ it("runs the stages in order, highlights each region and generates only the comp
 it("stops at a failed writer without submitting video",async()=>{
  vi.mocked(suggestShotMaterials).mockResolvedValue({materials:[material],reasons:[],warnings:[],candidate_count:1,model_duration_s:1,operation_duration_s:1});
  setup(async()=>draft,vi.fn().mockRejectedValue(new Error("Writer failed")));
- const button=screen.getByRole("button",{name:"Run full shot"});await waitFor(()=>expect((button as HTMLButtonElement).disabled).toBe(false));fireEvent.click(button);
- await screen.findByText("Auto shot stopped at prompt: Writer failed");
+ const button=screen.getByRole("button",{name:"Create shot"});await waitFor(()=>expect((button as HTMLButtonElement).disabled).toBe(false));fireEvent.click(button);
+ await screen.findByText("Shot creation stopped at prompt: Writer failed");
  expect(generation.generate).not.toHaveBeenCalled();expect(generation.clear).toHaveBeenCalledOnce();
 });
 it("does not write or generate when selection finds no usable references",async()=>{
  vi.mocked(suggestShotMaterials).mockResolvedValue({materials:[],reasons:[],warnings:[],candidate_count:1,model_duration_s:1,operation_duration_s:1});
  const writer=vi.fn();setup(async()=>draft,writer);
- const button=screen.getByRole("button",{name:"Run full shot"});await waitFor(()=>expect((button as HTMLButtonElement).disabled).toBe(false));fireEvent.click(button);
- await screen.findByText("Auto shot stopped at references: No matching references found.");
+ const button=screen.getByRole("button",{name:"Create shot"});await waitFor(()=>expect((button as HTMLButtonElement).disabled).toBe(false));fireEvent.click(button);
+ await screen.findByText("Shot creation stopped at references: No matching references found.");
  expect(replaceShotMaterials).not.toHaveBeenCalled();expect(writer).not.toHaveBeenCalled();expect(generation.generate).not.toHaveBeenCalled();
 });

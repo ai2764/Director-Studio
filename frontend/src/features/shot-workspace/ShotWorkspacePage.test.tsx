@@ -42,7 +42,7 @@ it("selects and saves references directly beside Link ref without opening a dial
   vi.mocked(replaceShotMaterials).mockImplementation(async()=>({id:"p1-1",project_id:"p1",title:"p1 shot 1",script_beat:"A quiet room.",duration_s:5,refs:[{...material,picture_index:1}],voice_refs:[],dialogue:[],prompt_sections:{}}) as never);
   render(<ShotWorkspacePage/>);await screen.findByDisplayValue("p1 shot 1");
   fireEvent.change(screen.getByRole("textbox",{name:"Shot brief"}),{target:{value:"An outdoor street."}});
-  fireEvent.click(screen.getByRole("button",{name:"Auto-select references"}));
+  fireEvent.click(screen.getByRole("button",{name:"Choose references with AI"}));
   expect(await screen.findByText("Selected 1 references · 2.4s.")).toBeTruthy();
   expect(suggestShotMaterials).toHaveBeenCalledWith("p1-1",[],"An outdoor street.");
   expect(replaceShotMaterials).toHaveBeenCalledWith("p1-1",[material],{expectedRefs:[]});
@@ -54,7 +54,7 @@ it("keeps existing references when automatic selection finds no matches",async()
   setup();
   vi.mocked(suggestShotMaterials).mockResolvedValue({materials:[],reasons:[],warnings:[],candidate_count:1,model_duration_s:1,operation_duration_s:1});
   render(<ShotWorkspacePage/>);await screen.findByDisplayValue("p1 shot 1");
-  fireEvent.click(screen.getByRole("button",{name:"Auto-select references"}));
+  fireEvent.click(screen.getByRole("button",{name:"Choose references with AI"}));
   expect(await screen.findByText(/No matching references found/)).toBeTruthy();
   expect(replaceShotMaterials).not.toHaveBeenCalled();
 });
