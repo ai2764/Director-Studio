@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useProject } from "../../shared/project/ProjectContext";
 import { parseError } from "../../shared/api/client";
 import { PROMPT_SECTION_KEYS, refPreviewCandidates, type Shot, type ShotRef } from "../../shared/api/types";
-import { cancelDirectorChatSession, chatWithDirectorStream, getDirectorChatSession, getProject, replaceShotMaterials, type AgentProgress } from "./api";
+import { cancelDirectorChatSession, chatWithDirectorStream, getDirectorChatSession, getProject, replaceShotMaterials, suggestShotMaterials, type AgentProgress } from "./api";
 import { ShotMaterialEditor } from "./WorkspaceReferences";
 import { ManualContinuity } from "./ManualContinuity";
 import { ManualShotOutput } from "./ManualShotOutput";
@@ -61,6 +61,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
   const [original, setOriginal] = useState(shot.script_beat);
   const [version, setVersion] = useState("");
   const [working, setWorking] = useState("");
+  const [autoStage, setAutoStage] = useState<"brief" | "references" | "prompt" | null>(null);
   const timings = useOperationTimings(shot.id, !!working || writing);
   const latestTiming = (stage:string) => [...timings].reverse().find(entry=>entry.stage===stage);
   const [elapsed, setElapsed] = useState(0);
@@ -75,6 +76,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
   const [error, setError] = useState("");
   const [materials, setMaterials] = useState(false);
   const [removedRef, setRemovedRef] = useState<{ before: ShotRef[]; after: ShotRef[] } | null>(null);
+  const [autoRefUndo, setAutoRefUndo] = useState<{ before: ShotRef[]; after: ShotRef[] } | null>(null);
   const [promptCheck, setPromptCheck] = useState<PromptCheck | null>(null);
   const [checkingPrompt, setCheckingPrompt] = useState(true);
   const [checkedShot, setCheckedShot] = useState<Shot | null>(null);
@@ -110,6 +112,72 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
       setRemovedRef(undo ? null : { before: expected, after: saved.refs });
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setWorking(""); }
+  }
+
+  async function autoSelectReferences() {
+    if (chainPending.current) return;
+    chainPending.current = true;
+    setWorking("Selecting references"); setError(""); setMessage("");
+    onAssistingChange?.(true);
+    try {
+      const result = await suggestShotMaterials(shot.id, shot.refs, description);
+      if (!result.materials.length) {
+        setMessage(["No matching references found. Existing selection kept.", ...result.warnings].join("\n"));
+        return;
+      }
+      const saved = await replaceShotMaterials(shot.id, result.materials, { expectedRefs: shot.refs });
+      setAutoRefUndo({ before: shot.refs, after: saved.refs }); setRemovedRef(null);
+      onSaved(saved);
+      const input = await json<{ version: string }>(`/api/shot-workspace/shots/${shot.id}/description`);
+      setVersion(input.version);
+      setMessage([`Selected ${saved.refs.length} references · ${result.operation_duration_s.toFixed(1)}s.`, ...result.warnings].join("\n"));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { chainPending.current = false; setWorking(""); onAssistingChange?.(false); }
+  }
+
+  async function runFullShot() {
+    if (chainPending.current) return;
+    chainPending.current = true;
+    onAssistingChange?.(true); setError(""); setMessage("");
+    setRemovedRef(null); setAutoRefUndo(null);
+    let stage = "brief";
+    try {
+      setAutoStage("brief"); setWorking("Refining brief");
+      const initial = await save();
+      // Resolve the user's original intent before refinement can paraphrase it.
+      stage = "continuity"; setWorking("Checking continuity");
+      const connected = await json<Shot>(`/api/shot-workspace/shots/${shot.id}/continuity/explicit`, "POST", {
+        description: initial.saved.script_beat,
+      });
+      onSaved(connected);
+      const continuityVersion = await json<{ version: string }>(`/api/shot-workspace/shots/${shot.id}/description`);
+      stage = "brief"; setWorking("Refining brief");
+      const draft = await json<Suggestion>(`/api/shot-workspace/shots/${shot.id}/description/refine`, "POST", {
+        description: initial.saved.script_beat, title: initial.saved.title,
+        duration_s: initial.saved.duration_s, suggest_title: titleNeeded,
+        expected_version: continuityVersion.version, description_only: true,
+      });
+      if (draft.questions.length) throw new Error(draft.questions.join("\n"));
+      const refined = await save(continuityVersion.version, draft);
+      stage = "references"; setAutoStage("references"); setWorking("Selecting references");
+      const selection = await suggestShotMaterials(shot.id, refined.saved.refs, refined.saved.script_beat);
+      if (!selection.materials.length) throw new Error(["No matching references found.", ...selection.warnings].join("\n"));
+      const bound = await replaceShotMaterials(shot.id, selection.materials, { expectedRefs: refined.saved.refs });
+      onSaved(bound);
+      const fresh = await json<{ version: string }>(`/api/shot-workspace/shots/${shot.id}/description`);
+      setVersion(fresh.version);
+      stage = "prompt"; setAutoStage("prompt"); setWorking("Writing prompt");
+      generationRef.current?.prepare?.();
+      const written = await onWrite(bound);
+      if (!written) throw new Error("Prompt writing did not complete. Video was not started.");
+      stage = "video"; setAutoStage(null); setWorking("Starting video");
+      if (!generationRef.current) throw new Error("Video output is unavailable.");
+      await generationRef.current.generate(written);
+      setMessage("Video queued. Progress is shown in Video output.");
+    } catch (cause) {
+      generationRef.current?.clear?.();
+      setError(`Auto run stopped at ${stage}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally { chainPending.current = false; setAutoStage(null); setWorking(""); onAssistingChange?.(false); }
   }
 
   async function save(expectedVersion = version, draft?: Suggestion) {
@@ -238,7 +306,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
       {message && <p role="status">{message}</p>}
       {error && <p className="banner error workspace-task-error" role="alert">{error}</p>}
     </div>
-    <div className="manual-brief-composer">
+    <div className={`manual-brief-composer${autoStage === "brief" ? " workflow-stage-active" : ""}`} data-workflow-stage="brief" data-active={autoStage === "brief" || undefined}>
       <div className="manual-description-label manual-brief-composer-header"><label htmlFor={`description-${shot.id}`}>Shot brief</label>
         <button type="button" className={`mode-chip workspace-refine-button${working === "Thinking about shot" ? " is-running" : ""}`} aria-label="Refine" title="Refine shot brief" disabled={disabled || !version || !description.trim()}
           onClick={() => { void assistDescription("Refine the current shot description. Preserve its intended action and explicit dialogue, clarify the framing and camera movement, and fill the camera fields. Return an updated description draft, not a discussion or prompt.", [])
@@ -246,7 +314,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
           <StudioIcon name="wand" size={20} /></button>
       </div>
       <textarea id={`description-${shot.id}`} rows={6} value={description} disabled={disabled}
-      placeholder="Describe the action, framing and camera movement. You can link references first."
+      placeholder="Start with a rough idea…"
       onChange={(event) => { setDescription(event.target.value); setOriginal(event.target.value); setMessage("");
         setCamera({ shot_type: "", camera_angle: "", camera_motion: "", composition: "" }); }} />
       <div className="manual-brief-composer-footer">
@@ -256,6 +324,17 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
           onClick={() => { setBeforeAmendment({ title, description, duration, dialogue, camera: { ...camera } });
             setError(""); setDescription(""); setOriginal(""); setDialogue(""); setCamera({ shot_type: "", camera_angle: "", camera_motion: "", composition: "" });
             setMessage("Brief cleared in draft. Save to keep it empty, or enter a new description."); }}>Clear</button>
+      </div>
+      <div className="manual-auto-run-row">
+        <button type="button" className="btn secondary compact manual-auto-shot" aria-label="Auto run"
+          aria-describedby={`auto-run-hint-${shot.id}`} aria-busy={autoStage !== null}
+          title={!description.trim() ? "Add a rough idea to get started." : "Refine the brief, choose references, write the prompt, then generate video"}
+          disabled={disabled || !version || !description.trim() || ["queued", "running"].includes(shot.status)}
+          onClick={() => void runFullShot()}><StudioIcon name="play" size={16} />
+          {autoStage !== null ? `${working}…` : "Auto run"}</button>
+        <small id={`auto-run-hint-${shot.id}`}>
+          {description.trim() ? "Refine → References → Prompt → Video" : "Add a rough idea to get started."}
+        </small>
       </div>
     </div>
     <small className="manual-brief-hint">Use Description assistant to create or revise this brief, or edit it directly. Save the brief before writing its prompt.</small>
@@ -274,9 +353,12 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
       ["shot_type", "Framing"], ["camera_angle", "Angle"], ["camera_motion", "Camera movement"], ["composition", "Composition"],
     ] as const).map(([key, label]) => <label key={key}>{label}<textarea rows={2} aria-label={label} placeholder="Enter a value or use Description assistant" value={camera[key]} disabled={disabled}
       onChange={(event) => setCamera((current) => ({ ...current, [key]: event.target.value }))} /></label>)}</div>}
-    <section className="manual-reference-section" aria-label="Reference">
+    <section className={`manual-reference-section${autoStage === "references" || working === "Selecting references" ? " workflow-stage-active" : ""}`} aria-label="Reference" data-workflow-stage="references" data-active={autoStage === "references" || working === "Selecting references" || undefined}>
       <div className="manual-description-label"><strong>Reference</strong>
-        <button className="btn secondary compact" disabled={disabled} onClick={() => setMaterials(true)}>Link ref</button></div>
+        <div className="manual-reference-actions"><button className="btn secondary compact" disabled={disabled} onClick={() => setMaterials(true)}>Link ref</button>
+          <button type="button" className={`mode-chip manual-auto-refs${working === "Selecting references" ? " is-running" : ""}`}
+            aria-label="Choose references with AI" title="Choose references that match this shot brief" aria-busy={working === "Selecting references"}
+            disabled={disabled || !description.trim()} onClick={() => void autoSelectReferences()}><StudioIcon name="assist-references" size={22} /></button></div></div>
     <div className="manual-reference-strip" aria-label="Selected references">
       {shot.refs.map((ref) => <figure key={`${ref.asset_id}:${ref.file_key}`}>
         <ReferencePreview item={ref} />
@@ -287,6 +369,8 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     </div>
     {removedRef && <div className="manual-undo" role="status">Reference removed
       <button className="mode-chip" disabled={disabled} onClick={() => void changeReferences(removedRef.before, removedRef.after, true)}>Undo removal</button></div>}
+    {autoRefUndo && JSON.stringify(shot.refs) === JSON.stringify(autoRefUndo.after) && <div className="manual-undo" role="status">References auto-selected
+      <button className="mode-chip" disabled={disabled} onClick={() => void changeReferences(autoRefUndo.before, autoRefUndo.after, true)}>Undo selection</button></div>}
     {dirty && <small>Save the brief before changing voice references.</small>}
     <VoiceReferences shot={shot} disabled={disabled || dirty} onSaved={(saved) => {
       onSaved(saved);
@@ -294,6 +378,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     }} />
     <ManualContinuity shot={shot} shots={shots} disabled={disabled} onSaved={onSaved} />
     </section>
+    <section className={`manual-prompt-section${autoStage === "prompt" || writing ? " workflow-stage-active" : ""}`} aria-label="Prompt workflow" data-workflow-stage="prompt" data-active={autoStage === "prompt" || writing || undefined}>
     <div className="manual-prompt-heading"><strong className="manual-prompt-label">Prompt</strong><TimingNote entry={latestTiming("prompt")} /></div>
     <small role="status" aria-label="Prompt status" className={!promptWriting && effectiveCheck?.stale ? "manual-prompt-warning" : undefined}>{promptStatus}</small>
     {dirty && !promptWriting && <small role="status">Unsaved shot changes. Save and rewrite the prompt before generating.</small>}
@@ -311,6 +396,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     {Object.values(shot.prompt_sections).some(Boolean) ? <details className="manual-generated-prompt" aria-label="Prompt contents" open={desktopOutput}><summary>Saved prompt</summary><small className="manual-saved-prompt-label">{effectiveCheck?.stale ? "Previously saved prompt · Out of date. Failed writes do not replace this text." : "Saved prompt · Failed writes do not replace this text."}</small>{PROMPT_SECTION_KEYS.map(({ key, label }) => shot.prompt_sections[key]
         ? <label key={key}>{label}<textarea aria-label={label} readOnly rows={4} value={shot.prompt_sections[key]} /></label> : null)}
     </details> : <small>Write from the current brief and selected references. Refinement is optional.</small>}
+    </section>
     {materials && <ShotMaterialEditor shot={shot} shots={shots} shotNumber={index + 1} manualReferences
       onClose={() => setMaterials(false)} onOpenImage={(url) => window.open(url, "_blank", "noopener")}
       onSaved={(updated, _note, write) => {

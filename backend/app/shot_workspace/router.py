@@ -50,6 +50,27 @@ class CreateShot(BaseModel):
     request_id: str = Field(min_length=1, max_length=100)
 
 
+class ExplicitContinuity(BaseModel):
+    description: str = Field(max_length=8000)
+
+
+@router.post("/shots/{shot_id}/continuity/explicit", response_model=Shot)
+async def explicit_continuity(shot_id: str, body: ExplicitContinuity):
+    from .continuity_selection import apply_explicit_continuation
+    from ..core.projects.video_context import VideoContextError
+    shot = find_shot(shot_id)
+    await ensure_idle(shot.project_id)
+    with _project_lock(shot.project_id):
+        shot = find_shot(shot_id)
+        ensure_shot_idle(shot)
+        if shot.script_beat != body.description:
+            raise HTTPException(409, "Shot description changed. Save and try again.")
+        try:
+            return apply_explicit_continuation(project(shot.project_id), shot, body.description)
+        except VideoContextError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+
 @router.post("/projects/{project_id}/shots", response_model=Shot)
 async def add_shot(project_id: str, body: CreateShot):
     project(project_id)
@@ -134,6 +155,7 @@ class Refine(BaseModel):
     suggest_title: bool = False
     expected_version: str
     duration_s: float | None = Field(default=None, gt=0, le=120, allow_inf_nan=False)
+    description_only: bool = False
 
 
 @router.post("/shots/{shot_id}/description/refine")
@@ -152,7 +174,8 @@ async def refine_brief(shot_id: str, body: Refine):
             await orch.ensure_llm_ready()
             append_brief(shot, body.description, "Before refinement")
             result = await refine(shot, body.description, body.expected_version, WorkspaceModel(),
-                                title=body.title, suggest_title=body.suggest_title, amendment=body.amendment, duration_s=body.duration_s)
+                                title=body.title, suggest_title=body.suggest_title, amendment=body.amendment, duration_s=body.duration_s,
+                                description_only=body.description_only)
             if result.get("description"):
                 append_brief(shot, result["description"], "Refined draft")
             return result
@@ -258,6 +281,30 @@ class Materials(BaseModel):
     materials: list[Material] = Field(max_length=9)
     expected_refs: list[ShotRef]
     revision_request: str = Field(default="", max_length=4000)
+
+
+class SuggestReferences(BaseModel):
+    expected_refs: list[ShotRef] = Field(max_length=9)
+    description: str | None = Field(default=None, max_length=8000)
+
+
+@router.post("/shots/{shot_id}/materials/suggest")
+@timed("reference_selection")
+async def suggest_materials(shot_id: str, body: SuggestReferences):
+    from ..config import settings
+    from ..core.vram import get_orchestrator
+    from .model import WorkspaceModel
+    from .reference_selection import suggest
+    shot = find_shot(shot_id)
+    await ensure_idle(shot.project_id)
+    ensure_shot_idle(shot)
+    try:
+        orch = get_orchestrator()
+        async with orch.llm_session(release_on_exit=not settings.llm_keep_loaded):
+            await orch.ensure_llm_ready()
+            return await suggest(shot, body.expected_refs, WorkspaceModel(), description=body.description)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.put("/shots/{shot_id}/materials", response_model=Shot)

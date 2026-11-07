@@ -1,6 +1,8 @@
-export type StudioIconName = "library" | "actors" | "scenes" | "props" | "layouts" | "voices" | "upload" | "refresh" | "edit" | "delete" | "search" | "file" | "close" | "check" | "plus" | "wand" | "chat";
+export type StudioIconName = "library" | "actors" | "scenes" | "props" | "layouts" | "voices" | "upload" | "refresh" | "edit" | "delete" | "search" | "file" | "close" | "check" | "plus" | "wand" | "chat" | "assist-references" | "play";
 
 const paths: Record<StudioIconName, string[]> = {
+  "assist-references": ["M7 4h7v9H7z", "m9 10 2-2 3 3", "M2 16h3l3-2h5a2 2 0 0 1 0 4h-3", "m14 17 5-2a2 2 0 0 1 2 3l-7 4H8l-3-2H2", "m19 2 .8 2.2L22 5l-2.2.8L19 8l-.8-2.2L16 5l2.2-.8Z"],
+  play: ["m9 5 11 7-11 7V5Z"],
   wand: ["m4 17 11-11 4 4L8 21H4v-4Z", "m12 9 4 4", "M5 3v4", "M3 5h4", "M18 2v4", "M16 4h4", "M20 18v4", "M18 20h4"],
   chat: ["M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2V11.5a9.5 9.5 0 0 1 19 0Z", "M7 10h10", "M7 14h6"],
   close: ["m6 6 12 12", "M18 6 6 18"],

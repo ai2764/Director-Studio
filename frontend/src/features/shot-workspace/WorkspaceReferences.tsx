@@ -28,7 +28,7 @@ export function ShotMaterialEditor({ shot, onClose, onOpenImage, onSaved }: {
   useEffect(() => {
     let current = true;
     setLoading(true); setError("");
-    void Promise.all(KINDS.map((kind) => listLibraryAssets(kind, shot.project_id))).then((groups) => {
+    void Promise.all(KINDS.map((kind) => listLibraryAssets(kind, shot.project_id, true))).then((groups) => {
       if (current) setAssets(groups.flat());
     }).catch((cause) => { if (current) setError(String(cause)); })
       .finally(() => { if (current) setLoading(false); });
