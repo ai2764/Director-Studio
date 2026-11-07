@@ -20,6 +20,7 @@ const material={role:"scene" as const,asset_id:"scene1",file_key:"master",notes:
 function setup(refine:()=>Promise<unknown>,write:(s:Shot)=>Promise<Shot|void>){
  let server=structuredClone(initial);const order:string[]=[];
  vi.stubGlobal("fetch",vi.fn(async(url:string,init?:RequestInit)=>({ok:true,json:async()=>{
+  if(url.endsWith("/continuity/explicit")){order.push("continuity");return server;}
   if(url.endsWith("/refine")){order.push("refine");expect(JSON.parse(init!.body as string).description_only).toBe(true);return refine();}
   if(init?.method==="PUT"){
    order.push("save");const b=JSON.parse(init.body as string);server={...server,script_beat:b.description,title:b.title,duration_s:b.duration_s};return server;
@@ -49,7 +50,7 @@ it("runs the stages in order, highlights each region and generates only the comp
  const complete={...initial,script_beat:draft.description,refs:[{...material,picture_index:1}],prompt_sections:{summary:"Finished prompt"}} as Shot;
  writing.resolve(complete);await screen.findByText("Video queued. Progress is shown in Video output.");
  expect(generation.generate).toHaveBeenCalledExactlyOnceWith(complete);
- expect(order).toEqual(["save","refine","save","references"]);
+ expect(order).toEqual(["save","continuity","refine","save","references"]);
  expect(suggestShotMaterials).toHaveBeenCalledWith("s1",[],draft.description);
 });
 it("stops at a failed writer without submitting video",async()=>{

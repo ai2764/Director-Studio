@@ -50,6 +50,27 @@ class CreateShot(BaseModel):
     request_id: str = Field(min_length=1, max_length=100)
 
 
+class ExplicitContinuity(BaseModel):
+    description: str = Field(max_length=8000)
+
+
+@router.post("/shots/{shot_id}/continuity/explicit", response_model=Shot)
+async def explicit_continuity(shot_id: str, body: ExplicitContinuity):
+    from .continuity_selection import apply_explicit_continuation
+    from ..core.projects.video_context import VideoContextError
+    shot = find_shot(shot_id)
+    await ensure_idle(shot.project_id)
+    with _project_lock(shot.project_id):
+        shot = find_shot(shot_id)
+        ensure_shot_idle(shot)
+        if shot.script_beat != body.description:
+            raise HTTPException(409, "Shot description changed. Save and try again.")
+        try:
+            return apply_explicit_continuation(project(shot.project_id), shot, body.description)
+        except VideoContextError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+
 @router.post("/projects/{project_id}/shots", response_model=Shot)
 async def add_shot(project_id: str, body: CreateShot):
     project(project_id)

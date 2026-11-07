@@ -144,13 +144,21 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     try {
       setAutoStage("brief"); setWorking("Refining brief");
       const initial = await save();
+      // Resolve the user's original intent before refinement can paraphrase it.
+      stage = "continuity"; setWorking("Checking continuity");
+      const connected = await json<Shot>(`/api/shot-workspace/shots/${shot.id}/continuity/explicit`, "POST", {
+        description: initial.saved.script_beat,
+      });
+      onSaved(connected);
+      const continuityVersion = await json<{ version: string }>(`/api/shot-workspace/shots/${shot.id}/description`);
+      stage = "brief"; setWorking("Refining brief");
       const draft = await json<Suggestion>(`/api/shot-workspace/shots/${shot.id}/description/refine`, "POST", {
         description: initial.saved.script_beat, title: initial.saved.title,
         duration_s: initial.saved.duration_s, suggest_title: titleNeeded,
-        expected_version: initial.version, description_only: true,
+        expected_version: continuityVersion.version, description_only: true,
       });
       if (draft.questions.length) throw new Error(draft.questions.join("\n"));
-      const refined = await save(initial.version, draft);
+      const refined = await save(continuityVersion.version, draft);
       stage = "references"; setAutoStage("references"); setWorking("Selecting references");
       const selection = await suggestShotMaterials(shot.id, refined.saved.refs, refined.saved.script_beat);
       if (!selection.materials.length) throw new Error(["No matching references found.", ...selection.warnings].join("\n"));
