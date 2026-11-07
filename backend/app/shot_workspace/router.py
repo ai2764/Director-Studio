@@ -134,6 +134,7 @@ class Refine(BaseModel):
     suggest_title: bool = False
     expected_version: str
     duration_s: float | None = Field(default=None, gt=0, le=120, allow_inf_nan=False)
+    description_only: bool = False
 
 
 @router.post("/shots/{shot_id}/description/refine")
@@ -152,7 +153,8 @@ async def refine_brief(shot_id: str, body: Refine):
             await orch.ensure_llm_ready()
             append_brief(shot, body.description, "Before refinement")
             result = await refine(shot, body.description, body.expected_version, WorkspaceModel(),
-                                title=body.title, suggest_title=body.suggest_title, amendment=body.amendment, duration_s=body.duration_s)
+                                title=body.title, suggest_title=body.suggest_title, amendment=body.amendment, duration_s=body.duration_s,
+                                description_only=body.description_only)
             if result.get("description"):
                 append_brief(shot, result["description"], "Refined draft")
             return result

@@ -98,3 +98,25 @@ async def test_route_records_time_without_saving_refs(selection_board,monkeypatc
     assert result['operation_duration_s']>=0
     assert history(shot)[-1]['stage']=='reference_selection'
     assert not load_shot(project.id,shot.id).refs
+
+
+@pytest.mark.asyncio
+async def test_full_flow_refinement_uses_current_description_only(selection_board,monkeypatch):
+    _,shot,_,_=selection_board
+    from app.shot_workspace.router import refine_brief,Refine
+    from app.shot_workspace.references import snapshot
+    requests=[]
+    class Model:
+        async def complete_shot_description(self,system,user,**kwargs):
+            requests.append(json.loads(user))
+            return json.dumps({'description':shot.script_beat,'title':shot.title,'duration_s':5,'shot_type':'close-up','camera_angle':'eye level','camera_motion':'static','composition':'centered','dialogue':[],'questions':[]})
+    class Orch:
+        @asynccontextmanager
+        async def llm_session(self,**kwargs):yield
+        async def ensure_llm_ready(self):pass
+    monkeypatch.setattr('app.core.vram.get_orchestrator',lambda:Orch())
+    monkeypatch.setattr('app.shot_workspace.model.WorkspaceModel',Model)
+    await refine_brief(shot.id,Refine(description=shot.script_beat,expected_version=snapshot(shot)['version'],description_only=True))
+    assert requests[0]['current_shot_description']==shot.script_beat
+    assert 'previous_shot_description' not in requests[0]
+    assert 'references' not in requests[0] and 'continuation' not in requests[0]

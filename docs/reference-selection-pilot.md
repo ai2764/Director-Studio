@@ -1,5 +1,11 @@
 # Reference selection pilot
 
+## Single-shot automation
+
+**Auto shot** beside the shot title runs only the current shot: save the current draft, refine its description, suggest and save references, write a prompt, then submit video generation. It preserves current voice-reference and Motion Context settings. Each active UI region is highlighted; Video output remains highlighted while its job is queued/running and stops highlighting when that job finishes. Errors stop the chain with the failed stage named; completed changes remain available for manual adjustment. No automatic retry or next-shot batch is started.
+
+The automatic refinement explicitly uses description-only context; reference selection still sees only the refined current description and candidate asset descriptions. No adjacent-shot descriptions are added to either of these two operations. Prompt writing retains its existing saved continuation contract.
+
 In AI Assistant mode, click the wand icon beside **Link ref** to auto-select and save references in one action, without opening a dialog. The reference strip updates, elapsed time is displayed, and **Undo selection** restores the previous set. A failed or empty suggestion keeps the existing references. **Link ref** still opens the manual picker for adjustments. The model makes one bounded text-only request; no image inference, Director history, old bindings or previous-shot reference lists are included. Existing new-shot inheritance remains available.
 
 Auto-selection uses the current editable shot description, including unsaved text, without silently saving that draft. A blank description disables the action. The model receives only this description and the candidate catalog (short IDs, category, names, file-key labels and saved descriptions), with no separate dialogue field or adjacent-shot descriptions. Voice references and Motion Context selection are not changed. This is not an automatic whole-film pipeline.

@@ -154,7 +154,7 @@ export function ManualShotOutput({ shot, disabled, onSaved, check, promptWriting
     } catch (cause) { if (mounted.current) setError(String(cause)); }
     finally { if (mounted.current) setBusy(false); }
   }
-  return <aside className="manual-output" aria-label="Video output">
+  return <aside className={`manual-output${running || busy ? " workflow-stage-active" : ""}`} aria-label="Video output" data-workflow-stage="video" data-active={running || busy || undefined}>
     <header><div className="workspace-output-title"><WorkspaceMascot role="director" /><strong>Video output</strong>{job && <small className="workspace-timing">{job.notes?.startsWith("Imported approved H3 film edit") ? "Imported clip" : `${running?"Elapsed":"Video"} · ${elapsed}s`}</small>}</div><small>{shot.title}</small></header>
     <div className="manual-output-preview">
       {video ? <video key={video} src={video} controls preload="metadata" /> : <p>{running ? "Generating video. It will appear here when ready." : "Your generated video will appear here."}</p>}
