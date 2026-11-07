@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { RefRole, Shot } from "../../shared/api/types";
 import { listLibraryAssets, type LibraryAsset, type LibraryKind } from "../library/api";
-import { replaceShotMaterials, suggestShotMaterials, type ReferenceSuggestion, type ShotMaterialSelection } from "./api";
+import { replaceShotMaterials, type ShotMaterialSelection } from "./api";
 import { StudioIcon } from "../../shared/components/StudioIcon";
 import { useLibraryRevision } from "../library/libraryChanges";
 import "./referenceDesign.css";
@@ -11,9 +11,8 @@ const ROLES: Record<string, RefRole> = { actors: "actor", costumes: "costume", s
 const LABELS: Record<string, string> = { actors: "Actors", costumes: "Wardrobe", scenes: "Scenes", props: "Props", layouts: "Layouts" };
 const identity = (value: ShotMaterialSelection) => `${value.asset_id}:${value.file_key || ""}`;
 
-export function ShotMaterialEditor({ shot, description, onClose, onOpenImage, onSaved }: {
+export function ShotMaterialEditor({ shot, onClose, onOpenImage, onSaved }: {
   shot: Shot; shots?: Shot[]; shotNumber?: number; manualReferences?: boolean;
-  description?: string;
   onClose: () => void; onOpenImage: (url: string) => void;
   onSaved?: (shot: Shot, note: string, write: boolean) => void;
 }) {
@@ -25,8 +24,6 @@ export function ShotMaterialEditor({ shot, description, onClose, onOpenImage, on
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [suggesting, setSuggesting] = useState(false);
-  const [suggestion, setSuggestion] = useState<ReferenceSuggestion | null>(null);
   const {revision, refresh} = useLibraryRevision();
   useEffect(() => {
     let current = true;
@@ -46,27 +43,12 @@ export function ShotMaterialEditor({ shot, description, onClose, onOpenImage, on
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   }
-  async function suggest() {
-    setBusy(true); setSuggesting(true); setError(""); setSuggestion(null);
-    try {
-      const result = await suggestShotMaterials(shot.id, shot.refs, description ?? shot.script_beat);
-      setMaterials(result.materials); setSuggestion(result);
-    } catch (cause) { setError(String(cause)); }
-    finally { setBusy(false); setSuggesting(false); }
-  }
   function move(index: number, delta: number) {
     setMaterials((current) => { const values = [...current]; [values[index], values[index + delta]] = [values[index + delta], values[index]]; return values; });
   }
   return <div className="shot-material-editor-backdrop workspace-reference-backdrop"><section role="dialog" aria-modal="true" aria-label="Shot references" className="shot-material-editor workspace-reference-dialog">
     <header className="manual-description-label"><div className="ref-dialog-title"><span className="ref-dialog-mark"><StudioIcon name="library" size={22} /></span><div><h2>Link references</h2><p>Choose the images that define this shot.</p></div></div><button type="button" className="ref-close" aria-label="Close references" disabled={busy} onClick={onClose}><StudioIcon name="close" /></button></header>
     <div className="workspace-reference-body">
-    <div className="ref-assistant-selection">
-      <button type="button" className="btn secondary" disabled={busy || loading || !(description ?? shot.script_beat)?.trim()} onClick={() => void suggest()}
-        title="Suggest references from this shot description and saved asset descriptions"><StudioIcon name="search" size={16} /> {suggesting ? "Selecting references…" : "Suggest references"}</button>
-      {suggestion && <div role="status"><p>Suggested {suggestion.materials.length} references in {suggestion.operation_duration_s.toFixed(1)}s. Review, then save.</p>
-        {suggestion.reasons.map((item) => <p key={`${item.asset_id}:${item.file_key}`}><strong>{assets.find((a) => a.id === item.asset_id)?.name || "Reference"}:</strong> {item.reason}</p>)}
-        {suggestion.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</div>}
-    </div>
     <details className="ref-selected-panel" open={materials.length > 0}><summary>Selected references <span>{materials.length} / 9</span></summary>
     <section aria-label="Selected references" className="workspace-reference-selection">
       {materials.map((material, index) => { const asset = assets.find((value) => value.id === material.asset_id); const url = asset?.urls[material.file_key || "master"];

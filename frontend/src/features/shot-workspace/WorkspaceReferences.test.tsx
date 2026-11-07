@@ -4,12 +4,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Shot } from "../../shared/api/types";
 import { ShotMaterialEditor } from "./WorkspaceReferences";
 import { listLibraryAssets } from "../library/api";
-import { replaceShotMaterials, suggestShotMaterials } from "./api";
+import { replaceShotMaterials } from "./api";
 import { LIBRARY_CHANGED } from "../library/libraryChanges";
 
 vi.mock("../library/api", () => ({ listLibraryAssets: vi.fn() }));
-vi.mock("./api", () => ({ replaceShotMaterials: vi.fn(), suggestShotMaterials: vi.fn() }));
-const shot = { id: "shot_test", project_id: "project_test", refs: [], script_beat: "A blue mug on a table." } as unknown as Shot;
+vi.mock("./api", () => ({ replaceShotMaterials: vi.fn() }));
+const shot = { id: "shot_test", project_id: "project_test", refs: [] } as unknown as Shot;
 const image = { id: "asset_test", kind: "props", name: "Blue mug", notes: "A square handle", files: { master: "mug.png" }, urls: { master: "/mug.png" } };
 beforeEach(() => {
   vi.clearAllMocks();
@@ -17,28 +17,6 @@ beforeEach(() => {
   vi.mocked(replaceShotMaterials).mockResolvedValue(shot);
 });
 afterEach(cleanup);
-
-it("previews assistant selections and timing but saves only after an explicit click", async () => {
-  vi.mocked(suggestShotMaterials).mockResolvedValue({materials:[{role:"prop",asset_id:"asset_test",file_key:"master",notes:""}],reasons:[{asset_id:"asset_test",file_key:"master",reason:"The mug is visible."}],warnings:[],candidate_count:1,model_duration_s:2,operation_duration_s:2.3});
-  render(<ShotMaterialEditor shot={shot} onClose={vi.fn()} onOpenImage={vi.fn()} />);
-  await screen.findByRole("button",{name:"Add Blue mug master"});
-  fireEvent.click(screen.getByRole("button",{name:"Suggest references"}));
-  expect(await screen.findByText(/Suggested 1 references in 2.3s/)).toBeTruthy();
-  expect(screen.getByText("P1 · Blue mug")).toBeTruthy();
-  expect(replaceShotMaterials).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button",{name:"Save references"}));
-  await waitFor(()=>expect(replaceShotMaterials).toHaveBeenCalled());
-});
-
-it("retains manual selections on an assistant error", async () => {
-  vi.mocked(suggestShotMaterials).mockRejectedValue(new Error("Model unavailable"));
-  render(<ShotMaterialEditor shot={shot} onClose={vi.fn()} onOpenImage={vi.fn()} />);
-  fireEvent.click(await screen.findByRole("button",{name:"Add Blue mug master"}));
-  fireEvent.click(screen.getByRole("button",{name:"Suggest references"}));
-  expect(await screen.findByRole("alert")).toBeTruthy();
-  expect(screen.getByText("P1 · Blue mug")).toBeTruthy();
-  expect(replaceShotMaterials).not.toHaveBeenCalled();
-});
 
 it("refreshes an open picker after a library change without dropping reference notes", async () => {
   render(<ShotMaterialEditor shot={shot} onClose={vi.fn()} onOpenImage={vi.fn()} />);

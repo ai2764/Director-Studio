@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useProject } from "../../shared/project/ProjectContext";
 import { parseError } from "../../shared/api/client";
 import { PROMPT_SECTION_KEYS, refPreviewCandidates, type Shot, type ShotRef } from "../../shared/api/types";
-import { cancelDirectorChatSession, chatWithDirectorStream, getDirectorChatSession, getProject, replaceShotMaterials, type AgentProgress } from "./api";
+import { cancelDirectorChatSession, chatWithDirectorStream, getDirectorChatSession, getProject, replaceShotMaterials, suggestShotMaterials, type AgentProgress } from "./api";
 import { ShotMaterialEditor } from "./WorkspaceReferences";
 import { ManualContinuity } from "./ManualContinuity";
 import { ManualShotOutput } from "./ManualShotOutput";
@@ -75,6 +75,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
   const [error, setError] = useState("");
   const [materials, setMaterials] = useState(false);
   const [removedRef, setRemovedRef] = useState<{ before: ShotRef[]; after: ShotRef[] } | null>(null);
+  const [autoRefUndo, setAutoRefUndo] = useState<{ before: ShotRef[]; after: ShotRef[] } | null>(null);
   const [promptCheck, setPromptCheck] = useState<PromptCheck | null>(null);
   const [checkingPrompt, setCheckingPrompt] = useState(true);
   const [checkedShot, setCheckedShot] = useState<Shot | null>(null);
@@ -110,6 +111,27 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
       setRemovedRef(undo ? null : { before: expected, after: saved.refs });
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setWorking(""); }
+  }
+
+  async function autoSelectReferences() {
+    if (chainPending.current) return;
+    chainPending.current = true;
+    setWorking("Selecting references"); setError(""); setMessage("");
+    onAssistingChange?.(true);
+    try {
+      const result = await suggestShotMaterials(shot.id, shot.refs, description);
+      if (!result.materials.length) {
+        setMessage(["No matching references found. Existing selection kept.", ...result.warnings].join("\n"));
+        return;
+      }
+      const saved = await replaceShotMaterials(shot.id, result.materials, { expectedRefs: shot.refs });
+      setAutoRefUndo({ before: shot.refs, after: saved.refs }); setRemovedRef(null);
+      onSaved(saved);
+      const input = await json<{ version: string }>(`/api/shot-workspace/shots/${shot.id}/description`);
+      setVersion(input.version);
+      setMessage([`Selected ${saved.refs.length} references · ${result.operation_duration_s.toFixed(1)}s.`, ...result.warnings].join("\n"));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { chainPending.current = false; setWorking(""); onAssistingChange?.(false); }
   }
 
   async function save(expectedVersion = version, draft?: Suggestion) {
@@ -276,7 +298,10 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
       onChange={(event) => setCamera((current) => ({ ...current, [key]: event.target.value }))} /></label>)}</div>}
     <section className="manual-reference-section" aria-label="Reference">
       <div className="manual-description-label"><strong>Reference</strong>
-        <button className="btn secondary compact" disabled={disabled} onClick={() => setMaterials(true)}>Link ref</button></div>
+        <div className="manual-reference-actions"><button className="btn secondary compact" disabled={disabled} onClick={() => setMaterials(true)}>Link ref</button>
+          <button type="button" className={`mode-chip manual-auto-refs${working === "Selecting references" ? " is-running" : ""}`}
+            aria-label="Auto-select references" title="Auto-select references from this shot brief" aria-busy={working === "Selecting references"}
+            disabled={disabled || !description.trim()} onClick={() => void autoSelectReferences()}><StudioIcon name="wand" size={19} /></button></div></div>
     <div className="manual-reference-strip" aria-label="Selected references">
       {shot.refs.map((ref) => <figure key={`${ref.asset_id}:${ref.file_key}`}>
         <ReferencePreview item={ref} />
@@ -287,6 +312,8 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     </div>
     {removedRef && <div className="manual-undo" role="status">Reference removed
       <button className="mode-chip" disabled={disabled} onClick={() => void changeReferences(removedRef.before, removedRef.after, true)}>Undo removal</button></div>}
+    {autoRefUndo && JSON.stringify(shot.refs) === JSON.stringify(autoRefUndo.after) && <div className="manual-undo" role="status">References auto-selected
+      <button className="mode-chip" disabled={disabled} onClick={() => void changeReferences(autoRefUndo.before, autoRefUndo.after, true)}>Undo selection</button></div>}
     {dirty && <small>Save the brief before changing voice references.</small>}
     <VoiceReferences shot={shot} disabled={disabled || dirty} onSaved={(saved) => {
       onSaved(saved);
@@ -311,7 +338,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     {Object.values(shot.prompt_sections).some(Boolean) ? <details className="manual-generated-prompt" aria-label="Prompt contents" open={desktopOutput}><summary>Saved prompt</summary><small className="manual-saved-prompt-label">{effectiveCheck?.stale ? "Previously saved prompt · Out of date. Failed writes do not replace this text." : "Saved prompt · Failed writes do not replace this text."}</small>{PROMPT_SECTION_KEYS.map(({ key, label }) => shot.prompt_sections[key]
         ? <label key={key}>{label}<textarea aria-label={label} readOnly rows={4} value={shot.prompt_sections[key]} /></label> : null)}
     </details> : <small>Write from the current brief and selected references. Refinement is optional.</small>}
-    {materials && <ShotMaterialEditor shot={shot} description={description} shots={shots} shotNumber={index + 1} manualReferences
+    {materials && <ShotMaterialEditor shot={shot} shots={shots} shotNumber={index + 1} manualReferences
       onClose={() => setMaterials(false)} onOpenImage={(url) => window.open(url, "_blank", "noopener")}
       onSaved={(updated, _note, write) => {
         onSaved(updated);

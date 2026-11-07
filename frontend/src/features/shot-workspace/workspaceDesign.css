@@ -203,3 +203,8 @@
   .manual-shots .manual-continuity > label { align-items: flex-start; }
   .manual-shots .manual-continuity select { max-width: 72%; min-width: 0; font-size: 16px; }
 }
+.manual-reference-actions { display: flex; align-items: center; gap: 6px; }
+.manual-shots .manual-auto-refs { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; min-height: 40px; padding: 0; flex-shrink: 0; }
+.manual-auto-refs.is-running .studio-icon { animation: auto-refs-pulse .9s ease-in-out infinite alternate; }
+@keyframes auto-refs-pulse { from { opacity: .35; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .manual-auto-refs.is-running .studio-icon { animation: none; } }
