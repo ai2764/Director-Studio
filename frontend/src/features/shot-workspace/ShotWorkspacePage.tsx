@@ -176,7 +176,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
       setMessage("Video queued. Progress is shown in Video output.");
     } catch (cause) {
       generationRef.current?.clear?.();
-      setError(`Shot creation stopped at ${stage}: ${cause instanceof Error ? cause.message : String(cause)}`);
+      setError(`Auto run stopped at ${stage}: ${cause instanceof Error ? cause.message : String(cause)}`);
     } finally { chainPending.current = false; setAutoStage(null); setWorking(""); onAssistingChange?.(false); }
   }
 
@@ -296,11 +296,6 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
     <div className="manual-shot-heading"><input aria-label="Shot title" value={title}
       disabled={disabled} onChange={(event) => setTitle(event.target.value)} />
 
-      <button type="button" className="btn secondary compact manual-auto-shot" aria-label="Create shot"
-        title="Refine the brief, choose references, write the prompt, then generate video"
-        disabled={disabled || !version || !description.trim() || ["queued", "running"].includes(shot.status)}
-        onClick={() => void runFullShot()}><StudioIcon name="play" size={16} />Create shot</button>
-
       <button type="button" className="mode-chip manual-delete-shot" aria-label="Delete shot" title="Delete shot (undo available)"
         disabled={disabled} onClick={() => {
           setWorking("Delete shot"); setError("");
@@ -319,7 +314,7 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
           <StudioIcon name="wand" size={20} /></button>
       </div>
       <textarea id={`description-${shot.id}`} rows={6} value={description} disabled={disabled}
-      placeholder="Describe the action, framing and camera movement. You can link references first."
+      placeholder="Start with a rough idea…"
       onChange={(event) => { setDescription(event.target.value); setOriginal(event.target.value); setMessage("");
         setCamera({ shot_type: "", camera_angle: "", camera_motion: "", composition: "" }); }} />
       <div className="manual-brief-composer-footer">
@@ -329,6 +324,17 @@ export function ShotEditor({ shot, index, shots, busy, onSaved, onWrite, onDelet
           onClick={() => { setBeforeAmendment({ title, description, duration, dialogue, camera: { ...camera } });
             setError(""); setDescription(""); setOriginal(""); setDialogue(""); setCamera({ shot_type: "", camera_angle: "", camera_motion: "", composition: "" });
             setMessage("Brief cleared in draft. Save to keep it empty, or enter a new description."); }}>Clear</button>
+      </div>
+      <div className="manual-auto-run-row">
+        <button type="button" className="btn secondary compact manual-auto-shot" aria-label="Auto run"
+          aria-describedby={`auto-run-hint-${shot.id}`} aria-busy={autoStage !== null}
+          title={!description.trim() ? "Add a rough idea to get started." : "Refine the brief, choose references, write the prompt, then generate video"}
+          disabled={disabled || !version || !description.trim() || ["queued", "running"].includes(shot.status)}
+          onClick={() => void runFullShot()}><StudioIcon name="play" size={16} />
+          {autoStage !== null ? `${working}…` : "Auto run"}</button>
+        <small id={`auto-run-hint-${shot.id}`}>
+          {description.trim() ? "Refine → References → Prompt → Video" : "Add a rough idea to get started."}
+        </small>
       </div>
     </div>
     <small className="manual-brief-hint">Use Description assistant to create or revise this brief, or edit it directly. Save the brief before writing its prompt.</small>

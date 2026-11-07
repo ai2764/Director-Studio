@@ -210,4 +210,6 @@
 @media (prefers-reduced-motion: reduce) { .manual-auto-refs.is-running .studio-icon { animation: none; } }
 .manual-shots .workflow-stage-active { outline: 2px solid #829963; outline-offset: 5px; box-shadow: 0 0 0 6px #82996312; border-radius: 9px; transition: outline-color .2s, box-shadow .2s; }
 .manual-shots .manual-auto-shot { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0; }
+.manual-auto-run-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 0 12px 12px; }
+.manual-auto-run-row small { min-width: 0; line-height: 1.5; }
 .manual-prompt-section { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
