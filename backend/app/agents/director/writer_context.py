@@ -158,7 +158,7 @@ def _png_from_video(path):
         return dest.read_bytes()
 
 
-async def complete_writer_prompt(provider, system: str, user: str, observation) -> str:
+async def complete_writer_prompt(provider, system: str, user: str, observation, *, allow_focused=False) -> str:
     """Send the tail frame only when the provider can see images."""
     import base64
 
@@ -172,4 +172,8 @@ async def complete_writer_prompt(provider, system: str, user: str, observation) 
         return await visual(
             system, user, images=[encoded], guides=("h3-prompt-writing",),
         )
+    from ...config import settings
+    focused = getattr(provider, "complete_execution", None)
+    if settings.director_focused_execution and allow_focused and not active and callable(focused):
+        return await focused(system, user, guides=("h3-prompt-writing",))
     return await provider.complete(system, user, guides=("h3-prompt-writing",))

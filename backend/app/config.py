@@ -92,6 +92,7 @@ class Settings(BaseSettings):
     director_vision_model: str = ""
     director_compact_vision_prompt: bool = False
     director_visual_facts_cache: bool = False
+    director_focused_execution: bool = False
 
     # Local Ollama / Director agent (VRAM exclusive with Comfy)
     ollama_base_url: str = "http://127.0.0.1:11434"

@@ -10,6 +10,7 @@ from ...config import settings
 from ...core.llm import LLMProvider, get_llm_provider
 from .skill_loader import with_director_skill
 from .context_metrics import observe_request
+from ...core.llm.performance import measure_call
 from ...core.prompt_errors import PromptContextOverflow, PromptOutputTruncated, is_context_overflow
 
 PROMPT_CALL_TIMEOUT_SEC = 180.0
@@ -85,8 +86,29 @@ class DirectorLLMPlanProvider:
     ) -> str:
         prompt = with_director_skill(f"{system}\n\n{user}", guides=guides, writer_only=True)
         observe_request("writer.generate", [{"role": "user", "content": prompt}])
-        async with self._input_budget(prompt):
-            return await self.client.generate(self.model, prompt)
+        async with measure_call("writer.generate", model=self.model, image_count=0, text_chars=len(prompt)) as call:
+            async with self._input_budget(prompt):
+                result = await self.client.generate(self.model, prompt)
+                call["result"] = result
+                return result
+
+    async def complete_execution(self, system: str, user: str, *, guides=()) -> str:
+        """Tool-free ordinary writer; planning and tail reviews retain their adapters."""
+        prompt = with_director_skill(f"{system}\n\n{user}", guides=guides,
+                                     writer_only=True, execution_only=True)
+        observe_request("writer.execution", [{"role": "user", "content": prompt}])
+        deadline = min(PROMPT_CALL_TIMEOUT_SEC, settings.llm_timeout_sec)
+        async with measure_call("writer.execution", model=self.model, image_count=0,
+                                text_chars=len(prompt)) as call:
+            async with asyncio.timeout(deadline), self._input_budget(
+                    prompt, output_tokens=settings.director_num_predict):
+                response = await self.client.chat_response(self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    options={"num_predict": settings.director_num_predict, "temperature": 0.1})
+                call["result"] = response
+                if (response.get("finish_reason") or response.get("done_reason")) in {"length", "max_tokens"}:
+                    raise PromptOutputTruncated("Focused writer output was truncated; no partial prompt accepted")
+                return str(response.get("content") or "")
 
     async def complete_with_images(
         self,
@@ -105,21 +127,24 @@ class DirectorLLMPlanProvider:
             from .material_review import ReferenceObservation
             schema = ReferenceObservation.model_json_schema()
             schema["properties"]["facts"]["maxItems"] = 8
-            async with asyncio.timeout(150), self._input_budget(prompt, output_tokens=2048, images=True):
+            async with measure_call("writer.vision", model=self.vision_model, image_count=len(images), text_chars=len(prompt)) as call, asyncio.timeout(150), self._input_budget(prompt, output_tokens=2048, images=True):
                 response = await self.vision_client.chat_response(
                     self.vision_model, messages=[{"role": "user", "content": prompt, "images": images}],
                     format=schema, require_vision=True,
                     options={"num_predict": 2048, "temperature": 0.3})
+                call["result"] = response
             if (response.get("finish_reason") or response.get("done_reason")) in {"length", "max_tokens"}:
                 raise PromptOutputTruncated("Visual observation exceeded 2048 tokens; no partial observation accepted")
             return str(response.get("content") or "")
         else:
             prompt = with_director_skill(f"{system}\n\n{user}", guides=guides, writer_only=True)
         observe_request("writer.vision", [{"role": "user", "content": prompt}], image_count=len(images))
-        async with self._input_budget(prompt, images=True):
-            return await self.vision_client.chat(
+        async with measure_call("writer.vision", model=self.vision_model, image_count=len(images), text_chars=len(prompt)) as call, self._input_budget(prompt, images=True):
+            result = await self.vision_client.chat(
                 self.vision_model, prompt, images=images, require_vision=True,
             )
+            call["result"] = result
+            return result
 
     async def complete_bounded(self, system: str, user: str, *, max_tokens: int,
                                guides: Iterable[str] = (), schema: dict | None = None,
@@ -133,13 +158,14 @@ class DirectorLLMPlanProvider:
         observe_request("writer.bounded", [message], image_count=len(images or []))
         deadline = min(PROMPT_CALL_TIMEOUT_SEC, settings.llm_timeout_sec)
         try:
-            async with asyncio.timeout(deadline), self._input_budget(prompt, output_tokens=output_budget, images=bool(images)):
+            async with measure_call("writer.bounded", model=self.vision_model if images else self.model, image_count=len(images or []), text_chars=len(prompt)) as call, asyncio.timeout(deadline), self._input_budget(prompt, output_tokens=output_budget, images=bool(images)):
                 client = self.vision_client if images else self.client
                 model = self.vision_model if images else self.model
                 response = await client.chat_response(model,
                     messages=[message], format=schema,
                     options={"num_predict": output_budget, "temperature": 0.1},
                     **({"require_vision": True} if images else {}))
+                call["result"] = response
         except TimeoutError as exc:
             # Transport failure is not a rejected creative draft: do not repair/retry it.
             raise TimeoutError(f"Prompt generation/review timed out after {deadline:g}s; "

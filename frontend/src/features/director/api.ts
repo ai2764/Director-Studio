@@ -158,6 +158,19 @@ export interface DirectorChatSessionStatus {
   active: boolean;
   session_id: string | null;
   started_at: string | null;
+  execution_progress?: DirectorExecutionProgress | null;
+}
+
+export type ExecutionStage = "plan" | "materials" | "prompt" | "generation";
+export interface DirectorExecutionProgress {
+  revision?: number; run_sequence?: number;
+  version: number; run_id: string; status: string; started_at: string; updated_at: string;
+  current_stage: ExecutionStage; shot_id: string | null; shot_index?: number; shot_total?: number;
+  activity: string;
+  stages: Record<ExecutionStage, {
+    status: string; started_at: string | null; finished_at: string | null;
+    job_id?: string; quality_status?: string;
+  }>;
 }
 
 export async function getDirectorChatSession(
@@ -209,6 +222,7 @@ export async function compactDirectorContext(projectId: string, signal?: AbortSi
 }
 
 export interface ChatStreamHandlers {
+  onExecutionProgress?: (progress: DirectorExecutionProgress) => void;
   onContextUsage?: (usage: ContextUsage) => void;
   onStatus?: (text: string) => void;
   onRuntime?: (text: string) => void;
@@ -308,7 +322,7 @@ export async function chatWithDirectorStream(
       message?: string;
       code?: string;
       generation_count?: number;
-      data?: ChatResponse | ContextUsage;
+      data?: ChatResponse | ContextUsage | DirectorExecutionProgress;
     };
     try {
       ev = JSON.parse(raw);
@@ -322,6 +336,7 @@ export async function chatWithDirectorStream(
     else if (t === "token" && ev.text) handlers.onToken?.(ev.text);
     else if (t === "tool" && ev.text) handlers.onTool?.(ev.text);
     else if (t === "context_usage" && ev.data) handlers.onContextUsage?.(ev.data as ContextUsage);
+    else if (t === "execution_progress" && ev.data) handlers.onExecutionProgress?.(ev.data as DirectorExecutionProgress);
     else if (t === "result" && ev.data) finalResult = ev.data as ChatResponse;
     else if (t === "error") {
       streamError = ev.code
