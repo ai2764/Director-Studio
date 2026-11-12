@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from .agent_tools import router as agent_tools_router
 
 from ..pipelines.actor.router import router as actor_router
 from ..pipelines.h3_ref2va.router import router as h3_ref2va_router
@@ -19,6 +20,7 @@ from .song_segments import router as song_segments_router
 
 def build_api_router() -> APIRouter:
     api = APIRouter(prefix="/api")
+    api.include_router(agent_tools_router)
     api.include_router(health_router)
     api.include_router(pipelines_router)
     api.include_router(files_router)
