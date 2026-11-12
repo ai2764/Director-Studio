@@ -433,6 +433,66 @@ async def test_wait_for_completion_retries_structured_timeouts_until_completed()
 
 
 @pytest.mark.asyncio
+async def test_status_probe_error_retries_same_prompt_without_resubmitting(monkeypatch):
+    monkeypatch.setattr("app.integrations.comfy_mcp._STATUS_RETRY_DELAY_SEC", 0)
+    session = FakeToolSession([
+        SimpleNamespace(is_error=True, content=[SimpleNamespace(
+            type="text", text="Error executing tool job",
+        )]),
+        _result({"status": "completed", "outputs": ["video.mp4"]}),
+    ])
+    result = await ComfyMcpClient(session=session).wait_for_completion(
+        "existing_prompt", cancel_event=asyncio.Event(),
+    )
+    assert result["status"] == "completed"
+    assert [name for name, _ in session.calls] == ["job", "job"]
+    assert all(args["prompt_id"] == "existing_prompt" for _, args in session.calls)
+    assert all(args["action"] == "wait" for _, args in session.calls)
+
+
+@pytest.mark.asyncio
+async def test_persistent_status_failure_reports_unknown_remote_outcome(monkeypatch):
+    monkeypatch.setattr("app.integrations.comfy_mcp._STATUS_RETRY_WINDOW_SEC", 0)
+    session = FakeToolSession([_result({"error": "server_not_running"}, is_error=True)])
+    with pytest.raises(ComfyMcpError, match="remote execution outcome is unknown") as error:
+        await ComfyMcpClient(session=session).wait_for_completion(
+            "existing_prompt", cancel_event=asyncio.Event(),
+        )
+    assert "existing_prompt" in str(error.value)
+    assert "server_not_running" in str(error.value)
+    assert len(session.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancellation_interrupts_status_retry_backoff():
+    cancel_event = asyncio.Event()
+
+    def polling_error(_name, _arguments):
+        cancel_event.set()
+        return _result({"error": "connection failed"}, is_error=True)
+
+    session = FakeToolSession([polling_error, _result({"status": "cancelled"})])
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(
+            ComfyMcpClient(session=session).wait_for_completion(
+                "existing_prompt", cancel_event=cancel_event,
+            ), timeout=1,
+        )
+    assert [args["action"] for _, args in session.calls] == ["wait", "cancel"]
+    assert all(args["prompt_id"] == "existing_prompt" for _, args in session.calls)
+
+
+@pytest.mark.asyncio
+async def test_confirmed_execution_failure_is_not_retried():
+    session = FakeToolSession([_result({"status": "failed", "error": "CUDA OOM"})])
+    with pytest.raises(ComfyMcpError, match="CUDA OOM"):
+        await ComfyMcpClient(session=session).wait_for_completion(
+            "existing_prompt", cancel_event=asyncio.Event(),
+        )
+    assert len(session.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_fetch_outputs_reads_downloaded_files_before_temp_cleanup():
     def write_output(_name: str, arguments: dict):
         path = Path(arguments["out_dir"]) / "prompt_000.mp4"
