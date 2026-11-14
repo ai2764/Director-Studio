@@ -5,6 +5,8 @@ import json
 from contextlib import asynccontextmanager
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("writer_reference_reuse")
 from PIL import Image
 
 from app.config import settings
@@ -86,10 +88,15 @@ class ObservationProvider:
     def __init__(self, responses):
         self.responses = list(responses)
         self.systems = []
+        self.text_systems = []
 
     async def complete_with_images(self, system, user, *, images, guides=()):
         assert len(images) == 1
         self.systems.append(system)
+        return self.responses.pop(0)
+
+    async def complete(self, system, user, *, guides=()):
+        self.text_systems.append(system)
         return self.responses.pop(0)
 
 
@@ -120,12 +127,10 @@ async def test_reference_observation_accepts_safe_singleton_wrappers(raw):
 @pytest.mark.asyncio
 async def test_reference_observation_repairs_invalid_structure_once():
     provider = ObservationProvider([
-        json.dumps([{"id": "img-001", "role": "assistant", "content": "analysis"}]),
-        json.dumps({
-            "readable": True,
-            "description": "Tao is centered against a plain white background.",
-            "concerns": [],
-        }),
+        json.dumps({"readable": True, "description": "Tao is centered against a plain white background.",
+                    "concerns": [], "facts": [{"attribute": "framing", "visibility": "observed",
+                    "value": "centered"}]}),
+        json.dumps({"repairs": [{"path": "facts[0].evidence", "value": "Tao is centered"}]}),
     ])
 
     result = await observe_reference(
@@ -135,8 +140,9 @@ async def test_reference_observation_repairs_invalid_structure_once():
     )
 
     assert result["description"] == "Tao is centered against a plain white background."
-    assert len(provider.systems) == 2
-    assert "exactly one JSON object" in provider.systems[1]
+    assert len(provider.systems) == 1
+    assert len(provider.text_systems) == 1
+    assert "exactly one JSON object" in provider.text_systems[0]
 
 
 @pytest.mark.asyncio
@@ -151,7 +157,8 @@ async def test_reference_observation_stops_after_one_structure_repair():
             "encoded-image",
         )
 
-    assert len(provider.systems) == 2
+    assert len(provider.systems) == 1
+    assert provider.text_systems == []  # No visual evidence to repair from text.
 
 
 class TailHandoffProvider(Provider):
@@ -362,7 +369,7 @@ async def test_material_review_cannot_rewrite_authored_brief(material_shot):
     updated = await DirectorService(plan_provider=provider, orchestrator=orch).write_prompts_after_layout(shot.id)
     assert len(provider.visual) == 9
     for i, (user, encoded) in enumerate(provider.visual, 1):
-        assert f"Picture {i}" in user
+        assert shot.refs[i - 1].asset_id in user
         with Image.open(io.BytesIO(base64.b64decode(encoded))) as thumbnail:
             assert max(thumbnail.size) <= 768
     assert all(f"Observed detail {i}" in provider.text[0][1] for i in range(1, 10))
@@ -821,7 +828,7 @@ async def test_same_asset_file_replacement_invalidates_review(material_shot):
     Image.effect_noise((640, 480), 70).convert("RGB").save(files[0])
     second = await svc.write_prompts_after_layout(shot.id)
     assert len(provider.visual) == 10  # Only changed bytes need new vision; decision still sees all nine.
-    assert "Picture 1" in provider.visual[-1][0]
+    assert shot.refs[0].asset_id in provider.visual[-1][0]
     assert first.meta["material_review"]["signature"] != second.meta["material_review"]["signature"]
 
 

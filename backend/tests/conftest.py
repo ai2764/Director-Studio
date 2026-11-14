@@ -6,6 +6,13 @@ from app.config import settings
 
 
 @pytest.fixture
+def writer_reference_reuse(monkeypatch):
+    """Explicitly exercise the opt-in Writer flow, never change global defaults."""
+    monkeypatch.setattr(settings, "director_writer_reference_reuse", True)
+    monkeypatch.setattr(settings, "director_visual_facts_cache", True)
+
+
+@pytest.fixture
 def legacy_chat_runtime(monkeypatch):
     """Opt in when testing the native loop without a Harness sidecar."""
     monkeypatch.setattr(settings, "director_agent_runtime", "legacy")

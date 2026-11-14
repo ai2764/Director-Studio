@@ -27,6 +27,7 @@ from .reference_facts import (VisualFact, ObservationConflict, validate_observat
     sanitize_observation, REFERENCE_POLICY_VERSION, sourced_records,
     reference_context_signature, reference_intent_signature, persist_reference_facts,
     REFERENCE_WRITER_CONTRACT)
+from .observation_repair import normalize_observation, apply_representation_repair, validate_representation_repair
 
 
 class ReferenceObservation(BaseModel):
@@ -72,7 +73,7 @@ class MaterialDecision(BaseModel):
         return value
 
 
-def _parse_reference_observation(raw: str) -> ReferenceObservation:
+def _observation_payload(raw: str):
     """Accept one observation, including common singleton content wrappers."""
     payload = _extract_json_payload(raw)
     for _ in range(2):
@@ -89,7 +90,11 @@ def _parse_reference_observation(raw: str) -> ReferenceObservation:
             payload = _extract_json_payload(payload["text"])
             continue
         break
-    return ReferenceObservation.model_validate(payload)
+    return payload
+
+
+def _parse_reference_observation(raw: str) -> ReferenceObservation:
+    return ReferenceObservation.model_validate(normalize_observation(_observation_payload(raw)))
 
 
 def tail_frame_review_signature(project: Project, shot: Shot, reference_signature: str) -> str | None:
@@ -138,7 +143,12 @@ def capture_asset_image(asset, role: str, file_key: str | None) -> tuple[dict, s
     }, encoded
 
 
-async def observe_reference(provider, record: dict, image: str, *, brief: str = "", attempts=None) -> dict:
+async def observe_reference(provider, record: dict, image: str, *, brief: str = "", attempts=None,
+                            initial_raw: str | None = None, on_candidate=None,
+                            max_structure_repairs: int = 2) -> dict:
+    if not settings.director_writer_reference_reuse:
+        from .legacy_reference_observation import observe_reference_legacy
+        return await observe_reference_legacy(provider, record, image, brief=brief, attempts=attempts)
     inspect = getattr(provider, "complete_with_images", None)
     if not callable(inspect):
         raise MaterialReviewError("Material review requires a vision-capable provider; no text-only fallback")
@@ -181,40 +191,79 @@ async def observe_reference(provider, record: dict, image: str, *, brief: str = 
     structure_repairs = 0
     reinspected = False
     previous_failure = None
+    repair_original = None
+    repair_candidate = None
+    repair_error = ""
+    repair_problem = ""
+    repair = getattr(provider, "complete_observation_repair", None) or getattr(provider, "complete", None)
     # One visual reinspection and at most two structural repairs. A malformed
     # reinspection must not lose its repair opportunity; identical candidates
     # with identical issues stop. Different bad fields are not the same failure.
     for attempt in range(4):
-        raw = await inspect(system + (" Return exactly one JSON object, no message envelope." if attempt else ""),
-                            user + correction, images=[image], guides=())
+        if attempt == 0 and initial_raw is not None:
+            raw = initial_raw
+        elif repair_original is None:
+            raw = await inspect(system, user + correction, images=[image], guides=())
+            if on_candidate is not None:
+                on_candidate(raw)
+        else:
+            # Schema/source corrections do not require image decoding. Keep the
+            # first visual candidate as the evidence anchor across all repairs.
+            raw = await repair(
+                "Repair observation representation using supplied text only, never reinterpret pixels. "
+                'Return exactly one JSON object: {"repairs":[{"path":"facts[0].evidence","value":"exact description substring"}]}. '
+                "Allowed fields: missing facts[i].evidence, missing observed facts[i].value, existing facts[i].source_id/source_quote, "
+                "conflicts[i].quote. Evidence and conflict quotes MUST be exact substrings of the "
+                "candidate description, never concerns or metadata. If necessary quote the entire description. "
+                "A missing observed value MUST quote the fact's existing evidence or candidate description. "
+                "Missing evidence for a not_visible/uncertain fact may instead copy its existing valid source_quote. "
+                "Source quotes MUST be exact substrings of the cited supplied source. "
+                "Preserve every fact, dispute and uncertainty. Return only patches; never the full observation.",
+                json.dumps({"candidate": repair_candidate, "sources": sources,
+                            "repair_error": repair_problem}, ensure_ascii=False), guides=())
         try:
-            observation = _parse_reference_observation(raw)
+            if repair_original is not None:
+                repair_candidate = apply_representation_repair(repair_candidate, _extract_json_payload(raw))
+                observation = ReferenceObservation.model_validate(repair_candidate)
+                validate_representation_repair(repair_original, observation)
+            else:
+                observation = _parse_reference_observation(raw)
             validate_observation_sources(observation, sources)
         except ValueError as exc:
             error = str(exc)
+            if repair_original is not None and repair_error:
+                error = f"{repair_error}; text repair rejected: {error}"
+            repair_problem = error
             issues = getattr(exc, "issues", None) or [dict(code="observation_schema_invalid", reason=error)]
             if attempts is not None:
-                attempts.append(dict(attempt=attempt + 1, raw=raw, issues=issues))
+                mode = "text_repair" if repair_original is not None else "stored" if initial_raw is not None and attempt == 0 else "vision"
+                attempts.append(dict(attempt=attempt + 1, raw=raw, issues=issues, mode=mode))
             failure = (raw, error)
-            if structure_repairs >= 2 or failure == previous_failure:
+            if structure_repairs >= max_structure_repairs or failure == previous_failure:
                 raise MaterialReviewError(error, issues=issues) from exc
+            if repair_original is None:
+                try:
+                    repair_original = _observation_payload(raw)
+                except ValueError:
+                    repair_original = None
+                if (not isinstance(repair_original, dict)
+                        or not isinstance(repair_original.get("description"), str)
+                        or not isinstance(repair_original.get("readable"), bool)
+                        or not isinstance(repair_original.get("concerns"), list)
+                        or not callable(repair)):
+                    raise MaterialReviewError(error, issues=issues) from exc
+                repair_candidate = normalize_observation(repair_original)
+                repair_error = str(exc)
             structure_repairs += 1
             previous_failure = failure
-            correction = (f"\nRepair only these observation structure/source evidence issues: {exc}"
-                "\nfacts[].source_quote must be copied verbatim from the cited supplied source, never translated or paraphrased. "
-                "conflicts[].quote must be copied verbatim from your CURRENT description, "
-                "not from concerns, source metadata, or the previous response. "
-                "If the description already resolves the disputed label, remove that conflict. "
-                "Keep unresolved uncertainty in concerns; do not invent a description claim just to match a quote. "
-                "For a purely visual observation with no applicable source, omit source_id/source_quote and keep "
-                "source_kind=model_observation. Do not change the source text or invent authority."
-                f"\nPrevious response (untrusted candidate): {raw}")
             continue
         if not observation.readable:
             raise MaterialReviewError("image is not reliably readable")
         previous_failure = None
         if observation.conflicts and not reinspected:
             reinspected = True
+            repair_original = None
+            repair_error = ""
             correction = ("\nReinspect only this image to resolve these specific disputes; preserve valid "
                           "observations. Do not infer hidden details. Return a corrected full observation.\n"
                           + observation.model_dump_json())
@@ -240,8 +289,9 @@ async def observe_references_cached(provider, project_id, records, images, check
                                     refresh_request: str = "", on_progress=None, force_reinspect: bool = False):
     """Cache visual evidence separately from shot suitability and directing history.
 
-    inspection_request is an explicit visual reinspection, not a prompt revision.
     Current directing sources remain in the returned records for suitability review.
+    inspection_request adds current context; callers needing fresh pixels must use
+    force_reinspect or refresh_pictures rather than invalidating all image facts.
     """
     from ...core.projects.store import load_project
     project = load_project(project_id)
@@ -257,7 +307,7 @@ async def observe_references_cached(provider, project_id, records, images, check
     from .reference_cache import ObservationCache
     cache_started = monotonic()
     reviewed = []
-    hits, misses = 0, 0
+    hits, misses, pending_repairs = 0, 0, 0
     for record, image in zip(records, images, strict=True):
         check_current()
         pixel_only = settings.director_visual_facts_cache
@@ -267,6 +317,7 @@ async def observe_references_cached(provider, project_id, records, images, check
             source for source in record.get("sources", [])
             if source.get("kind") != "user_directing_request"
         ]}
+        contextual_record = observation_record
         if pixel_only:
             observation_record = {k: record[k] for k in ("asset_id", "role", "file_key", "content_sha256")}
         stable_record = {k: v for k, v in observation_record.items()
@@ -281,26 +332,69 @@ async def observe_references_cached(provider, project_id, records, images, check
         if pixel_only:
             identity["visual_scope"] = "pixels-only-v1"
         cache = ObservationCache(settings.projects_dir / project_id / "agent" / "reference_observations", identity)
+        pending = None
         if force_reinspect or record["picture_index"] in (refresh_pictures or set()):
             observation, reason = None, "requested_reinspection"
+        elif settings.director_writer_reference_reuse and cache.pending_path.exists():
+            # A newer, unfinished explicit inspection supersedes an older hit.
+            # Pending output is parsed/validated by observe_reference, never used as facts here.
+            pending = cache.load_pending()
+            observation, reason = None, "pending_validation" if pending is not None else "pending_evidence_invalid"
         else:
             observation, reason = cache.load(ReferenceObservation, observation_record.get("sources", []))
+            if (observation is None and pixel_only and settings.director_writer_reference_reuse
+                    and not cache.path.exists() and not cache.legacy_path.exists()):
+                # Reuse an exact, still-valid old contextual observation during
+                # rollout. Never promote it into the metadata-independent cache.
+                legacy_identity = {k: v for k, v in identity.items() if k != "visual_scope"}
+                legacy_identity.update(record={k: v for k, v in contextual_record.items()
+                    if k not in {"picture_index", "reference_notes"}}, inspection_request=inspection_request)
+                legacy_cache = ObservationCache(cache.path.parent, legacy_identity)
+                if not legacy_cache.pending_path.exists():
+                    legacy_observation, _ = legacy_cache.load(ReferenceObservation, contextual_record.get("sources", []))
+                    if legacy_observation is not None:
+                        observation, reason, cache = legacy_observation, "hit", legacy_cache
         if observation is not None:
             hits += 1
             await emit_progress(on_progress, {"type": "status", "phase": "reference_cache", "state": "hit",
                 "text": f"Reusing the verified observation for Picture {record['picture_index']}.",
                 "cache_hits": hits, "cache_misses": misses})
         if observation is None:
-            misses += 1
+            if pending is None:
+                misses += 1
+            else:
+                pending_repairs += 1
             await emit_progress(on_progress, {"type": "status", "phase": "reference_cache", "state": "miss",
-                "text": f"Picture {record['picture_index']} needs a current observation.", "cache_reason": reason,
-                "cache_hits": hits, "cache_misses": misses})
+                "text": (f"Repairing the stored response for Picture {record['picture_index']} without reading the image again."
+                         if pending is not None else f"Picture {record['picture_index']} needs a current observation."),
+                "cache_reason": reason, "cache_hits": hits, "cache_misses": misses, "cache_repairs": pending_repairs})
             attempts = []
+            fresh_observed = False
+            def remember_candidate(raw):
+                nonlocal fresh_observed
+                fresh_observed = True
+                cache.save_pending(raw)
             try:
                 async with report_phase(on_progress, "reference_observation",
-                                        f"Inspecting Picture {record['picture_index']}/{len(records)}"):
-                    result = await observe_reference(provider, observation_record, image,
-                                                     brief=(refresh_request or "") if pixel_only else (refresh_request or inspection_request), attempts=attempts)
+                                        f"{'Validating stored response for' if pending is not None else 'Inspecting'} Picture {record['picture_index']}/{len(records)}"):
+                    brief = (refresh_request or "") if pixel_only else (refresh_request or inspection_request)
+                    try:
+                        result = await observe_reference(provider, observation_record, image,
+                            brief=brief, attempts=attempts, initial_raw=pending,
+                            on_candidate=remember_candidate if settings.director_writer_reference_reuse else None)
+                    except MaterialReviewError:
+                        if pending is None or fresh_observed:
+                            raise
+                        # A cached failure must not permanently poison the asset.
+                        # Try fresh pixels once in this new request, sharing its
+                        # two text-repair slots rather than resetting the budget.
+                        remaining = max(0, 2 - sum(a.get("mode") == "text_repair" for a in attempts))
+                        misses += 1
+                        await emit_progress(on_progress, {"type": "status", "phase": "reference_cache", "state": "miss",
+                            "text": f"Stored response for Picture {record['picture_index']} could not be repaired; taking one fresh observation.",
+                            "cache_reason": "pending_repair_failed", "cache_hits": hits, "cache_misses": misses})
+                        result = await observe_reference(provider, observation_record, image, brief=brief, attempts=attempts,
+                            on_candidate=remember_candidate, max_structure_repairs=remaining)
                 observation = ReferenceObservation.model_validate({k: result[k] for k in ReferenceObservation.model_fields})
             except Exception as exc:
                 _save_review_failure(project_id, record, identity, attempts, exc)
@@ -309,15 +403,26 @@ async def observe_references_cached(provider, project_id, records, images, check
                     issues=[dict(issue, picture_index=record['picture_index'], asset_id=record['asset_id'])
                             for issue in getattr(exc, 'issues', [])]) from exc
             check_current()
-        cache.save(observation)
+        if reason != "hit" or not cache.path.exists():
+            if cache.save(observation):
+                cache.clear_pending()
+            else:
+                # Preserve the finished repair too; a failed canonical write
+                # must not replay an older malformed/disputed raw response.
+                if settings.director_writer_reference_reuse:
+                    cache.save_pending(observation.model_dump_json())
+                await emit_progress(on_progress, {"type": "status", "phase": "reference_cache", "state": "warning",
+                    "text": f"Picture {record['picture_index']} was inspected but its verified cache could not be saved.",
+                    "cache_reason": "cache_persistence_failed", "picture_index": record['picture_index']})
         reviewed.append({**record, **observation.model_dump(), "observation_model": {
             key: identity[key] for key in ("model", "provider", "endpoint", "fact_policy")}})
     check_current()
     persist_reference_facts(project_id, reviewed, check_current)
     await emit_progress(on_progress, {"type": "status", "phase": "reference_cache", "state": "completed",
-        "text": f"Reference observations: {hits} reused, {misses} inspected ({monotonic() - cache_started:.1f}s).",
-        "cache_hits": hits, "cache_misses": misses, "elapsed_s": monotonic() - cache_started})
-    logging.getLogger(__name__).info("Reference observations: %s reused, %s inspected", hits, misses)
+        "text": f"Reference observations: {hits} reused, {misses} inspected, {pending_repairs} stored responses validated ({monotonic() - cache_started:.1f}s).",
+        "cache_hits": hits, "cache_misses": misses, "cache_repairs": pending_repairs, "elapsed_s": monotonic() - cache_started})
+    logging.getLogger(__name__).info("Reference observations: %s reused, %s inspected, %s pending validated",
+                                     hits, misses, pending_repairs)
     return reviewed
 
 

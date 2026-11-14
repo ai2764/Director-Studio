@@ -380,6 +380,15 @@ async def handle_project_tool(
             "expected_shot_hash": digest(current.model_dump(mode="json")),
             "expected_script_hash": _script_hash(project.script_text)} if evidence else {}))
         actions.append("revise_shot")
+        from ....config import settings
+        revised = next(shot for shot in persisted if shot.id == revision.shot_id)
+        if settings.director_writer_reference_reuse and revised == current:
+            if result_payloads is not None:
+                result_payloads.append({"ok": True, "changed": False,
+                    "shot": storyboard_snapshot([revised])["shots"][0],
+                    "duration_budget": duration_budget(project, persisted)})
+            notes.append(f"Shot {revision.shot_id} is unchanged. Existing prompts, references and H3 links were preserved.")
+            return True
         if result_payloads is not None:
             # Report the saved target, not a full board per edit (quadratic in
             # batch size). The complete storyboard remains in the project store.

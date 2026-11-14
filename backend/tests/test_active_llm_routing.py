@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("writer_reference_reuse")
+
 from app.core.llm.provider import UnsupportedLLMFeatureError
 
 
@@ -32,6 +34,45 @@ class RecordingProvider:
 
     def model_status(self) -> dict:
         return {"model": "catalog-model"}
+
+
+@pytest.mark.asyncio
+async def test_observation_patch_repair_uses_text_client_without_writer_skill(monkeypatch):
+    from app.agents.director import llm_plan_provider as module
+    def forbidden_skill(*args, **kwargs):
+        pytest.fail("A JSON patch repair must not load the H3 writing instructions")
+    monkeypatch.setattr(module, "with_director_skill", forbidden_skill)
+    active = RecordingProvider()
+    adapter = module.DirectorLLMPlanProvider(provider=active)
+    assert await adapter.complete_observation_repair("Repair JSON", "Original evidence") == "ok"
+    assert active.client.generate_calls == [("catalog-model", "Repair JSON\n\nOriginal evidence")]
+    assert active.client.chat_calls == []
+
+
+@pytest.mark.asyncio
+async def test_default_observation_uses_its_schema_and_preserves_fact_budget(monkeypatch):
+    from app.agents.director import llm_plan_provider as module
+    from app.config import settings
+    class VisionClient:
+        calls = []
+        async def chat_response(self, model, **kwargs):
+            self.calls.append(kwargs)
+            return {"content": "{}", "finish_reason": "stop"}
+    def forbidden_skill(*args, **kwargs):
+        pytest.fail("Visual extraction must not load H3 writing instructions")
+    monkeypatch.setattr(module, "with_director_skill", forbidden_skill)
+    monkeypatch.setattr(settings, "director_compact_vision_prompt", False)
+    monkeypatch.setattr(settings, "director_num_predict", 4096)
+    client = VisionClient()
+    adapter = module.DirectorLLMPlanProvider(provider=RecordingProvider(client))
+    await adapter.complete_with_images("Inspect exactly one reference image. Return JSON.", "pixels", images=["image"])
+    call = client.calls[0]
+    assert call["messages"][0]["images"] == ["image"]
+    assert call["format"]["properties"]["facts"]["maxItems"] == 24
+    assert "evidence" in call["format"]["$defs"]["VisualFact"]["required"]
+    assert "value" in call["format"]["$defs"]["VisualFact"]["required"]
+    assert call["options"]["num_predict"] == 4096
+    assert call["require_vision"] is True
 
 
 @pytest.mark.asyncio

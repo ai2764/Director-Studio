@@ -8,6 +8,7 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ...core.projects.dialogue import digest
 from ...core.prompt_errors import PromptFailureError
+from ...config import settings
 
 REFERENCE_POLICY_VERSION = 2
 
@@ -57,7 +58,12 @@ def validate_observation_sources(observation, sources):
             if not source or not fact.source_quote or fact.source_quote not in source["text"]:
                 matches = [sid for sid, candidate in by_id.items()
                            if fact.source_quote and fact.source_quote in candidate["text"]]
-                if len(matches) == 1:
+                # The same Library metadata can be stored under both notes and
+                # description. Equivalent aliases are one evidence source;
+                # differing text, authority or provenance remains ambiguous.
+                equivalent = [{k: v for k, v in by_id[sid].items() if k != "id"} for sid in matches]
+                if len(matches) == 1 or (settings.director_writer_reference_reuse and matches and equivalent[0].get("kind") == "library_metadata"
+                                        and all(item == equivalent[0] for item in equivalent)):
                     # Repair only an unambiguous pointer to verbatim supplied evidence.
                     # This does not certify the model's interpretation of that evidence.
                     fact.source_id_repaired_from = fact.source_id
@@ -141,7 +147,7 @@ def persist_reference_facts(project_id, references, check_current):
             key = digest([ref["asset_id"], ref.get("file_key", "")])
             saved["references"][key] = {k: v for k, v in ref.items() if k != "picture_index"}
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+        temporary = path.parent / f".facts-{uuid.uuid4().hex}.tmp"
         try:
             temporary.write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
             os.replace(temporary, path)
