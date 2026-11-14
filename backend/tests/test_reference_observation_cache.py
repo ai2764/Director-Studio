@@ -1,6 +1,8 @@
 """Presentation-only changes reuse observations without weakening source checks."""
 import pytest
 
+pytestmark = pytest.mark.usefixtures("writer_reference_reuse")
+
 from app.agents.director.material_review import capture_references, observe_references_cached
 from test_director_material_review import material_shot
 from test_reference_facts import Vision, observation
@@ -59,7 +61,9 @@ async def test_renamed_delivery_and_picture_order_reuse_observation(material_sho
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["bytes", "metadata", "model", "instruction"])
-async def test_meaningful_changes_reinspect_and_explain_miss(material_shot, change):
+async def test_meaningful_changes_reinspect_and_explain_miss(material_shot, change, monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "director_visual_facts_cache", False)  # Legacy contextual mode.
     project, shot, _, _ = material_shot
     records, images, _ = capture_references(shot)
     provider = Vision(observation(), observation())
@@ -104,6 +108,8 @@ async def test_existing_unicode_v5_cache_is_reused_and_migrated(material_shot):
 
 @pytest.mark.asyncio
 async def test_same_evidence_with_new_citation_ids_rebinds_without_vision(material_shot, monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "director_visual_facts_cache", False)
     from app.agents.director import material_review
     project, shot, _, _ = material_shot
     records, images, _ = capture_references(shot)

@@ -88,6 +88,14 @@ class DirectorLLMPlanProvider:
         async with self._input_budget(prompt):
             return await self.client.generate(self.model, prompt)
 
+    async def complete_observation_repair(self, system: str, user: str, *, guides=()) -> str:
+        # JSON field patches are not H3 prose. Loading the Writer skill here
+        # adds conflicting output instructions and needlessly expands retries.
+        prompt = f"{system}\n\n{user}"
+        observe_request("reference.repair", [{"role": "user", "content": prompt}])
+        async with self._input_budget(prompt):
+            return await self.client.generate(self.model, prompt)
+
     async def complete_with_images(
         self,
         system: str,
@@ -96,22 +104,32 @@ class DirectorLLMPlanProvider:
         images: list[str],
         guides: Iterable[str] = (),
     ) -> str:
-        if settings.director_compact_vision_prompt and system.startswith("Inspect exactly one reference image"):
+        reuse = settings.director_writer_reference_reuse
+        if (settings.director_compact_vision_prompt or reuse) and system.startswith("Inspect exactly one reference image"):
             # Pixel extraction already has a complete provenance/JSON contract.
             # Tool, soundtrack and production instructions do not belong here.
-            prompt = (f"{system}\n\nKeep the description under 120 words and return at most 8 salient facts. "
-                      f"Use concise evidence; do not enumerate repetitive details.\n\n{user}")
+            compact = settings.director_compact_vision_prompt
+            limits = ("\n\nKeep the description under 120 words and return at most 8 salient facts. "
+                      "Use concise evidence; do not enumerate repetitive details.") if compact else ""
+            prompt = f"{system}{limits}\n\n{user}"
             observe_request("writer.vision", [{"role": "user", "content": prompt}], image_count=len(images))
             from .material_review import ReferenceObservation
             schema = ReferenceObservation.model_json_schema()
-            schema["properties"]["facts"]["maxItems"] = 8
-            async with asyncio.timeout(150), self._input_budget(prompt, output_tokens=2048, images=True):
+            # Pydantic defaults value to null for unseen facts, but an observed
+            # fact must actually supply it. Make that slot explicit to decoders.
+            if reuse:
+                schema["$defs"]["VisualFact"]["required"].append("value")
+            if compact:
+                schema["properties"]["facts"]["maxItems"] = 8
+            output_budget = 2048 if compact else settings.director_num_predict
+            deadline = 150 if compact and not reuse else min(150 if compact else PROMPT_CALL_TIMEOUT_SEC, settings.llm_timeout_sec)
+            async with asyncio.timeout(deadline), self._input_budget(prompt, output_tokens=output_budget, images=True):
                 response = await self.vision_client.chat_response(
                     self.vision_model, messages=[{"role": "user", "content": prompt, "images": images}],
                     format=schema, require_vision=True,
-                    options={"num_predict": 2048, "temperature": 0.3})
+                    options={"num_predict": output_budget, "temperature": 0.3})
             if (response.get("finish_reason") or response.get("done_reason")) in {"length", "max_tokens"}:
-                raise PromptOutputTruncated("Visual observation exceeded 2048 tokens; no partial observation accepted")
+                raise PromptOutputTruncated(f"Visual observation exceeded {output_budget} tokens; no partial observation accepted")
             return str(response.get("content") or "")
         else:
             prompt = with_director_skill(f"{system}\n\n{user}", guides=guides, writer_only=True)

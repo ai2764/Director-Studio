@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("writer_reference_reuse")
+
 from test_director_material_review import material_shot, Orchestrator, Provider
 from test_reference_facts import Vision, observation
 from app.agents.director.material_review import observe_reference, capture_references
@@ -21,18 +23,17 @@ def cited_fact(attribute, quote):
 async def test_multiple_bad_quotes_report_each_location_and_repair_progress():
     first = observation()
     first["facts"] = [cited_fact("wardrobe", "bad coat"), cited_fact("prop", "bad object")]
-    second = observation()
-    second["facts"] = [cited_fact("wardrobe", "blue coat"), cited_fact("prop", "bad object")]
-    third = observation()
-    third["facts"] = [cited_fact("wardrobe", "blue coat"), cited_fact("prop", "brass watch")]
+    second = {"repairs": [{"path": "facts[0].source_quote", "value": "blue coat"}]}
+    third = {"repairs": [{"path": "facts[1].source_quote", "value": "brass watch"}]}
     provider = Vision(first, second, third)
     result = await observe_reference(provider, {"sources": [dict(id="approved_notes",
         kind="library_metadata", text="blue coat and brass watch")]}, "image")
     assert result["facts"][1]["source_quote"] == "brass watch"
-    correction = provider.calls[1][1]
+    correction = provider.text_calls[0][1]
     assert "facts[0]" in correction and "facts[1]" in correction
     assert "bad coat" in correction and "bad object" in correction
-    assert len(provider.calls) == 3
+    assert len(provider.calls) == 1
+    assert len(provider.text_calls) == 2
 
 
 @pytest.mark.asyncio
@@ -42,17 +43,18 @@ async def test_repeated_invalid_citation_is_bounded_and_failed_evidence_not_publ
     records, images, _ = capture_references(shot)
     bad = observation()
     bad["facts"] = [cited_fact("wardrobe", "invented")]
-    provider = Vision(bad, bad)
+    provider = Vision(bad, bad, bad)
     with pytest.raises(ValueError) as error:
         await observe_references_cached(provider, project.id, records[:1], images[:1], lambda: None)
     assert getattr(error.value, "code", None) == "MATERIAL_REVIEW_INVALID"
-    assert len(provider.calls) == 2
+    assert len(provider.calls) == 1
+    assert len(provider.text_calls) == 2
     assert not (project_dir(project.id) / "agent/reference_facts.json").exists()
     diagnostics = list((project_dir(project.id) / "agent/reference_review_failures").glob("*.json"))
     assert len(diagnostics) == 1
     saved = json.loads(diagnostics[0].read_text(encoding="utf-8"))
     assert saved["reference"]["asset_id"] == shot.refs[0].asset_id
-    assert len(saved["attempts"]) == 2
+    assert len(saved["attempts"]) == 3
     assert saved["attempts"][0]["issues"][0]["path"] == "facts[0].source_quote"
     assert "invented" in saved["attempts"][0]["raw"]
 

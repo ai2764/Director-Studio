@@ -566,6 +566,12 @@ class DirectorService:
         resulting_voices = authored_updates.get("voice_refs", shot.voice_refs)
         if resulting_music is not None and resulting_music.use_as_audio_reference and resulting_voices:
             raise ValueError("music_segment cannot be combined with Voice references")
+        if (settings.director_writer_reference_reuse and dialogue_authoring is None
+                and authored_updates and all(hasattr(shot, key) and getattr(shot, key) == value
+                                             for key, value in authored_updates.items())):
+            # Replaying unchanged authored values must not discard a usable
+            # prompt/video link before the requested prompt-only correction.
+            return list_shots(project_id)
         meta = dict(shot.meta or {})
         if shot.h3_job_id:
             superseded = list(meta.get("superseded_h3_job_ids") or [])
@@ -2499,8 +2505,17 @@ class DirectorService:
                          + json.dumps(review.get("decision"), ensure_ascii=False))
             if dialogue_lines:
                 user += "\nSource dialogue lines:\n" + json.dumps([line.model_dump(mode="json") for line in dialogue_lines], ensure_ascii=False)
+            if dialogue_lines or (settings.director_writer_reference_reuse and revision_request.strip()
+                                  and any(shot.prompt_sections.model_dump().values())):
                 user += "\nExisting prompt, if present: preserve valid creative choices while repairing attribution or applying the current requested revision:\n" + shot.prompt_sections.model_dump_json()
             writer_instructions = prompt_text.H3_PROMPT_INSTRUCTIONS + SHOT_EXECUTION_INTENT + REFERENCE_WRITER_CONTRACT + (WRITER_CONTRACT if dialogue_lines else "")
+            if settings.director_writer_reference_reuse:
+                writer_instructions += (
+                    "\nWrite only this Shot's authored actions. The overall screenplay is context; "
+                    "do not move actions assigned to another Shot into this clip. "
+                    "For a revision with an existing prompt, change only the requested or necessarily affected text. "
+                    "Preserve unaffected sections and action timing; do not add new actions in sound descriptions.\n"
+                )
             from .prompt_retry import prompt_only_retry_active, PROMPT_ONLY_INSTRUCTIONS
             if prompt_only_retry_active():
                 writer_instructions += PROMPT_ONLY_INSTRUCTIONS

@@ -1,5 +1,7 @@
 import json
 import pytest
+
+pytestmark = pytest.mark.usefixtures("writer_reference_reuse")
 from app.agents.director.material_review import observe_reference
 from test_director_material_review import material_shot, Orchestrator, Provider
 
@@ -8,9 +10,14 @@ class Vision:
     def __init__(self, *answers):
         self.answers = list(answers)
         self.calls = []
+        self.text_calls = []
 
     async def complete_with_images(self, system, user, **kwargs):
         self.calls.append((system, user, kwargs))
+        return json.dumps(self.answers.pop(0))
+
+    async def complete(self, system, user, **kwargs):
+        self.text_calls.append((system, user, kwargs))
         return json.dumps(self.answers.pop(0))
 
 
@@ -96,41 +103,37 @@ async def test_structure_error_during_reinspection_has_its_own_repair_budget():
     result = await observe_reference(provider, {}, "image")
     assert result["facts"][0]["value"] is None
     assert result["description"] == "Only the upper body is visible."
-    assert len(provider.calls) == 3
+    assert len(provider.calls) == 2
+    assert provider.text_calls == []
 
 
 @pytest.mark.asyncio
-async def test_distinct_source_errors_can_be_repaired_locally():
+async def test_text_repair_cannot_replace_facts_with_disputes():
     wrong_source = observation()
     wrong_source["facts"] = [dict(attribute="wardrobe", value="beige",
         visibility="observed", evidence="Visible fabric", source_id="missing", source_quote="invented")]
     wrong_conflict = observation()
     wrong_conflict["conflicts"] = [dict(attribute="wardrobe", quote="not present", reason="Mismatch")]
     provider = Vision(wrong_source, wrong_conflict, observation())
-    result = await observe_reference(provider, {"sources": []}, "image")
-    assert result["description"] == "A beige blazer and pencil skirt."
-    assert result["conflicts"] == []
-    assert len(provider.calls) == 3
+    with pytest.raises(ValueError, match="repair"):
+        await observe_reference(provider, {"sources": []}, "image")
+    assert len(provider.calls) == 1
+    assert len(provider.text_calls) == 2
 
 
 @pytest.mark.asyncio
-async def test_mixed_reinspection_and_schema_repairs_remain_bounded():
+async def test_distinct_source_pointer_repairs_remain_bounded():
     wrong_source = observation()
     wrong_source["facts"] = [dict(attribute="wardrobe", value="beige",
         visibility="observed", evidence="Visible fabric", source_id="missing", source_quote="invented")]
-    wrong_conflict = observation()
-    wrong_conflict["conflicts"] = [dict(attribute="wardrobe", quote="not present", reason="Mismatch")]
-    provider = Vision(wrong_source, conflict_observation(), wrong_conflict, observation())
-    result = await observe_reference(provider, {"sources": []}, "image")
-    assert result["description"] == "A beige blazer and pencil skirt."
-    assert len(provider.calls) == 4
-
-    # A further invalid response exhausts the budget instead of asking the user
-    # to unknowingly pay for an unbounded retry loop.
-    provider = Vision(wrong_source, conflict_observation(), wrong_conflict, wrong_source)
+    repairs = []
+    for pointer in ("another-missing-source", "third-missing-source"):
+        repairs.append({"repairs": [{"path": "facts[0].source_id", "value": pointer}]})
+    provider = Vision(wrong_source, *repairs)
     with pytest.raises(ValueError, match="source"):
         await observe_reference(provider, {"sources": []}, "image")
-    assert len(provider.calls) == 4
+    assert len(provider.calls) == 1
+    assert len(provider.text_calls) == 2
 
 
 @pytest.mark.asyncio
@@ -168,7 +171,7 @@ async def test_model_cannot_claim_nonexistent_user_source():
     forged = observation()
     forged["facts"] = [dict(attribute="wardrobe", value="anything", visibility="observed", evidence="Visible fabric.", source_id="user-confirmed", source_quote="Approved by the user.")]
     with pytest.raises(ValueError, match="source"):
-        await observe_reference(Vision(forged, forged), {"sources": []}, "image")
+        await observe_reference(Vision(forged, forged, forged), {"sources": []}, "image")
 
 
 @pytest.mark.asyncio
@@ -187,7 +190,7 @@ async def test_invalid_conflict_quote_cannot_delete_unrelated_description():
     wrong = observation()
     wrong["conflicts"] = [dict(attribute="wardrobe", quote="not present", reason="invented")]
     with pytest.raises(ValueError, match="quote"):
-        await observe_reference(Vision(wrong, wrong), {}, "image")
+        await observe_reference(Vision(wrong, wrong, wrong), {}, "image")
 
 
 @pytest.mark.asyncio
@@ -196,11 +199,13 @@ async def test_conflict_quote_repair_targets_description_not_external_sources():
     wrong["concerns"] = ["No backrest is visible."]
     wrong["conflicts"] = [dict(attribute="chair_structure", quote="No backrest is visible.",
         reason="The reference notes describe a chair back.")]
-    provider = Vision(wrong, observation("Hands grip a wooden seat beside the bed."))
-    await observe_reference(provider, {"sources": []}, "image")
-    repair = provider.calls[1][1]
-    assert "conflicts[].quote must be copied verbatim from your CURRENT description" in repair
-    assert "not from concerns, source metadata, or the previous response" in repair
+    provider = Vision(wrong, wrong, wrong)
+    with pytest.raises(ValueError, match="quote"):
+        await observe_reference(provider, {"sources": []}, "image")
+    assert len(provider.calls) == 1
+    repair = provider.text_calls[0][0]
+    assert "conflict quotes MUST be exact substrings" in repair
+    assert "never concerns or metadata" in repair
 
 
 @pytest.mark.asyncio

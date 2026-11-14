@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("writer_reference_reuse")
+
 from app.agents.director.service import DirectorService
 from app.core.projects.models import Shot
 from app.core.projects.store import save_project, save_shot
@@ -89,7 +91,7 @@ async def test_current_visual_correction_reinspects_instead_of_reusing_old_label
     await svc.write_prompts_after_layout(shot.id)
     updated = await svc.write_prompts_after_layout(shot.id, revision_request=correction)
     assert len(provider.visual) == 10
-    assert "Picture 3" in provider.visual[-1][0]
+    assert shot.refs[2].asset_id in provider.visual[-1][0]
     assert correction in provider.visual[-1][0]
     assert updated.meta["material_review"]["references"][2]["description"] == "A hip-length jacket with no backpack."
     # Identical correction and image bytes can still share the bounded inspection.
@@ -160,16 +162,20 @@ async def test_writer_receives_resolved_review_instead_of_only_stale_feedback(ma
 
 
 @pytest.mark.asyncio
-async def test_visual_correction_has_an_exact_citable_source(material_shot):
+@pytest.mark.parametrize("pixel_only", [False, True])
+async def test_visual_correction_has_an_exact_citable_source(material_shot, monkeypatch, pixel_only):
+    from app.config import settings
+    monkeypatch.setattr(settings, "director_visual_facts_cache", pixel_only)
     from app.agents.director.material_review import capture_references, observe_references_cached
     _, shot, _, _ = material_shot
     correction = "腰包在腰前。"
     class CitingVision:
         async def complete_with_images(self, system, user, **kwargs):
+            assert (correction in user) is not pixel_only
+            citation = {} if pixel_only else {"source_id": "current_inspection_request", "source_quote": correction}
             return json.dumps({"readable": True, "description": "A pouch at the front waist.",
                 "concerns": [], "facts": [{"attribute": "pouch_position", "value": "front",
-                    "visibility": "observed", "evidence": "Visible waist pouch.",
-                    "source_id": "current_inspection_request", "source_quote": correction}]})
+                    "visibility": "observed", "evidence": "Visible waist pouch.", **citation}]})
     records, images, _ = capture_references(shot)
     result = await observe_references_cached(CitingVision(), shot.project_id,
         records[:1], images[:1], lambda: None, inspection_request=correction)

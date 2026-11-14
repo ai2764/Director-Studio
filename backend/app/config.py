@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     director_vision_model: str = ""
     director_compact_vision_prompt: bool = False
     director_visual_facts_cache: bool = False
+    # Experimental Writer observation/repair flow; keep main's defaults intact.
+    director_writer_reference_reuse: bool = False
 
     # Local Ollama / Director agent (VRAM exclusive with Comfy)
     ollama_base_url: str = "http://127.0.0.1:11434"

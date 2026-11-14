@@ -15,7 +15,9 @@ def _digest(value):
 
 def _write(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+    # Do not append to the 64-character cache key: on Windows an otherwise
+    # usable cache path can cross MAX_PATH only during the atomic write.
+    temporary = path.parent / f".obs-{uuid.uuid4().hex}.tmp"
     try:
         temporary.write_text(content, encoding="utf-8")
         temporary.replace(path)
@@ -35,6 +37,8 @@ class ObservationCache:
             {k: v for k, v in source.items() if k not in {"id", "source_message_id"}}
             for source in sources]
         self.path = directory / f"{_digest(canonical)}.json"
+        # Untrusted model output lives outside the validated observation namespace.
+        self.pending_path = directory / "pending" / self.path.name
         # Existing exact v5 observations remain usable after this upgrade.
         legacy_key = hashlib.sha256(json.dumps(legacy, sort_keys=True).encode()).hexdigest()
         self.legacy_path = directory / f"{legacy_key}.json"
@@ -78,5 +82,29 @@ class ObservationCache:
         try:
             _write(self.path, observation.model_dump_json())
             _write(self.metadata_path, json.dumps(self.dimensions))
+            return True
         except OSError:
             logger.exception("Could not cache visual observation")
+            return False
+
+    def load_pending(self):
+        try:
+            payload = json.loads(self.pending_path.read_text(encoding="utf-8"))
+            raw = payload["raw"]
+            if isinstance(raw, str) and 0 < len(raw) <= 1_048_576:
+                return raw
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+        return None
+
+    def save_pending(self, raw):
+        try:
+            _write(self.pending_path, json.dumps({"raw": raw}, ensure_ascii=False))
+        except OSError:
+            logger.exception("Could not save pending visual response")
+
+    def clear_pending(self):
+        try:
+            self.pending_path.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Could not clear pending visual response")
