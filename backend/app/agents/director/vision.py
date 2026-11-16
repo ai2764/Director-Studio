@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import logging
 import re
+from collections import OrderedDict
+from threading import Lock
 from typing import Any
 
 from ...core.library.store import load_asset
@@ -15,6 +18,39 @@ from ...core.projects.store import load_shot
 from ...core.schemas import LibraryAsset
 
 logger = logging.getLogger("director_studio.director.vision")
+
+
+class _EncodedImageCache:
+    """Bounded process-local LRU; retain encoded payloads, never source bytes."""
+
+    def __init__(self, *, max_bytes=8 * 1024 * 1024, max_entries=32):
+        self._max_bytes, self._max_entries = max_bytes, max_entries
+        self._entries = OrderedDict()
+        self._bytes = 0
+        self._lock = Lock()
+
+    def get(self, key):
+        with self._lock:
+            value = self._entries.get(key)
+            if value is not None:
+                self._entries.move_to_end(key)
+            return value
+
+    def put(self, key, value):
+        if len(value) > self._max_bytes:
+            return
+        with self._lock:
+            previous = self._entries.pop(key, None)
+            if previous is not None:
+                self._bytes -= len(previous)
+            self._entries[key] = value
+            self._bytes += len(value)
+            while self._bytes > self._max_bytes or len(self._entries) > self._max_entries:
+                _, removed = self._entries.popitem(last=False)
+                self._bytes -= len(removed)
+
+
+_encoded_image_cache = _EncodedImageCache()
 
 # User phrases that mean "look at the picture(s)"
 _VISION_HINTS = (
@@ -74,6 +110,14 @@ def image_bytes_to_b64_jpeg(data: bytes, *, max_side: int = THUMB_MAX_SIDE) -> s
     except ImportError:
         # Fallback: send original as base64 (may be large)
         return base64.b64encode(data).decode("ascii")
+    # Callers still read/hash current files and validate metadata. This only
+    # avoids repeating the deterministic pixel conversion for identical bytes.
+    # Unusual input types retain the original uncached behavior.
+    key = (hashlib.sha256(data).digest(), max_side) if isinstance(data, bytes) and type(max_side) is int else None
+    if key is not None:
+        cached = _encoded_image_cache.get(key)
+        if cached is not None:
+            return cached
     try:
         im = Image.open(io.BytesIO(data))
         im = im.convert("RGB")
@@ -86,7 +130,10 @@ def image_bytes_to_b64_jpeg(data: bytes, *, max_side: int = THUMB_MAX_SIDE) -> s
             )
         buf = io.BytesIO()
         im.save(buf, format="JPEG", quality=85, optimize=True)
-        return base64.b64encode(buf.getvalue()).decode("ascii")
+        encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+        if key is not None:
+            _encoded_image_cache.put(key, encoded)
+        return encoded
     except Exception:
         logger.exception("thumbnail encode failed")
         return None
