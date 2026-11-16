@@ -205,6 +205,22 @@ def fill_profile_graph(
         raise ValueError("frames is required")
     frames = validate_frame_count(int(frames))
 
+    from ...workflow_profiles.h3.models import H3DirectInputMapping
+    if isinstance(profile.mapping.inputs, H3DirectInputMapping):
+        from ...workflow_profiles.h3.direct import fill_direct_graph
+        width = int(job_params.get('width', DEFAULT_WIDTH))
+        height = int(job_params.get('height', DEFAULT_HEIGHT))
+        if width <= 0 or height <= 0:
+            raise ValueError('width and height must be positive')
+        seed = job_params.get('seed')
+        if seed is not None and not 0 <= int(seed) <= MAX_COMFY_SEED:
+            raise ValueError(f'seed must be in [0, {MAX_COMFY_SEED}]')
+        return fill_direct_graph(profile.workflow, profile.mapping, {
+            **job_params, 'frames': frames,
+            'width': width, 'height': height,
+            'seed': int(seed) if seed is not None else None,
+        })
+
     filled = copy.deepcopy(profile.workflow)
     binding = profile.mapping.inputs
     _assert_pure_ref2va(filled, h3_node_id=binding.h3_node_id)
@@ -360,6 +376,7 @@ def build_ref2va_prompt(
     profile: ResolvedH3Profile | None = None,
     context_video: str | None = None,
     video_context_source: dict[str, Any] | None = None,
+    native_latent_context: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Fill a resolved profile graph and return it with the job's concrete seed."""
     resolved_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
@@ -387,6 +404,7 @@ def build_ref2va_prompt(
             "output_prefix": output_prefix,
             "context_video": context_video,
             "video_context_source": video_context_source,
+            "native_latent_context": native_latent_context,
         },
     )
     return filled, resolved_seed

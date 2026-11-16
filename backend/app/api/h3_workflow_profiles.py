@@ -24,6 +24,7 @@ from ..workflow_profiles.h3 import (
     ProfileStateError,
     ProfileStorageError,
     ResolvedH3Profile,
+    contract_version_for,
 )
 from ..workflow_profiles.h3.inspector import MAX_WORKFLOW_BYTES, inspect_h3_workflow
 from ..workflow_profiles.h3.validator import validate_h3_contract
@@ -44,7 +45,10 @@ class SelectOutputRequest(_StrictModel):
 
 
 class TestProfileRequest(_StrictModel):
-    picture_asset_id: StrictStr = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+    native_source_job_id: StrictStr | None = Field(default=None, pattern=r'^[A-Za-z0-9_-]{1,128}$')
+    picture_asset_id: StrictStr | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+    picture_asset_ids: list[StrictStr] = Field(default_factory=list, max_length=9)
+    audio_asset_ids: list[StrictStr] = Field(default_factory=list, max_length=3)
     audio_asset_id: StrictStr | None = Field(
         default=None,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
@@ -145,10 +149,11 @@ def _active_payload(store: H3ProfileStore) -> dict[str, Any]:
     resolved = store.resolve_active()
     return {
         "profile_id": resolved.profile_id,
+        "standalone_profile_id": store.configured_standalone_profile_id() or None,
         "display_name": resolved.display_name,
         "source": resolved.source,
         "workflow_sha256": resolved.workflow_sha256,
-        "contract_version": 2,
+        "contract_version": contract_version_for(resolved.mapping),
         "validated_at": resolved.validated_at,
         "warning": (
             {
@@ -399,6 +404,8 @@ async def validate_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
                 },
             )
         mapping_sha256 = store.mapping_sha256(mapping)
+        from ..workflow_profiles.h3.models import H3DirectInputMapping
+        direct = isinstance(mapping.inputs, H3DirectInputMapping)
         filled = fill_profile_graph(
             ResolvedH3Profile(
                 profile_id="validation-import",
@@ -409,12 +416,17 @@ async def validate_h3_import(import_id: str) -> dict[str, Any] | JSONResponse:
             ),
             {
                 "prompt": "Neutral H3 workflow validation",
-                "images": ["contract-picture.png"],
-                "audios": [],
+                "images": ([f'contract-picture-{i}.png' for i in range(len(mapping.inputs.pictures))]
+                           if direct else ["contract-picture.png"]),
+                "audios": ([f'contract-audio-{i}.wav' for i in range(len(mapping.inputs.audios))]
+                           if direct else []),
                 "frames": 56,
                 "width": 864,
                 "height": 480,
                 "seed": 42,
+                **({'native_latent_context': {'save_prefix': 'contract/validation/native/clip', 'save_index': 1,
+                    'load_path': 'contract/source/native', 'load_index': 1}}
+                   if mapping.native_latent_context is not None else {}),
                 **({"context_video": "contract-context.mp4"} if mapping.context_video is not None else {}),
                 "output_prefix": "director-studio/h3/contract-validation",
             },
@@ -474,6 +486,24 @@ async def test_h3_import(
 
     context_params: dict[str, Any] = {}
     context_file: tuple[str, bytes] | None = None
+    test_width, test_height = 864, 480
+    native = mapping.native_latent_context if mapping is not None else None
+    if native is not None:
+        if body.context_upload_id or body.context_project_id:
+            return _error(422, 'native_source_required', 'Native context accepts a DS source job, not uploaded video')
+        if native.load_path is not None:
+            from ..pipelines.h3_ref2va.video_context import native_source_job
+            try:
+                source = native_source_job(body.native_source_job_id)
+            except ValueError as exc:
+                return _error(422, 'native_source_required', str(exc))
+            cache = source.params['native_latent_context']
+            test_width, test_height = cache['width'], cache['height']
+            context_params['native_source_job_id'] = source.id
+        elif body.native_source_job_id:
+            return _error(422, 'native_source_unsupported', 'Native bootstrap cannot consume a source job')
+    elif body.native_source_job_id:
+        return _error(422, 'native_source_unsupported', 'This workflow has no native context mapping')
     if mapping is not None and mapping.context_video is not None:
         if not body.context_upload_id or not body.context_project_id:
             return _error(
@@ -528,37 +558,43 @@ async def test_h3_import(
             {"import_id": import_id},
         )
 
-    picture = _resolve_picture_asset(body.picture_asset_id)
-    if picture is None:
-        return _error(
-            404,
-            "picture_asset_not_found",
-            "A readable Picture asset is required for the H3 profile test",
-            {"picture_asset_id": body.picture_asset_id},
-        )
-
-    inputs = {"picture_1": picture}
+    if body.picture_asset_id and body.picture_asset_ids or body.audio_asset_id and body.audio_asset_ids:
+        return _error(422, 'ambiguous_test_assets', 'Use singular or ordered plural asset IDs, not both')
+    pictures = body.picture_asset_ids or ([body.picture_asset_id] if body.picture_asset_id else [])
+    audios = body.audio_asset_ids or ([body.audio_asset_id] if body.audio_asset_id else [])
+    if not pictures:
+        return _error(422, 'picture_asset_required', 'Supply at least one Picture asset')
+    from ..workflow_profiles.h3.models import H3DirectInputMapping
+    direct = mapping is not None and isinstance(mapping.inputs, H3DirectInputMapping)
+    if direct and (len(pictures) != len(mapping.inputs.pictures) or len(audios) != len(mapping.inputs.audios)):
+        return _error(422, 'media_slot_count', 'Test Picture/Audio counts must match the direct mapping file slots')
+    inputs = {}
+    for index, asset_id in enumerate(pictures, 1):
+        picture = _resolve_picture_asset(asset_id)
+        if picture is None:
+            return _error(404, 'picture_asset_not_found', 'A readable Picture asset is required', {'picture_asset_id': asset_id})
+        inputs[f'picture_{index}'] = picture
     audio_keys: list[str] = []
     audio_binding = ""
-    if body.audio_asset_id is not None:
-        if mapping is None or mapping.inputs.audio_input_pattern is None:
+    for index, asset_id in enumerate(audios, 1):
+        if mapping is None or (not direct and mapping.inputs.audio_input_pattern is None):
             return _error(
                 422,
                 "audio_not_supported",
                 "This H3 workflow profile does not support reference Audio",
                 {"import_id": import_id},
             )
-        audio = _resolve_voice_asset(body.audio_asset_id)
+        audio = _resolve_voice_asset(asset_id)
         if audio is None:
             return _error(
                 404,
                 "audio_asset_not_found",
                 "A readable H3-ready Voice asset is required",
-                {"audio_asset_id": body.audio_asset_id},
+                {"audio_asset_id": asset_id},
             )
-        inputs["audio_1"] = audio
-        audio_keys.append("audio_1")
-        audio_binding = " <Audio 1> defines the optional voice reference."
+        inputs[f'audio_{index}'] = audio
+        audio_keys.append(f'audio_{index}')
+        audio_binding += f' <Audio {index}> defines a voice reference.'
     if context_file is not None:
         inputs["context_video"] = context_file
 
@@ -574,12 +610,13 @@ async def test_h3_import(
             "h3_profile_test_workflow_sha256": workflow_sha256,
             "h3_profile_test_mapping_sha256": mapping_sha256,
             "h3_profile_test_boundary_sha256": store.boundary_sha256(mapping),
-            "prompt": _TEST_PROMPT.format(audio_binding=audio_binding),
+            "prompt": _TEST_PROMPT.format(audio_binding=audio_binding) + ''.join(
+                f' <Picture {index}> defines an additional reference.' for index in range(2, len(pictures) + 1)),
             "dialogue": [],
             "frames": 56,
-            "width": 864,
-            "height": 480,
-            "image_keys": ["picture_1"],
+            "width": test_width,
+            "height": test_height,
+            "image_keys": [f'picture_{index}' for index in range(1, len(pictures) + 1)],
             "audio_keys": audio_keys,
             **context_params,
         },

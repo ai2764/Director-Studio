@@ -17,8 +17,85 @@ LEGAL_CONTEXT_FRAMES = (5, 22, 39, 56)
 VIDEO_FILE_FIELDS = {"LoadVideo": "file", "VHS_LoadVideo": "video"}
 
 
+def native_cache_prefix(job_id):
+    import re
+    if not isinstance(job_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', job_id):
+        raise ValueError('Invalid native cache job ID')
+    return f'director-studio/{job_id}/native/clip'
+
+
+def native_source_job(job_id, *, width=None, height=None):
+    """Only durable DS success records may supply native cache paths."""
+    from ...config import settings
+    from ...core.jobs.store import load_job
+    from ...core.schemas import JobStatus
+    if not job_id:
+        raise ValueError('native_source_job_id is required; call list_h3_native_sources or generate a bootstrap with a mapped native cache output')
+    prefix = native_cache_prefix(job_id)
+    source = load_job(job_id)
+    if source is None or source.id != job_id or source.pipeline_id != 'h3_ref2va' or source.status != JobStatus.succeeded:
+        raise ValueError('Native source must be a succeeded DS H3 job')
+    params = source.params or {}
+    cache = params.get('native_latent_context') or {}
+    if params.get('h3_provider') not in ('local', 'mcp') or cache.get('verified') is not True:
+        raise ValueError('Native source must have a verified local cache')
+    if cache.get('save_prefix') != prefix or cache.get('save_index') != 1:
+        raise ValueError('Native source cache does not match its DS job')
+    if cache.get('comfy_base_url', '').rstrip('/') != settings.comfy_base_url.rstrip('/'):
+        raise ValueError('Native source belongs to a different Comfy host')
+    if not isinstance(cache.get('width'), int) or not isinstance(cache.get('height'), int):
+        raise ValueError('Native source has no verified dimensions')
+    if width is not None and (width, height) != (cache['width'], cache['height']):
+        raise ValueError('Native continuation requires identical source dimensions')
+    return source
+
+
+def prepare_native_latent_context(job, profile):
+    from ...config import settings
+    native = profile.mapping.native_latent_context
+    if native is None:
+        return None
+    params = job.params or {}
+    width = int(params.get('width') or 864)
+    height = int(params.get('height') or 480)
+    lineage = {'comfy_base_url': settings.comfy_base_url, 'width': width, 'height': height,
+        'verified': False, 'source_job_id': None}
+    if native.save_prefix is not None:
+        lineage.update(save_prefix=native_cache_prefix(job.id), save_index=1)
+    source_id = params.get('native_source_job_id') or (params.get('video_context_source') or {}).get('source_job_id')
+    if native.load_path is not None:
+        if not source_id:
+            raise ValueError('A native source job is required for continuation')
+        if source_id == job.id:
+            raise ValueError('A native source cannot be the current job')
+        source = native_source_job(source_id, width=width, height=height)
+        cache = source.params['native_latent_context']
+        lineage.update(source_job_id=source.id, load_path=cache['save_prefix'].rsplit('/', 1)[0], load_index=1)
+    elif source_id:
+        raise ValueError('The native bootstrap workflow cannot consume a source job')
+    job.params = dict(params, native_latent_context=lineage, h3_provider='local')
+    return lineage
+
+
 def context_runtime_options(config, profile=None) -> dict[str, Any]:
     """Read custom Motion Context settings; the file mapping does not own them."""
+    from ...workflow_profiles.h3.models import H3DirectInputMapping
+    if profile is not None and isinstance(profile.mapping.inputs, H3DirectInputMapping):
+        if profile.mapping.native_latent_context is not None:
+            if getattr(config, 'mode', None) == 'external_upload':
+                raise VideoContextGraphError('Native context requires a previous DS job, not an uploaded video')
+            return {'workflow_owns_context': True, 'native_latent_context': True,
+                'context_frames': getattr(config, 'context_frames', None) or 22,
+                'audio_context_frames': getattr(config, 'audio_context_frames', None) or 18,
+                'carry_audio': True}
+        if profile.mapping.context_video is None:
+            raise VideoContextGraphError('This direct workflow has no context video file binding')
+        # Direct graphs own sampling, context windows and overlap removal.
+        # These options govern source-media preparation, not graph rewriting.
+        return {'workflow_owns_context': True,
+                'context_frames': getattr(config, 'context_frames', None) or 22,
+                'audio_context_frames': getattr(config, 'audio_context_frames', None) or 0,
+                'carry_audio': bool(getattr(config, 'carry_audio', False))}
     if profile is not None and profile.source == "custom":
         mapping = getattr(profile, "mapping", None)
         video_mapping = getattr(mapping, "context_video", None)

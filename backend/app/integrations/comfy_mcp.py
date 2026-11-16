@@ -29,7 +29,7 @@ _STATUS_RETRY_DELAY_SEC = 5.0
 
 
 def _resolve_command(command: str) -> str:
-    """Resolve console scripts installed beside the running Python on Windows."""
+    """Resolve console scripts beside the running or base Python on Windows."""
     discovered = shutil.which(command)
     if discovered:
         return discovered
@@ -37,6 +37,11 @@ def _resolve_command(command: str) -> str:
     candidates = [executable_dir / command, executable_dir / "Scripts" / command]
     if os.name == "nt" and not command.lower().endswith(".exe"):
         candidates.extend(path.with_suffix(".exe") for path in list(candidates))
+    if os.name == "nt":
+        base_script = Path(sys.base_prefix) / "Scripts" / command
+        candidates.append(base_script)
+        if not command.lower().endswith(".exe"):
+            candidates.append(base_script.with_suffix(".exe"))
     for candidate in candidates:
         if candidate.is_file():
             return str(candidate)

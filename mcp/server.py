@@ -132,7 +132,7 @@ async def list_video_jobs(project_id: str, limit: int = 30) -> list:
 
 @mcp.tool()
 async def get_video_job(job_id: str) -> dict:
-    """Read a video generation job and its current status."""
+    """Read video status and native_latent_context metadata, if present. verified records describe generation-time proof; use list_h3_native_sources to check current source availability."""
     return await request('GET', '/h3-ref2va/jobs/' + segment(job_id))
 
 @mcp.tool()
@@ -154,6 +154,109 @@ async def get_project_context(project_id: str, objective: str = '') -> dict:
 async def get_agent_task(task_id: str) -> dict:
     """Read accepted native operation status, bounded progress, actual result and actions. succeeded/failed/interrupted are terminal. After interrupted or failed writes inspect project state before choosing a new request ID."""
     return await request('GET', '/agent/tasks/' + segment(task_id))
+
+@mcp.tool()
+async def get_h3_workflow_contract() -> dict:
+    """Read the CURRENT full mapping JSON schema and contract_revision before connecting H3/H3N. Includes native_latent_context and explicit input-only/native output examples. Refresh this tool rather than assume cached v4 documentation. No official Ref2AV node is required."""
+    return await request('GET', '/agent/h3-workflows/contract')
+
+
+@mcp.tool()
+async def list_h3_workflows() -> dict:
+    """List installed H3 workflow profiles and current global active ID/hash. Refresh before activation or rollback. Applies to subsequent local generation jobs across all projects."""
+    return await request('GET', '/agent/h3-workflows')
+
+
+@mcp.tool()
+async def list_h3_native_sources(limit: int = 20, project_id: str | None = None) -> dict:
+    """Discover existing native_source_job_id candidates BEFORE generating a new bootstrap. Omit project_id to include ALL projects and unassigned setup-test jobs. Checks succeeded local jobs, verified cache ownership, current Comfy host and a fresh nonempty cache-file HEAD. Returns job IDs, dimensions, metadata and cache_available=true; unavailable_sources distinguishes missing files/network failures from no recorded cache. Read-only; does not generate, activate or reinstall profiles."""
+    params = {'limit': limit}
+    if project_id is not None:
+        params['project_id'] = project_id
+    return await request('GET', '/agent/h3-workflows/native-sources', params=params, timeout=180)
+
+
+@mcp.tool()
+async def import_h3_workflow(request_id: str, workflow: dict, mapping: dict,
+                             display_name: str = 'Agent H3 workflow') -> dict:
+    """Import ComfyUI API JSON plus a COMPLETE explicit direct mapping; no automatic node discovery or manual setup sequence. Read get_h3_workflow_contract first. Set mapping.inputs.kind=direct and bind existing literal ports; no official H3 node is needed. Returns a durable receipt with result.import_id, workflow, mapping and lifecycle. Import does not activate or generate. Reuse identical request_id and inputs for retries."""
+    return await request('POST', '/agent/h3-workflows/operations', body={
+        'request_id': request_id, 'action': 'import', 'arguments': {
+            'workflow': workflow, 'mapping': mapping, 'display_name': display_name}}, timeout=120)
+
+
+@mcp.tool()
+async def configure_h3_workflow(request_id: str, import_id: str, mapping: dict,
+                                 expected_workflow_sha256: str,
+                                 expected_mapping_sha256: str | None) -> dict:
+    """Replace the COMPLETE mapping of an existing import without changing its graph or import_id. Read inspect_h3_workflow first and supply lifecycle.workflow_sha256/mapping_sha256 for stale-write checks. Supports native input-only load_path/load_index bindings when the graph has no SaveLatent node. Clears previous validation/test proof; revalidate using a new request_id. Does not generate or activate. Identical request_id retries return the same receipt."""
+    return await request('POST', '/agent/h3-workflows/operations', body={
+        'request_id': request_id, 'action': 'configure', 'arguments': {
+            'import_id': import_id, 'mapping': mapping,
+            'expected_workflow_sha256': expected_workflow_sha256,
+            'expected_mapping_sha256': expected_mapping_sha256}}, timeout=120)
+
+
+@mcp.tool()
+async def inspect_h3_workflow(import_id: str) -> dict:
+    """Read the exact imported workflow, accepted mapping, contract version and validation/test lifecycle. No heuristic remapping. Inspect after interrupted writes or before deciding the next step."""
+    return await request('GET', '/agent/h3-workflows/imports/' + segment(import_id))
+
+
+@mcp.tool()
+async def validate_h3_workflow(request_id: str, import_id: str) -> dict:
+    """Validate explicit ports and the filled graph against ComfyUI dependencies without queueing video generation. Returns a receipt; check status and structured error details. Validation alone does not authorize activation."""
+    return await request('POST', '/agent/h3-workflows/operations', body={
+        'request_id': request_id, 'action': 'validate', 'arguments': {'import_id': import_id}}, timeout=180)
+
+
+@mcp.tool()
+async def test_h3_workflow(request_id: str, import_id: str, picture_asset_ids: list[str],
+                           audio_asset_ids: list[str] | None = None,
+                           context_project_id: str | None = None,
+                           context_upload_id: str | None = None,
+                           native_source_job_id: str | None = None) -> dict:
+    """Start ONE isolated local GPU test after successful validation. Requires actual user authorization to generate. Picture/Audio asset IDs are ordered and must exactly match mapped slots. For native latent continuation supply native_source_job_id from a succeeded local DS job with verified cache; test dimensions match that source. Native bootstrap needs no source. For a context-video mapping supply existing project upload/project IDs. Reuse request_id on timeout. Receipt success means submitted; poll get_video_job and inspect_h3_workflow. Output is not bound to a production shot."""
+    return await request('POST', '/agent/h3-workflows/operations', body={
+        'request_id': request_id, 'action': 'test', 'arguments': {
+            'import_id': import_id, 'picture_asset_ids': picture_asset_ids,
+            'audio_asset_ids': audio_asset_ids or [], 'context_project_id': context_project_id,
+            'context_upload_id': context_upload_id, 'native_source_job_id': native_source_job_id}}, timeout=120)
+
+
+@mcp.tool()
+async def select_h3_test_output(request_id: str, import_id: str, artifact_index: int) -> dict:
+    """Choose one observed successful test video when multiple outputs require a selection. artifact_index comes from test output candidates; no generation rerun."""
+    return await request('POST', '/agent/h3-workflows/operations', body={
+        'request_id': request_id, 'action': 'select_test_output', 'arguments': {
+            'import_id': import_id, 'artifact_index': artifact_index}})
+
+
+@mcp.tool()
+async def activate_h3_workflow(request_id: str, import_id: str,
+                               expected_active_profile_id: str,
+                               expected_active_workflow_sha256: str,
+                               standalone_profile_id: str | None = None) -> dict:
+    """Install and globally activate a validated, successfully tested import for subsequent LOCAL videos. Supply current active ID/hash; stale values fail. Optional standalone_profile_id persists a tested source-free fallback for shots without context. Existing snapshots remain unchanged. Returns previous_active and active. Check receipt.status."""
+    return await request('POST', '/agent/h3-workflows/operations', body={
+        'request_id': request_id, 'action': 'activate', 'arguments': {
+            'import_id': import_id, 'expected_active_profile_id': expected_active_profile_id,
+            'expected_active_workflow_sha256': expected_active_workflow_sha256,
+            'standalone_profile_id': standalone_profile_id}})
+
+
+@mcp.tool()
+async def select_h3_workflow(request_id: str, profile_id: str,
+                             expected_active_profile_id: str,
+                             expected_active_workflow_sha256: str,
+                             standalone_profile_id: str | None = None) -> dict:
+    """Switch globally to an installed tested profile or builtin-official-h3. Supply current active ID/hash. Optional standalone_profile_id persists a tested source-free fallback for shots without context. Does not regenerate or alter existing snapshots. Returns previous_active and active."""
+    return await request('POST', '/agent/h3-workflows/operations', body={
+        'request_id': request_id, 'action': 'select', 'arguments': {
+            'profile_id': profile_id, 'expected_active_profile_id': expected_active_profile_id,
+            'expected_active_workflow_sha256': expected_active_workflow_sha256,
+            'standalone_profile_id': standalone_profile_id}})
+
 
 @mcp.tool()
 async def send_message(sender: str, recipient: str, subject: str, body: str, reply_to: int | None = None, client_message_id: str | None = None) -> dict:

@@ -48,23 +48,74 @@ class H3ContextVideoInput(_StrictModel):
     input_name: StrictStr = Field(min_length=1)
 
 
+class H3NumericPort(H3ContextVideoInput):
+    """A literal numeric input; result = application value * scale + offset."""
+
+    scale: float = Field(default=1, allow_inf_nan=False)
+    offset: float = Field(default=0, allow_inf_nan=False)
+
+
+class H3DirectInputMapping(_StrictModel):
+    """Agent-authored literal ports. Media lists are ordered, fixed-arity slots."""
+
+    kind: Literal['direct'] = 'direct'
+    prompt: tuple[H3ContextVideoInput, ...] = Field(min_length=1, max_length=32)
+    width: tuple[H3NumericPort, ...] = Field(min_length=1, max_length=32)
+    height: tuple[H3NumericPort, ...] = Field(min_length=1, max_length=32)
+    frames: tuple[H3NumericPort, ...] = Field(min_length=1, max_length=32)
+    seed: tuple[H3NumericPort, ...] = Field(default=(), max_length=32)
+    pictures: tuple[H3ContextVideoInput, ...] = Field(min_length=1, max_length=9)
+    audios: tuple[H3ContextVideoInput, ...] = Field(default=(), max_length=3)
+
+
+class H3NativeLatentContext(_StrictModel):
+    load_path: H3ContextVideoInput | None = None
+    load_index: H3ContextVideoInput | None = None
+    save_prefix: H3ContextVideoInput | None = None
+    save_index: H3ContextVideoInput | None = None
+    save_output_node_id: StrictStr | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_load_pair(self):
+        if (self.load_path is None) != (self.load_index is None):
+            raise ValueError("Native load_path and load_index must be set together")
+        saves = (self.save_prefix, self.save_index, self.save_output_node_id)
+        if any(value is not None for value in saves) and not all(value is not None for value in saves):
+            raise ValueError('Native save_prefix, save_index and save_output_node_id must be set together')
+        if self.load_path is None and self.save_prefix is None:
+            raise ValueError('Native context requires a load pair or a complete save group')
+        return self
+
+
 class H3BoundaryMapping(_StrictModel):
     """The complete Director Studio boundary around an opaque H3 graph."""
 
-    inputs: H3InputMapping
+    inputs: H3InputMapping | H3DirectInputMapping
     output: H3OutputSelection
     context_video: H3ContextVideoInput | None = None
+    native_latent_context: H3NativeLatentContext | None = None
+
+    @model_validator(mode="after")
+    def validate_native_boundary(self):
+        if self.native_latent_context is not None:
+            if not isinstance(self.inputs, H3DirectInputMapping) or self.context_video is not None:
+                raise ValueError("Native latent context requires direct inputs without context_video")
+        return self
 
     @model_serializer(mode="wrap")
     def _omit_absent_context_video(self, handler):
         payload = handler(self)
         if isinstance(payload, dict) and payload.get("context_video") is None:
             payload.pop("context_video", None)
+        if isinstance(payload, dict) and payload.get("native_latent_context") is None:
+            payload.pop("native_latent_context", None)
         return payload
 
 
-def contract_version_for(mapping: H3BoundaryMapping) -> Literal[2, 3]:
+def contract_version_for(mapping: H3BoundaryMapping) -> Literal[2, 3, 4]:
     """v2 mappings stay v2. A context-video file mapping uses the v3 contract."""
+    if isinstance(mapping.inputs, H3DirectInputMapping):
+        return 4
     return 3 if mapping.context_video is not None else 2
 
 
@@ -73,7 +124,7 @@ class H3WorkflowProfile(_StrictModel):
 
     id: StrictStr = Field(pattern=r"[a-z0-9][a-z0-9-]{0,63}")
     kind: Literal["h3_ref2av"] = "h3_ref2av"
-    contract_version: Literal[2, 3] = 2
+    contract_version: Literal[2, 3, 4] = 2
     workflow_sha256: StrictStr = Field(pattern=r"[0-9a-f]{64}")
     mapping: H3BoundaryMapping
     status: Literal["draft", "mapped", "validated", "tested", "active", "broken"]

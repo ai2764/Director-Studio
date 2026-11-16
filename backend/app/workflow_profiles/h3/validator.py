@@ -46,6 +46,10 @@ def validate_h3_contract(
     object_info: Mapping[str, Any] | None = None,
 ) -> ValidationReport:
     """Validate only Director Studio's selected input/output graph boundary."""
+    from .models import H3DirectInputMapping
+    if isinstance(mapping.inputs, H3DirectInputMapping):
+        from .direct import validate_direct_contract
+        return validate_direct_contract(graph, mapping)
     del object_info
     synthetic_boundary = {
         "pictures": 1,

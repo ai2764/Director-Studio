@@ -2470,7 +2470,7 @@ async def submit_shot_endpoint(
             H3ProfileStore().resolve_for_submission(has_context=staged_context is not None)
         except ProfileStorageError as exc:
             raise HTTPException(400, str(exc)) from exc
-    if staged_context is not None:
+    if staged_context is not None and staged_context['data']:
         images["context_video"] = (staged_context["filename"], staged_context["data"])
     reference_evidence = (latest_shot.meta.get("material_review") or {}).get("references", [])
     if latest_project.mode == ProjectMode.director and latest_shot.refs:

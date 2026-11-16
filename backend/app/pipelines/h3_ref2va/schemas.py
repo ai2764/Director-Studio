@@ -35,6 +35,7 @@ class H3Ref2VaJobResponse(BaseModel):
     h3_profile_id: str | None = None
     h3_profile_sha256: str | None = None
     h3_contract_version: int | None = None
+    native_latent_context: dict[str, Any] | None = None
 
     @classmethod
     def from_job(cls, job: JobRecord) -> H3Ref2VaJobResponse:
@@ -51,6 +52,10 @@ class H3Ref2VaJobResponse(BaseModel):
         except (TypeError, ValueError):
             frames_i = None
         revision = p.get("json_storyboard_revision")
+        cache = p.get('native_latent_context')
+        cache_info = ({key: cache[key] for key in (
+            'verified', 'source_job_id', 'save_prefix', 'save_index', 'width', 'height') if key in cache}
+            if isinstance(cache, dict) else None)
         try:
             revision_i = int(revision) if revision is not None else None
         except (TypeError, ValueError):
@@ -83,6 +88,7 @@ class H3Ref2VaJobResponse(BaseModel):
             h3_profile_id=p.get("h3_profile_id") or None,
             h3_profile_sha256=p.get("h3_profile_sha256") or None,
             h3_contract_version=p.get("h3_contract_version"),
+            native_latent_context=cache_info,
         )
 
 

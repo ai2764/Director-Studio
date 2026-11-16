@@ -61,6 +61,51 @@ def test_server_parameters_resolve_installed_windows_entrypoints(
     assert Path(params.env["COMFY_BIN"]) == comfy_exe
 
 
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows entrypoint layout")
+@pytest.mark.parametrize("source", ["base", "venv", "path", "override", "missing_override"])
+def test_server_parameters_resolve_base_interpreter_scripts_as_last_fallback(
+    monkeypatch, tmp_path, source,
+):
+    venv_scripts = tmp_path / "venv" / "Scripts"
+    base_python = tmp_path / "base"
+    base_scripts = base_python / "Scripts"
+    venv_scripts.mkdir(parents=True)
+    base_scripts.mkdir(parents=True)
+    for name in ("comfy-mcp.exe", "comfy.exe"):
+        (base_scripts / name).touch()
+        if source in {"venv", "path", "override", "missing_override"}:
+            (venv_scripts / name).touch()
+
+    monkeypatch.setattr(sys, "executable", str(venv_scripts / "python.exe"))
+    monkeypatch.setattr(sys, "base_prefix", str(base_python))
+    monkeypatch.setattr("app.integrations.comfy_mcp.shutil.which", lambda _name: None)
+    monkeypatch.setattr(settings, "comfy_mcp_command", "comfy-mcp")
+    monkeypatch.setattr(settings, "comfy_mcp_comfy_bin", "comfy")
+    expected_scripts = base_scripts if source == "base" else venv_scripts
+    if source == "path":
+        expected_scripts = tmp_path / "path"
+        expected_scripts.mkdir()
+        for name in ("comfy-mcp.exe", "comfy.exe"):
+            (expected_scripts / name).touch()
+        monkeypatch.setattr(
+            "app.integrations.comfy_mcp.shutil.which",
+            lambda name: str(expected_scripts / f"{name}.exe"),
+        )
+    elif source in {"override", "missing_override"}:
+        expected_scripts = tmp_path / "explicit override"
+        expected_scripts.mkdir()
+        if source == "override":
+            for name in ("comfy-mcp.exe", "comfy.exe"):
+                (expected_scripts / name).touch()
+        monkeypatch.setattr(settings, "comfy_mcp_command", str(expected_scripts / "comfy-mcp.exe"))
+        monkeypatch.setattr(settings, "comfy_mcp_comfy_bin", str(expected_scripts / "comfy.exe"))
+
+    params = PersistentMcpToolSession()._server_parameters()
+
+    assert Path(params.command) == expected_scripts / "comfy-mcp.exe"
+    assert Path(params.env["COMFY_BIN"]) == expected_scripts / "comfy.exe"
+
+
 @pytest.mark.asyncio
 async def test_persistent_session_opens_and_closes_contexts_in_same_task(monkeypatch):
     class TaskBoundContext:

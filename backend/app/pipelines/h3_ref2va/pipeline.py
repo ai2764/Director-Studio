@@ -59,9 +59,31 @@ class H3Ref2VaPipeline(Pipeline):
         if self.execution_adapter_id_for_job(job) == "h3_api":
             return
         if bool((job.params or {}).get("h3_profile_test")):
-            H3ProfileStore().snapshot_import_for_job(job)
+            profile = H3ProfileStore().snapshot_import_for_job(job)
+        else:
+            profile = snapshot_profile_for_job(job)
+        from .video_context import prepare_native_latent_context
+        prepare_native_latent_context(job, profile)
+
+    async def verify_job_outputs(self, job: JobRecord) -> None:
+        """SaveLatent has no history artifact; prove the fresh job cache exists."""
+        import httpx
+        from .video_context import native_cache_prefix
+        cache = (job.params or {}).get('native_latent_context')
+        if not cache or cache.get('save_prefix') is None:
             return
-        snapshot_profile_for_job(job)
+        if cache.get('save_prefix') != native_cache_prefix(job.id) or cache.get('save_index') != 1:
+            raise ValueError('Native cache output does not match this job')
+        if cache.get('comfy_base_url', '').rstrip('/') != settings.comfy_base_url.rstrip('/'):
+            raise ValueError('Native cache output host changed')
+        async with httpx.AsyncClient(trust_env=False, timeout=30) as client:
+            response = await client.head(settings.comfy_base_url.rstrip('/') + '/view', params={
+                'type': 'output', 'subfolder': cache['save_prefix'].rsplit('/', 1)[0],
+                'filename': 'clip_00001.safetensors'})
+            response.raise_for_status()
+            if response.status_code != 200:
+                raise ValueError('Native cache output is not available')
+        cache['verified'] = True
 
     def on_job_succeeded(self, job: JobRecord) -> None:
         """Bind a durably succeeded setup-test job to its import identity."""
@@ -239,6 +261,8 @@ class H3Ref2VaPipeline(Pipeline):
 
         output_prefix = p.get("output_prefix")
         profile = self._profile_for_job(job)
+        from .video_context import prepare_native_latent_context
+        native_context = prepare_native_latent_context(job, profile)
         context_key = str(p.get("context_video_key") or "").strip()
         context_name = None
         if context_key:
@@ -261,6 +285,7 @@ class H3Ref2VaPipeline(Pipeline):
             profile=profile,
             context_video=context_name,
             video_context_source=source if isinstance(source, dict) else None,
+            native_latent_context=native_context,
         )
 
     def build_api_payload(
