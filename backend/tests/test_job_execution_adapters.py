@@ -199,6 +199,25 @@ class FakeMcpImagePipeline:
         return None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('available', [True, False])
+async def test_comfy_mcp_verifies_required_cache_before_success(available):
+    class Pipeline(FakeMcpPipeline):
+        async def verify_job_outputs(self, job):
+            assert job.status != JobStatus.succeeded
+            if not available:
+                raise ValueError('Native cache missing')
+            job.params['cache_verified'] = True
+    async def no_op(_job): pass
+    client = FakeMcpClient()
+    job = _mcp_job()
+    await ComfyMcpExecutionAdapter().run(job, Pipeline(), {'ref_0': ('ref.png', b'ref')},
+        asyncio.Event(), ComfyMcpExecutionRuntime(client_factory=lambda: client, prepare=no_op, finish=no_op))
+    saved = load_job(job.id)
+    assert saved.status == (JobStatus.succeeded if available else JobStatus.failed)
+    assert bool(saved.params.get('cache_verified')) is available
+
+
 def _mcp_job():
     return create_job(
         pipeline_id="h3_ref2va",

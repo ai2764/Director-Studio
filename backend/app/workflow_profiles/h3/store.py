@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from functools import wraps
+from threading import RLock
+
 import hashlib
 import json
 import os
@@ -49,6 +52,16 @@ _IMPORT_FILE = "import.json"
 _JOB_SNAPSHOT_DIR = "workflow_profile"
 _H3_REF2AV_NODE = "MiniMaxH3ReferenceToVideo"
 _H3_I2V_NODE = "MiniMaxH3ImageToVideo"
+
+_SWITCH_LOCK = RLock()
+
+
+def _serialize_switch(method):
+    @wraps(method)
+    def locked(*args, **kwargs):
+        with _SWITCH_LOCK:
+            return method(*args, **kwargs)
+    return locked
 
 _OFFICIAL_MAPPING = H3BoundaryMapping(
     inputs=H3InputMapping(
@@ -355,8 +368,13 @@ class H3ProfileStore:
             artifact_index=artifact_index,
         )
 
-    def activate_import(self, import_id: str) -> H3WorkflowProfile:
+    @_serialize_switch
+    def activate_import(self, import_id: str, *, expected_active: tuple[str, str] | None = None,
+                        standalone_profile_id: str | None = None) -> H3WorkflowProfile:
         """Install and select an import only with same-identity validation/test proof."""
+        self.check_expected_active(expected_active)
+        if standalone_profile_id:
+            self._require_standalone_profile(standalone_profile_id)
         directory = self._require_existing_import(import_id)
         workflow, workflow_sha256 = self._read_workflow(directory / _WORKFLOW_FILE)
         mapping = self.load_import_mapping(import_id)
@@ -450,7 +468,7 @@ class H3ProfileStore:
             raise ProfileChangedError(
                 "Imported workflow or mapping changed during activation"
             )
-        self.select_profile(profile_id)
+        self.select_profile(profile_id, expected_active=expected_active, standalone_profile_id=standalone_profile_id)
         return profile
 
     def list_installed_profiles(self) -> list[H3WorkflowProfile]:
@@ -562,6 +580,11 @@ class H3ProfileStore:
             return result
         result.update(status="tested", test_job_id=test["job_id"])
         return result
+
+    def import_test_evidence(self, import_id: str) -> dict[str, Any] | None:
+        """Expose observed test candidates, without turning them into activation proof."""
+        directory = self._require_existing_import(import_id)
+        return self._optional_record(directory / _TEST_FILE)
 
     def _import_contract_version(self, import_id: str) -> int:
         mapping = self.load_import_mapping(import_id)
@@ -809,19 +832,31 @@ class H3ProfileStore:
                 },
             )
 
-    def select_profile(self, profile_id: str) -> None:
+    def check_expected_active(self, expected_active: tuple[str, str] | None) -> None:
+        if expected_active is not None:
+            current = self.resolve_active()
+            if (current.profile_id, current.workflow_sha256) != expected_active:
+                raise ProfileChangedError('Active H3 profile changed; refresh list_h3_workflows before switching')
+
+    @_serialize_switch
+    def select_profile(self, profile_id: str, *, expected_active: tuple[str, str] | None = None,
+                       standalone_profile_id: str | None = None) -> None:
         """Atomically point future jobs at the requested verified profile."""
+        self.check_expected_active(expected_active)
         profile_id = self._require_profile_id(profile_id)
         if profile_id == _BUILTIN_PROFILE_ID:
             resolved = self._resolve_builtin()
         else:
             resolved = self._resolve_custom(profile_id)
+        if standalone_profile_id:
+            self._require_standalone_profile(standalone_profile_id)
         self._mkdir(self.root)
         self._atomic_write_json(
             self.active_path,
             {
                 "profile_id": resolved.profile_id,
                 "workflow_sha256": resolved.workflow_sha256,
+                **({'standalone_profile_id': standalone_profile_id} if standalone_profile_id else {}),
             },
         )
 
@@ -891,7 +926,9 @@ class H3ProfileStore:
             return snapshot
 
         resolved = self.resolve_for_submission(has_context=bool(
-            params.get("context_video_key") or params.get("context_video")))
+            params.get("context_video_key") or params.get("context_video")
+            or params.get('native_source_job_id')
+            or (params.get('video_context_source') or {}).get('source_job_id')))
         if resolved.source == "builtin":
             workflow_path = Path(settings.workflows_dir) / settings.h3_builtin_workflow
             profile = H3WorkflowProfile(
@@ -953,19 +990,37 @@ class H3ProfileStore:
     def resolve_for_submission(self, *, has_context: bool) -> ResolvedH3Profile:
         """Use an explicitly configured standalone graph for shots without video."""
         resolved = self.resolve_active()
-        if resolved.mapping.context_video is not None and not has_context:
-            standalone = settings.h3_standalone_profile_id.strip()
+        def requires_context(mapping):
+            return mapping.context_video is not None or (
+                mapping.native_latent_context is not None and mapping.native_latent_context.load_path is not None)
+        if requires_context(resolved.mapping) and not has_context:
+            standalone = self.configured_standalone_profile_id()
             if not standalone:
                 raise ProfileStateError("context_video_required",
                     "The selected H3 workflow requires a context video. Enable Motion Context "
                     "and choose a source, or configure a standalone H3 workflow for this shot.")
             resolved = self.resolve_profile(standalone)
-            if resolved.mapping.context_video is not None:
+            if requires_context(resolved.mapping):
                 raise ProfileStateError("standalone_profile_invalid",
                     "The configured standalone H3 workflow also requires a context video.")
-        if has_context and resolved.source == "custom" and resolved.mapping.context_video is None:
+        if has_context and resolved.source == "custom" and not requires_context(resolved.mapping):
             raise ProfileStateError("context_video_unsupported",
                 "The selected custom H3 workflow has no mapped context video input.")
+        return resolved
+
+    def configured_standalone_profile_id(self) -> str:
+        if self._safe_path(self.active_path).exists():
+            pointer = self._read_json(self.active_path)
+            fallback = pointer.get('standalone_profile_id')
+            if fallback is not None:
+                return self._require_profile_id(fallback)
+        return settings.h3_standalone_profile_id.strip()
+
+    def _require_standalone_profile(self, profile_id: str) -> ResolvedH3Profile:
+        resolved = self.resolve_profile(profile_id)
+        native = resolved.mapping.native_latent_context
+        if resolved.mapping.context_video is not None or native is not None and native.load_path is not None:
+            raise ProfileStateError('standalone_profile_invalid', 'Standalone fallback must not require a context source')
         return resolved
 
     def snapshot_import_for_job(self, job: JobRecord) -> ResolvedH3Profile:

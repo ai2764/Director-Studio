@@ -95,6 +95,15 @@ def resolve_video_context(
         record = None
         source_job_id = job.id
         source_shot_id = source_shot.id
+        from ...workflow_profiles.h3.store import resolve_active_h3_profile
+        profile = resolve_active_h3_profile()
+        if profile.mapping.native_latent_context is not None:
+            from ...pipelines.h3_ref2va.video_context import native_source_job
+            native_source_job(source_job_id, width=width, height=height)
+            return ResolvedVideoContext(filename='', data=b'', provenance={
+                'mode': config.mode, 'source_job_id': source_job_id,
+                'source_shot_id': source_shot_id, 'source_output_key': output_key,
+                'workflow_owns_context': True, 'native_latent_context': True})
     data = path.read_bytes()
     media = probe_video(path)
     if config.mode == "previous_shot" and (width, height) != (media.width, media.height):
@@ -137,6 +146,8 @@ def resolve_video_context(
         "carry_audio": carry_audio,
         "conversion": conversion,
     }
+    if runtime.get('workflow_owns_context'):
+        provenance['workflow_owns_context'] = True
     return ResolvedVideoContext(filename=path.name, data=data, provenance=provenance)
 
 
@@ -149,7 +160,7 @@ def submission_video_context(
     resolved = resolve_video_context(shot, width=width, height=height)
     if resolved is None:
         return None
-    if delivered_frames is not None:
+    if delivered_frames is not None and not resolved.provenance.get('workflow_owns_context'):
         from ...pipelines.h3_ref2va.video_context import context_generation_frames
         from ..h3.frames import MAX_FRAMES
         try:
@@ -158,7 +169,7 @@ def submission_video_context(
             raise VideoContextError(str(exc)) from exc
     return {
         "params": {
-            "context_video_key": "context_video",
+            **({} if resolved.provenance.get('native_latent_context') else {"context_video_key": "context_video"}),
             "video_context_source": resolved.provenance,
         },
         "filename": resolved.filename,

@@ -78,3 +78,15 @@ def test_changed_standalone_profile_does_not_fall_back_silently(routes):
     with pytest.raises(ProfileStorageError):
         routes.resolve_for_submission(has_context=False)
     assert routes.resolve_for_submission(has_context=True).profile_id == "motion-4"
+
+
+def test_persistent_standalone_route_precedes_environment_and_rejects_context(routes, monkeypatch):
+    routes.select_profile('motion-4', standalone_profile_id='standalone-4')
+    monkeypatch.setattr(settings, 'h3_standalone_profile_id', 'missing')
+    assert routes.resolve_for_submission(has_context=False).profile_id == 'standalone-4'
+    assert routes.configured_standalone_profile_id() == 'standalone-4'
+    before = routes.active_path.read_bytes()
+    for fallback in ('motion-4', 'missing'):
+        with pytest.raises(ProfileStorageError):
+            routes.select_profile('motion-4', standalone_profile_id=fallback)
+        assert routes.active_path.read_bytes() == before

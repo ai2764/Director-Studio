@@ -81,6 +81,30 @@ def test_limits_match_the_external_video_contract():
     assert MAX_DURATION_S == 60
 
 
+def test_native_previous_shot_submission_skips_video_probe_and_upload(monkeypatch, tmp_path):
+    from test_h3_direct_mapping import native_fixture, profile_for
+    graph, mapping = native_fixture()
+    profile = profile_for(graph, mapping)
+    project, first, second = _board(monkeypatch, tmp_path)
+    job = _succeed(project.id, first.id)
+    job.params.update(h3_provider='local', native_latent_context={
+        'save_prefix': f'director-studio/{job.id}/native/clip', 'save_index': 1,
+        'verified': True, 'comfy_base_url': settings.comfy_base_url, 'width': 864, 'height': 480})
+    save_job(job)
+    save_shot(first.model_copy(update={'h3_job_id': job.id}))
+    second = second.model_copy(update={'video_context': ShotVideoContext(mode='previous_shot', source_shot_id=first.id)})
+    monkeypatch.setattr('app.workflow_profiles.h3.store.resolve_active_h3_profile', lambda: profile)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Native source must not probe or transcode video')
+    monkeypatch.setattr('app.core.projects.video_context.probe_video', forbidden)
+    monkeypatch.setattr('app.pipelines.h3_ref2va.video_context.prepare_context_bytes', forbidden)
+    result = submission_video_context(second, width=864, height=480, delivered_frames=56)
+    assert result['data'] == b''
+    assert 'context_video_key' not in result['params']
+    assert result['params']['video_context_source']['source_job_id'] == job.id
+    assert result['params']['video_context_source']['native_latent_context'] is True
+
+
 def test_implicit_single_artifact_selection_survives_save_and_reload(monkeypatch, tmp_path):
     from app.core.projects.video_context import video_context_status
     project, first, second = _board(monkeypatch, tmp_path)

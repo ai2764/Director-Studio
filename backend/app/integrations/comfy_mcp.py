@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import os
 import re
 import shlex
@@ -19,9 +20,16 @@ from typing import Any, Protocol
 
 from ..config import settings
 
+logger = logging.getLogger(__name__)
+
+# A failed status probe does not establish that a submitted GPU job failed.
+# Retry only reads against the same prompt; submission is never retried here.
+_STATUS_RETRY_WINDOW_SEC = 120.0
+_STATUS_RETRY_DELAY_SEC = 5.0
+
 
 def _resolve_command(command: str) -> str:
-    """Resolve console scripts installed beside the running Python on Windows."""
+    """Resolve console scripts beside the running or base Python on Windows."""
     discovered = shutil.which(command)
     if discovered:
         return discovered
@@ -29,6 +37,11 @@ def _resolve_command(command: str) -> str:
     candidates = [executable_dir / command, executable_dir / "Scripts" / command]
     if os.name == "nt" and not command.lower().endswith(".exe"):
         candidates.extend(path.with_suffix(".exe") for path in list(candidates))
+    if os.name == "nt":
+        base_script = Path(sys.base_prefix) / "Scripts" / command
+        candidates.append(base_script)
+        if not command.lower().endswith(".exe"):
+            candidates.append(base_script.with_suffix(".exe"))
     for candidate in candidates:
         if candidate.is_file():
             return str(candidate)
@@ -417,23 +430,63 @@ class ComfyMcpClient:
     ) -> dict[str, Any]:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.job_timeout_sec
+        poll_failure_since: float | None = None
+        last_poll_error: ComfyMcpError | None = None
         while True:
             if cancel_event.is_set():
                 await self.cancel(prompt_id)
                 raise asyncio.CancelledError
             remaining = deadline - loop.time()
             if remaining <= 0:
+                if last_poll_error is not None:
+                    raise ComfyMcpError(
+                        f"MCP job status monitoring unavailable for prompt {prompt_id}; "
+                        f"remote execution outcome is unknown. The prompt was not "
+                        f"resubmitted; inspect its existing result before retrying "
+                        f"generation. Last polling error: {last_poll_error}"
+                    ) from last_poll_error
                 raise ComfyMcpError(
                     f"MCP job timed out after {self.job_timeout_sec:g}s: {prompt_id}"
                 )
-            payload = await self.call_tool(
-                "job",
-                {
-                    "action": "wait",
-                    "prompt_id": prompt_id,
-                    "timeout_seconds": min(30.0, remaining),
-                },
-            )
+            try:
+                payload = await self.call_tool(
+                    "job",
+                    {
+                        "action": "wait",
+                        "prompt_id": prompt_id,
+                        "timeout_seconds": min(30.0, remaining),
+                    },
+                )
+            except ComfyMcpError as exc:
+                last_poll_error = exc
+                now = loop.time()
+                if poll_failure_since is None:
+                    poll_failure_since = now
+                retry_remaining = min(
+                    deadline - now,
+                    _STATUS_RETRY_WINDOW_SEC - (now - poll_failure_since),
+                )
+                if retry_remaining <= 0:
+                    raise ComfyMcpError(
+                        f"MCP job status monitoring unavailable for prompt {prompt_id}; "
+                        f"remote execution outcome is unknown. The prompt was not "
+                        f"resubmitted; inspect its existing result before retrying "
+                        f"generation. Last polling error: {exc}"
+                    ) from exc
+                logger.warning(
+                    "Status polling failed for Comfy prompt %s; retrying the same "
+                    "prompt within %.1fs: %s", prompt_id, retry_remaining, exc,
+                )
+                try:
+                    await asyncio.wait_for(
+                        cancel_event.wait(),
+                        timeout=min(_STATUS_RETRY_DELAY_SEC, retry_remaining),
+                    )
+                except TimeoutError:
+                    pass
+                continue
+            poll_failure_since = None
+            last_poll_error = None
             status_payload = (
                 payload.get("status") if payload.get("timed_out") else payload
             )

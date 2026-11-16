@@ -153,6 +153,11 @@ class ComfyMcpExecutionAdapter:
         job.input_previews = store.input_preview_urls(job.id)
         if cancel_event.is_set():
             raise asyncio.CancelledError
+        verify_hook = getattr(pipeline, "verify_job_outputs", None)
+        if callable(verify_hook):
+            await verify_hook(job)
+        if cancel_event.is_set():
+            raise asyncio.CancelledError
         job.status = JobStatus.succeeded
         job.error = None
         store.save_job(job)

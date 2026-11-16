@@ -61,6 +61,51 @@ def test_server_parameters_resolve_installed_windows_entrypoints(
     assert Path(params.env["COMFY_BIN"]) == comfy_exe
 
 
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows entrypoint layout")
+@pytest.mark.parametrize("source", ["base", "venv", "path", "override", "missing_override"])
+def test_server_parameters_resolve_base_interpreter_scripts_as_last_fallback(
+    monkeypatch, tmp_path, source,
+):
+    venv_scripts = tmp_path / "venv" / "Scripts"
+    base_python = tmp_path / "base"
+    base_scripts = base_python / "Scripts"
+    venv_scripts.mkdir(parents=True)
+    base_scripts.mkdir(parents=True)
+    for name in ("comfy-mcp.exe", "comfy.exe"):
+        (base_scripts / name).touch()
+        if source in {"venv", "path", "override", "missing_override"}:
+            (venv_scripts / name).touch()
+
+    monkeypatch.setattr(sys, "executable", str(venv_scripts / "python.exe"))
+    monkeypatch.setattr(sys, "base_prefix", str(base_python))
+    monkeypatch.setattr("app.integrations.comfy_mcp.shutil.which", lambda _name: None)
+    monkeypatch.setattr(settings, "comfy_mcp_command", "comfy-mcp")
+    monkeypatch.setattr(settings, "comfy_mcp_comfy_bin", "comfy")
+    expected_scripts = base_scripts if source == "base" else venv_scripts
+    if source == "path":
+        expected_scripts = tmp_path / "path"
+        expected_scripts.mkdir()
+        for name in ("comfy-mcp.exe", "comfy.exe"):
+            (expected_scripts / name).touch()
+        monkeypatch.setattr(
+            "app.integrations.comfy_mcp.shutil.which",
+            lambda name: str(expected_scripts / f"{name}.exe"),
+        )
+    elif source in {"override", "missing_override"}:
+        expected_scripts = tmp_path / "explicit override"
+        expected_scripts.mkdir()
+        if source == "override":
+            for name in ("comfy-mcp.exe", "comfy.exe"):
+                (expected_scripts / name).touch()
+        monkeypatch.setattr(settings, "comfy_mcp_command", str(expected_scripts / "comfy-mcp.exe"))
+        monkeypatch.setattr(settings, "comfy_mcp_comfy_bin", str(expected_scripts / "comfy.exe"))
+
+    params = PersistentMcpToolSession()._server_parameters()
+
+    assert Path(params.command) == expected_scripts / "comfy-mcp.exe"
+    assert Path(params.env["COMFY_BIN"]) == expected_scripts / "comfy.exe"
+
+
 @pytest.mark.asyncio
 async def test_persistent_session_opens_and_closes_contexts_in_same_task(monkeypatch):
     class TaskBoundContext:
@@ -430,6 +475,66 @@ async def test_wait_for_completion_retries_structured_timeouts_until_completed()
     assert result["outputs"] == ["http://127.0.0.1:8188/view?filename=video.mp4"]
     assert [name for name, _ in session.calls] == ["job", "job"]
     assert all(args["action"] == "wait" for _, args in session.calls)
+
+
+@pytest.mark.asyncio
+async def test_status_probe_error_retries_same_prompt_without_resubmitting(monkeypatch):
+    monkeypatch.setattr("app.integrations.comfy_mcp._STATUS_RETRY_DELAY_SEC", 0)
+    session = FakeToolSession([
+        SimpleNamespace(is_error=True, content=[SimpleNamespace(
+            type="text", text="Error executing tool job",
+        )]),
+        _result({"status": "completed", "outputs": ["video.mp4"]}),
+    ])
+    result = await ComfyMcpClient(session=session).wait_for_completion(
+        "existing_prompt", cancel_event=asyncio.Event(),
+    )
+    assert result["status"] == "completed"
+    assert [name for name, _ in session.calls] == ["job", "job"]
+    assert all(args["prompt_id"] == "existing_prompt" for _, args in session.calls)
+    assert all(args["action"] == "wait" for _, args in session.calls)
+
+
+@pytest.mark.asyncio
+async def test_persistent_status_failure_reports_unknown_remote_outcome(monkeypatch):
+    monkeypatch.setattr("app.integrations.comfy_mcp._STATUS_RETRY_WINDOW_SEC", 0)
+    session = FakeToolSession([_result({"error": "server_not_running"}, is_error=True)])
+    with pytest.raises(ComfyMcpError, match="remote execution outcome is unknown") as error:
+        await ComfyMcpClient(session=session).wait_for_completion(
+            "existing_prompt", cancel_event=asyncio.Event(),
+        )
+    assert "existing_prompt" in str(error.value)
+    assert "server_not_running" in str(error.value)
+    assert len(session.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancellation_interrupts_status_retry_backoff():
+    cancel_event = asyncio.Event()
+
+    def polling_error(_name, _arguments):
+        cancel_event.set()
+        return _result({"error": "connection failed"}, is_error=True)
+
+    session = FakeToolSession([polling_error, _result({"status": "cancelled"})])
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(
+            ComfyMcpClient(session=session).wait_for_completion(
+                "existing_prompt", cancel_event=cancel_event,
+            ), timeout=1,
+        )
+    assert [args["action"] for _, args in session.calls] == ["wait", "cancel"]
+    assert all(args["prompt_id"] == "existing_prompt" for _, args in session.calls)
+
+
+@pytest.mark.asyncio
+async def test_confirmed_execution_failure_is_not_retried():
+    session = FakeToolSession([_result({"status": "failed", "error": "CUDA OOM"})])
+    with pytest.raises(ComfyMcpError, match="CUDA OOM"):
+        await ComfyMcpClient(session=session).wait_for_completion(
+            "existing_prompt", cancel_event=asyncio.Event(),
+        )
+    assert len(session.calls) == 1
 
 
 @pytest.mark.asyncio
