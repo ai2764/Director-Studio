@@ -1,5 +1,70 @@
 # Director Studio MCP v2
 
+## Compact catalog (default)
+
+The default catalog keeps native Director tool names and their common
+`project_id`, `request_id`, `expected_revision`, `objective`, `arguments` envelope.
+Detailed business argument schemas and instructions are loaded when needed:
+
+1. Read `get_project_context(project_id, objective)` for state, revision and the
+   available tool index.
+2. Call `get_tool_contract(tool_name="append_shots")` (or the chosen tool name).
+   Its `inputSchema` is the complete call schema, including definitions. Do not
+   guess fields inside `arguments` from the compact catalog.
+3. Call the named Director tool with that schema. Follow its complete instructions
+   and inspect its asynchronous receipt before proceeding.
+4. Refresh project context after writes. Reuse a previously fetched contract only
+   within the same server version; fetch it again on a schema error or reconnect.
+
+H3 setup is available through ONE entry, `h3_workflow(tool_name, arguments)`.
+Its `tool_name` enum lists supported H3 operations. First fetch that operation's
+contract with `get_tool_contract`, then pass its **entire** argument object inside
+the gateway's `arguments`. Example:
+
+```json
+{"name":"get_tool_contract","arguments":{"tool_name":"import_h3_workflow"}}
+```
+
+```json
+{"name":"h3_workflow","arguments":{"tool_name":"import_h3_workflow","arguments":{"request_id":"import-one","workflow":{},"mapping":{},"display_name":"My H3 workflow"}}}
+```
+
+The empty graph/mapping above are placeholders, not a valid import. For the full
+mapping schema and setup instructions, use
+`h3_workflow("get_h3_workflow_contract", {})` only when connecting workflows.
+The H3 operation names in the rest of this document refer to this gateway in
+compact mode, and to individual MCP tools in full mode.
+
+Execution still validates the full canonical schema and the backend still
+enforces revision, deduplication, generation and activation requirements. Missing
+fields produce an error pointing to `get_tool_contract`; failed writes require
+state inspection before retrying. No contract-read state is shared between
+clients. This reduces metadata, not the underlying checks. Model task reliability
+and total tokens (including contract reads/retries) still need client testing.
+
+For older clients or comparison testing, set this before starting the bridge:
+
+```powershell
+$env:DIRECTOR_MCP_CATALOG_MODE = "full"
+python .\mcp\server.py
+```
+
+Use `compact` (or unset the variable) to restore the default. Reconnect the client
+after changing modes so it refreshes its catalog. Full mode advertises the original
+individual H3 and complete Director schemas. Cached legacy tool calls remain
+supported in compact mode. `get_project_context(..., include_tool_schemas=True)`
+also explicitly requests the original full tool definitions; it defaults to true
+in full mode and false in compact mode. Backend/internal Director APIs are unchanged.
+
+Reproduce offline metadata estimates using the project Python environment with
+`tiktoken` installed: `python mcp/measure_catalog.py`. This makes no network/model
+requests and measures serialized compact JSON rather than actual host billing.
+On the 2026-11-16 implementation, `o200k_base` estimates were 16,683 tokens for
+48 full-mode tools and 5,528 tokens for 39 compact-mode tools (about 67% less).
+Reading the full `append_shots` contract adds about 2,077 tokens when needed;
+the H3 mapping contract adds about 1,837. These are metadata measurements, not
+proof of task success rates or net savings over a complete agent session.
+
 The adapter exposes the backend's native Director tool schemas and executor. The backend owns validation and project state. Run one backend worker so calls share the UI's locks and task registries.
 
 ## Native operations

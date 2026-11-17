@@ -8,22 +8,54 @@ from mcp.server import MCPServer
 from mcp import types
 import copy
 import json
+from typing import Literal
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 import bridge_mailbox
 
 BASE = os.environ.get('DIRECTOR_STUDIO_URL', 'http://127.0.0.1:8796').rstrip('/')
+
+H3ToolName = Literal[
+    'get_h3_workflow_contract', 'list_h3_workflows', 'list_h3_native_sources',
+    'import_h3_workflow', 'configure_h3_workflow', 'inspect_h3_workflow',
+    'validate_h3_workflow', 'test_h3_workflow', 'select_h3_test_output',
+    'activate_h3_workflow', 'select_h3_workflow',
+]
+H3_TOOLS = frozenset(H3ToolName.__args__)
+DISCOVERY_TOOLS = {'get_tool_contract', 'h3_workflow'}
+
+
+def full_catalog():
+    mode = os.environ.get('DIRECTOR_MCP_CATALOG_MODE', 'compact')
+    if mode not in {'compact', 'full'}:
+        raise ValueError('DIRECTOR_MCP_CATALOG_MODE must be compact or full')
+    return mode == 'full'
+
+
+def short_description(description):
+    return description.split('. ', 1)[0].split('\n', 1)[0][:220]
+
+
+def validate_arguments(name, schema, arguments):
+    from jsonschema import Draft202012Validator
+    errors = Draft202012Validator(schema).iter_errors(arguments)
+    error = next(errors, None)
+    if error is not None:
+        path = '.'.join(map(str, error.absolute_path)) or '<root>'
+        raise ToolError(f'{name}: {path}: {error.message}. Read get_tool_contract("{name}") before retrying.')
+
+
 class DirectorMCP(MCPServer):
     native_schemas = {}
 
-    async def list_tools(self):
+    async def full_tools(self):
         result = await super().list_tools()
+        self.native_schemas = {}
         try:
             native = await request('GET', '/agent/tools')
         except (httpx.HTTPError, ToolError):
             # Mailbox and ordinary bridge tools remain discoverable during backend outages.
             return result
-        self.native_schemas = {}
         for tool in native['tools']:
             args = copy.deepcopy(tool['parameters'])
             definitions = args.pop('$defs', None)
@@ -39,23 +71,66 @@ class DirectorMCP(MCPServer):
             result.append(types.Tool(name=tool['name'], description=tool['description'] + ' Native Director tool; returns an asynchronous task receipt. Check get_agent_task for actual completion. Availability and business preconditions come from get_project_context.', inputSchema=schema))
         return result
 
+    async def list_tools(self):
+        tools = await self.full_tools()
+        if full_catalog():
+            return [tool for tool in tools if tool.name not in DISCOVERY_TOOLS]
+        result = []
+        for tool in tools:
+            if tool.name in H3_TOOLS:
+                continue
+            if tool.name in self.native_schemas:
+                tool = tool.model_copy(deep=True)
+                tool.input_schema['properties']['arguments'] = {'type': 'object'}
+                tool.input_schema.pop('$defs', None)
+                tool.description = (short_description(tool.description) +
+                    f'. Read get_tool_contract("{tool.name}") for arguments before calling. Receipt is not completion.')
+            result.append(tool)
+        return result
+
+    async def tool_contract(self, name):
+        # Registered bridge/H3 contracts are available even if the backend is down.
+        registered = await super().list_tools()
+        tools = registered if any(t.name == name for t in registered) else await self.full_tools()
+        tool = next((t for t in tools if t.name == name), None)
+        if tool is None:
+            raise ToolError(f'Unknown or unavailable tool: {name}. Refresh tools/list; check backend availability.')
+        return tool
+
     def _tool_input_schema(self, name):
         return self.native_schemas.get(name) or super()._tool_input_schema(name)
 
     async def call_tool(self, name, arguments, context=None):
         if name not in self.native_schemas and self._tool_manager.get_tool(name) is None:
             # Hosts may cache a catalog across connections and call without listing again.
-            await self.list_tools()
+            await self.full_tools()
         if name in self.native_schemas:
-            from jsonschema import Draft202012Validator
-            errors = list(Draft202012Validator(self.native_schemas[name]).iter_errors(arguments))
-            if errors: raise ToolError(errors[0].message)
+            validate_arguments(name, self.native_schemas[name], arguments)
             body = {k: v for k, v in arguments.items() if k != 'project_id'}
             result = await request('POST', '/agent/projects/' + segment(arguments['project_id']) + '/tools/' + segment(name), body=body)
             return types.CallToolResult(content=[types.TextContent(type='text', text=json.dumps(result, ensure_ascii=False))], structuredContent=result)
         return await super().call_tool(name, arguments, context)
 
-mcp = DirectorMCP('Director Studio', version='2.0.0', instructions='Native tools execute directly on the requested project; no chat delegation. First read get_project_context for revision, evidence and available tools. Supply the actual user objective and a stable request_id to a native tool. A task receipt means accepted, not completed: inspect get_agent_task. Never infer success from prose. Project authoring mode need not change. Tool schemas are canonical; current availability and state checks are enforced in the backend.')
+mcp = DirectorMCP('Director Studio', version='2.1.0', instructions='Native tools execute on the requested project. Read get_project_context for revision, evidence and available names. Read get_tool_contract(tool_name) for complete arguments before an unfamiliar call; never guess omitted fields. H3 setup uses h3_workflow; read its operation contract first and fetch get_h3_workflow_contract only when connecting a workflow. Supply the actual user objective and stable request_id. A receipt is not completion: inspect get_agent_task/get_video_job. Backend schemas, availability and state checks remain authoritative.')
+
+
+@mcp.tool()
+async def get_tool_contract(tool_name: str) -> dict:
+    """Read ONE tool's full description and JSON input schema before calling it; names come from tools/list or project context. Read-only."""
+    tool = await mcp.tool_contract(tool_name)
+    return tool.model_dump(mode='json', by_alias=True, exclude_none=True)
+
+
+@mcp.tool()
+async def h3_workflow(tool_name: H3ToolName, arguments: dict) -> types.CallToolResult:
+    """H3 workflow setup on demand. Read get_tool_contract(tool_name), then pass its exact arguments. Generation requires user authorization; activate/select affect subsequent local videos globally."""
+    if tool_name not in H3_TOOLS:
+        raise ToolError('Only H3 setup operations are accepted; read get_tool_contract("h3_workflow").')
+    tool = await mcp.tool_contract(tool_name)
+    schema = copy.deepcopy(tool.input_schema)
+    schema['additionalProperties'] = False
+    validate_arguments(tool_name, schema, arguments)
+    return await mcp.call_tool(tool_name, arguments)
 
 async def request(method: str, path: str, *, params=None, body=None, form_data=None, files=None, timeout=30):
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
@@ -146,9 +221,16 @@ async def create_project(request_id: str, name: str, script_text: str = '', mode
     return await request('POST', '/agent/projects', body={'request_id': request_id, 'name': name, 'script_text': script_text, 'mode': mode, 'authoring_mode': authoring_mode})
 
 @mcp.tool()
-async def get_project_context(project_id: str, objective: str = '') -> dict:
-    """Read current revision, agent evidence, and currently available native tool contracts. Read this before authoring tool arguments."""
-    return await request('GET', '/agent/projects/' + segment(project_id) + '/context', params={'objective': objective})
+async def get_project_context(project_id: str, objective: str = '', include_tool_schemas: bool | None = None) -> dict:
+    """Read revision, evidence, instructions and available tool names before mutations. Fetch detailed arguments with get_tool_contract. Set include_tool_schemas=true for all schemas."""
+    result = await request('GET', '/agent/projects/' + segment(project_id) + '/context', params={'objective': objective})
+    if include_tool_schemas is None:
+        include_tool_schemas = full_catalog()
+    if not include_tool_schemas:
+        result = {**result, 'available_tools': [
+            {'name': tool['function']['name'], 'description': short_description(tool['function']['description'])}
+            for tool in result.get('available_tools', [])]}
+    return result
 
 @mcp.tool()
 async def get_agent_task(task_id: str) -> dict:

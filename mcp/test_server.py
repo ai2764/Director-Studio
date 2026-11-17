@@ -31,6 +31,7 @@ def test_public_hosts_are_explicit_environment_configuration(monkeypatch):
 
 
 def test_h3_tools_are_discoverable_without_a_live_backend(monkeypatch):
+    monkeypatch.setenv('DIRECTOR_MCP_CATALOG_MODE', 'full')
     bridge = load_bridge(monkeypatch)
     async def request(*args, **kwargs):
         raise bridge.httpx.ConnectError('offline')
