@@ -26,7 +26,6 @@ export function harnessSchema(
     for (const key of [
       "type",
       "description",
-      "title",
       "default",
       "enum",
       "const",
