@@ -21,11 +21,14 @@ async def test_harness_envelope_includes_skills_once_and_summary_is_skill_free(t
     assert context["system"].count("<DIRECTOR_SKILL>") == 1
     await turn.infer({"messages": [{"role": "user", "content": "hello"}]})
     system, kwargs = captured[-1]
-    assert system == context["system"] + "\n\nPROJECT_STATE:\n" + context["state"]
+    assert system == context["system"]
+    assert "PROJECT_STATE:\n" not in system
+    assert kwargs["messages"][-1] == {"role": "user", "content": "PROJECT_STATE:\n" + context["state"]}
     assert kwargs["prepared_system"] is True
     assert system.count("<DIRECTOR_SKILL>") == 1
     await turn.infer({"purpose": "compaction", "messages": [{"role": "user", "content": "summarize"}]})
     assert "<DIRECTOR_SKILL>" not in captured[-1][0]
+    assert all("PROJECT_STATE" not in m["content"] for m in captured[-1][1]["messages"])
     assert captured[-1][1]["prepared_system"] is True
 
 
@@ -40,15 +43,39 @@ async def test_inference_uses_metered_envelope_and_does_not_authorize_concurrent
         return {"content": "done"}
     turn = BackendTurn(project.id, "hello", None, chat_fn)
     context = await turn.dispatch("context", {})
-    system = context["system"] + "\n\nPROJECT_STATE:\n" + context["state"]
+    system = context["system"]
+    state_tail = {"role": "user", "content": "PROJECT_STATE:\n" + context["state"]}
     schemas = [{"name": tool["function"]["name"], "description": tool["function"].get("description", ""),
                 "parameters": {"type": "object", "properties": {}}} for tool in context["tools"]]
     save_project(project.model_copy(update={"name": "AFTER_CONCURRENT_CHANGE"}))
-    await turn.infer({"system": system, "tools": schemas, "messages": [{"role": "user", "content": "hello"}]})
+    await turn.infer({"system": system, "tools": schemas, "messages": [{"role": "user", "content": "hello"}, state_tail]})
     assert captured[0][0] == system
+    assert captured[0][1]["messages"][-1] == state_tail
     assert [t["function"] for t in captured[0][1]["tools"]] == schemas
     result = await turn.tool({"name": "set_script", "arguments": {"script": "bad"}, "call_id": "stale"})
     assert result["ok"] is False and "changed since inference" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_inference_hydrates_images_on_user_message_before_ephemeral_state_tail(tmp_projects_dir):
+    from app.agents.director.harness_runtime import BackendTurn
+    project = create_project("images", "A cat waits.")
+    captured = []
+    async def chat_fn(system, user, **kwargs):
+        captured.append((system, kwargs))
+        return {"content": "done"}
+    turn = BackendTurn(project.id, "inspect this", None, chat_fn, images=["IMG_B64"])
+    context = await turn.dispatch("context", {})
+    state_tail = {"role": "user", "content": "PROJECT_STATE:\n" + context["state"]}
+    await turn.infer({
+        "system": context["system"],
+        "messages": [{"role": "user", "content": "inspect this"}, state_tail],
+    })
+    messages = captured[0][1]["messages"]
+    assert messages[0]["content"] == "inspect this"
+    assert messages[0]["images"] == ["IMG_B64"]
+    assert messages[-1] == state_tail
+    assert "images" not in messages[-1]
 
 
 @pytest.mark.asyncio

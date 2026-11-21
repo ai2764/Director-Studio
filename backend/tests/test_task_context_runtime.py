@@ -85,8 +85,8 @@ async def test_runtime_switch_read_status_final_preserves_scope_and_evidence(con
     assert "Checked" in result.reply
     assert load_shot(project.id, target.id) == target
     assert current_task_context(project.id) is None
-    first = calls[0][0] + calls[0][1]
-    second = calls[1][0] + calls[1][1] + json.dumps(calls[1][2].get("messages", []))
+    first = calls[0][0] + calls[0][1] + "\n".join(str(m.get("content", "")) for m in calls[0][2].get("messages", []))
+    second = calls[1][0] + calls[1][1] + "\n".join(str(m.get("content", "")) for m in calls[1][2].get("messages", []))
     assert '"kind": "overview"' in first
     assert '"kind": "shot_prompt"' in second
     assert target.id in second and '"source_versions"' in second

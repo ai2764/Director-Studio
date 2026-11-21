@@ -59,8 +59,11 @@ const textOf = (blocks: readonly ContentBlock[]) =>
     .filter((b) => b.type === "text")
     .map((b) => (b.type === "text" ? b.text : ""))
     .join("\n");
-const hostSystem = (context: any): string =>
-  `${context.system}\n\nPROJECT_STATE:\n${typeof context.state === "string" ? context.state : JSON.stringify(context.state)}`;
+const hostSystem = (context: any): string => String(context.system ?? "");
+const hostStateMessage = (context: any): string =>
+  `PROJECT_STATE:\n${typeof context.state === "string" ? context.state : JSON.stringify(context.state)}`;
+const estimateStateTokens = (stateMessage: string): number =>
+  stateMessage ? Math.ceil(stateMessage.length / 4) + 8 : 0;
 const SUMMARY_SYSTEM = "Summarize conversation history concisely. Preserve user decisions, creative constraints, unresolved questions and confirmed tool outcomes. Do not invent successful actions. Current project facts are supplied separately by the backend.";
 function isLegacyHostSnapshot(message: Message): boolean {
   if (message.role !== "user") return false;
@@ -101,7 +104,8 @@ function messagesForHost(
 class HostAdapter extends LlmAdapter {
   constructor(
     private host: Host,
-    private window: number,
+    private getEffectiveWindow: () => number,
+    private getStateMessage: () => string,
     private beforeRequest: (purpose: "turn" | "compaction") => Promise<void>,
     private maxSteps: number,
   ) {
@@ -127,7 +131,7 @@ class HostAdapter extends LlmAdapter {
       id: model,
       name: model,
       inputModalities: ["text"] as const,
-      context: { contextWindow: this.window },
+      context: { contextWindow: this.getEffectiveWindow() },
     };
   }
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
@@ -138,9 +142,13 @@ class HostAdapter extends LlmAdapter {
     for (let attempt = 0; ; attempt++) {
       options.signal?.throwIfAborted();
       await this.beforeRequest(purpose);
+      const wireMessages = messagesForHost(options.messages);
+      if (purpose === "turn") {
+        wireMessages.push({ role: "user", content: this.getStateMessage() });
+      }
       try {
         result = await this.host("llm", {
-          messages: messagesForHost(options.messages),
+          messages: wireMessages,
           system: options.system ?? "",
           tools: options.tools ?? [],
           purpose,
@@ -238,7 +246,12 @@ export async function runTurn(
   let failure: unknown;
   let compactionFailure: unknown;
   let initialContext: any;
+  let currentStateMessage = "";
   let terminalToolReply: string | undefined;
+  const currentStateTokens = () => estimateStateTokens(currentStateMessage);
+  const effectiveWindow = () => Math.max(16, input.context_window - currentStateTokens());
+  const measuredTotalTokens = (session: any) =>
+    ctx.tokenMeter.measure(session).totalTokens + currentStateTokens();
   class FailClosedCompaction extends BasicCompaction {
     private committed: Awaited<ReturnType<BasicCompaction["compactRegion"]>> | null = null;
     private regionFailed = false;
@@ -266,7 +279,7 @@ export async function runTurn(
         ? JSON.stringify([agent.session.id, measurement.nodes.slice(first, last + 1)]) : undefined;
       try {
         const previous = key && this.nonshrinkingRegions.get(key);
-        if (this.pressureAttempt && previous && measurement.totalTokens < input.context_window) {
+        if (this.pressureAttempt && previous && measurement.totalTokens + currentStateTokens() < input.context_window) {
           signal?.throwIfAborted();
           throw previous;
         }
@@ -277,7 +290,7 @@ export async function runTurn(
         this.regionFailed = true;
         if (this.pressureAttempt && key && !signal?.aborted && error instanceof Error
           && error.message.startsWith("summary is not smaller than the shadowed content")
-          && ctx.tokenMeter.measure(agent.session).totalTokens < input.context_window)
+          && measuredTotalTokens(agent.session) < input.context_window)
           this.nonshrinkingRegions.set(key, error);
         throw error;
       }
@@ -294,7 +307,7 @@ export async function runTurn(
       } catch (error) {
         // Native bounded attempts may commit useful summaries yet remain above
         // the early-pressure threshold. That is not a failed checkpoint.
-        const after = ctx.tokenMeter.measure(args[0].session).totalTokens;
+        const after = measuredTotalTokens(args[0].session);
         const noFurtherReduction = error instanceof Error
           && error.message.startsWith("summary is not smaller than the shadowed content");
         // Proactive pressure compaction is an optimization. If the summary
@@ -322,6 +335,7 @@ export async function runTurn(
     signal.throwIfAborted();
     const context = await host("context", {});
     initialContext ??= context;
+    currentStateMessage = hostStateMessage(context);
     if (!scoped) return;
     for (const dispose of disposers.splice(0)) dispose();
     disposers.push(
@@ -386,14 +400,14 @@ export async function runTurn(
     await ctx.plugin(TokenMeter);
     ctx.llm.registerAdapter(
       ["host"],
-      new HostAdapter(host, input.context_window, async purpose => {
+      new HostAdapter(host, effectiveWindow, () => currentStateMessage, async purpose => {
         signal.throwIfAborted();
         if (purpose === "compaction") return;
         if (compactionFailure) {
           const cause = compactionFailure instanceof Error ? compactionFailure.message : String(compactionFailure);
           throw new LlmError(`History compaction failed: ${cause}. Original history is preserved.`, "COMPACTION_FAILED");
         }
-        if (handle && ctx.tokenMeter.measure(handle.agent.session).totalTokens >= input.context_window)
+        if (handle && measuredTotalTokens(handle.agent.session) >= input.context_window)
           throw new LlmError("Current request exceeds the reserved input budget even after history compaction; reduce the current message, references or project context.", "CONTEXT_WINDOW_EXCEEDED");
       }, input.max_steps),
     );
@@ -483,10 +497,10 @@ export async function runTurn(
         }), { surfaceOp: "append" });
       }
       try {
-        const before = ctx.tokenMeter.measure(handle.agent.session).totalTokens;
+        const before = measuredTotalTokens(handle.agent.session);
         const result = await ctx.compaction.compactNow(handle.agent, signal);
         migration = { compacted: result !== null, before_tokens: before,
-          after_tokens: ctx.tokenMeter.measure(handle.agent.session).totalTokens, session_id: sessionId };
+          after_tokens: measuredTotalTokens(handle.agent.session), session_id: sessionId };
       } catch (error) {
         signal.throwIfAborted();
         throw new ProtocolError("COMPACTION_FAILED",
@@ -495,9 +509,9 @@ export async function runTurn(
     }
     if (input.operation === "compact") {
       if (migration) return { reply: "", thinking: "", compaction: migration };
-      const before = ctx.tokenMeter.measure(handle.agent.session).totalTokens;
+      const before = measuredTotalTokens(handle.agent.session);
       const result = await ctx.compaction.compactNow(handle.agent, signal);
-      const after = ctx.tokenMeter.measure(handle.agent.session).totalTokens;
+      const after = measuredTotalTokens(handle.agent.session);
       await ctx.sessions.flush(handle.agent.session);
       if (after >= input.context_window) {
         const detail = result === null ? "No compactable history remains" : "The summary was saved";

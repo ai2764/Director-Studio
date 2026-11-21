@@ -57,21 +57,60 @@ describe("real Harness kernel", () => {
       .rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED" });
     expect(models).toBe(0);
   });
-  it("meters one literal host envelope and refreshes it after tools without history snapshots", async () => {
+  it("keeps static system prefix immutable and injects fresh PROJECT_STATE only at the ephemeral tail", async () => {
     let version = 1;
     let models = 0;
     const host: Host = async (method, params) => {
       if (method === "context") return { system: "Director {{literal}}", state: JSON.stringify({ version }), tools };
       if (method === "tool") { version = 2; return { ok: true }; }
       models++;
-      expect(params.system).toBe('Director {{literal}}\n\nPROJECT_STATE:\n{"version":' + version + '}');
-      expect(JSON.stringify(params.messages)).not.toContain("Current runtime context.");
-      expect(JSON.stringify(params.messages)).not.toContain("PROJECT_STATE");
+      expect(params.system).toBe("Director {{literal}}");
+      const sent = params.messages as any[];
+      expect(sent.at(-1)).toEqual({
+        role: "user",
+        content: 'PROJECT_STATE:\n{"version":' + version + "}",
+      });
+      expect(JSON.stringify(sent.slice(0, -1))).not.toContain("Current runtime context.");
+      expect(JSON.stringify(sent.slice(0, -1))).not.toContain("PROJECT_STATE");
       expect(params.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: "change" })]));
       return models === 1 ? { tool_calls: [{ id: "change-1", name: "change", arguments: { value: "next" } }] } : { content: "done" };
     };
     expect((await runTurn(input, host, new AbortController().signal)).reply).toBe("done");
     expect(models).toBe(2);
+  });
+  it("never persists ephemeral PROJECT_STATE tails into durable session history", async () => {
+    const { mkdtemp, readdir, readFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const sessionRoot = await mkdtemp(join(tmpdir(), "director-ephemeral-state-"));
+    try {
+      let version = 1;
+      const seenPrefixes: string[] = [];
+      const host: Host = async (method, params) => {
+        if (method === "context") return { system: "STATIC_SYSTEM_PROMPT", state: JSON.stringify({ version }), tools };
+        if (method === "tool") { version += 1; return { ok: true }; }
+        const sent = params.messages as any[];
+        seenPrefixes.push(String(params.system));
+        expect(sent.at(-1)).toEqual({
+          role: "user",
+          content: 'PROJECT_STATE:\n{"version":' + version + "}",
+        });
+        expect(JSON.stringify(sent.slice(0, -1))).not.toContain("PROJECT_STATE");
+        return version === 1
+          ? { tool_calls: [{ id: "step-1", name: "change", arguments: { value: "next" } }] }
+          : { content: `ok-${version}` };
+      };
+      const turnInput = { ...input, session_id: "kv-cache-check" };
+      expect((await runTurn({ ...turnInput, message: "turn 1" }, host, new AbortController().signal, { sessionRoot })).reply).toBe("ok-2");
+      version = 3;
+      expect((await runTurn({ ...turnInput, message: "turn 2" }, host, new AbortController().signal, { sessionRoot })).reply).toBe("ok-3");
+      expect(seenPrefixes).toEqual(["STATIC_SYSTEM_PROMPT", "STATIC_SYSTEM_PROMPT", "STATIC_SYSTEM_PROMPT"]);
+      const files = await readdir(sessionRoot, { recursive: true });
+      const log = await readFile(join(sessionRoot, files.find(p => p.endsWith("session.jsonl"))!), "utf8");
+      expect(log).not.toContain("PROJECT_STATE");
+    } finally {
+      await rm(sessionRoot, { recursive: true, force: true });
+    }
   });
   it.each([false, true])("compacts seeded history before the first model turn (large envelope: %s)", async (largeEnvelope) => {
     const purposes: string[] = [];
