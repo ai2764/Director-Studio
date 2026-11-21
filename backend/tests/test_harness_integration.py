@@ -251,7 +251,11 @@ async def test_real_harness_repairs_tool_then_edits_one_shot(real_sidecar, tmp_p
         async def chat_response(self, model, *, messages, **kwargs):
             calls.append(messages)
             assert model == "isolated-test-model"
-            assert messages[0]["role"] == "system" and "PROJECT_STATE" in messages[0]["content"]
+            assert messages[0]["role"] == "system" and "PROJECT_STATE:\n" not in messages[0]["content"]
+            assert messages[-1]["role"] == "user" and messages[-1]["content"].startswith("PROJECT_STATE:\n")
+            assert all("PROJECT_STATE:\n" not in str(m.get("content", "")) for m in messages[1:-1])
+            if len(calls) > 1:
+                assert messages[0]["content"] == calls[0][0]["content"]
             assert any(m.get("content") == "Keep the second shot unchanged." for m in messages)
             if len(calls) == 1:
                 return {"content": "", "tool_calls": [{"name": "revise_shot", "arguments": {"title": "missing shot id"}}]}

@@ -243,9 +243,11 @@ async def test_long_history_final_envelope_is_measured_honestly(context_case, mo
             await turn.infer({"messages": history})
         final = requests[-1]
         system = final["messages"][0]["content"]
+        assert final["messages"][-1] == {"role": "user", "content": "PROJECT_STATE:\n" + context["state"]}
         rows.append({"mode": mode, "allowed": allowed, "system_without_state_chars": len(context["system"]),
             "task_state_chars": len(context["state"]), "final_system_chars": len(system),
-            "history_and_user_chars": sum(len(m["content"]) for m in final["messages"][1:]),
+            "history_and_user_chars": sum(len(m["content"]) for m in final["messages"][1:-1]),
+            "ephemeral_state_chars": len(final["messages"][-1]["content"]),
             "tool_schema_chars": len(json.dumps(final["tools"], ensure_ascii=False, sort_keys=True)), "image_count": 0})
         if mode == "pilot" and allowed:
             assert "UNRELATED_DETAIL" not in context["state"]
@@ -253,9 +255,12 @@ async def test_long_history_final_envelope_is_measured_honestly(context_case, mo
             assert len(context["state"]) <= small_state_chars + 10
             assert json.loads(context["state"])["complete"]
     assert len(requests) == 4 and requests[0] == requests[1] == requests[2]
+    assert all(row["final_system_chars"] == row["system_without_state_chars"] for row in rows)
     assert all(row["history_and_user_chars"] == sum(len(m["content"]) for m in history) for row in rows)
     assert before == {p: p.read_bytes() for p in settings.projects_dir.rglob("*") if p.is_file()}
     final_shapes = [s for s in shapes if s["path"].startswith("chat.")]
     assert len(final_shapes) == 2
-    assert final_shapes[-1]["text_chars"] == rows[-1]["final_system_chars"] + rows[-1]["history_and_user_chars"]
+    assert final_shapes[-1]["text_chars"] == (
+        rows[-1]["final_system_chars"] + rows[-1]["history_and_user_chars"] + rows[-1]["ephemeral_state_chars"]
+    )
     print("ENVELOPE_MEASUREMENTS " + json.dumps(rows))

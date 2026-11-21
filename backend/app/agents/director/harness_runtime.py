@@ -256,11 +256,6 @@ class BackendTurn:
             messages.append(clean)
         if not messages:
             raise ValueError("Harness conversation is empty")
-        self.context_history = messages
-        tool_names = {call["id"]: call["function"]["name"] for m in messages for call in m.get("tool_calls", [])}
-        for m in messages:
-            if m["role"] == "tool" and m.get("tool_call_id") in tool_names:
-                m["tool_name"] = tool_names[m["tool_call_id"]]
         context = self.offered_context or self.context()
         project, _, version = self.snapshot()
         compacting = purpose == "compaction"
@@ -269,7 +264,25 @@ class BackendTurn:
             # project revision that arrived while the request was being prepared.
             self.expected_state = self.offered_version
         system = ("Summarize conversation history concisely. Preserve user decisions, creative constraints, unresolved questions and confirmed tool outcomes. Do not invent successful actions. Current project facts are supplied separately by the backend."
-                  if compacting else context["system"] + "\n\nPROJECT_STATE:\n" + context["state"])
+                  if compacting else context["system"])
+        expected_state_message = f"PROJECT_STATE:\n{context['state']}"
+        ephemeral_state = None
+        if not compacting:
+            if (
+                messages[-1]["role"] == "user"
+                and not messages[-1].get("tool_calls")
+                and messages[-1].get("content") == expected_state_message
+            ):
+                ephemeral_state = messages.pop()
+            elif "system" in params:
+                raise ValueError("Harness state tail does not match the issued backend context")
+            if not messages:
+                raise ValueError("Harness conversation is empty")
+        self.context_history = list(messages)
+        tool_names = {call["id"]: call["function"]["name"] for m in messages for call in m.get("tool_calls", [])}
+        for m in messages:
+            if m["role"] == "tool" and m.get("tool_call_id") in tool_names:
+                m["tool_name"] = tool_names[m["tool_call_id"]]
         offered_tools = [] if compacting else context["tools"]
         if not compacting and "system" in params and params["system"] != system:
             raise ValueError("Harness system envelope does not match the issued backend context")
@@ -287,11 +300,13 @@ class BackendTurn:
                 "name": t["name"], "description": t.get("description", ""), "parameters": t["parameters"],
             }} for t in schemas]
         if self.images and not compacting:
-            # Bytes are never sent to Node. Always hydrate the latest user message locally.
+            # Bytes are never sent to Node. Always hydrate the latest actual user message locally.
             for message in reversed(messages):
                 if message["role"] == "user":
                     message["images"] = self.images
                     break
+        if not compacting:
+            messages.append(ephemeral_state or {"role": "user", "content": expected_state_message})
         try:
             result = await self.chat_fn(
                 system, self.message, messages=messages,

@@ -1141,7 +1141,10 @@ async def test_backend_llm_uses_authoritative_context_and_keeps_images_local(tmp
     system, kwargs = captured[0]
     assert "Director" in system and "forged" not in system
     assert kwargs["messages"][0]["role"] == "user"
-    assert kwargs["messages"][-1]["images"] == ["LOCAL_IMAGE_BYTES"]
+    assert kwargs["messages"][0]["images"] == ["LOCAL_IMAGE_BYTES"]
+    assert kwargs["messages"][-1]["role"] == "user"
+    assert kwargs["messages"][-1]["content"].startswith("PROJECT_STATE:\n")
+    assert "images" not in kwargs["messages"][-1]
     assert kwargs["tools"][0]["function"]["name"] == "classify_chat_image"
     await turn.dispatch("llm", {"messages": [{"role": "user", "content": "summarize history"}], "purpose": "compaction"})
     assert captured[-1][1]["tools"] == []
