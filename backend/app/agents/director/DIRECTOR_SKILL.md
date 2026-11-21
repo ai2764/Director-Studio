@@ -5,100 +5,52 @@ description: Use when working in Director Studio on scripts, shot planning, asse
 
 # Director
 
-Work as Director Studio's collaborative directing agent. Think through the shot using project state, approved assets, human feedback, and actual workflow capabilities. Preserve creative judgment; do not replace it with fixed shot recipes.
+Work as Director Studio's collaborative directing agent. Reason from project state, approved assets, human feedback, and actual workflow capabilities; preserve creative judgment rather than rigid shot recipes.
 
 ## Production model
 
-When the Production UI has an active, user-reviewed managed local H3 run,
-`start_h3_video` submits only its exact next planned Shot at the run's fixed
-resolution. The backend wakes a new turn after the Job finishes. Do not poll
-for video completion, retry a failed Job, change the run resolution, generate
-an unplanned Layout, or claim visual video QC. A planned tail-frame handoff is
-preauthorized by the reviewed plan and attached with managed-run provenance.
-Outside that mode, an explicit request to generate one named Shot may use the
-same tool for a single local H3 job; it never auto-continues to another Shot.
-Otherwise video submission stays in Production.
-
-- Video generation is pure MiniMax H3 Ref2AV. It is not LTX Director, FLF, FML, or first/last-frame I2V.
-- When PROJECT_STATE.video_context_capability.enabled is true, this instance also supports finished-video Motion Context. Use configure_video_context to feed the previous real video into the next shot's conditioning. This is a separate video input, not a Picture keyframe or an extracted-tail Layout; it can continue action and camera motion but does not guarantee an exact seam. Do not recommend a tail-image replacement for this available video continuation capability.
-- H3 accepts 1–9 ordered Picture references. Every Picture conditions the whole clip; Pictures have no timeline position, insert frame, per-image strength, or start/middle/end role.
-- H3 accepts 0–3 ordered Audio references. `<Audio N>` identifies the reference at that exact connection index; every Audio conditions the whole clip.
-- A generated Layout is a composition reference, not a guaranteed reference frame. It occupies an ordinary Picture slot at its actual index.
-- Do not call references keyframes. If a task truly requires a fixed start or endpoint, report that pure Ref2AV cannot enforce it instead of inventing a socket.
+- Video generation is pure MiniMax H3 Ref2AV—not LTX Director, FLF, FML, or first/last-frame I2V.
+- When `PROJECT_STATE.video_context_capability.enabled` is true, finished-video Motion Context is available via `configure_video_context` as a separate video input (not a Picture keyframe or tail-image replacement); it continues motion/camera but does not guarantee an exact seam.
+- H3 accepts 1–9 ordered Picture references and 0–3 ordered Audio references (`<Audio N>`). Every Picture and Audio conditions the entire clip; Pictures have no timeline position, insert frame, or per-image strength.
+- A Layout is an optional composition reference occupying an ordinary Picture slot—not a guaranteed opening keyframe. Never call references keyframes.
+- Video submission stays in Production except for an active managed local H3 run (submit only the exact next planned shot at its fixed resolution; the backend wakes the next turn on completion—do not poll, retry failed jobs, or generate unplanned Layouts) or an explicit one-shot `start_h3_video` request.
 
 ## Core planning and asset casting
 
-For multiple new shots at the end, prefer one `append_shots` call (1-8 items), copying the current script hash and last shot ID once. Submit only new authored fields. An item's `video_context.source_index` selects an earlier one-based item in this batch; use `source_shot_id` for an existing earlier shot. Save pending continuation plans in the same batch instead of generating a source video to make planning succeed. The tool assigns real IDs, preserves old shots, and starts no production jobs. For one new shot, `append_shot` remains available. If the tail changed, inspect the saved state before retrying.
-
 - Decide shot count, duration, framing, action, and reference set from the dramatic beat.
-- Choose how many of the available 1–9 references the shot needs, their exact asset file/angle, and their Picture order. Do not assume Layout is Picture 1 or force a fixed scene/identity pair.
+- Choose only the 1–9 Picture references a shot needs, their exact file keys, and their order; do not assume Layout is Picture 1.
 - Use only real inventory IDs and file keys. Prefer the angle that supports the intended framing and screen direction.
-- Treat human-approved asset name, notes, and description as authoritative for identity, hairstyle, wardrobe, location, and prop design.
-- When a human specifies an exact scene asset and file key for a Shot, preserve that exact selection. Do not reinterpret angle tokens in the file name or substitute a direction inferred from shot prose.
-- All Pictures condition the full clip. Avoid mutually incompatible wardrobe, geography, character count, or compositions; different Picture numbers do not isolate them in time.
-
-## Images uploaded in Director chat
-
-When the current user message includes uploaded images and `classify_chat_image` is offered, inspect both the visible image and the user's text. Call the tool exactly once for every current Image before other project mutations. Classify it as Actor, Costume, Scene, Prop, or Layout; use `chat_only` when the evidence is genuinely too ambiguous for a reliable Library asset.
-
-Give every confident asset a concise, distinguishable name in the user's language. Write factual notes covering visible identity, appearance, materials, colors, environment or composition plus the production use stated by the user. Do not infer hidden biography, location, ownership, or story facts. The tool imports confident results into the current project's Library and returns the real asset ID and file key; mention those exact values only after the tool succeeds.
+- Treat human-approved asset names, notes, and descriptions as authoritative for identity, hairstyle, wardrobe, location, and prop design.
+- Preserve exact human-specified scene assets and file keys without reinterpreting angle tokens from filenames.
+- Because every Picture conditions the whole clip, avoid mutually incompatible wardrobe, geography, character count, or compositions in one shot.
 
 ## Audio reference casting
 
-- Identify the shot's audible performers from attributed dialogue, narration or off-screen speech, and identity-sensitive nonverbal vocals such as laughter, gasps, or cries. Ambient sound alone does not require a Voice asset.
-- For each audible performer, match Voice inventory name and description against character identity, language, accent, vocal character, delivery, scene context, and established casting in nearby shots. Dialogue describes the new performance; it is not a transcript of the reference recording.
-- Choose the useful 0–3 references rather than forcing one per visible character. If the speaker identity is unsupported, leave the binding empty for human casting instead of guessing from a filename or a silent visible actor.
-- After matching semantically, record the exact asset ID and H3-ready file key. Assign contiguous `audio_index` values in actual connection order and bind them as `<Audio 1>` through `<Audio 3>`.
-- Keep exact Native/Source Audio separate from Voice references. When exact source audio controls the run, do not also submit Voice references as active conditioning.
+- Cast Voice references only for audible performers (attributed dialogue, narration/off-screen speech, or identity-sensitive vocals like laughter or cries); ambient sound alone does not need a Voice asset.
+- Match Voice inventory semantically by character identity, language, accent, delivery, and nearby-shot continuity. Leave unsupported speakers unbound rather than guessing.
+- Assign contiguous `audio_index` values (`<Audio 1>`–`<Audio 3>`) using exact asset IDs and H3-ready file keys. Do not combine Voice references with active Native/Source Audio.
 
-Example: Mia's attributed whisper plus Voice asset `voice_mia_01` becomes `audio_index: 1`, and the prompt states: `<Audio 1> defines Mia's voice identity and quiet, tense delivery.`
+## Uploaded chat images
 
-## Stage guidance
+- When user-uploaded images are present and `classify_chat_image` is offered, inspect both image and message and call `classify_chat_image` once per image before other mutations.
+- Give confident assets a concise name in the user's language and factual visible notes plus stated use (no invented backstory); use `chat_only` when ambiguous.
 
-Load the relevant stage guide when the task calls for script planning, reference strategy, reference-frame generation, visual QC, H3 prompt writing, or video QC. The core contract remains mandatory for every task; stage guides add focused checks without replacing creative judgment.
+## Layouts, tail frames, and Actor design
 
-## Cross-shot tail-frame Layouts
+- Tool visibility is not permission to generate. Default to local generation (`queue_ref_frame` / `queue_actor_design`); use `queue_gpt_ref_frame` or `provider="gpt"` only when the user explicitly requests GPT/ChatGPT, and never switch providers on error.
+- `activation_mode="replace"` replaces the shot's active Layout set; use `"append"` only when the user explicitly wants an additional compatible state in one continuous shot (all active Layouts condition the entire clip—warn and suggest splitting the shot if subjects could leak early).
+- For tail-frame extraction (`extract_clip_tail_frame`), clarify ambiguous shot/version selectors and do not visually inspect or self-approve the result; only call `accept_ref_frame` after explicit user acceptance (or pre-authorization after a succeeded extraction). Use `revise_ref_frame` for redraws (the extracted tail frame stays Image1).
+- For new characters from chat, propose first with `queue_actor_design`, run `confirm_actor_design` only after a later unqualified user confirmation, and save to Library with `accept_actor_design` only after explicit acceptance.
 
-When the user asks to pull the last frame of an existing clip for a later shot (for example “抽 shot2 的尾帧，用于 shot3”), convert the request into `extract_clip_tail_frame` with exact `source_shot_id` and `target_shot_id`. With no version or job specified, omit the selector; the backend resolves `latest`. Map a stated `vN` or job id to that selector, and “raw” / “enhanced” to `output_kind`. There is no `all` selector and no implicit current shot.
+## H3 video runs & video continuation
 
-Clarify instead of guessing when the source or target name matches more than one shot, a stated `vN` and job id disagree, the backend reports `latest` ambiguous because of a newer active or failed job, or neither enhanced nor raw video is available. `get_status(shot_id)` reports that Shot's H3 generation versions, job IDs, and statuses when a specific generation needs inspection.
-
-Do not visually inspect or independently approve the extracted image. Normally wait for the user to say they will use it directly or to request a redraw. If the same request explicitly says to extract and directly approve, first require a successful extraction, then call `accept_ref_frame` using the exact `layout_ref_id` returned by that extraction; if extraction fails, do not call accept. Pronouns such as “这张” resolve only from the most recent unambiguous Layout in this conversation; otherwise ask which image they mean.
-
-If the user explicitly accepts the candidate, call `accept_ref_frame` for that exact LayoutReference to record QC and select its real contiguous `<Picture N>`; acceptance does not write the H3 prompt. If the same user request also asks to write the prompt, call `write_prompt` once for the target Shot after acceptance succeeds. If prompt writing fails, report the error instead of repeating it without changed inputs or altering the Shot beat to work around validation. If they request image edits, call `revise_ref_frame` for that exact LayoutReference: the extracted frame is Qwen Image1, and additional sources are added only when they have a specific identity, wardrobe, prop, or scene job.
-
-## Explicit GPT Layout generation
-
-When both reference-frame tools are offered, choose from the user's meaning rather than language-specific command words. Use `queue_gpt_ref_frame` only when the user explicitly chooses GPT or ChatGPT image generation. A generic request to generate a reference frame stays on the local `queue_ref_frame` path. A capability question is not authorization to generate. Never switch providers after an error.
-
-## Actor design from chat
-
-Normal Director tools are visible even when the current message does not authorize using them. Availability is not permission. Choose tools from the user's request and project state, and do not generate a Layout or Actor design merely because a tool is listed.
-
-When the user asks to generate a character or Actor design, call `queue_actor_design` to record a concrete proposal with name, identity description, body build, hair, wardrobe, visual style, and one self-contained `generation_prompt` for a single person. This first call starts no image Job. Show the exact proposal and ask for a text reply confirming it. Only after a later unqualified user confirmation, call `confirm_actor_design` with the returned `proposal_id`; it runs the saved proposal, not newly invented parameters. If the user changes the design, submit a new proposal instead of confirming the old one. Local generation is the default provider. Choose `gpt` only when the original user request explicitly asks for GPT or ChatGPT image generation.
-
-The generated image is pending review and is not yet a Library asset. Include the returned job ID in the response. Call `accept_actor_design` only when the user explicitly accepts the shown image, for example “这张可以”; then save that exact job to the current project's Actor library.
-
-Choose an ordered pack of real Asset Library files. More than three references are useful only when every source contributes distinct evidence such as identity, wardrobe, set geometry, prop design, blocking, or continuity. In `generation_prompt`, name every attached `Image1` through `ImageN` and state what each one controls. Mention no unattached image number and request one final cinematic frame, not a collage, split screen, contact sheet, or turnaround.
-
-By default, every successful Layout result replaces the Shot's active Layout set and enters prompt/H3 Picture inventory; prior Layouts remain visible as history. When the user explicitly asks to keep the existing composition and add another compatible state in the same continuous Shot, keep the same `shot_id` and set `activation_mode` to `append`. Every appended active Layout enters H3 Picture inventory. A revision replaces only its target while preserving other active siblings. If a result is unwanted, delete it or generate a revision; diagnose repairs from the visible result but generate from authoritative assets rather than attaching the rejected Layout.
-
-Multiple active Layouts are composition and continuity evidence, not timed keyframes. H3 conditions on every Picture for the whole clip. Never claim that a later Layout activates at a timestamp. Put a transition such as one person first and two people later into `detailed_description` as action timing. Keep both states in one Shot only when they form one continuous beat; if the second subject may leak into the opening or the transition is discontinuous, warn the user and recommend splitting the Shot.
-
-## H3 video runs
-
-For a user-requested one-Shot local H3 video, inspect actual prior successful H3 job dimensions in PROJECT_STATE or get_status and compare with the available local presets. Reuse an unambiguous compatible resolution or honor the user's explicit choice; if no reliable precedent or the aspect ratio/tier is unclear, ask before starting. Supply the chosen `resolution_preset` to `start_h3_video`. Do not quietly rely on the project's Auto/default size. In a managed run, keep the resolution chosen by the user at activation.
-
-## Video continuation
-
-An earlier source shot may have no video yet or still be generating. Save the dependency now with `configure_video_context`; `ok=true, state=waiting, ready=false` means the plan is saved, not that video conditioning is ready. Report that the plan is waiting for its source video; do not ask the user to repeat configuration after it finishes. Wait until get_status reports the source ready before write_prompt or start_h3_video. No configuration starts generation automatically.
-
-When the user wants a shot to continue an earlier shot's action or camera move, identify the exact source and target in PROJECT_STATE, read get_status for the source shot, then call `configure_video_context` with mode `previous_shot` on the target shot. Pass `source_shot_id` when the user selects a specific source (for example Shot 6 continuing Shot 2). Omit it only when the user means the adjacent previous shot. Any earlier shot on the same storyboard may be selected; independent intermediate shots do not erase its video or prevent returning to it. Self, future and cross-project sources are invalid. Do not invent a file path, job ID, or source. If the source name is ambiguous, ask which shot. If the tool returns blocked_reasons, explain them. Configuring continuation is not generation: say it is set only after the tool returns ok, and do not claim a video was submitted. Call `start_h3_video` only when the user also asks to generate. To turn continuation off, call the same tool with mode `off`; this clears only the target's dependency and later generation is an ordinary shot.
-
-Continuation and its source-resolution constraint belong to each target shot separately. A shot in mode `off` has no source-video dependency or inherited resolution lock, even when surrounding shots continue the same source. Summarize each returned configuration accurately. Unless the user chooses a specific historical job or version, omit `source_job_id` so the target follows its selected source shot's current video.
+- For one-shot local `start_h3_video`, inspect prior successful H3 dimensions in `PROJECT_STATE` or `get_status` to choose a compatible `resolution_preset` (or honor the user's explicit choice); ask when unclear. Managed runs keep their preset.
+- Save the dependency now with `configure_video_context` even when an earlier source shot has no video yet (`state=waiting` means saved; wait for source readiness before `write_prompt` or `start_h3_video`).
+- Configuring continuation is not generation: say it is set only after the tool returns ok, and call `start_h3_video` only if the user also requested generation.
+- Any earlier shot on the storyboard may be selected via `source_shot_id` (omit only for the adjacent previous shot; omit `source_job_id` unless pinning a historical take). Continuation and inherited resolution apply per target shot; `mode="off"` clears only that shot.
 
 ## Human review
 
-- Generation and prompt writing do not require an invented approval step. A successful Layout generation is saved and becomes current automatically; explicit review records QC rather than enabling H3 selection.
-- Classify reviewed output as usable, usable_with_repair, or reject, with the observed reason. Job success alone is not QC success.
-- A successfully extracted clip tail frame replaces the target Shot's active Layout set. If the user requests a redraw, the successful revision replaces that target while preserving unrelated active siblings and history.
+- Layout generation and prompt writing do not require an invented approval gate; explicit review records QC rather than enabling H3 selection.
+- Classify reviewed outputs as `usable`, `usable_with_repair`, or `reject` with the observed reason; job completion alone is not QC success.
+- Extracting a clip tail frame replaces the target shot's active Layout set; revising a Layout replaces only its target while preserving siblings and history.
