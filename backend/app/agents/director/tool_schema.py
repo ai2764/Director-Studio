@@ -186,17 +186,12 @@ LAYOUT_ACTIVATION_MODE = {
 GPT_REF_FRAME_TOOL = function_tool(
     "queue_gpt_ref_frame",
     (
-        "Generate one Layout through the optional local ChatGPT Bridge only "
-        "after the user explicitly requests GPT/ChatGPT image generation. "
-        "Preserve ordered real inventory sources and assign every ImageN one job. "
-        "An Actor source is an authoritative identity reference, not a loose style "
-        "hint: preserve exact facial structure, hair, body proportions, and its "
-        "approved wardrobe unless an attached Costume source or explicit user "
-        "request changes clothing. Use exact file_keys; prefer bust_threeview for "
-        "face fidelity and a full-body/master source for wardrobe when both jobs "
-        "matter and reference capacity allows. "
-        "When no useful source asset exists, use an empty source_refs array for "
-        "prompt-only generation and do not mention ImageN."
+        "Generate one Layout via the optional local ChatGPT Bridge only when the user "
+        "explicitly requests GPT/ChatGPT generation. Use real inventory source_refs in "
+        "order and assign each ImageN a job (Actor sources lock identity, hair, build, "
+        "and approved wardrobe unless a Costume or explicit user request changes it; "
+        "prefer bust_threeview for face and full-body/master for wardrobe), or pass "
+        "source_refs=[] for prompt-only generation without ImageN labels."
     ),
     {
         "shot_id": {"type": "string", "minLength": 1},
@@ -222,11 +217,9 @@ GPT_REF_FRAME_TOOL = function_tool(
 ACTOR_DESIGN_TOOL = function_tool(
     "queue_actor_design",
     (
-        "Propose one reviewable character design; this does not start generation. "
-        "After the user confirms the exact proposal in a later chat reply, "
-        "call confirm_actor_design with its proposal ID. Local is the default provider; "
-        "use GPT only when the user explicitly asks for GPT or ChatGPT generation. "
-        "Do not save it to the Actor library until the user accepts it."
+        "Record a character design proposal without starting generation. Run it only "
+        "after a later user confirmation via confirm_actor_design. Default provider is "
+        "local; use gpt only on explicit user request."
     ),
     {
         "name": {"type": "string", "minLength": 1},
@@ -246,14 +239,14 @@ ACTOR_DESIGN_TOOL = function_tool(
 
 ACTOR_CONFIRM_TOOL = function_tool(
     "confirm_actor_design",
-    "Start the exact pending Actor design proposal only after the user confirms it in a later text reply. Never substitute new parameters.",
+    "Start the saved Actor design proposal after a later explicit user confirmation; never substitute new parameters.",
     {"proposal_id": {"type": "string", "minLength": 1}},
     required=["proposal_id"],
 )
 
 ACTOR_ACCEPT_TOOL = function_tool(
     "accept_actor_design",
-    "Save one succeeded Actor design job after explicit user acceptance.",
+    "Save one succeeded Actor design job to the Actor library after explicit user acceptance.",
     {
         "job_id": {"type": "string", "minLength": 1},
         "name": {"type": "string"},
@@ -265,10 +258,9 @@ ACTOR_ACCEPT_TOOL = function_tool(
 CHAT_IMAGE_CLASSIFICATION_TOOL = function_tool(
     "classify_chat_image",
     (
-        "Classify one user-uploaded chat image from its visible contents and the "
-        "current user message, give it a concise useful name and factual notes, "
-        "then import it into the current project's Library when confidence is "
-        "sufficient. Use chat_only when the image is too ambiguous."
+        "Classify one user-uploaded chat image from its visible contents and message, "
+        "assign a concise name and factual notes, and import it into the Library when "
+        "confident (use chat_only when ambiguous)."
     ),
     {
         "image_index": {
@@ -312,13 +304,80 @@ CHAT_IMAGE_CLASSIFICATION_TOOL = function_tool(
     required=["image_index", "kind", "name", "notes", "confidence"],
 )
 
+
+def _strip_schema_titles(node: Any) -> Any:
+    """Remove redundant Pydantic JSON Schema 'title' metadata without touching property names."""
+    if isinstance(node, list):
+        return [_strip_schema_titles(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    cleaned: dict[str, Any] = {}
+    for key, value in node.items():
+        if key == "title" and isinstance(value, str):
+            continue
+        if key in {"properties", "$defs"} and isinstance(value, dict):
+            cleaned[key] = {k: _strip_schema_titles(v) for k, v in value.items()}
+        else:
+            cleaned[key] = _strip_schema_titles(value)
+    return cleaned
+
+
+def _omit_music_segment_field(node: Any) -> Any:
+    """Remove MV-only music_segment schema entries for non-MV projects."""
+    if isinstance(node, list):
+        return [_omit_music_segment_field(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    cleaned: dict[str, Any] = {}
+    for key, value in node.items():
+        if key == "properties" and isinstance(value, dict):
+            cleaned[key] = {
+                k: _omit_music_segment_field(v)
+                for k, v in value.items()
+                if k != "music_segment"
+            }
+        elif key == "$defs" and isinstance(value, dict):
+            defs = {
+                k: _omit_music_segment_field(v)
+                for k, v in value.items()
+                if k != "ShotMusicSegment"
+            }
+            if defs:
+                cleaned[key] = defs
+        elif key == "required" and isinstance(value, list):
+            cleaned[key] = [item for item in value if item != "music_segment"]
+        else:
+            cleaned[key] = _omit_music_segment_field(value)
+    return cleaned
+
+
+def _without_music_segment(tool: dict[str, Any]) -> dict[str, Any]:
+    params = tool.get("function", {}).get("parameters")
+    if not isinstance(params, dict):
+        return tool
+    has_music = "music_segment" in (params.get("properties") or {}) or "ShotMusicSegment" in (
+        params.get("$defs") or {}
+    )
+    if not has_music:
+        return tool
+    copy_tool = deepcopy(tool)
+    copy_tool["function"]["parameters"] = _omit_music_segment_field(
+        copy_tool["function"]["parameters"]
+    )
+    return copy_tool
+
+
+def _model_schema(model) -> dict[str, Any]:
+    return _strip_schema_titles(model.model_json_schema())
+
+
 def _storyboard_schema(model) -> dict[str, Any]:
-    schema = model.model_json_schema()
+    schema = _model_schema(model)
     role = schema["$defs"]["AssetMatchDraft"]["properties"]["role"]
     role["enum"] = [value for value in role["enum"] if value not in {"layout", "layout_ref_frame"}]
     role["description"] += (
-        " Bind user-imported Layout images as other, preserving their exact asset_id and file_key. "
-        "Generated Layout selection is managed separately after storyboarding."
+        " Bind user-imported Layout images as other with exact asset_id/file_key; "
+        "generated Layouts are managed separately."
     )
     return schema
 
@@ -338,11 +397,10 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "review_asset_coverage",
             "description": (
-                "Persist an advisory review of whether the current assets and their "
-                "file_keys cover the screenplay. Recommend useful additions, or record "
-                "that the user chose to skip. This never blocks storyboarding."
+                "Save an advisory review of whether current assets cover the screenplay "
+                "(or record status=skipped). Never blocks storyboarding."
             ),
-            "parameters": AssetCoverageReviewSubmission.model_json_schema(),
+            "parameters": _model_schema(AssetCoverageReviewSubmission),
         },
     },
     {
@@ -350,19 +408,17 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "save_storyboard",
             "description": (
-                "Propose or persist the exact complete ordered storyboard you authored "
-                "for the current screenplay. If any Shots already exist, this first "
-                "records a pending destructive replacement and asks the user for a later "
-                "explicit confirmation; it does not save. Use PROJECT_STATE.script_hash. Preserve every "
-                "existing Shot's PROJECT_STATE id in shot_id, and omit shot_id only "
-                "for a genuinely new Shot. For adding one Shot at the end, use append_shot instead."
+                "Propose or save a complete ordered storyboard against PROJECT_STATE.script_hash. "
+                "Preserve existing Shot IDs in shot_id (omit only for new shots). If shots already "
+                "exist, records a pending replacement requiring confirm_storyboard_replacement. "
+                "Use append_shot/append_shots for end additions."
             ),
             "parameters": _storyboard_schema(StoryboardSubmission),
         },
     },
     function_tool(
         "confirm_storyboard_replacement",
-        "Execute the exact pending complete storyboard replacement only when the current user message explicitly says they confirm clearing and rewriting all Shots. Never use for ok, continue, or a reply that also changes the proposal.",
+        "Execute the pending storyboard replacement only after explicit user confirmation to clear and rewrite all shots (never for ok/continue or a modified proposal).",
         {"proposal_id": {"type": "string", "description": "Exact proposal_id from PROJECT_STATE.pending_storyboard_replacement."}},
         required=["proposal_id"],
     ),
@@ -371,15 +427,10 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "append_shot",
             "description": (
-                "Append exactly one new Shot at the end. Submit only the new shot's "
-                "authored fields, not existing Shots or production state. Python assigns "
-                "its ID and preserves every existing Shot, ref, prompt, Layout and video link. "
-                  "asset_matches is authoritative: only bind assets that actually fit this Shot; "
-                  "missing roles remain empty rather than being filled from inventory. "
-                "Copy PROJECT_STATE.script_hash and last_shot_id for stale/replay checks. "
-                "Provide attributed dialogue_lines with stable narrative speaker IDs when known. "
-                "Otherwise include exact words and speaker cues in script_beat; attribution is "
-                "resolved before saving, using the current user request or authored beat, not a stale script."
+                "Append one new Shot at the end using PROJECT_STATE.script_hash and last_shot_id; "
+                "submit only the new shot's authored fields. Preserves existing shots. "
+                "Only bind assets that fit this shot; include speaker-attributed dialogue_lines or "
+                "speaker-cued script_beat when dialogue is spoken."
             ),
             "parameters": _storyboard_schema(AppendShotSubmission),
         },
@@ -389,15 +440,11 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "append_shots",
             "description": (
-                "Append 1-8 new Shots in one validated batch. Prefer this for multiple end additions. "
-                "Submit only NEW authored shot fields; never existing shots or production state. "
-                "Copy PROJECT_STATE.script_hash and last_shot_id once for the whole batch. "
-                "Python assigns IDs, preserves old Shots, and rejects the whole batch if any item is invalid. "
-                "Set an item's video_context.mode=previous_shot with source_index=1 to continue the first NEW "
-                "batch item; source_index is one-based within this batch and must precede its target. "
-                "Use source_shot_id for an existing earlier Shot, omit both for its adjacent predecessor, "
-                "or mode=off for independent shots. Pending sources are valid saved plans. "
-                "This tool never writes prompts, creates Layouts, or starts video jobs."
+                "Append 1–8 new Shots in one atomic batch using PROJECT_STATE.script_hash and "
+                "last_shot_id once. Submit only new authored fields. For continuation within the "
+                "batch set video_context.mode=previous_shot with one-based source_index (or "
+                "source_shot_id for an existing shot; omit both for adjacent predecessor). "
+                "Never writes prompts, creates Layouts, or starts video jobs."
             ),
             "parameters": _storyboard_schema(AppendShotsSubmission),
         },
@@ -407,23 +454,13 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "revise_shot",
             "description": (
-                "Update only explicitly supplied authored fields on exactly one "
-                "existing Shot. Preserves neighboring Shots, Picture refs, "
-                "Layouts, and historical jobs. voice_matches optionally replaces "
-                "this Shot's complete ordered Voice reference list ([] clears it; "
-                "omission preserves it). Invalidates that Shot's stale prompt and active H3 link. "
-                "Keep the supplied authored fields coherent: when changing camera or blocking in "
-                "script_beat, also update any saved camera_motion or composition that would contradict it. "
-                "For MV, music_segment.use_as_audio_reference=false "
-                "disables the song reference while preserving timestamps; null removes the segment. "
-                "For an editorial-only lyric cutaway, also clear dialogue=[] when no generated "
-                "speech/singing is requested. For a language-only dialogue change, use "
-                "dialogue_language_updates with saved line_id and language; do not retype words. "
-                "For missing legacy attribution, resubmit unchanged dialogue with its speaker-cued "
-                "script_beat or explicit dialogue_lines from source evidence before writing a prompt. "
-                "Never change spoken words merely to match an older script."
+                "Update explicitly supplied authored fields on one existing Shot while preserving "
+                "other shots, Picture refs, Layouts, and jobs; invalidates stale prompt/H3 link. "
+                "Keep camera/blocking fields coherent. voice_matches replaces all voice refs "
+                "([] clears; omit preserves). Use dialogue_language_updates for language-only "
+                "changes without retyping words; never alter spoken words to match an older script."
             ),
-            "parameters": ShotRevisionSubmission.model_json_schema(),
+            "parameters": _model_schema(ShotRevisionSubmission),
         },
     },
     {
@@ -431,11 +468,10 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "patch_shot_refs",
             "description": (
-                "Replace only the complete ordered Picture bindings on named "
-                "existing shots. Use for exact asset additions or recasting without "
+                "Replace only the ordered Picture bindings on named existing shots without "
                 "changing story beats, dialogue, duration, title, or shot order."
             ),
-            "parameters": ShotRefsPatchSubmission.model_json_schema(),
+            "parameters": _model_schema(ShotRefsPatchSubmission),
         },
     },
     {
@@ -443,26 +479,20 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "set_shot_scene_ref",
             "description": (
-                "Apply a human's exact scene asset and file_key selection to one "
-                "existing shot while preserving every other Picture binding and "
-                "all story fields. The file_key is authoritative: do not reinterpret "
-                "camera direction or replace it from filename angle tokens."
+                "Apply a human's exact scene asset and file_key selection to one existing shot "
+                "while preserving other bindings and story fields. Do not reinterpret filename "
+                "angle tokens or substitute another file_key."
             ),
-            "parameters": ShotSceneRefSelection.model_json_schema(),
+            "parameters": _model_schema(ShotSceneRefSelection),
         },
     },
     function_tool("plan_shots", "Plan shots from the current screenplay."),
     function_tool(
         "queue_ref_frame",
         (
-            "Generate or regenerate a Layout reference frame for selected shots. "
-            "For an additional Layout, use only after discussion establishes a "
-            "distinct visual purpose, and set activation_mode=append only when "
-            "the user explicitly wants to preserve existing active Layouts. "
-            "Choose zero to three exact source assets from the inventory only when "
-            "they materially help the shot. An empty source_refs list deliberately "
-            "requests text-to-image; useful references request reference-to-image. "
-            "Use Qwen Image 2.1 for either mode."
+            "Generate or regenerate a local Qwen Image 2.1 Layout reference for selected shots. "
+            "Use activation_mode=append only when explicitly keeping existing active Layouts. "
+            "Pass 0–3 real source_refs ([] for text-to-image)."
         ),
         {
             **SHOT_SELECTOR,
@@ -490,10 +520,9 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     function_tool(
         "extract_clip_tail_frame",
         (
-            "Extract the last decoded frame of a succeeded H3 clip into a "
-            "pending, unselected Layout on a later shot. Use exact shot IDs. "
-            "Omitting the clip selector uses latest; clarify if latest is ambiguous. "
-            "Do not visually approve the image."
+            "Extract the last frame of a succeeded H3 clip as a pending, unselected Layout on "
+            "a later shot using exact shot IDs (defaults to latest; clarify if ambiguous). "
+            "Do not self-approve the image."
         ),
         {
             "source_shot_id": {
@@ -524,10 +553,7 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     function_tool(
         "accept_ref_frame",
-        (
-            "Record acceptance from this Director conversation on one existing "
-            "Layout and select that exact Layout for the H3 Picture pack."
-        ),
+        "Record user acceptance on one existing Layout and select it for the H3 Picture pack.",
         {
             **SHOT_SELECTOR,
             "layout_ref_id": {
@@ -545,13 +571,9 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     function_tool(
         "revise_ref_frame",
         (
-            "Record feedback from this Director conversation on one existing "
-            "Layout and generate a linked replacement. Use this instead of "
-            "queue_ref_frame when the user critiques a generated reference. "
-            "For ordinary Layouts, source_refs may override the inherited source pack; "
-            "use a scene-only pack when removing a person from the image. "
-            "For a clip_tail_frame origin, additional_source_refs (max 2) are "
-            "honored; the extracted Layout is always Qwen Image1."
+            "Record critique feedback on one existing Layout and generate a linked replacement. "
+            "Ordinary revisions may override source_refs; clip_tail_frame redraws keep the tail "
+            "as Image1 and accept up to 2 additional_source_refs."
         ),
         {
             **SHOT_SELECTOR,
@@ -588,36 +610,36 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     function_tool(
         "write_prompt",
-        "Prepare the six-section H3 production prompt for one shot. The backend ensures visual evidence "
-        "for every current Picture, reviewing new or changed references first, decides whether the Creative brief "
-        "and prompt need changes, and preserves old drafts if review is incomplete or needs a user choice. "
-        "For prompt-only corrections, call this tool directly: the current user feedback is passed to "
-        "the writer. Do not call revise_shot merely to restate prompt timing, reference responsibilities, "
-        "style, or sound direction when the authored Shot and saved bindings already fit the request. "
-        "For selected clip tails, the current user request reaches a bounded drafting and semantic review pass; "
-        "it may reconcile this shot's camera plan with the requested continuity. Read returned shot_changes. "
-        "This tool uses saved audio bindings; it does not clear them from prose. Before calling it, "
-        "apply any requested audio-reference changes with revise_shot, including disabling MV song "
-        "conditioning for editorial-only cutaways and clearing unwanted generated dialogue.",
+        (
+            "Review changed Picture evidence and write/revise the six-section H3 prompt for one "
+            "shot, passing current user feedback directly (do not call revise_shot for prompt-only "
+            "edits). Apply any audio-binding or dialogue changes via revise_shot first; inspect "
+            "returned shot_changes for tail-frame continuations."
+        ),
         dict(SHOT_SELECTOR),
     ),
     function_tool(
         "inspect_asset",
-        "Read one exact Library image before casting or answering visual questions, even with no Shots. "
-        "Includes imported and generated Layout images. Inspect the actual current image before claiming to have seen or reviewed it; get_status returns saved metadata, not visible pixels. "
-        "Returns visual observations, metadata conflicts and content hash, not image bytes. "
-        "Use when appearance is unknown or names/descriptions may be misleading; does not change the asset or project.",
+        (
+            "Visually inspect one exact Library or Layout image by asset_id and file_key "
+            "(returns visual observations and metadata conflicts, not bytes). Call when appearance "
+            "is unknown or labels conflict; does not mutate state."
+        ),
         {"asset_id": {"type": "string", "minLength": 1}, "file_key": {"type": "string", "minLength": 1}},
         required=["asset_id", "file_key"],
     ),
     function_tool(
         "get_status",
-        "Read project status, or one Shot's saved details and H3 generation versions, job IDs, statuses, and actual dimensions by exact shot_id before editing it.",
+        "Read project status, or one Shot's full saved details and H3 generation history/dimensions by shot_id.",
         {"shot_id": {"type": "string", "description": "Optional exact Shot ID to read; omit for project status."}},
     ),
     function_tool(
         "start_h3_video",
-        "Start a local ComfyUI H3 Job only for the next managed Shot or an explicitly requested one-off Shot. Visibility does not authorize execution. For one-off runs, inspect previous successful H3 resolutions and supply a supported resolution_preset; ask the user when uncertain. Managed runs use the user's already selected preset. Returns the actual Job ID immediately; never waits for completion.",
+        (
+            "Start a local ComfyUI H3 job for the next managed Shot or an explicitly requested "
+            "one-off Shot (returns Job ID immediately). One-off runs require a compatible "
+            "resolution_preset (ask when uncertain); managed runs keep their preset."
+        ),
         {
             "shot_id": {"type": "string", "description": "Exact Shot ID."},
             "resolution_preset": {
@@ -630,14 +652,12 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     function_tool(
         "configure_video_context",
-        "Save a plan for how this shot continues from an earlier source shot. "
-        "The source need not be generated yet: a waiting result means the plan was saved successfully. "
-        "Source video readiness is required before writing its continuation prompt or generating. "
-        "Pass source_shot_id to select any earlier shot on this project's storyboard; "
-        "omit it only when the user means the immediately previous shot. "
-        "Use mode=previous_shot when the user asks to continue its action or camera motion; "
-        "its actual video resolution is inherited and cannot be overridden. "
-        "This does not start generation. Do not pass a file path.",
+        (
+            "Save a shot's video continuation dependency on an earlier shot (mode=previous_shot "
+            "inherits the source resolution; waiting result means saved before source video is "
+            "ready). Pass source_shot_id for a non-adjacent earlier shot, or omit for the "
+            "immediately previous shot. This does not start generation; never pass a file path."
+        ),
         {
             "shot_id": {"type": "string"},
             "mode": {"type": "string", "enum": ["off", "previous_shot", "external_upload"]},
@@ -716,6 +736,8 @@ def director_tool_schemas(
             tool["function"]["parameters"]["properties"]["layout_ref_id"]["enum"] = acceptable_ids
         grounded_tools.append(tool)
     tools = grounded_tools
+    if project.mode != ProjectMode.mv:
+        tools = [_without_music_segment(tool) for tool in tools]
     if settings.gpt_bridge_configured:
         tools.append(GPT_REF_FRAME_TOOL)
     return tools
