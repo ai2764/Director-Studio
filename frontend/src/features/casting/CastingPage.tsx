@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { ImageUploadSlot, type LocalImage } from "../../shared/components/ImageUploadSlot";
 import { Lightbox } from "../../shared/components/Lightbox";
 import { OutputGrid } from "../../shared/components/OutputGrid";
 import type { OutputSlot } from "../../shared/api/types";
 import { useProject } from "../../shared/project/ProjectContext";
+import { Badge, Banner, Button, Input, StatusDot, Textarea } from "../../shared/ui";
 import {
   cancelJob,
   fetchDefaults,
@@ -18,6 +20,16 @@ import {
 } from "./api";
 
 const ACTIVE: JobStatus[] = ["queued", "uploading", "running"];
+
+const STATUS_TONES: Record<JobStatus | "idle", "neutral" | "info" | "ok" | "danger" | "warn"> = {
+  idle: "neutral",
+  queued: "info",
+  uploading: "info",
+  running: "info",
+  succeeded: "ok",
+  failed: "danger",
+  cancelled: "warn",
+};
 
 interface Props {
   onOpenLibrary: () => void;
@@ -222,30 +234,42 @@ export function CastingPage({ onOpenLibrary }: Props) {
 
   return (
     <>
-      <main className="workspace">
-        <section className="panel input-panel">
-          <h2>Input</h2>
+      <main className="workspace mx-auto grid w-full max-w-[1440px] grid-cols-1 gap-4 p-5 lg:grid-cols-[420px_minmax(0,1fr)] lg:items-start">
+        <section className="panel input-panel flex flex-col gap-4 rounded-lg border border-border-subtle bg-panel p-4 shadow-[var(--shadow-card)]">
+          <div className="border-b border-border-subtle pb-3">
+            <h2 className="text-sm font-semibold tracking-[-0.01em] text-ink">Input</h2>
+          </div>
+
           {!projectId ? (
-            <div className="banner error">Select a project in the header before casting.</div>
+            <Banner tone="danger" role="alert">
+              Select a project in the header before casting.
+            </Banner>
           ) : null}
 
-          <div className="block">
-            <div className="block-title">Identity</div>
-            <label className="field">
-              <span>
-                Name <span className="req">*</span>
+          <div className="block flex flex-col gap-3 rounded-md border border-border-subtle bg-elevated/40 p-3">
+            <div className="block-title text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
+              Identity
+            </div>
+            <label className="field flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-ink-secondary">
+                Name <span className="req text-status-danger">*</span>
               </span>
-              <input
+              <Input
                 value={name}
                 disabled={isRunning}
+                hasError={Boolean(fieldErrors.name)}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. Lead_Female_A"
               />
-              {fieldErrors.name ? <span className="field-error">{fieldErrors.name}</span> : null}
+              {fieldErrors.name ? (
+                <span className="field-error text-[11px] text-status-danger">
+                  {fieldErrors.name}
+                </span>
+              ) : null}
             </label>
-            <label className="field">
-              <span>Notes</span>
-              <input
+            <label className="field flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-ink-secondary">Notes</span>
+              <Input
                 value={notes}
                 disabled={isRunning}
                 onChange={(e) => setNotes(e.target.value)}
@@ -254,9 +278,11 @@ export function CastingPage({ onOpenLibrary }: Props) {
             </label>
           </div>
 
-          <div className="block">
-            <div className="block-title">References</div>
-            <div className="upload-row two">
+          <div className="block flex flex-col gap-3 rounded-md border border-border-subtle bg-elevated/40 p-3">
+            <div className="block-title text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
+              References
+            </div>
+            <div className="upload-row two grid grid-cols-1 gap-3 sm:grid-cols-2">
               <ImageUploadSlot
                 label="Actor"
                 value={actorImg}
@@ -279,21 +305,23 @@ export function CastingPage({ onOpenLibrary }: Props) {
               />
             </div>
             {wardrobeImg ? (
-              <div className="wardrobe-options">
-                <label className="check">
+              <div className="wardrobe-options flex flex-col gap-2 border-t border-border-subtle pt-2.5">
+                <label className="check flex cursor-pointer items-center gap-2 text-xs text-ink">
                   <input
                     type="checkbox"
                     checked={includeHeadwear}
                     disabled={isRunning}
+                    className="h-3.5 w-3.5 rounded border-border-strong accent-accent"
                     onChange={(e) => setIncludeHeadwear(e.target.checked)}
                   />
                   <span>Include hat / headwear</span>
                 </label>
-                <label className="check">
+                <label className="check flex cursor-pointer items-center gap-2 text-xs text-ink">
                   <input
                     type="checkbox"
                     checked={includeFootwear}
                     disabled={isRunning}
+                    className="h-3.5 w-3.5 rounded border-border-strong accent-accent"
                     onChange={(e) => setIncludeFootwear(e.target.checked)}
                   />
                   <span>Include shoes / footwear</span>
@@ -302,95 +330,130 @@ export function CastingPage({ onOpenLibrary }: Props) {
             ) : null}
           </div>
 
-          <div className="block">
-            <div className="block-title">Description</div>
-            <label className="field">
-              <span>
-                Actor description {!actorImg ? <span className="req">*</span> : null}
+          <div className="block flex flex-col gap-3 rounded-md border border-border-subtle bg-elevated/40 p-3">
+            <div className="block-title text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
+              Description
+            </div>
+            <label className="field flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-ink-secondary">
+                Actor description{" "}
+                {!actorImg ? <span className="req text-status-danger">*</span> : null}
               </span>
-              <textarea
-                rows={8}
+              <Textarea
+                rows={7}
                 value={description}
                 disabled={isRunning}
+                hasError={Boolean(fieldErrors.description)}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Age, look, hair, clothing, pose notes… (optional when reference photo is uploaded)"
               />
               {fieldErrors.description ? (
-                <span className="field-error">{fieldErrors.description}</span>
+                <span className="field-error text-[11px] text-status-danger">
+                  {fieldErrors.description}
+                </span>
               ) : null}
             </label>
           </div>
 
-          <div className="block advanced">
-            <button type="button" className="advanced-toggle" onClick={() => setAdvancedOpen((v) => !v)}>
-              {advancedOpen ? "▾" : "▸"} Advanced
+          <div className="block advanced rounded-md border border-border-subtle bg-elevated/30 p-3">
+            <button
+              type="button"
+              className="advanced-toggle flex w-full cursor-pointer items-center gap-1.5 text-left text-xs font-medium text-ink-secondary hover:text-ink"
+              onClick={() => setAdvancedOpen((v) => !v)}
+            >
+              {advancedOpen ? (
+                <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              <span>Advanced</span>
             </button>
             {advancedOpen ? (
-              <div className="advanced-body">
-                <label className="check">
+              <div className="advanced-body mt-3 flex flex-col gap-3 border-t border-border-subtle pt-3">
+                <label className="check flex cursor-pointer items-center gap-2 text-xs text-ink">
                   <input
                     type="checkbox"
                     checked={fixedSeed}
                     disabled={isRunning}
+                    className="h-3.5 w-3.5 rounded border-border-strong accent-accent"
                     onChange={(e) => setFixedSeed(e.target.checked)}
                   />
                   <span>Fixed seed</span>
                 </label>
                 {fixedSeed ? (
-                  <label className="field">
-                    <span>Seed</span>
-                    <input
+                  <label className="field flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-ink-secondary">Seed</span>
+                    <Input
                       value={seed}
                       disabled={isRunning}
+                      hasError={Boolean(fieldErrors.seed)}
                       onChange={(e) => setSeed(e.target.value)}
                       placeholder="integer"
                       inputMode="numeric"
                     />
-                    {fieldErrors.seed ? <span className="field-error">{fieldErrors.seed}</span> : null}
+                    {fieldErrors.seed ? (
+                      <span className="field-error text-[11px] text-status-danger">
+                        {fieldErrors.seed}
+                      </span>
+                    ) : null}
                   </label>
                 ) : null}
-                <label className="field">
-                  <span>Negative prompt</span>
-                  <textarea rows={3} value={negative} disabled={isRunning} onChange={(e) => setNegative(e.target.value)} />
+                <label className="field flex flex-col gap-1.5">
+                  <span className="text-xs font-medium text-ink-secondary">Negative prompt</span>
+                  <Textarea
+                    rows={3}
+                    value={negative}
+                    disabled={isRunning}
+                    onChange={(e) => setNegative(e.target.value)}
+                  />
                 </label>
               </div>
             ) : null}
           </div>
 
-          {formError ? <div className="banner error">{formError}</div> : null}
+          {formError ? (
+            <Banner tone="danger" role="alert">
+              {formError}
+            </Banner>
+          ) : null}
 
-          <div className="actions">
+          <div className="actions flex flex-wrap items-center gap-2 border-t border-border-subtle pt-3">
             {!isRunning ? (
-              <button type="button" className="btn primary" disabled={busy} onClick={onGenerate}>
+              <Button type="button" variant="primary" disabled={busy} onClick={onGenerate}>
                 {busy ? "Submitting…" : "Generate Actor"}
-              </button>
+              </Button>
             ) : (
-              <button type="button" className="btn danger" onClick={onCancel}>
+              <Button type="button" variant="danger" onClick={onCancel}>
                 Cancel
-              </button>
+              </Button>
             )}
-            <button type="button" className="btn ghost" disabled={isRunning} onClick={onReset}>
+            <Button type="button" variant="ghost" disabled={isRunning} onClick={onReset}>
               Reset form
-            </button>
+            </Button>
           </div>
         </section>
 
-        <section className="panel output-panel">
-          <div className="output-header">
-            <h2>Output</h2>
-            <div className={`status-pill status-${status}`}>
-              <span className="dot" />
-              {statusLabel}
-            </div>
+        <section className="panel output-panel flex min-w-0 flex-col gap-4 rounded-lg border border-border-subtle bg-panel p-4 shadow-[var(--shadow-card)]">
+          <div className="output-header flex items-center justify-between gap-3 border-b border-border-subtle pb-3">
+            <h2 className="text-sm font-semibold tracking-[-0.01em] text-ink">Output</h2>
+            <Badge tone={STATUS_TONES[status]} className={`status-pill status-${status}`}>
+              <StatusDot tone={STATUS_TONES[status]} pulse={isRunning} />
+              <span>{statusLabel}</span>
+            </Badge>
           </div>
 
           {job?.error && (job.status === "failed" || job.status === "cancelled") ? (
-            <div className="banner error">{job.error}</div>
+            <Banner tone="danger" role="alert">
+              {job.error}
+            </Banner>
           ) : null}
 
           {job?.seed != null ? (
-            <p className="meta-line">
-              Seed <code>{job.seed}</code>
+            <p className="meta-line text-xs text-ink-secondary">
+              Seed{" "}
+              <code className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[11px] text-ink">
+                {job.seed}
+              </code>
             </p>
           ) : null}
 
@@ -399,34 +462,48 @@ export function CastingPage({ onOpenLibrary }: Props) {
             outputs={outputMap}
             mainKeys={["master", "fullbody_threeview", "bust_threeview", "asset_sheet"]}
             featuredKey="asset_sheet"
-            showSecondary={!!wardrobeImg || !!job?.has_wardrobe_ref || !!job?.outputs?.wardrobe_ref?.url}
+            showSecondary={
+              !!wardrobeImg || !!job?.has_wardrobe_ref || !!job?.outputs?.wardrobe_ref?.url
+            }
             onOpen={(slot, all) => {
               const idx = all.findIndex((s) => s.key === slot.key);
               setLightbox({ slots: all, index: Math.max(0, idx) });
             }}
           />
 
-          <div className="actions output-actions">
-            <button
+          <div className="actions output-actions flex flex-wrap items-center gap-2 border-t border-border-subtle pt-3">
+            <Button
               type="button"
-              className="btn primary"
+              variant="primary"
               disabled={!job || job.status !== "succeeded" || busy || !!job.actor_id}
               onClick={onSave}
             >
               {job?.actor_id ? "Saved" : "Save to Library"}
-            </button>
-            <button type="button" className="btn secondary" disabled={!job || isRunning || busy} onClick={onGenerate}>
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!job || isRunning || busy}
+              onClick={onGenerate}
+            >
               Regenerate
-            </button>
+            </Button>
           </div>
 
           {savedActor || job?.actor_id ? (
-            <div className="banner ok">
-              Saved as Actor · <code>{savedActor?.id || job?.actor_id}</code>
-              <button type="button" className="btn ghost sm" onClick={onOpenLibrary}>
-                View in Library
-              </button>
-            </div>
+            <Banner tone="ok" role="status">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  Saved as Actor ·{" "}
+                  <code className="font-mono text-[11px]">
+                    {savedActor?.id || job?.actor_id}
+                  </code>
+                </span>
+                <Button type="button" variant="ghost" size="xs" onClick={onOpenLibrary}>
+                  View in Library
+                </Button>
+              </div>
+            </Banner>
           ) : null}
         </section>
       </main>

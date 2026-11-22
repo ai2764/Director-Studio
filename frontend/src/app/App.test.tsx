@@ -443,12 +443,22 @@ describe("App mode routing", () => {
     expect(screen.queryByRole("banner", { name: "Application header" })).toBeNull();
   });
 
-  it("applies the Oat & Walnut workspace theme to desktop and mobile shells", () => {
+  it("applies the Linear dark/light theme to desktop and mobile shells and toggles via topbar", () => {
+    localStorage.clear();
     const { container, rerender } = render(<App />);
-    expect(container.querySelector(".app")?.getAttribute("data-theme")).toBe("oat-walnut");
+    expect(container.querySelector(".app")?.getAttribute("data-theme")).toBe("dark");
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch to light theme" }));
+    expect(container.querySelector(".app")?.getAttribute("data-theme")).toBe("light");
+    expect(localStorage.getItem("ds.theme")).toBe("light");
 
     window.history.replaceState({}, "", "/mobile");
     rerender(<App />);
-    expect(container.querySelector(".mobile-app")?.getAttribute("data-theme")).toBe("oat-walnut");
+    expect(container.querySelector(".mobile-app")?.getAttribute("data-theme")).toBe("light");
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch to dark theme" }));
+    expect(container.querySelector(".mobile-app")?.getAttribute("data-theme")).toBe("dark");
+    expect(localStorage.getItem("ds.theme")).toBe("dark");
   });
 });

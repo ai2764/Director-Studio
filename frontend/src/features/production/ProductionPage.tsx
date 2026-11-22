@@ -1,47 +1,48 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  EMPTY_PROMPT_SECTIONS,
+  ArrowDown,
+  ArrowUp,
+  CheckCircle2,
+  Circle,
+  Film,
+  Image as ImageIcon,
+  Layers,
+  Play,
+  Plus,
+  Square,
+  Trash2,
+  X,
+} from "lucide-react";
+import {
   PROMPT_SECTION_KEYS,
-  layoutPreviewUrl,
   refPreviewCandidates,
-  type JobStatus,
-  type PromptSections,
   type Shot,
   type ShotRef,
-  type ShotVoiceRef,
 } from "../../shared/api/types";
 import { PageShell } from "../../shared/components/PageShell";
-import { useProject } from "../../shared/project/ProjectContext";
 import { promptReady, shotWorkflowStatus } from "../../shared/shotWorkflowStatus";
 import {
-  cancelH3Job,
-  deleteLayout,
-  getH3Job,
-  getH3ProviderStatus,
-  getLocalH3Resolutions,
-  getProject,
-  patchShot,
-  submitShot,
-  type H3JobRecord,
-  type H3Provider,
-  type H3ProviderStatus,
-  type LocalH3Resolution,
-} from "./api";
-import { listLibraryAssets, type LibraryAsset } from "../library/api";
+  Badge,
+  Banner,
+  Button,
+  EmptyState,
+  Input,
+  Panel,
+  PanelBody,
+  PanelHeader,
+  PanelTitle,
+  Select,
+  StatusDot,
+  Textarea,
+  cn,
+  type StatusDotProps,
+} from "../../shared/ui";
 import { ShotMaterialEditor } from "../director/ShotMaterialEditor";
 import { VideoContextPanel } from "../director/VideoContextPanel";
-import { getVideoContextStatus } from "../director/api";
+import { type H3Provider } from "./api";
 import { ManagedRunControls } from "./ManagedRunControls";
-import { fetchH3Profiles } from "../../shared/api/client";
-import type { H3ActiveProfile } from "../../shared/api/types";
+import { useProductionController, type ProductionDrawerTab } from "./useProductionController";
 
-const ACTIVE: JobStatus[] = ["queued", "uploading", "running"];
-type ProjectLoadState = {
-  projectId: string | null;
-  status: "idle" | "loading" | "loaded" | "error";
-};
-
-type DrawerTab = "layout" | "refs" | "prompt" | "run";
 function pictureLabel(ref: { role: string; picture_index: number }): string {
   if (ref.role === "layout_ref_frame") {
     return `P${ref.picture_index} · Layout`;
@@ -49,12 +50,50 @@ function pictureLabel(ref: { role: string; picture_index: number }): string {
   return `P${ref.picture_index} · ${ref.role.replace(/_/g, " ")}`;
 }
 
+function statusTone(key: string): NonNullable<StatusDotProps["tone"]> {
+  switch (key) {
+    case "h3-running":
+      return "info";
+    case "h3-queued":
+      return "accent";
+    case "h3-succeeded":
+    case "ready-for-h3":
+      return "ok";
+    case "prompt-stale":
+      return "warn";
+    case "h3-failed":
+    case "blocked":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+function jobStatusTone(status: string): NonNullable<StatusDotProps["tone"]> {
+  switch (status) {
+    case "running":
+    case "uploading":
+      return "info";
+    case "queued":
+      return "accent";
+    case "succeeded":
+      return "ok";
+    case "failed":
+    case "cancelled":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
 function ProductionStatusChip({ shot }: { shot: Shot }) {
   const stage = shotWorkflowStatus(shot);
+  const tone = statusTone(stage.key);
   return (
-    <span className={`status-chip status-${stage.key}`}>
+    <Badge tone={tone} className={cn("status-chip", `status-${stage.key}`)}>
+      <StatusDot tone={tone} pulse={stage.key === "h3-running"} />
       {stage.label}
-    </span>
+    </Badge>
   );
 }
 
@@ -80,18 +119,19 @@ function ProductionRefThumb({
   return (
     <button
       type="button"
-      className="ref-thumb ref-thumb-btn"
+      className="ref-thumb ref-thumb-btn group flex flex-col overflow-hidden rounded-lg border border-border-subtle bg-elevated/40 p-2 text-left transition-colors hover:border-border-strong hover:bg-hover/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       title={`${pictureLabel(refItem)} · ${refItem.asset_id}${refItem.file_key ? ` · ${refItem.file_key}` : ""}`}
       onClick={() => {
         if (url) onOpen(url);
       }}
     >
-      <div className="ref-thumb-img">
+      <div className="ref-thumb-img relative aspect-video w-full overflow-hidden rounded border border-border-subtle bg-canvas">
         {url ? (
           <img
             src={url}
             alt={pictureLabel(refItem)}
             draggable={false}
+            className="h-full w-full object-cover transition-transform duration-150 group-hover:scale-[1.02]"
             onError={() => {
               if (idx + 1 < candidates.length) {
                 setIdx((i) => i + 1);
@@ -101,13 +141,17 @@ function ProductionRefThumb({
             }}
           />
         ) : (
-          <div className="output-empty">no preview</div>
+          <div className="output-empty flex h-full w-full items-center justify-center text-[11px] text-ink-muted">
+            no preview
+          </div>
         )}
       </div>
-      <div className="ref-thumb-label">{pictureLabel(refItem)}</div>
-      <div className="muted tiny mono">{refItem.asset_id}</div>
+      <div className="ref-thumb-label mt-2 text-xs font-medium text-ink">
+        {pictureLabel(refItem)}
+      </div>
+      <div className="mt-0.5 truncate font-mono text-[10px] text-ink-muted">{refItem.asset_id}</div>
       {refItem.file_key ? (
-        <div className="muted tiny ellipsis">{refItem.file_key}</div>
+        <div className="truncate text-[10px] text-ink-muted">{refItem.file_key}</div>
       ) : null}
     </button>
   );
@@ -122,417 +166,68 @@ export function ProductionPage({
   mobile?: boolean;
   onReviewMaterials?: (shot: Shot, shotNumber: number, message: string) => void;
 } = {}) {
-  const { projectId } = useProject();
-  const [shots, setShots] = useState<Shot[]>([]);
-  const [projectLoad, setProjectLoad] = useState<ProjectLoadState>(() => ({
+  const ctrl = useProductionController({ active, mobile });
+  const {
     projectId,
-    status: projectId ? "loading" : "idle",
-  }));
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [draftPrompt, setDraftPrompt] = useState<PromptSections>(EMPTY_PROMPT_SECTIONS);
-  const [promptDirty, setPromptDirty] = useState(false);
-  const [draftDialogue, setDraftDialogue] = useState("");
-  const [draftDuration, setDraftDuration] = useState("8");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [h3Job, setH3Job] = useState<H3JobRecord | null>(null);
-  const [workflowProfile, setWorkflowProfile] = useState<H3ActiveProfile | null>(null);
-  const [workflowProfileError, setWorkflowProfileError] = useState<string | null>(null);
-  const profileRequest = useRef(0);
-  const refreshWorkflowProfile = useCallback(async () => {
-    const request = ++profileRequest.current;
-    try {
-      const current = await fetchH3Profiles();
-      if (request === profileRequest.current) {
-        setWorkflowProfile(current.active);
-        setWorkflowProfileError(null);
-      }
-    } catch (err) {
-      if (request === profileRequest.current) {
-        setWorkflowProfile(null);
-        setWorkflowProfileError(err instanceof Error ? err.message : String(err));
-      }
-    }
-  }, []);
-  useEffect(() => {
-    if (active) void refreshWorkflowProfile();
-    return () => { profileRequest.current += 1; };
-  }, [active, refreshWorkflowProfile]);
-  useEffect(() => {
-    if (h3Job && h3Job.h3_provider !== "minimax" && !ACTIVE.includes(h3Job.status))
-      void refreshWorkflowProfile();
-  }, [h3Job?.id, h3Job?.status, refreshWorkflowProfile]);
-  const [tab, setTab] = useState<DrawerTab>("layout");
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [voiceAssets, setVoiceAssets] = useState<LibraryAsset[]>([]);
-  const [draftVoiceRefs, setDraftVoiceRefs] = useState<ShotVoiceRef[]>([]);
-  const [selectedVoiceId, setSelectedVoiceId] = useState("");
-  const [voiceRefsDirty, setVoiceRefsDirty] = useState(false);
-  const [materialEditorOpen, setMaterialEditorOpen] = useState(false);
-  const [h3ProviderStatus, setH3ProviderStatus] = useState<H3ProviderStatus | null>(null);
-  const [h3Provider, setH3Provider] = useState<H3Provider>("local");
-  const [localResolutions, setLocalResolutions] = useState<LocalH3Resolution[]>([]);
-  const [resolutionPreset, setResolutionPreset] =
-    useState<string>("auto");
-  const [managedActive, setManagedActive] = useState(false);
-  const [contextSize, setContextSize] = useState<{ shotId: string; width: number; height: number } | null>(null);
+    shots,
+    projectLoading,
+    projectFailed,
+    selectedId,
+    setSelectedId,
+    selected,
+    continuesPrevious,
+    currentLayout,
+    draftPrompt,
+    setDraftPrompt,
+    setPromptDirty,
+    draftDialogue,
+    setDraftDialogue,
+    draftDuration,
+    setDraftDuration,
+    error,
+    busy,
+    h3Job,
+    jobActive,
+    canSubmit,
+    workflowProfile,
+    workflowProfileError,
+    tab,
+    setTab,
+    previewUrl,
+    setPreviewUrl,
+    voiceAssets,
+    voiceAssetById,
+    draftVoiceRefs,
+    selectedVoiceId,
+    setSelectedVoiceId,
+    voiceRefsDirty,
+    voicePromptStale,
+    materialEditorOpen,
+    setMaterialEditorOpen,
+    h3ProviderStatus,
+    h3Provider,
+    setH3Provider,
+    localResolutions,
+    resolutionPreset,
+    setResolutionPreset,
+    managedActive,
+    setManagedActive,
+    contextSize,
+    orderedRefs,
+    layoutUrl,
+    loadProject,
+    replaceShot,
+    onSavePrompt,
+    onDeleteLayout,
+    onSubmit,
+    onCancelJob,
+    updateVoiceRefs,
+    addVoiceRef,
+    moveVoiceRef,
+    saveVoiceRefs,
+  } = ctrl;
 
-  const selected = useMemo(
-    () => shots.find((s) => s.id === selectedId) || null,
-    [shots, selectedId],
-  );
-  const continuesPrevious = selected?.video_context?.mode === "previous_shot";
-  useEffect(() => {
-    setContextSize(null);
-    if (!selected || !continuesPrevious) return;
-    let cancelled = false;
-    getVideoContextStatus(selected.id).then((status) => {
-      if (!cancelled && status.resolution) setContextSize({ shotId: selected.id, ...status.resolution });
-    }).catch(() => { /* Submission rechecks the source and reports a missing video. */ });
-    return () => { cancelled = true; };
-  }, [selected, continuesPrevious]);
-  const currentLayout = useMemo(() => {
-    if (!selected) return null;
-    return selected.layout_refs.find(
-      (layout) => layout.asset_id === selected.layout_asset_id,
-    ) || [...selected.layout_refs].reverse().find((layout) => layout.asset_id) || null;
-  }, [selected]);
-
-  const loadProject = useCallback(async (id: string) => {
-    const detail = await getProject(id);
-    setShots(detail.shots);
-    setProjectLoad({ projectId: id, status: "loaded" });
-    return detail;
-  }, []);
-
-  useEffect(() => {
-    setSelectedId(null);
-    setH3Job(null);
-    setManagedActive(false);
-    setShots([]);
-    setProjectLoad({
-      projectId,
-      status: projectId ? "loading" : "idle",
-    });
-  }, [projectId]);
-
-  // Pages stay mounted across top-level tab switches. Refresh when Production
-  // becomes visible so Director-side prompt/layout changes are not stale.
-  useEffect(() => {
-    if (!projectId) return;
-    let cancelled = false;
-    setError(null);
-    setProjectLoad((current) => current.projectId === projectId && current.status === "loaded"
-      ? current
-      : { projectId, status: "loading" });
-    getProject(projectId)
-      .then((detail) => {
-        if (cancelled) return;
-        setShots(detail.shots);
-        setProjectLoad({ projectId, status: "loaded" });
-        setError(null);
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setProjectLoad((current) => current.projectId === projectId && current.status === "loaded"
-            ? current
-            : { projectId, status: "error" });
-          setError(e instanceof Error ? e.message : String(e));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [active, projectId]);
-
-  const projectLoading = Boolean(
-    projectId
-    && (projectLoad.projectId !== projectId || projectLoad.status === "loading"),
-  );
-  const projectFailed = Boolean(
-    projectId
-    && projectLoad.projectId === projectId
-    && projectLoad.status === "error",
-  );
-
-  useEffect(() => {
-    if (!active) return;
-    let cancelled = false;
-    getLocalH3Resolutions()
-      .then(({ presets }) => {
-        if (!cancelled) setLocalResolutions(presets);
-      })
-      .catch(() => {
-        if (!cancelled) setLocalResolutions([]);
-      });
-    getH3ProviderStatus()
-      .then((status) => {
-        if (cancelled) return;
-        setH3ProviderStatus(status);
-        setH3Provider(
-          status.default_provider === "minimax" && !status.minimax_configured
-            ? "local"
-            : status.default_provider,
-        );
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setH3ProviderStatus(null);
-          setH3Provider("local");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [active]);
-
-  useEffect(() => {
-    if (!mobile || shots.length === 0) return;
-    setSelectedId((current) =>
-      current && shots.some((shot) => shot.id === current) ? current : shots[0].id,
-    );
-  }, [mobile, shots]);
-
-  useEffect(() => {
-    if (!active || !projectId) {
-      setVoiceAssets([]);
-      return;
-    }
-    let cancelled = false;
-    listLibraryAssets("voices", projectId)
-      .then((assets) => {
-        if (!cancelled) setVoiceAssets(assets);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [active, projectId]);
-
-  useEffect(() => {
-    if (!selected) {
-      setDraftPrompt(EMPTY_PROMPT_SECTIONS);
-      setPromptDirty(false);
-      setDraftDialogue("");
-      setDraftDuration("8");
-      setH3Job(null);
-      setTab("layout");
-      setDraftVoiceRefs([]);
-      setSelectedVoiceId("");
-      setVoiceRefsDirty(false);
-      return;
-    }
-    setDraftPrompt({ ...EMPTY_PROMPT_SECTIONS, ...selected.prompt_sections });
-    setPromptDirty(false);
-    setDraftDialogue((selected.dialogue || []).join("\n"));
-    setDraftDuration(String(selected.duration_s ?? 8));
-    setDraftVoiceRefs(
-      [...(selected.voice_refs || [])]
-        .sort((a, b) => a.audio_index - b.audio_index)
-        .map((ref, index) => ({ ...ref, audio_index: index + 1 })),
-    );
-    setSelectedVoiceId("");
-    setVoiceRefsDirty(false);
-  }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Accept Director-side prompt generation for the selected shot, but never
-  // overwrite text the user has changed locally and not saved yet.
-  useEffect(() => {
-    if (!selected || promptDirty) return;
-    setDraftPrompt({ ...EMPTY_PROMPT_SECTIONS, ...selected.prompt_sections });
-  }, [selected?.prompt_sections, promptDirty]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const jobId = selected?.h3_job_id;
-    if (!jobId) {
-      setH3Job(null);
-      return;
-    }
-    if (!active) return;
-    let cancelled = false;
-    const tick = () => {
-      getH3Job(jobId)
-        .then((j) => {
-          if (!cancelled) {
-            setH3Job(j);
-            if (!ACTIVE.includes(j.status)) window.clearInterval(t);
-          }
-        })
-        .catch(() => undefined);
-    };
-    tick();
-    const t = window.setInterval(tick, 1500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(t);
-    };
-  }, [active, selected?.h3_job_id]);
-
-  useEffect(() => {
-    if (!active || !projectId) return;
-    const running = shots.some((s) => ACTIVE.includes(s.status as JobStatus));
-    if (!running) return;
-    const t = window.setInterval(() => {
-      getProject(projectId)
-        .then((d) => setShots(d.shots))
-        .catch(() => undefined);
-    }, 3000);
-    return () => window.clearInterval(t);
-  }, [active, projectId, shots]);
-
-  const replaceShot = (updated: Shot) => {
-    setShots((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
-  };
-
-  const onSavePrompt = async () => {
-    if (!selected) return;
-    setError(null);
-    setBusy(true);
-    try {
-      const dialogue = draftDialogue
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean);
-      const duration_s = Number(draftDuration);
-      const updated = await patchShot(selected.id, {
-        prompt_sections: draftPrompt,
-        dialogue,
-        duration_s: Number.isFinite(duration_s) ? duration_s : selected.duration_s,
-      });
-      replaceShot(updated);
-      setPromptDirty(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onDeleteLayout = async () => {
-    if (!selected || !currentLayout) return;
-    if (!window.confirm("Delete this Layout permanently?")) return;
-    setError(null);
-    setBusy(true);
-    try {
-      replaceShot(await deleteLayout(selected.id, currentLayout.id));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onSubmit = async () => {
-    if (!selected || jobActive) return;
-    setError(null);
-    setBusy(true);
-    try {
-      const resolution =
-        h3Provider !== "local" || continuesPrevious || resolutionPreset === "auto"
-          ? undefined
-          : localResolutions.find((preset) => preset.id === resolutionPreset);
-      if (h3Provider === "local") await refreshWorkflowProfile();
-      replaceShot(await submitShot(selected.id, h3Provider, resolution && {
-        width: resolution.width,
-        height: resolution.height,
-      }));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onCancelJob = async () => {
-    if (!selected?.h3_job_id) return;
-    setError(null);
-    setBusy(true);
-    try {
-      setH3Job(await cancelH3Job(selected.h3_job_id));
-      if (projectId) await loadProject(projectId);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const orderedRefs = useMemo(() => {
-    if (!selected) return [];
-    return [...selected.refs].sort((a, b) => a.picture_index - b.picture_index);
-  }, [selected]);
-
-  const voiceAssetById = useMemo(
-    () => new Map(voiceAssets.map((asset) => [asset.id, asset])),
-    [voiceAssets],
-  );
-
-  const normalizeVoiceRefs = (refs: ShotVoiceRef[]) =>
-    refs.map((ref, index) => ({ ...ref, audio_index: index + 1 }));
-
-  const updateVoiceRefs = (refs: ShotVoiceRef[]) => {
-    setDraftVoiceRefs(normalizeVoiceRefs(refs));
-    setVoiceRefsDirty(true);
-  };
-
-  const addVoiceRef = () => {
-    if (!selectedVoiceId || draftVoiceRefs.length >= 3) return;
-    if (draftVoiceRefs.some((ref) => ref.asset_id === selectedVoiceId)) return;
-    const asset = voiceAssetById.get(selectedVoiceId);
-    if (!asset) return;
-    updateVoiceRefs([
-      ...draftVoiceRefs,
-      {
-        asset_id: asset.id,
-        audio_index: draftVoiceRefs.length + 1,
-        file_key: "reference",
-        speaker: asset.name,
-        notes: "",
-      },
-    ]);
-    setSelectedVoiceId("");
-  };
-
-  const moveVoiceRef = (index: number, direction: -1 | 1) => {
-    const target = index + direction;
-    if (target < 0 || target >= draftVoiceRefs.length) return;
-    const next = [...draftVoiceRefs];
-    [next[index], next[target]] = [next[target], next[index]];
-    updateVoiceRefs(next);
-  };
-
-  const saveVoiceRefs = async () => {
-    if (!selected || selected.source_audio_path) return;
-    setError(null);
-    setBusy(true);
-    try {
-      const voice_refs = normalizeVoiceRefs(draftVoiceRefs);
-      replaceShot(await patchShot(selected.id, { voice_refs }));
-      setDraftVoiceRefs(voice_refs);
-      setVoiceRefsDirty(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const jobActive = h3Job ? ACTIVE.includes(h3Job.status) : false;
-  // No Gate-2 approve: ready when refs + six-section prompt exist and not mid-run
-  const canSubmit =
-    !!selected &&
-    !jobActive &&
-    !["queued", "running"].includes(selected.status) &&
-    (selected.refs?.length ?? 0) > 0 &&
-    promptReady(selected.prompt_sections);
-  const layoutUrl = layoutPreviewUrl(selected?.layout_asset_id);
-  const voicePromptStale =
-    voiceRefsDirty ||
-    (draftVoiceRefs.length > 0 && !selected?.meta?.prompt_voice_signature);
-
-  const tabs: { id: DrawerTab; label: string }[] = [
+  const tabs: { id: ProductionDrawerTab; label: string }[] = [
     { id: "layout", label: "Layout" },
     { id: "refs", label: "Refs" },
     { id: "prompt", label: "Prompt" },
@@ -540,23 +235,22 @@ export function ProductionPage({
   ];
 
   const providerPicker = (
-    <label className="h3-provider-picker">
+    <label className="h3-provider-picker flex flex-col gap-1 text-xs font-medium text-ink-secondary">
       <span>Provider</span>
-      <select
+      <Select
         aria-label="H3 provider"
         value={h3Provider}
         disabled={busy || jobActive}
+        wrapperClassName="w-full"
         onChange={(event) => setH3Provider(event.target.value as H3Provider)}
       >
         <option value="local">Local · ComfyUI</option>
         <option value="minimax" disabled={!h3ProviderStatus?.minimax_configured}>
           MiniMax · Official API
-          {h3ProviderStatus && !h3ProviderStatus.minimax_configured
-            ? " · not configured"
-            : ""}
+          {h3ProviderStatus && !h3ProviderStatus.minimax_configured ? " · not configured" : ""}
         </option>
-      </select>
-      <small>
+      </Select>
+      <small className="text-[11px] font-normal text-ink-muted">
         {h3Provider === "minimax"
           ? `Official API · ${h3ProviderStatus?.minimax_resolution || "768P"}`
           : "Local ComfyUI workflow"}
@@ -565,25 +259,60 @@ export function ProductionPage({
   );
 
   const resolutionPicker = (
-    <label className="field-label h3-resolution-picker">
+    <label className="h3-resolution-picker flex flex-col gap-1 text-xs font-medium text-ink-secondary">
       Resolution
-      <select
-        className="field-input"
+      <Select
         value={continuesPrevious ? "previous" : resolutionPreset}
         disabled={busy || jobActive || continuesPrevious}
-        onChange={(event) =>
-          setResolutionPreset(event.target.value)
-        }
+        wrapperClassName="w-full"
+        onChange={(event) => setResolutionPreset(event.target.value)}
       >
-        {continuesPrevious ? <option value="previous">
-          Match previous shot{contextSize?.shotId === selected?.id ? ` · ${contextSize.width}×${contextSize.height}` : ""}
-        </option> : <option value="auto">Auto from project</option>}
-        {!continuesPrevious && localResolutions.map((preset) => (
-          <option key={preset.id} value={preset.id}>{preset.label}</option>
-        ))}
-      </select>
+        {continuesPrevious ? (
+          <option value="previous">
+            Match previous shot
+            {contextSize && contextSize.shotId === selected?.id
+              ? ` · ${contextSize.width}×${contextSize.height}`
+              : ""}
+          </option>
+        ) : (
+          <option value="auto">Auto from project</option>
+        )}
+        {!continuesPrevious &&
+          localResolutions.map((preset) => (
+            <option key={preset.id} value={preset.id}>
+              {preset.label}
+            </option>
+          ))}
+      </Select>
     </label>
   );
+
+  const lightbox = previewUrl ? (
+    <div
+      className="lightbox-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      onClick={() => setPreviewUrl(null)}
+      onKeyDown={(e) => e.key === "Escape" && setPreviewUrl(null)}
+    >
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        className="lightbox-close fixed right-4 top-4 gap-1"
+        onClick={() => setPreviewUrl(null)}
+      >
+        <X className="h-3.5 w-3.5" aria-hidden="true" />
+        Close
+      </Button>
+      <img
+        className="lightbox-img max-h-[88dvh] max-w-[92vw] rounded-lg border border-border-subtle bg-panel object-contain shadow-[var(--shadow-popover)]"
+        src={previewUrl}
+        alt="ref preview"
+        onClick={(e) => e.stopPropagation()}
+      />
+    </div>
+  ) : null;
 
   if (mobile) {
     const selectedNumber = selected
@@ -595,130 +324,231 @@ export function ProductionPage({
       : [];
 
     return (
-      <main className="mobile-production-review" aria-label="Mobile production review">
-        <header className="mobile-section-header mobile-production-header">
+      <main
+        className="mobile-production-review flex flex-col gap-3 p-3.5 text-ink"
+        aria-label="Mobile production review"
+      >
+        <header className="mobile-section-header mobile-production-header flex items-end justify-between gap-3">
           <div>
-            <span className="mobile-eyebrow">Production</span>
-            <h1>Shot review</h1>
+            <span className="mobile-eyebrow block text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-muted">
+              Production
+            </span>
+            <h1 className="text-base font-semibold tracking-[-0.015em] text-ink">Shot review</h1>
           </div>
-          <span className="mobile-shot-count">
+          <Badge tone="neutral" className="mobile-shot-count font-mono tabular-nums">
             {projectLoading ? "Loading…" : `${shots.length} shots`}
-          </span>
+          </Badge>
         </header>
 
-        {error ? <div className="banner error mobile-production-error">{error}</div> : null}
+        {error ? (
+          <Banner tone="danger" className="mobile-production-error">
+            {error}
+          </Banner>
+        ) : null}
 
-        {projectId ? <ManagedRunControls projectId={projectId} shots={shots}
-          provider={h3Provider} presets={localResolutions}
-          onStateChange={setManagedActive}
-          onProjectChanged={() => { void loadProject(projectId); }} /> : null}
+        {projectId ? (
+          <ManagedRunControls
+            projectId={projectId}
+            shots={shots}
+            provider={h3Provider}
+            presets={localResolutions}
+            onStateChange={setManagedActive}
+            onProjectChanged={() => {
+              void loadProject(projectId);
+            }}
+          />
+        ) : null}
 
         {!projectId ? (
-          <p className="mobile-production-empty">Select a project to review its shots.</p>
+          <p className="mobile-production-empty rounded-lg border border-border-subtle bg-panel px-4 py-6 text-center text-xs text-ink-muted">
+            Select a project to review its shots.
+          </p>
         ) : projectLoading ? (
-          <p className="mobile-production-empty" role="status">Loading shots…</p>
+          <p
+            className="mobile-production-empty rounded-lg border border-border-subtle bg-panel px-4 py-6 text-center text-xs text-ink-muted"
+            role="status"
+          >
+            Loading shots…
+          </p>
         ) : projectFailed ? null : shots.length === 0 ? (
-          <p className="mobile-production-empty">No shots yet. Plan them with Director first.</p>
+          <p className="mobile-production-empty rounded-lg border border-border-subtle bg-panel px-4 py-6 text-center text-xs text-ink-muted">
+            No shots yet. Plan them with Director first.
+          </p>
         ) : (
-          <nav className="mobile-production-shot-strip" aria-label="Production shots">
-            {shots.map((shot, index) => (
-              <button
-                key={shot.id}
-                type="button"
-                className={shot.id === selectedId ? "active" : ""}
-                aria-label={`Shot ${String(index + 1).padStart(2, "0")} · ${shot.title || shot.id}`}
-                aria-current={shot.id === selectedId ? "page" : undefined}
-                onClick={() => {
-                  setSelectedId(shot.id);
-                  setMaterialEditorOpen(false);
-                }}
-              >
-                <span>{String(index + 1).padStart(2, "0")}</span>
-                <strong>{shot.title || shot.id}</strong>
-              </button>
-            ))}
+          <nav
+            className="mobile-production-shot-strip flex gap-1.5 overflow-x-auto pb-1"
+            aria-label="Production shots"
+          >
+            {shots.map((shot, index) => {
+              const isCurrent = shot.id === selectedId;
+              return (
+                <button
+                  key={shot.id}
+                  type="button"
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition-colors cursor-pointer",
+                    isCurrent
+                      ? "active border-accent bg-accent-soft text-ink font-medium"
+                      : "border-border-subtle bg-panel text-ink-secondary hover:bg-hover",
+                  )}
+                  aria-label={`Shot ${String(index + 1).padStart(2, "0")} · ${shot.title || shot.id}`}
+                  aria-current={isCurrent ? "page" : undefined}
+                  onClick={() => {
+                    setSelectedId(shot.id);
+                    setMaterialEditorOpen(false);
+                  }}
+                >
+                  <span className="font-mono text-[10px] text-ink-muted tabular-nums">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <strong className="font-medium">{shot.title || shot.id}</strong>
+                </button>
+              );
+            })}
           </nav>
         )}
 
         {selected ? (
-          <article className="mobile-production-sheet">
-            <header className="mobile-production-shot-header">
+          <article className="mobile-production-sheet flex flex-col gap-3">
+            <header className="mobile-production-shot-header flex items-start justify-between gap-3 rounded-lg border border-border-subtle bg-panel p-3.5">
               <div>
-                <span className="mobile-eyebrow">
+                <span className="mobile-eyebrow block font-mono text-[10px] uppercase tracking-[0.06em] text-ink-muted">
                   Shot {String(selectedNumber).padStart(2, "0")}
                 </span>
-                <h2>{selected.title || selected.id}</h2>
+                <h2 className="mt-0.5 text-sm font-semibold text-ink">
+                  {selected.title || selected.id}
+                </h2>
               </div>
               <ProductionStatusChip shot={selected} />
             </header>
 
-            <section className="mobile-production-section mobile-production-result">
-              <div className="mobile-production-section-title">
-                <h3>Final result</h3>
-                {h3Job ? <span>{h3Job.status}</span> : null}
+            <section className="mobile-production-section mobile-production-result flex flex-col gap-3 rounded-lg border border-border-subtle bg-panel p-3.5">
+              <div className="mobile-production-section-title flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-[0.05em] text-ink-secondary">
+                  Final result
+                </h3>
+                {h3Job ? (
+                  <Badge tone={jobStatusTone(h3Job.status)}>
+                    <StatusDot
+                      tone={jobStatusTone(h3Job.status)}
+                      pulse={jobActive}
+                    />
+                    {h3Job.status}
+                  </Badge>
+                ) : null}
               </div>
               {videoUrl ? (
-                <video controls playsInline preload="metadata" src={videoUrl} />
+                <video
+                  controls
+                  playsInline
+                  preload="metadata"
+                  src={videoUrl}
+                  className="w-full rounded-md border border-border-subtle bg-black"
+                />
               ) : jobActive ? (
-                <p className="mobile-production-empty-inline">Video generation is in progress.</p>
+                <p className="mobile-production-empty-inline rounded-md border border-dashed border-border-subtle bg-elevated/40 px-3 py-4 text-center text-xs text-ink-muted">
+                  Video generation is in progress.
+                </p>
               ) : (
-                <p className="mobile-production-empty-inline">No final video for this shot yet.</p>
+                <p className="mobile-production-empty-inline rounded-md border border-dashed border-border-subtle bg-elevated/40 px-3 py-4 text-center text-xs text-ink-muted">
+                  No final video for this shot yet.
+                </p>
               )}
               {h3Job?.error ? (
-                <div className="mobile-production-job-error" role="status">
+                <div
+                  className="mobile-production-job-error rounded-md border border-status-danger/30 bg-status-danger-soft px-3 py-2 text-xs text-status-danger"
+                  role="status"
+                >
                   Generation failed. Open desktop Production for diagnostic details.
                 </div>
               ) : null}
               {providerPicker}
-              {h3Provider === "local" ? <VideoContextPanel key={selected.id} shot={selected} shots={shots} onShotUpdated={replaceShot} /> : null}
+              {h3Provider === "local" ? (
+                <VideoContextPanel
+                  key={selected.id}
+                  shot={selected}
+                  shots={shots}
+                  onShotUpdated={replaceShot}
+                />
+              ) : null}
               {h3Provider === "local" ? resolutionPicker : null}
-              <button
+              <Button
                 type="button"
-                className="btn primary mobile-production-run"
+                variant="primary"
+                className="mobile-production-run w-full"
                 disabled={busy || !canSubmit || jobActive || managedActive}
                 onClick={() => void onSubmit()}
               >
+                <Play className="h-3.5 w-3.5" aria-hidden="true" />
                 {jobActive ? "H3 running…" : "Run H3"}
-              </button>
+              </Button>
             </section>
 
-            <section className="mobile-production-section">
-              <h3>Shot design</h3>
-              <p className="mobile-production-beat">{selected.script_beat}</p>
-              <dl className="mobile-production-metadata">
-                <div><dt>Duration</dt><dd>{selected.duration_s}s</dd></div>
-                <div><dt>Framing</dt><dd>{selected.shot_type || "—"}</dd></div>
-                <div><dt>Angle</dt><dd>{selected.camera_angle || "—"}</dd></div>
-                <div><dt>Motion</dt><dd>{selected.camera_motion || "—"}</dd></div>
+            <section className="mobile-production-section flex flex-col gap-2.5 rounded-lg border border-border-subtle bg-panel p-3.5">
+              <h3 className="text-xs font-semibold uppercase tracking-[0.05em] text-ink-secondary">
+                Shot design
+              </h3>
+              <p className="mobile-production-beat text-xs leading-relaxed text-ink">
+                {selected.script_beat}
+              </p>
+              <dl className="mobile-production-metadata grid grid-cols-2 gap-2 rounded-md border border-border-subtle bg-elevated/40 p-2.5 text-xs">
+                <div>
+                  <dt className="text-[10px] uppercase tracking-[0.04em] text-ink-muted">
+                    Duration
+                  </dt>
+                  <dd className="mt-0.5 font-mono font-medium text-ink">{selected.duration_s}s</dd>
+                </div>
+                <div>
+                  <dt className="text-[10px] uppercase tracking-[0.04em] text-ink-muted">
+                    Framing
+                  </dt>
+                  <dd className="mt-0.5 text-ink">{selected.shot_type || "—"}</dd>
+                </div>
+                <div>
+                  <dt className="text-[10px] uppercase tracking-[0.04em] text-ink-muted">Angle</dt>
+                  <dd className="mt-0.5 text-ink">{selected.camera_angle || "—"}</dd>
+                </div>
+                <div>
+                  <dt className="text-[10px] uppercase tracking-[0.04em] text-ink-muted">Motion</dt>
+                  <dd className="mt-0.5 text-ink">{selected.camera_motion || "—"}</dd>
+                </div>
               </dl>
               {selected.composition ? (
-                <div className="mobile-production-note">
-                  <span>Composition</span>
-                  <p>{selected.composition}</p>
+                <div className="mobile-production-note text-xs">
+                  <span className="block text-[11px] font-medium text-ink-muted">Composition</span>
+                  <p className="mt-0.5 text-ink-secondary">{selected.composition}</p>
                 </div>
               ) : null}
               {selected.dialogue?.length ? (
-                <div className="mobile-production-note">
-                  <span>Dialogue</span>
-                  {selected.dialogue.map((line, index) => <p key={`${line}-${index}`}>{line}</p>)}
+                <div className="mobile-production-note text-xs">
+                  <span className="block text-[11px] font-medium text-ink-muted">Dialogue</span>
+                  {selected.dialogue.map((line, index) => (
+                    <p key={`${line}-${index}`} className="mt-0.5 text-ink-secondary">
+                      {line}
+                    </p>
+                  ))}
                 </div>
               ) : null}
             </section>
 
-            <section className="mobile-production-section">
-              <div className="mobile-production-section-title">
-                <h3>References</h3>
-                <button
+            <section className="mobile-production-section flex flex-col gap-2.5 rounded-lg border border-border-subtle bg-panel p-3.5">
+              <div className="mobile-production-section-title flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-[0.05em] text-ink-secondary">
+                  References
+                </h3>
+                <Button
                   type="button"
-                  className="mode-chip shot-material-edit-trigger"
+                  variant="secondary"
+                  size="xs"
+                  className="shot-material-edit-trigger"
                   disabled={busy}
                   onClick={() => setMaterialEditorOpen(true)}
                 >
                   Edit materials
-                </button>
+                </Button>
               </div>
               {orderedRefs.length ? (
-                <div className="mobile-production-reference-strip">
+                <div className="mobile-production-reference-strip grid grid-cols-2 gap-2">
                   {orderedRefs.map((ref) => (
                     <ProductionRefThumb
                       key={`${ref.role}-${ref.picture_index}-${ref.asset_id}-${ref.file_key || ""}`}
@@ -728,21 +558,38 @@ export function ProductionPage({
                   ))}
                 </div>
               ) : layoutUrl ? (
-                <img className="mobile-production-layout" src={layoutUrl} alt="Layout reference" />
+                <img
+                  className="mobile-production-layout max-h-56 w-full rounded-md border border-border-subtle object-contain bg-canvas"
+                  src={layoutUrl}
+                  alt="Layout reference"
+                />
               ) : (
-                <p className="mobile-production-empty-inline">No references attached.</p>
+                <p className="mobile-production-empty-inline text-xs text-ink-muted">
+                  No references attached.
+                </p>
               )}
             </section>
 
-            <section className="mobile-production-section mobile-production-prompt">
-              <h3>H3 prompt</h3>
-              {promptSections.length ? promptSections.map(({ key, label }) => (
-                <div key={key} className="mobile-production-prompt-section">
-                  <h4>{label}</h4>
-                  <p>{selected.prompt_sections[key]}</p>
-                </div>
-              )) : (
-                <p className="mobile-production-empty-inline">No H3 prompt written yet.</p>
+            <section className="mobile-production-section mobile-production-prompt flex flex-col gap-2.5 rounded-lg border border-border-subtle bg-panel p-3.5">
+              <h3 className="text-xs font-semibold uppercase tracking-[0.05em] text-ink-secondary">
+                H3 prompt
+              </h3>
+              {promptSections.length ? (
+                promptSections.map(({ key, label }) => (
+                  <div
+                    key={key}
+                    className="mobile-production-prompt-section rounded-md border border-border-subtle bg-elevated/40 p-2.5"
+                  >
+                    <h4 className="text-[11px] font-semibold text-ink-secondary">{label}</h4>
+                    <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-ink">
+                      {selected.prompt_sections[key]}
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <p className="mobile-production-empty-inline text-xs text-ink-muted">
+                  No H3 prompt written yet.
+                </p>
               )}
             </section>
           </article>
@@ -764,20 +611,7 @@ export function ProductionPage({
           />
         ) : null}
 
-        {previewUrl ? (
-          <div
-            className="lightbox-overlay"
-            role="dialog"
-            aria-modal="true"
-            onClick={() => setPreviewUrl(null)}
-            onKeyDown={(event) => event.key === "Escape" && setPreviewUrl(null)}
-          >
-            <button type="button" className="lightbox-close btn secondary sm" onClick={() => setPreviewUrl(null)}>
-              Close
-            </button>
-            <img className="lightbox-img" src={previewUrl} alt="ref preview" onClick={(event) => event.stopPropagation()} />
-          </div>
-        ) : null}
+        {lightbox}
       </main>
     );
   }
@@ -787,7 +621,7 @@ export function ProductionPage({
       title="Production"
       subtitle={
         projectId ? (
-          <strong className="production-workflow-title">
+          <strong className="production-workflow-title font-medium text-ink-secondary">
             {workflowProfile
               ? `Local · ComfyUI — ${workflowProfile.display_name}`
               : workflowProfileError
@@ -798,434 +632,689 @@ export function ProductionPage({
           "Select a project in the header."
         )
       }
+      actions={
+        projectId ? (
+          <ManagedRunControls
+            projectId={projectId}
+            shots={shots}
+            provider={h3Provider}
+            presets={localResolutions}
+            onStateChange={setManagedActive}
+            onProjectChanged={() => {
+              void loadProject(projectId);
+            }}
+          />
+        ) : null
+      }
       className="production-page"
     >
-      {workflowProfile?.warning ? (
-        <div className="banner production-workflow-warning" role="status">
-          <strong>{`Using ${workflowProfile.display_name}`}</strong>
-          <span>{workflowProfile.warning.message}</span>
-        </div>
-      ) : null}
-      {error ? <div className="banner error">{error}</div> : null}
-      {projectId ? <ManagedRunControls projectId={projectId} shots={shots}
-        provider={h3Provider} presets={localResolutions}
-        onStateChange={setManagedActive}
-        onProjectChanged={() => { void loadProject(projectId); }} /> : null}
+      <div className="flex flex-col gap-3">
+        {workflowProfile?.warning ? (
+          <Banner
+            tone="warn"
+            role="status"
+            title={`Using ${workflowProfile.display_name}`}
+            className="production-workflow-warning"
+          >
+            {workflowProfile.warning.message}
+          </Banner>
+        ) : null}
+        {error ? <Banner tone="danger">{error}</Banner> : null}
 
-      <div className="split-layout production-split">
-        <aside className="split-side">
-          <div className="section-card compact-card">
-            <div className="section-card-head">
-              <h2 className="section-card-title">Shots</h2>
-              <span className="muted tiny">{projectLoading ? "Loading…" : shots.length}</span>
-            </div>
-            {!projectId ? (
-              <p className="empty-copy">No project selected.</p>
-            ) : projectLoading ? (
-              <p className="empty-copy" role="status">Loading shots…</p>
-            ) : projectFailed ? null : shots.length === 0 ? (
-              <p className="empty-copy">No shots yet. Plan them in Director first.</p>
-            ) : (
-              <div className="shot-table-wrap">
-                <table className="shot-table">
-                  <thead>
-                    <tr>
-                      <th>Shot</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {shots.map((s) => (
-                      <tr
-                        key={s.id}
-                        className={s.id === selectedId ? "selected" : ""}
-                        onClick={() => setSelectedId(s.id)}
-                      >
-                        <td>
-                          <div className="shot-table-title">{s.title || s.id}</div>
-                          <div className="muted tiny">{s.duration_s}s</div>
-                        </td>
-                        <td>
+        <div className="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-[276px_minmax(0,1fr)] lg:items-start">
+          <aside className="min-w-0">
+            <Panel>
+              <PanelHeader className="px-3.5 py-2.5">
+                <PanelTitle>Shots</PanelTitle>
+                <span className="font-mono text-[11px] text-ink-muted tabular-nums">
+                  {projectLoading ? "Loading…" : shots.length}
+                </span>
+              </PanelHeader>
+              <PanelBody className="p-2">
+                {!projectId ? (
+                  <p className="px-2 py-4 text-center text-xs text-ink-muted">
+                    No project selected.
+                  </p>
+                ) : projectLoading ? (
+                  <p className="px-2 py-4 text-center text-xs text-ink-muted" role="status">
+                    Loading shots…
+                  </p>
+                ) : projectFailed ? null : shots.length === 0 ? (
+                  <p className="px-2 py-4 text-center text-xs text-ink-muted">
+                    No shots yet. Plan them in Director first.
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    {shots.map((s, index) => {
+                      const isSelected = s.id === selectedId;
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setSelectedId(s.id)}
+                          className={cn(
+                            "flex w-full items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-left transition-colors cursor-pointer",
+                            isSelected
+                              ? "border-accent/40 bg-accent-soft/60 text-ink"
+                              : "border-transparent bg-transparent text-ink-secondary hover:bg-hover hover:text-ink",
+                          )}
+                        >
+                          <div className="flex min-w-0 items-start gap-2">
+                            <span className="mt-0.5 font-mono text-[11px] text-ink-muted tabular-nums">
+                              {String(index + 1).padStart(2, "0")}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="truncate text-xs font-medium text-ink">
+                                {s.title || s.id}
+                              </div>
+                              <div className="mt-0.5 font-mono text-[10px] text-ink-muted">
+                                {s.duration_s}s
+                              </div>
+                            </div>
+                          </div>
                           <ProductionStatusChip shot={s} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </aside>
-
-        <section className="split-main">
-          {!selected ? (
-            <div className="section-card empty-state-card">
-              <p className="empty-copy">Select a shot from the list to edit layout, refs, and prompt.</p>
-            </div>
-          ) : (
-            <div className="section-card shot-editor">
-              <div className="shot-editor-header">
-                <div>
-                  <h2 className="shot-editor-title">{selected.title || selected.id}</h2>
-                </div>
-                <ProductionStatusChip shot={selected} />
-              </div>
-
-              <section className="desktop-shot-design" aria-label="Shot design">
-                <h3>Shot design</h3>
-                <p className="shot-beat muted">{selected.script_beat}</p>
-                <dl className="shot-design-metadata">
-                  <div><dt>Duration</dt><dd>{selected.duration_s}s</dd></div>
-                  <div><dt>Framing</dt><dd>{selected.shot_type || "—"}</dd></div>
-                  <div><dt>Angle</dt><dd>{selected.camera_angle || "—"}</dd></div>
-                  <div><dt>Motion</dt><dd>{selected.camera_motion || "—"}</dd></div>
-                </dl>
-                {selected.composition ? (
-                  <div className="shot-design-note">
-                    <span>Composition</span>
-                    <p>{selected.composition}</p>
+                        </button>
+                      );
+                    })}
                   </div>
-                ) : null}
-                {selected.dialogue?.length ? (
-                  <div className="shot-design-note">
-                    <span>Dialogue</span>
-                    {selected.dialogue.map((line, index) => <p key={`${line}-${index}`}>{line}</p>)}
+                )}
+              </PanelBody>
+            </Panel>
+          </aside>
+
+          <section className="min-w-0">
+            {!selected ? (
+              <EmptyState
+                icon={<Film className="h-4 w-4" aria-hidden="true" />}
+                title="No shot selected"
+                description="Select a shot from the list to edit layout, refs, and prompt."
+                className="min-h-[320px]"
+              />
+            ) : (
+              <Panel className="shot-editor overflow-hidden">
+                <PanelHeader className="px-5 py-3.5">
+                  <div className="min-w-0">
+                    <h2 className="shot-editor-title truncate text-sm font-semibold tracking-[-0.015em] text-ink">
+                      {selected.title || selected.id}
+                    </h2>
                   </div>
-                ) : null}
-              </section>
+                  <ProductionStatusChip shot={selected} />
+                </PanelHeader>
 
-              <div className="segment-tabs" role="tablist">
-                {tabs.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={tab === t.id}
-                    className={`segment-tab ${tab === t.id ? "active" : ""}`}
-                    onClick={() => setTab(t.id)}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
+                <section
+                  className="desktop-shot-design border-b border-border-subtle bg-elevated/30 px-5 py-3.5"
+                  aria-label="Shot design"
+                >
+                  <h3 className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+                    Shot design
+                  </h3>
+                  <p className="shot-beat mt-1 text-xs leading-relaxed text-ink-secondary">
+                    {selected.script_beat}
+                  </p>
+                  <dl className="shot-design-metadata mt-2.5 grid grid-cols-2 gap-3 rounded-md border border-border-subtle bg-panel px-3 py-2 sm:grid-cols-4">
+                    <div>
+                      <dt className="text-[10px] uppercase tracking-[0.05em] text-ink-muted">
+                        Duration
+                      </dt>
+                      <dd className="mt-0.5 font-mono text-xs font-medium text-ink">
+                        {selected.duration_s}s
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-[10px] uppercase tracking-[0.05em] text-ink-muted">
+                        Framing
+                      </dt>
+                      <dd className="mt-0.5 text-xs text-ink">{selected.shot_type || "—"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-[10px] uppercase tracking-[0.05em] text-ink-muted">
+                        Angle
+                      </dt>
+                      <dd className="mt-0.5 text-xs text-ink">{selected.camera_angle || "—"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-[10px] uppercase tracking-[0.05em] text-ink-muted">
+                        Motion
+                      </dt>
+                      <dd className="mt-0.5 text-xs text-ink">
+                        {selected.camera_motion || "—"}
+                      </dd>
+                    </div>
+                  </dl>
+                  {selected.composition || selected.dialogue?.length ? (
+                    <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+                      {selected.composition ? (
+                        <div className="shot-design-note rounded-md border border-border-subtle bg-panel px-3 py-2 text-xs">
+                          <span className="block text-[10px] font-medium uppercase tracking-[0.05em] text-ink-muted">
+                            Composition
+                          </span>
+                          <p className="mt-0.5 text-ink-secondary">{selected.composition}</p>
+                        </div>
+                      ) : null}
+                      {selected.dialogue?.length ? (
+                        <div className="shot-design-note rounded-md border border-border-subtle bg-panel px-3 py-2 text-xs">
+                          <span className="block text-[10px] font-medium uppercase tracking-[0.05em] text-ink-muted">
+                            Dialogue
+                          </span>
+                          {selected.dialogue.map((line, index) => (
+                            <p key={`${line}-${index}`} className="mt-0.5 text-ink-secondary">
+                              {line}
+                            </p>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </section>
 
-              <div className="shot-editor-body">
-                {tab === "layout" ? (
-                  <div className="tab-panel">
-                    <p className="field-hint">
-                      Optional still for spatial lock. It binds as a normal Picture slot
-                      and does not steal Picture 1. Skip if you only have actor/scene refs.
-                    </p>
-                    <div className="layout-preview-box">
-                      {layoutUrl ? (
-                        <img src={layoutUrl} alt="layout" />
-                      ) : (
-                        <div className="output-empty">No layout</div>
-                      )}
-                    </div>
-                    <div className="muted tiny mono" style={{ marginTop: "0.5rem" }}>
-                      {selected.layout_asset_id || "no layout asset"}
-                    </div>
-                    {currentLayout ? (
-                      <div className="actions" style={{ marginTop: "1rem" }}>
+                <div
+                  className="flex items-center gap-5 border-b border-border-subtle bg-panel px-5"
+                  role="tablist"
+                >
+                  {tabs.map((t) => {
+                    const isActive = tab === t.id;
+                    return (
                       <button
+                        key={t.id}
                         type="button"
-                        className="btn danger"
-                        disabled={busy || jobActive}
-                        onClick={onDeleteLayout}
+                        role="tab"
+                        aria-selected={isActive}
+                        className={cn(
+                          "-mb-px border-b-2 py-2.5 text-xs font-medium transition-colors cursor-pointer",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                          isActive
+                            ? "border-accent text-ink"
+                            : "border-transparent text-ink-secondary hover:text-ink",
+                        )}
+                        onClick={() => setTab(t.id)}
                       >
-                        Delete Layout
+                        {t.label}
                       </button>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
+                    );
+                  })}
+                </div>
 
-                {tab === "refs" ? (
-                  <div className="tab-panel">
-                    <div className="refs-section-head">
-                      <div>
-                        <strong>Picture References</strong>
-                        <div className="muted tiny">Ordered Picture slots for H3</div>
-                      </div>
-                    </div>
-                    {orderedRefs.length === 0 ? (
-                      <p className="empty-copy">
-                        No Picture refs. Import in Library or cast via Director chat.
+                <div className="shot-editor-body p-5">
+                  {tab === "layout" ? (
+                    <div className="tab-panel flex flex-col gap-3">
+                      <p className="text-xs leading-relaxed text-ink-secondary">
+                        Optional still for spatial lock. It binds as a normal Picture slot and does
+                        not steal Picture 1. Skip if you only have actor/scene refs.
                       </p>
-                    ) : (
-                      <div className="ref-thumb-row">
-                        {orderedRefs.map((ref) => (
-                          <ProductionRefThumb
-                            key={`${ref.role}-${ref.picture_index}-${ref.asset_id}-${ref.file_key || ""}`}
-                            refItem={ref}
-                            onOpen={setPreviewUrl}
+                      <div className="flex min-h-[220px] items-center justify-center overflow-hidden rounded-lg border border-border-subtle bg-canvas p-3">
+                        {layoutUrl ? (
+                          <img
+                            src={layoutUrl}
+                            alt="layout"
+                            className="max-h-[360px] rounded object-contain"
                           />
-                        ))}
+                        ) : (
+                          <div className="flex flex-col items-center gap-1.5 text-xs text-ink-muted">
+                            <Layers className="h-5 w-5 opacity-50" aria-hidden="true" />
+                            <span>No layout</span>
+                          </div>
+                        )}
                       </div>
-                    )}
+                      <div className="font-mono text-[11px] text-ink-muted">
+                        {selected.layout_asset_id || "no layout asset"}
+                      </div>
+                      {currentLayout ? (
+                        <div className="pt-1">
+                          <Button
+                            type="button"
+                            variant="danger"
+                            size="sm"
+                            disabled={busy || jobActive}
+                            onClick={onDeleteLayout}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            Delete Layout
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
 
-                    <section className="voice-ref-editor" aria-label="Voice References">
-                      <div className="refs-section-head">
-                        <div>
-                          <strong>Voice References</strong>
-                          <div className="muted tiny">
-                            Audio order maps directly to &lt;Audio 1&gt;–&lt;Audio 3&gt; in the H3 prompt.
+                  {tab === "refs" ? (
+                    <div className="tab-panel flex flex-col gap-6">
+                      <div>
+                        <div className="mb-3 flex items-center justify-between">
+                          <div>
+                            <strong className="text-xs font-semibold text-ink">
+                              Picture References
+                            </strong>
+                            <div className="text-[11px] text-ink-muted">
+                              Ordered Picture slots for H3
+                            </div>
                           </div>
                         </div>
-                        <span className="voice-slot-count">{draftVoiceRefs.length}/3</span>
+                        {orderedRefs.length === 0 ? (
+                          <EmptyState
+                            icon={<ImageIcon className="h-4 w-4" aria-hidden="true" />}
+                            title="No Picture refs"
+                            description="Import in Library or cast via Director chat."
+                            className="py-6"
+                          />
+                        ) : (
+                          <div className="ref-thumb-row grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                            {orderedRefs.map((ref) => (
+                              <ProductionRefThumb
+                                key={`${ref.role}-${ref.picture_index}-${ref.asset_id}-${ref.file_key || ""}`}
+                                refItem={ref}
+                                onOpen={setPreviewUrl}
+                              />
+                            ))}
+                          </div>
+                        )}
                       </div>
 
-                      {selected.source_audio_path ? (
-                        <div className="banner voice-source-audio-banner">
-                          <strong>Exact source audio controls this run</strong>
-                          <span>Voice Reference overrides are disabled.</span>
+                      <section
+                        className="voice-ref-editor flex flex-col gap-3 border-t border-border-subtle pt-5"
+                        aria-label="Voice References"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <strong className="text-xs font-semibold text-ink">
+                              Voice References
+                            </strong>
+                            <div className="text-[11px] text-ink-muted">
+                              Audio order maps directly to &lt;Audio 1&gt;–&lt;Audio 3&gt; in the
+                              H3 prompt.
+                            </div>
+                          </div>
+                          <Badge tone="neutral" className="voice-slot-count font-mono tabular-nums">
+                            {draftVoiceRefs.length}/3
+                          </Badge>
                         </div>
+
+                        {selected.source_audio_path ? (
+                          <Banner
+                            tone="warn"
+                            title="Exact source audio controls this run"
+                            className="voice-source-audio-banner"
+                          >
+                            Voice Reference overrides are disabled.
+                          </Banner>
+                        ) : null}
+
+                        <div className="voice-picker-row flex flex-wrap items-end gap-2">
+                          <label className="voice-picker-field flex min-w-[220px] flex-1 flex-col gap-1 text-xs font-medium text-ink-secondary">
+                            <span>Add Voice reference</span>
+                            <Select
+                              aria-label="Add Voice reference"
+                              value={selectedVoiceId}
+                              disabled={
+                                busy ||
+                                jobActive ||
+                                Boolean(selected.source_audio_path) ||
+                                draftVoiceRefs.length >= 3
+                              }
+                              wrapperClassName="w-full"
+                              onChange={(e) => setSelectedVoiceId(e.target.value)}
+                            >
+                              <option value="">Choose from Voice Library…</option>
+                              {voiceAssets
+                                .filter(
+                                  (asset) => !draftVoiceRefs.some((ref) => ref.asset_id === asset.id),
+                                )
+                                .map((asset) => (
+                                  <option key={asset.id} value={asset.id}>
+                                    {asset.name}
+                                  </option>
+                                ))}
+                            </Select>
+                          </label>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="md"
+                            disabled={
+                              !selectedVoiceId ||
+                              busy ||
+                              jobActive ||
+                              Boolean(selected.source_audio_path)
+                            }
+                            onClick={addVoiceRef}
+                          >
+                            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                            Add Voice
+                          </Button>
+                        </div>
+
+                        {draftVoiceRefs.length === 0 ? (
+                          <p className="text-xs text-ink-muted">No Voice references selected.</p>
+                        ) : (
+                          <div className="voice-ref-list flex flex-col gap-2.5">
+                            {draftVoiceRefs.map((ref, index) => {
+                              const asset = voiceAssetById.get(ref.asset_id);
+                              return (
+                                <article
+                                  className="voice-ref-item flex flex-col gap-3 rounded-lg border border-border-subtle bg-elevated/40 p-3 sm:flex-row sm:items-start"
+                                  key={ref.asset_id}
+                                >
+                                  <Badge tone="accent" className="voice-ref-index shrink-0 font-mono">
+                                    Audio {index + 1}
+                                  </Badge>
+                                  <div className="voice-ref-main flex min-w-0 flex-1 flex-col gap-2">
+                                    <div className="flex items-center gap-2">
+                                      <strong className="text-xs font-semibold text-ink">
+                                        {asset?.name || ref.asset_id}
+                                      </strong>
+                                      {asset?.meta?.duration_s != null ? (
+                                        <span className="font-mono text-[11px] text-ink-muted">
+                                          {String(asset.meta.duration_s)}s
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    {asset?.notes ? (
+                                      <div className="text-xs text-ink-secondary">{asset.notes}</div>
+                                    ) : null}
+                                    {asset?.urls?.[ref.file_key || "reference"] ? (
+                                      <audio
+                                        controls
+                                        preload="metadata"
+                                        src={asset.urls[ref.file_key || "reference"]}
+                                        className="h-8 w-full max-w-md"
+                                      />
+                                    ) : (
+                                      <div className="text-xs text-ink-muted">
+                                        Reference audio is unavailable.
+                                      </div>
+                                    )}
+                                    <label className="voice-speaker-field flex max-w-xs flex-col gap-1 text-[11px] font-medium text-ink-secondary">
+                                      <span>Speaker label</span>
+                                      <Input
+                                        value={ref.speaker}
+                                        disabled={
+                                          busy || jobActive || Boolean(selected.source_audio_path)
+                                        }
+                                        onChange={(e) =>
+                                          updateVoiceRefs(
+                                            draftVoiceRefs.map((item, itemIndex) =>
+                                              itemIndex === index
+                                                ? { ...item, speaker: e.target.value }
+                                                : item,
+                                            ),
+                                          )
+                                        }
+                                      />
+                                    </label>
+                                  </div>
+                                  <div className="voice-ref-actions flex shrink-0 items-center gap-1">
+                                    <Button
+                                      type="button"
+                                      variant="secondary"
+                                      size="xs"
+                                      aria-label={`Move Audio ${index + 1} up`}
+                                      disabled={
+                                        index === 0 || busy || Boolean(selected.source_audio_path)
+                                      }
+                                      onClick={() => moveVoiceRef(index, -1)}
+                                    >
+                                      <ArrowUp className="h-3 w-3" aria-hidden="true" />
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="secondary"
+                                      size="xs"
+                                      aria-label={`Move Audio ${index + 1} down`}
+                                      disabled={
+                                        index === draftVoiceRefs.length - 1 ||
+                                        busy ||
+                                        Boolean(selected.source_audio_path)
+                                      }
+                                      onClick={() => moveVoiceRef(index, 1)}
+                                    >
+                                      <ArrowDown className="h-3 w-3" aria-hidden="true" />
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="xs"
+                                      aria-label={`Remove Audio ${index + 1}`}
+                                      disabled={busy || Boolean(selected.source_audio_path)}
+                                      onClick={() =>
+                                        updateVoiceRefs(
+                                          draftVoiceRefs.filter(
+                                            (_, itemIndex) => itemIndex !== index,
+                                          ),
+                                        )
+                                      }
+                                    >
+                                      Remove
+                                    </Button>
+                                  </div>
+                                </article>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {voicePromptStale && !selected.source_audio_path ? (
+                          <p className="voice-prompt-stale text-xs text-status-warn">
+                            Prompt will refresh before H3 submission.
+                          </p>
+                        ) : null}
+
+                        <div>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled={
+                              busy ||
+                              jobActive ||
+                              Boolean(selected.source_audio_path) ||
+                              !voiceRefsDirty
+                            }
+                            onClick={saveVoiceRefs}
+                          >
+                            Save Voice refs
+                          </Button>
+                        </div>
+                      </section>
+                    </div>
+                  ) : null}
+
+                  {tab === "prompt" ? (
+                    <div className="tab-panel flex flex-col gap-3.5">
+                      {PROMPT_SECTION_KEYS.map(({ key, label }) => {
+                        const inputId = `production-prompt-${key}`;
+                        return (
+                          <div key={key} className="flex flex-col gap-1.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <label
+                                htmlFor={inputId}
+                                className="text-xs font-medium text-ink-secondary"
+                              >
+                                {label}
+                              </label>
+                              <span className="font-mono text-[10px] text-ink-muted">{key}</span>
+                            </div>
+                            <Textarea
+                              id={inputId}
+                              rows={key === "detailed_description" ? 6 : 2}
+                              value={draftPrompt[key]}
+                              disabled={busy || jobActive}
+                              className="font-mono text-xs leading-relaxed"
+                              onChange={(e) => {
+                                setPromptDirty(true);
+                                setDraftPrompt((p) => ({ ...p, [key]: e.target.value }));
+                              }}
+                            />
+                          </div>
+                        );
+                      })}
+                      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_160px]">
+                        <label className="flex flex-col gap-1.5 text-xs font-medium text-ink-secondary">
+                          <span>Dialogue (one line per cue)</span>
+                          <Textarea
+                            rows={3}
+                            value={draftDialogue}
+                            disabled={busy || jobActive}
+                            className="font-mono text-xs leading-relaxed"
+                            onChange={(e) => setDraftDialogue(e.target.value)}
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1.5 text-xs font-medium text-ink-secondary">
+                          <span>Duration (seconds)</span>
+                          <Input
+                            value={draftDuration}
+                            disabled={busy || jobActive}
+                            className="font-mono"
+                            onChange={(e) => setDraftDuration(e.target.value)}
+                            inputMode="decimal"
+                          />
+                        </label>
+                      </div>
+                      <div className="pt-1">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          disabled={busy || jobActive}
+                          onClick={onSavePrompt}
+                        >
+                          Save prompt
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {tab === "run" ? (
+                    <div className="tab-panel flex flex-col gap-4">
+                      {h3Provider === "local" ? (
+                        <VideoContextPanel
+                          key={selected.id}
+                          shot={selected}
+                          shots={shots}
+                          onShotUpdated={replaceShot}
+                        />
+                      ) : null}
+                      {h3Provider === "local" ? resolutionPicker : null}
+
+                      <ol className="run-steps grid gap-2 sm:grid-cols-3">
+                        {[
+                          {
+                            label: "Refs cast",
+                            done: (selected.refs?.length ?? 0) > 0,
+                          },
+                          {
+                            label: "Six-section prompt saved",
+                            done: promptReady(selected.prompt_sections),
+                          },
+                          {
+                            label: "Submit H3 Ref2AV",
+                            done:
+                              selected.status === "queued" ||
+                              selected.status === "running" ||
+                              selected.status === "succeeded",
+                          },
+                        ].map((step) => (
+                          <li
+                            key={step.label}
+                            className={cn(
+                              "flex items-center gap-2 rounded-md border px-3 py-2 text-xs font-medium",
+                              step.done
+                                ? "done border-status-ok/30 bg-status-ok-soft text-status-ok"
+                                : "border-border-subtle bg-elevated/40 text-ink-secondary",
+                            )}
+                          >
+                            {step.done ? (
+                              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                            ) : (
+                              <Circle
+                                className="h-3.5 w-3.5 shrink-0 text-ink-muted"
+                                aria-hidden="true"
+                              />
+                            )}
+                            <span>{step.label}</span>
+                          </li>
+                        ))}
+                      </ol>
+
+                      {!canSubmit && !jobActive ? (
+                        <p className="text-xs text-ink-muted">
+                          Need at least one ref and a complete prompt (all six sections non-empty).
+                          Save prompt on the Prompt tab first.
+                        </p>
                       ) : null}
 
-                      <div className="voice-picker-row">
-                        <label className="field voice-picker-field">
-                          <span>Add Voice reference</span>
-                          <select
-                            aria-label="Add Voice reference"
-                            value={selectedVoiceId}
-                            disabled={busy || jobActive || Boolean(selected.source_audio_path) || draftVoiceRefs.length >= 3}
-                            onChange={(e) => setSelectedVoiceId(e.target.value)}
-                          >
-                            <option value="">Choose from Voice Library…</option>
-                            {voiceAssets
-                              .filter((asset) => !draftVoiceRefs.some((ref) => ref.asset_id === asset.id))
-                              .map((asset) => (
-                                <option key={asset.id} value={asset.id}>{asset.name}</option>
-                              ))}
-                          </select>
-                        </label>
-                        <button
-                          type="button"
-                          className="btn secondary"
-                          disabled={!selectedVoiceId || busy || jobActive || Boolean(selected.source_audio_path)}
-                          onClick={addVoiceRef}
-                        >
-                          Add Voice
-                        </button>
-                      </div>
-
-                      {draftVoiceRefs.length === 0 ? (
-                        <p className="empty-copy">No Voice references selected.</p>
-                      ) : (
-                        <div className="voice-ref-list">
-                          {draftVoiceRefs.map((ref, index) => {
-                            const asset = voiceAssetById.get(ref.asset_id);
-                            return (
-                              <article className="voice-ref-item" key={ref.asset_id}>
-                                <div className="voice-ref-index">Audio {index + 1}</div>
-                                <div className="voice-ref-main">
-                                  <div className="voice-ref-title-row">
-                                    <strong>{asset?.name || ref.asset_id}</strong>
-                                    {asset?.meta?.duration_s != null ? (
-                                      <span className="muted tiny">{String(asset.meta.duration_s)}s</span>
-                                    ) : null}
-                                  </div>
-                                  {asset?.notes ? <div className="muted tiny">{asset.notes}</div> : null}
-                                  {asset?.urls?.[ref.file_key || "reference"] ? (
-                                    <audio controls preload="metadata" src={asset.urls[ref.file_key || "reference"]} />
-                                  ) : (
-                                    <div className="muted tiny">Reference audio is unavailable.</div>
-                                  )}
-                                  <label className="field voice-speaker-field">
-                                    <span>Speaker label</span>
-                                    <input
-                                      value={ref.speaker}
-                                      disabled={busy || jobActive || Boolean(selected.source_audio_path)}
-                                      onChange={(e) => updateVoiceRefs(draftVoiceRefs.map((item, itemIndex) =>
-                                        itemIndex === index ? { ...item, speaker: e.target.value } : item,
-                                      ))}
-                                    />
-                                  </label>
-                                </div>
-                                <div className="voice-ref-actions">
-                                  <button type="button" className="btn secondary compact" aria-label={`Move Audio ${index + 1} up`} disabled={index === 0 || busy || Boolean(selected.source_audio_path)} onClick={() => moveVoiceRef(index, -1)}>↑</button>
-                                  <button type="button" className="btn secondary compact" aria-label={`Move Audio ${index + 1} down`} disabled={index === draftVoiceRefs.length - 1 || busy || Boolean(selected.source_audio_path)} onClick={() => moveVoiceRef(index, 1)}>↓</button>
-                                  <button type="button" className="btn secondary compact" aria-label={`Remove Audio ${index + 1}`} disabled={busy || Boolean(selected.source_audio_path)} onClick={() => updateVoiceRefs(draftVoiceRefs.filter((_, itemIndex) => itemIndex !== index))}>Remove</button>
-                                </div>
-                              </article>
-                            );
-                          })}
+                      {h3Job ? (
+                        <div className="run-job-box flex flex-col gap-3 rounded-lg border border-border-subtle bg-elevated/40 p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <Badge
+                              tone={jobStatusTone(h3Job.status)}
+                              className={cn("status-pill", `status-${h3Job.status}`)}
+                            >
+                              <StatusDot
+                                tone={jobStatusTone(h3Job.status)}
+                                pulse={jobActive}
+                              />
+                              {h3Job.status}
+                            </Badge>
+                            <span className="job-id font-mono text-[11px] text-ink-muted">
+                              {h3Job.id}
+                            </span>
+                          </div>
+                          <div className="text-xs text-ink-secondary">
+                            Provider:{" "}
+                            {h3Job.h3_provider === "minimax"
+                              ? "MiniMax · Official API"
+                              : "Local · ComfyUI"}
+                          </div>
+                          {h3Job.error ? <Banner tone="danger">{h3Job.error}</Banner> : null}
+                          {h3Job.outputs?.video?.url || h3Job.outputs?.master?.url ? (
+                            <video
+                              className="h3-preview max-h-[420px] w-full rounded-md border border-border-subtle bg-black"
+                              controls
+                              src={
+                                (h3Job.outputs.video?.url ||
+                                  h3Job.outputs.master?.url) as string
+                              }
+                            />
+                          ) : null}
                         </div>
+                      ) : (
+                        <p className="rounded-md border border-dashed border-border-subtle bg-elevated/30 px-3 py-3 text-xs text-ink-muted">
+                          No H3 job yet for this shot.
+                        </p>
                       )}
 
-                      {voicePromptStale && !selected.source_audio_path ? (
-                        <p className="field-hint voice-prompt-stale">Prompt will refresh before H3 submission.</p>
-                      ) : null}
-                      <div className="actions">
-                        <button type="button" className="btn secondary" disabled={busy || jobActive || Boolean(selected.source_audio_path) || !voiceRefsDirty} onClick={saveVoiceRefs}>
-                          Save Voice refs
-                        </button>
-                      </div>
-                    </section>
-                  </div>
-                ) : null}
+                      {providerPicker}
 
-                {tab === "prompt" ? (
-                  <div className="tab-panel">
-                    {PROMPT_SECTION_KEYS.map(({ key, label }) => (
-                      <label key={key} className="field">
-                        <span>{label}</span>
-                        <textarea
-                          rows={key === "detailed_description" ? 6 : 2}
-                          value={draftPrompt[key]}
-                          disabled={busy || jobActive}
-                          onChange={(e) => {
-                            setPromptDirty(true);
-                            setDraftPrompt((p) => ({ ...p, [key]: e.target.value }));
-                          }}
-                        />
-                      </label>
-                    ))}
-                    <div className="form-row-2">
-                      <label className="field">
-                        <span>Dialogue (one line per cue)</span>
-                        <textarea
-                          rows={3}
-                          value={draftDialogue}
-                          disabled={busy || jobActive}
-                          onChange={(e) => setDraftDialogue(e.target.value)}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Duration (seconds)</span>
-                        <input
-                          value={draftDuration}
-                          disabled={busy || jobActive}
-                          onChange={(e) => setDraftDuration(e.target.value)}
-                          inputMode="decimal"
-                        />
-                      </label>
-                    </div>
-                    <div className="actions">
-                      <button
-                        type="button"
-                        className="btn secondary"
-                        disabled={busy || jobActive}
-                        onClick={onSavePrompt}
-                      >
-                        Save prompt
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-
-                {tab === "run" ? (
-                  <div className="tab-panel">
-                    {h3Provider === "local" ? <VideoContextPanel key={selected.id} shot={selected} shots={shots} onShotUpdated={replaceShot} /> : null}
-                    {h3Provider === "local" ? resolutionPicker : null}
-                    <ol className="run-steps">
-                      <li className={(selected.refs?.length ?? 0) > 0 ? "done" : ""}>
-                        Refs cast
-                      </li>
-                      <li className={promptReady(selected.prompt_sections) ? "done" : ""}>
-                        Six-section prompt saved
-                      </li>
-                      <li
-                        className={
-                          selected.status === "queued" ||
-                          selected.status === "running" ||
-                          selected.status === "succeeded"
-                            ? "done"
-                            : ""
-                        }
-                      >
-                        Submit H3 Ref2AV
-                      </li>
-                    </ol>
-                    {!canSubmit && !jobActive ? (
-                      <p className="field-hint">
-                        Need at least one ref and a complete prompt (all six sections
-                        non-empty). Save prompt on the Prompt tab first.
-                      </p>
-                    ) : null}
-
-                    {h3Job ? (
-                      <div className="run-job-box">
-                        <div className={`status-pill status-${h3Job.status}`}>
-                          <span className="dot" />
-                          {h3Job.status}
-                          <span className="job-id">{h3Job.id}</span>
-                        </div>
-                        <div className="field-hint">
-                          Provider: {h3Job.h3_provider === "minimax" ? "MiniMax · Official API" : "Local · ComfyUI"}
-                        </div>
-                        {h3Job.error ? (
-                          <div className="banner error">{h3Job.error}</div>
-                        ) : null}
-                        {h3Job.outputs?.video?.url || h3Job.outputs?.master?.url ? (
-                          <video
-                            className="h3-preview"
-                            controls
-                            src={
-                              (h3Job.outputs.video?.url ||
-                                h3Job.outputs.master?.url) as string
-                            }
-                          />
-                        ) : null}
-                      </div>
-                    ) : (
-                      <p className="field-hint">No H3 job yet for this shot.</p>
-                    )}
-
-                    {providerPicker}
-
-                    <div className="production-submit-actions">
-                      <button
-                        type="button"
-                        className="btn primary"
-                        disabled={busy || !canSubmit || jobActive || managedActive}
-                        onClick={onSubmit}
-                      >
-                        {jobActive ? "H3 running…" : "Submit H3"}
-                      </button>
-                      {jobActive ? (
-                        <button
+                      <div className="production-submit-actions flex flex-wrap items-center gap-2 border-t border-border-subtle pt-3">
+                        <Button
                           type="button"
-                          className="btn danger"
-                          disabled={busy}
-                          onClick={onCancelJob}
+                          variant="primary"
+                          disabled={busy || !canSubmit || jobActive || managedActive}
+                          onClick={onSubmit}
                         >
-                          Cancel
-                        </button>
-                      ) : null}
+                          <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                          {jobActive ? "H3 running…" : "Submit H3"}
+                        </Button>
+                        {jobActive ? (
+                          <Button
+                            type="button"
+                            variant="danger"
+                            disabled={busy}
+                            onClick={onCancelJob}
+                          >
+                            <Square className="h-3 w-3" aria-hidden="true" />
+                            Cancel
+                          </Button>
+                        ) : null}
+                      </div>
                     </div>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          )}
-        </section>
+                  ) : null}
+                </div>
+              </Panel>
+            )}
+          </section>
+        </div>
       </div>
 
-      {previewUrl ? (
-        <div
-          className="lightbox-overlay"
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setPreviewUrl(null)}
-          onKeyDown={(e) => e.key === "Escape" && setPreviewUrl(null)}
-        >
-          <button
-            type="button"
-            className="lightbox-close btn secondary sm"
-            onClick={() => setPreviewUrl(null)}
-          >
-            Close
-          </button>
-          <img
-            className="lightbox-img"
-            src={previewUrl}
-            alt="ref preview"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      ) : null}
+      {lightbox}
     </PageShell>
   );
 }

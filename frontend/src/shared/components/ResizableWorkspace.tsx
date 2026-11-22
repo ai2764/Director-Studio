@@ -1,4 +1,5 @@
 import { useCallback, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { cn } from "../ui/cn";
 
 const DEFAULT_SIZE = 55;
 const MIN_SIZE = 34;
@@ -39,27 +40,33 @@ export function ResizableWorkspace({
   maxSize?: number;
 }) {
   const [size, setSize] = useState(() => initialSize(storageKey, defaultSize, minSize, maxSize));
+  const [dragging, setDragging] = useState(false);
 
-  const updateSize = useCallback((next: number) => {
-    const clamped = clamp(next, minSize, maxSize);
-    setSize(clamped);
-    try {
-      localStorage.setItem(storageKey, String(clamped));
-    } catch {
-      /* local persistence is optional */
-    }
-  }, [maxSize, minSize, storageKey]);
+  const updateSize = useCallback(
+    (next: number) => {
+      const clamped = clamp(next, minSize, maxSize);
+      setSize(clamped);
+      try {
+        localStorage.setItem(storageKey, String(clamped));
+      } catch {
+        /* local persistence is optional */
+      }
+    },
+    [maxSize, minSize, storageKey],
+  );
 
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     const split = event.currentTarget.parentElement;
     if (!split) return;
+    setDragging(true);
     const onMove = (moveEvent: PointerEvent) => {
       const bounds = split.getBoundingClientRect();
       if (!bounds.width) return;
       updateSize(((moveEvent.clientX - bounds.left) / bounds.width) * 100);
     };
     const onUp = () => {
+      setDragging(false);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
@@ -69,12 +76,12 @@ export function ResizableWorkspace({
 
   return (
     <div
-      className={`resizable-workspace ${className}`.trim()}
+      className={cn("resizable-workspace grid min-h-0 w-full min-w-0 flex-1", className)}
       style={{ gridTemplateColumns: `${size}fr 10px ${100 - size}fr` }}
     >
-      <div className="resizable-pane primary-pane">{primary}</div>
+      <div className="resizable-pane primary-pane min-h-0 min-w-0">{primary}</div>
       <div
-        className="resize-separator"
+        className="resize-separator group relative flex cursor-col-resize touch-none items-center justify-center select-none focus-visible:outline-none"
         role="separator"
         aria-label={separatorLabel}
         aria-orientation="vertical"
@@ -100,9 +107,17 @@ export function ResizableWorkspace({
           }
         }}
       >
-        <span aria-hidden="true" />
+        <span
+          aria-hidden="true"
+          className={cn(
+            "h-12 w-[3px] rounded-full transition-all duration-150",
+            dragging
+              ? "h-20 bg-accent opacity-100"
+              : "bg-border-strong opacity-0 group-hover:bg-accent/80 group-hover:opacity-100 group-focus-visible:bg-accent group-focus-visible:opacity-100",
+          )}
+        />
       </div>
-      <div className="resizable-pane secondary-pane">{secondary}</div>
+      <div className="resizable-pane secondary-pane min-h-0 min-w-0">{secondary}</div>
     </div>
   );
 }

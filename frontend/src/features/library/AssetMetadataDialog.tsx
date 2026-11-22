@@ -1,8 +1,21 @@
 import { useState } from "react";
+import { X } from "lucide-react";
+import { useProject } from "../../shared/project/ProjectContext";
+import {
+  Banner,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  Input,
+  Textarea,
+} from "../../shared/ui";
 import type { LibraryAsset } from "./api";
 import { updateLibraryAsset } from "./api";
 import { LibraryDescriptionWand } from "./LibraryDescriptionWand";
-import { useProject } from "../../shared/project/ProjectContext";
 
 export function AssetMetadataDialog({
   asset,
@@ -18,6 +31,8 @@ export function AssetMetadataDialog({
   const [notes, setNotes] = useState(asset.notes || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const titleId = `asset-metadata-title-${asset.id}`;
+  const descId = `asset-metadata-desc-${asset.id}`;
 
   const save = async () => {
     if (!name.trim()) return;
@@ -37,28 +52,50 @@ export function AssetMetadataDialog({
   };
 
   return (
-    <div
-      className="folder-modal asset-metadata-modal"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Edit ${asset.name} metadata`}
-      onClick={() => { if (!saving) onClose(); }}
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !saving) onClose();
+      }}
     >
-      <section
-        className="folder-modal-panel asset-metadata-panel"
-        onClick={(event) => event.stopPropagation()}
+      <DialogContent
+        hideClose
+        aria-labelledby={titleId}
+        aria-describedby={descId}
+        className="folder-modal-panel asset-metadata-panel w-[min(520px,calc(100vw-24px))] overflow-y-auto"
       >
-        <header className="asset-metadata-heading">
+        <DialogTitle id={titleId} className="sr-only">
+          Edit {asset.name} metadata
+        </DialogTitle>
+        <DialogDescription id={descId} className="sr-only">
+          Edit asset name and description for library reuse.
+        </DialogDescription>
+
+        <DialogHeader className="asset-metadata-heading flex-row items-start justify-between gap-3 pr-0">
           <div>
-            <span>Library metadata</span>
-            <h2>Edit asset</h2>
+            <span className="block text-[11px] font-medium uppercase tracking-wider text-ink-muted">
+              Library metadata
+            </span>
+            <h2 className="mt-0.5 text-sm font-semibold tracking-[-0.01em] text-ink">
+              Edit asset
+            </h2>
           </div>
-          <button type="button" aria-label="Close metadata editor" disabled={saving} onClick={onClose}>×</button>
-        </header>
-        <div className="asset-metadata-fields">
-          <label>
-            <span>Name</span>
-            <input
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Close metadata editor"
+            disabled={saving}
+            onClick={onClose}
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </DialogHeader>
+
+        <div className="asset-metadata-fields mt-4 flex flex-col gap-3.5">
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-ink-secondary">Name</span>
+            <Input
               aria-label="Name"
               value={name}
               required
@@ -66,9 +103,9 @@ export function AssetMetadataDialog({
               onChange={(event) => setName(event.target.value)}
             />
           </label>
-          <label>
-            <span>Description</span>
-            <textarea
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-ink-secondary">Description</span>
+            <Textarea
               aria-label="Description"
               value={notes}
               rows={5}
@@ -76,25 +113,40 @@ export function AssetMetadataDialog({
               onChange={(event) => setNotes(event.target.value)}
             />
           </label>
-          <LibraryDescriptionWand asset={asset} name={name} description={notes} projectId={asset.project_id || projectId}
-            disabled={saving} onDescription={setNotes} />
+          <LibraryDescriptionWand
+            asset={asset}
+            name={name}
+            description={notes}
+            projectId={asset.project_id || projectId}
+            disabled={saving}
+            onDescription={setNotes}
+          />
         </div>
-        <p className="asset-metadata-impact">
+
+        <p className="asset-metadata-impact mt-3 rounded-md border border-border-subtle bg-elevated/40 px-3 py-2 text-[11px] text-ink-muted">
           Shots using this asset will need their H3 prompt reviewed again.
         </p>
-        {error ? <div className="banner error">{error}</div> : null}
-        <footer className="asset-metadata-actions">
-          <button type="button" className="btn secondary" disabled={saving} onClick={onClose}>Cancel</button>
-          <button
+
+        {error ? (
+          <Banner tone="danger" role="alert" className="mt-3">
+            {error}
+          </Banner>
+        ) : null}
+
+        <DialogFooter className="asset-metadata-actions">
+          <Button type="button" variant="secondary" disabled={saving} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
             type="button"
-            className="btn primary"
+            variant="primary"
             disabled={saving || !name.trim()}
             onClick={() => void save()}
           >
             {saving ? "Saving…" : "Save changes"}
-          </button>
-        </footer>
-      </section>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -1,4 +1,16 @@
 import { useEffect, useRef, useState } from "react";
+import {
+  Banner,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  Input,
+  Textarea,
+} from "../../shared/ui";
 import { describeUploadImage, importExternalAsset, type LibraryKind } from "./api";
 
 const KIND_LABELS: Record<LibraryKind, string> = {
@@ -40,10 +52,14 @@ export function AssetImportDialog({
   const isVoice = kind === "voices";
   const label = libraryKindLabel(kind);
   const titleId = `asset-import-${kind}-title`;
+  const descId = `asset-import-${kind}-desc`;
 
   useEffect(() => () => request.current?.abort(), []);
   useEffect(() => {
-    if (!selectedFile) { setPreview(""); return; }
+    if (!selectedFile) {
+      setPreview("");
+      return;
+    }
     const url = URL.createObjectURL(selectedFile);
     setPreview(url);
     return () => URL.revokeObjectURL(url);
@@ -67,15 +83,22 @@ export function AssetImportDialog({
     setNotice("");
     try {
       const result = await describeUploadImage({
-        file: selectedFile, name: name.trim() || filenameName.current,
-        existingDescription, kind, projectId, signal: controller.signal,
+        file: selectedFile,
+        name: name.trim() || filenameName.current,
+        existingDescription,
+        kind,
+        projectId,
+        signal: controller.signal,
       });
       if (request.current !== controller || controller.signal.aborted) return;
       if (notesRevision.current === revision) {
         setNotes(result.description);
         generated.current = result.description;
-        setNotice(existingDescription ? "Description refined. Review and edit before importing."
-          : "Description ready. Review and edit before importing.");
+        setNotice(
+          existingDescription
+            ? "Description refined. Review and edit before importing."
+            : "Description ready. Review and edit before importing.",
+        );
       } else {
         setNotice("Your description edits were kept.");
       }
@@ -84,7 +107,10 @@ export function AssetImportDialog({
         setError(cause instanceof Error ? cause.message : String(cause));
       }
     } finally {
-      if (request.current === controller) { request.current = null; setReading(false); }
+      if (request.current === controller) {
+        request.current = null;
+        setReading(false);
+      }
     }
   };
 
@@ -113,34 +139,48 @@ export function AssetImportDialog({
   };
 
   return (
-    <div
-      className="folder-modal asset-import-modal"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      onClick={() => { if (!busy) onClose(); }}
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !busy) onClose();
+      }}
     >
-      <div className="folder-modal-panel asset-import-modal-panel" onClick={(event) => event.stopPropagation()}>
-        <div className="folder-modal-head">
-          <div>
-            <span className="mobile-eyebrow">Add to project library</span>
-            <h2 className="folder-modal-title" id={titleId}>Import {label}</h2>
+      <DialogContent
+        hideClose
+        aria-labelledby={titleId}
+        aria-describedby={descId}
+        className="folder-modal-panel asset-import-modal-panel w-[min(540px,calc(100vw-24px))] overflow-y-auto"
+      >
+        <DialogHeader className="flex-row items-start justify-between gap-3 pr-0">
+          <div className="min-w-0">
+            <span className="mobile-eyebrow block text-[11px] font-medium uppercase tracking-wider text-ink-muted">
+              Add to project library
+            </span>
+            <DialogTitle id={titleId} className="folder-modal-title mt-0.5">
+              Import {label}
+            </DialogTitle>
           </div>
-          <button type="button" className="btn secondary sm" onClick={onClose} disabled={busy}>
+          <Button type="button" variant="secondary" size="sm" onClick={onClose} disabled={busy}>
             Close import
-          </button>
-        </div>
+          </Button>
+        </DialogHeader>
 
-        {error ? <div className="banner error">{error}</div> : null}
-        <p className="field-hint">
+        <DialogDescription id={descId} className="mt-2">
           {isVoice
             ? "Upload a clean 2–15 second voice sample. Name and Description help the Director cast it."
             : "The magic wand uses this image, its name and your current description to draft or refine the text. Review before importing."}
-        </p>
-        <div className="import-form">
-          <label className="field field-span-2">
-            <span>Name</span>
-            <input
+        </DialogDescription>
+
+        {error ? (
+          <Banner tone="danger" role="alert" className="mt-3">
+            {error}
+          </Banner>
+        ) : null}
+
+        <div className="import-form mt-4 flex flex-col gap-3.5">
+          <label className="field flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-ink-secondary">Name</span>
+            <Input
               value={name}
               onChange={(event) => {
                 cancelReading();
@@ -151,10 +191,15 @@ export function AssetImportDialog({
               required={isVoice}
             />
           </label>
+
           {!isVoice ? (
-            <label className="field field-span-2">
-              <span>Image file</span>
-              <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={busy}
+            <label className="field flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-ink-secondary">Image file</span>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                disabled={busy}
+                className="block w-full cursor-pointer rounded-md border border-border-subtle bg-elevated/40 px-2.5 py-1.5 text-xs text-ink file:mr-3 file:cursor-pointer file:rounded file:border-0 file:bg-panel file:px-2.5 file:py-1 file:text-xs file:font-medium file:text-ink hover:border-border-strong"
                 onChange={(event) => {
                   const file = event.target.files?.[0];
                   if (!file) return;
@@ -164,54 +209,108 @@ export function AssetImportDialog({
                   const stem = file.name.replace(/\.[^.]+$/, "");
                   if (!name.trim() || name === filenameName.current) setName(stem);
                   filenameName.current = stem;
-                  if (notes === generated.current) { setNotes(""); notesRevision.current += 1; }
+                  if (notes === generated.current) {
+                    setNotes("");
+                    notesRevision.current += 1;
+                  }
                   generated.current = "";
-                }} />
+                }}
+              />
             </label>
           ) : null}
-          {preview ? <img className="asset-import-preview field-span-2" src={preview} alt="Selected reference" /> : null}
-          <div className="field field-span-2">
-            <div className="asset-description-heading">
-              <label htmlFor={`${titleId}-description`}>Description</label>
+
+          {preview ? (
+            <div className="flex items-center justify-center overflow-hidden rounded-lg border border-border-subtle bg-canvas/70 p-2">
+              <img
+                className="asset-import-preview max-h-44 max-w-full rounded object-contain"
+                src={preview}
+                alt="Selected reference"
+              />
+            </div>
+          ) : null}
+
+          <div className="field flex flex-col gap-1.5">
+            <div className="asset-description-heading flex items-center justify-between gap-2">
+              <label
+                htmlFor={`${titleId}-description`}
+                className="text-xs font-medium text-ink-secondary"
+              >
+                Description
+              </label>
               {!isVoice ? (
-                <button type="button" className="btn secondary sm asset-description-wand"
-                  aria-label="Describe selected image" aria-busy={reading}
-                  title={notes.trim() ? "Refine using this image, its name and the current description" : "Describe this image using its name as guidance"}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="xs"
+                  className="asset-description-wand"
+                  aria-label="Describe selected image"
+                  aria-busy={reading}
+                  title={
+                    notes.trim()
+                      ? "Refine using this image, its name and the current description"
+                      : "Describe this image using its name as guidance"
+                  }
                   disabled={busy || reading || !selectedFile}
-                  onClick={() => void readImage()}>🪄{reading ? " Reading…" : ""}</button>
+                  onClick={() => void readImage()}
+                >
+                  🪄{reading ? " Reading…" : ""}
+                </Button>
               ) : null}
             </div>
-            <textarea
+            <Textarea
               id={`${titleId}-description`}
               value={notes}
-              onChange={(event) => { notesRevision.current += 1; setNotes(event.target.value); setNotice(""); }}
-              rows={isVoice ? 3 : 6}
-              placeholder={isVoice ? "Neutral speech, language and delivery notes" : "Describe visible details, construction and any uncertainty"}
-              disabled={busy}
-            />
-            {notice ? <span className="field-hint" role="status">{notice}</span> : null}
-          </div>
-          {isVoice ? <label className="field field-span-2">
-            <span>Audio file</span>
-            <input
-              type="file"
-              accept={isVoice
-                ? "audio/*,.wav,.mp3,.m4a,.aac,.flac,.ogg"
-                : "image/png,image/jpeg,image/webp,image/gif"}
-              disabled={busy}
               onChange={(event) => {
-                const file = event.target.files?.[0] || null;
-                event.target.value = "";
-                void onImport(file);
+                notesRevision.current += 1;
+                setNotes(event.target.value);
+                setNotice("");
               }}
+              rows={isVoice ? 3 : 5}
+              placeholder={
+                isVoice
+                  ? "Neutral speech, language and delivery notes"
+                  : "Describe visible details, construction and any uncertainty"
+              }
+              disabled={busy}
             />
-          </label> : null}
+            {notice ? (
+              <span className="field-hint text-[11px] text-ink-muted" role="status">
+                {notice}
+              </span>
+            ) : null}
+          </div>
+
+          {isVoice ? (
+            <label className="field flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-ink-secondary">Audio file</span>
+              <input
+                type="file"
+                accept="audio/*,.wav,.mp3,.m4a,.aac,.flac,.ogg"
+                disabled={busy}
+                className="block w-full cursor-pointer rounded-md border border-border-subtle bg-elevated/40 px-2.5 py-1.5 text-xs text-ink file:mr-3 file:cursor-pointer file:rounded file:border-0 file:bg-panel file:px-2.5 file:py-1 file:text-xs file:font-medium file:text-ink hover:border-border-strong"
+                onChange={(event) => {
+                  const file = event.target.files?.[0] || null;
+                  event.target.value = "";
+                  void onImport(file);
+                }}
+              />
+            </label>
+          ) : null}
         </div>
-        {!isVoice ? <footer className="asset-metadata-actions">
-          <button type="button" className="btn primary" disabled={busy || reading || !selectedFile}
-            onClick={() => void onImport(selectedFile)}>{busy ? "Importing…" : "Import image"}</button>
-        </footer> : null}
-      </div>
-    </div>
+
+        {!isVoice ? (
+          <DialogFooter className="asset-metadata-actions">
+            <Button
+              type="button"
+              variant="primary"
+              disabled={busy || reading || !selectedFile}
+              onClick={() => void onImport(selectedFile)}
+            >
+              {busy ? "Importing…" : "Import image"}
+            </Button>
+          </DialogFooter>
+        ) : null}
+      </DialogContent>
+    </Dialog>
   );
 }

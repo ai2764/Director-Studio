@@ -1,89 +1,21 @@
-import { ShotWorkspacePage } from "../shot-workspace/ShotWorkspacePage";
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  layoutPreviewUrl,
-  type Shot,
-} from "../../shared/api/types";
+import { useState } from "react";
+import { Plus, RotateCcw, Send, Square, X } from "lucide-react";
 import { ResizableWorkspace } from "../../shared/components/ResizableWorkspace";
 import { useProject } from "../../shared/project/ProjectContext";
+import { Banner, Button, EmptyState, Select, StatusDot, Textarea, cn } from "../../shared/ui";
 import type { SegmentSelection } from "../music/api";
 import { SongTransport } from "../music/SongTransport";
-import { ShotWorkspace } from "./ShotWorkspace";
-import { ContextUsagePanel } from "./ContextUsage";
+import { ShotWorkspacePage } from "../shot-workspace/ShotWorkspacePage";
 import { ContextCompaction } from "./ContextCompaction";
+import { ContextUsagePanel } from "./ContextUsage";
 import { MobileShotDrawer } from "./MobileShotDrawer";
-import { continuationFocus } from "./VideoContextPanel";
+import { ShotWorkspace } from "./ShotWorkspace";
+import { generationStatusText } from "./generationStatus";
 import {
-  cancelDirectorChatSession,
-  DirectorChatError,
-  chatWithDirectorStream,
-  getDirectorChatHistory,
-  getDirectorChatSession,
-  getDirectorModel,
-  getDirectorVramStatus,
-  getProject,
-  setDirectorModel,
-  type ChatMessage,
-  type PromptRetryRequest,
-  type ContextUsage,
-  type DirectorChatSessionStatus,
-} from "./api";
-import {
-  generationStatusText,
-  type DirectorVramStatus,
-} from "./generationStatus";
-
-const MAX_CHAT_IMAGES = 4;
-const MAX_CHAT_IMAGE_BYTES = 20 * 1024 * 1024;
-const CHAT_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
-const IDLE_CHAT_SESSION: DirectorChatSessionStatus = {
-  active: false,
-  session_id: null,
-  started_at: null,
-};
-
-interface PendingChatImage {
-  file: File;
-  previewUrl: string;
-}
-
-function layoutChatEntries(shot: Shot) {
-  const layouts = shot.layout_refs;
-  if (layouts.length) {
-    const submittedLayoutAssets = new Set(
-      shot.refs
-        .filter((ref) => ref.role === "layout_ref_frame")
-        .map((ref) => ref.asset_id),
-    );
-    if (submittedLayoutAssets.size === 0 && shot.layout_asset_id) {
-      submittedLayoutAssets.add(shot.layout_asset_id);
-    }
-    return layouts.flatMap((layout) => {
-      if (!layout.asset_id) return [];
-      if (!submittedLayoutAssets.has(layout.asset_id)) return [];
-      if (layout.review_status === "reject") return [];
-      if (layout.superseded_by) return [];
-      const url = layoutPreviewUrl(layout.asset_id);
-      return url
-        ? [{ key: `${layout.id}:${layout.asset_id}`, assetId: layout.asset_id, url, purpose: layout.purpose }]
-        : [];
-    });
-  }
-  if (!shot.layout_asset_id) return [];
-  const url = layoutPreviewUrl(shot.layout_asset_id);
-  return url ? [{ key: `legacy:${shot.layout_asset_id}`, assetId: shot.layout_asset_id, url, purpose: "reference frame" }] : [];
-}
-
-function visibleChatImages(images: ChatMessage["images"], shots: Shot[]) {
-  return (images ?? []).filter((image) => {
-    if (!image.shot_id || !image.url.includes("/api/files/library/layouts/")) {
-      return true;
-    }
-    const shot = shots.find((candidate) => candidate.id === image.shot_id);
-    if (!shot) return false;
-    return layoutChatEntries(shot).some((entry) => entry.url === image.url);
-  });
-}
+  MAX_CHAT_IMAGES,
+  useDirectorController,
+  visibleChatImages,
+} from "./useDirectorController";
 
 function ChatImageCard({
   url,
@@ -99,7 +31,7 @@ function ChatImageCard({
   return (
     <button
       type="button"
-      className="chat-image-btn"
+      className="chat-image-btn group flex flex-col overflow-hidden rounded-lg border border-border-subtle bg-panel text-left transition-colors hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent cursor-pointer"
       onClick={() => onOpen(url)}
       title={caption || "preview"}
     >
@@ -107,38 +39,35 @@ function ChatImageCard({
         src={url}
         alt={caption || "layout"}
         onError={() => setFailed(true)}
+        className="aspect-video w-full bg-canvas object-cover transition-transform duration-200 group-hover:scale-[1.02]"
       />
-      {caption ? <span className="chat-image-cap">{caption}</span> : null}
+      {caption ? (
+        <span className="chat-image-cap block w-full truncate border-t border-border-subtle px-2 py-1 text-[11px] text-ink-secondary">
+          {caption}
+        </span>
+      ) : null}
     </button>
   );
 }
 
-function shouldPollShot(shot: Shot): boolean {
-  if (["failed", "blocked"].includes(shot.status)) return false;
-  const unresolvedLayout = shot.layout_refs.some(
-    (layout) =>
-      Boolean(layout.job_id) &&
-      !layout.asset_id &&
-      layout.job_status !== "failed" &&
-      layout.job_status !== "cancelled",
-  );
-  if (shot.layout_refs.length) {
-    // A Layout collection owns reference-frame lifecycle. Shot status still drives
-    // unrelated planning/H3 work, but cannot keep a terminal Layout polling.
-    return unresolvedLayout || ["planning", "queued", "running"].includes(shot.status);
-  }
-  return ["planning", "ref_frame_pending", "queued", "running"].includes(shot.status);
-}
-
 function JsonModeDirectorNotice() {
   return (
-    <main className="workspace">
-      <section className="panel">
-        <h2>Director</h2>
-        <p>This project bypasses the local Director Agent</p>
-        <p className="muted">
-          Use the Production tab to import storyboard JSON and submit shots directly to H3.
-        </p>
+    <main className="workspace flex flex-1 items-center justify-center p-6">
+      <section className="panel w-full max-w-md rounded-xl border border-border-subtle bg-panel p-6 text-ink shadow-[var(--shadow-card)]">
+        <EmptyState
+          title="Director"
+          description={
+            <>
+              <span className="block font-medium text-ink">
+                This project bypasses the local Director Agent
+              </span>
+              <span className="muted mt-1 block text-ink-muted">
+                Use the Production tab to import storyboard JSON and submit shots directly to H3.
+              </span>
+            </>
+          }
+          className="border-0 bg-transparent p-0"
+        />
       </section>
     </main>
   );
@@ -168,7 +97,9 @@ export function DirectorPage({
   segmentSelection?: SegmentSelection;
 } = {}) {
   const { project } = useProject();
-  if (project?.authoring_mode === "shot_workspace") return <ShotWorkspacePage desktopOutput={!mobile} />;
+  if (project?.authoring_mode === "shot_workspace") {
+    return <ShotWorkspacePage desktopOutput={!mobile} />;
+  }
   if (project?.mode === "json_production") {
     return <JsonModeDirectorNotice />;
   }
@@ -183,6 +114,15 @@ export function DirectorPage({
   );
 }
 
+const SHORTCUT_CHIPS = [
+  { label: "Project status", text: "status" },
+  { label: "Plan shots", text: "plan" },
+  {
+    label: "Discuss Layouts",
+    text: "I want to discuss whether any shots would benefit from optional Layout studies. Ask what visual states I want before proposing sources. Do not queue generation yet.",
+  },
+];
+
 function DirectorAgentWorkspace({
   active,
   chatOnly,
@@ -196,631 +136,195 @@ function DirectorAgentWorkspace({
   requestedMessage: DirectorChatRequest | null;
   segmentSelection?: SegmentSelection;
 }) {
-  const { projectId, project, refreshProjects, createAndSelect } = useProject();
-  const [musicSelection, setMusicSelection] = useState<SegmentSelection | undefined>();
-  const segmentSelection = providedSelection ?? (project?.mode === "mv" ? musicSelection : undefined);
-  const [shots, setShots] = useState<Shot[]>([]);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [draft, setDraft] = useState("");
-  const [pendingImages, setPendingImages] = useState<PendingChatImage[]>([]);
-  const [selectedShotId, setSelectedShotId] = useState<string | null>(null);
-  const [videoContextFocusId, setVideoContextFocusId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [pollError, setPollError] = useState<string | null>(null);
-  const [vramPollError, setVramPollError] = useState<string | null>(null);
-  const [vramStatus, setVramStatus] = useState<DirectorVramStatus | null>(null);
-  const [clockNow, setClockNow] = useState(() => new Date());
-  const [busy, setBusy] = useState(false);
-  const [lightbox, setLightbox] = useState<string | null>(null);
-  const [liveStatus, setLiveStatus] = useState<string[]>([]);
-  const [liveRuntime, setLiveRuntime] = useState("");
-  const [liveThink, setLiveThink] = useState("");
-  const [liveTokens, setLiveTokens] = useState("");
-  const [contextUsage, setContextUsage] = useState<ContextUsage[]>([]);
-  const [compactingContext, setCompactingContext] = useState(false);
-  const [llmModel, setLlmModel] = useState<string>("");
-  const [llmOptions, setLlmOptions] = useState<string[]>([]);
-  const [llmProvider, setLlmProvider] = useState("LLM provider");
-  const [llmReachable, setLlmReachable] = useState(false);
-  const [llmBusy, setLlmBusy] = useState(false);
-  const [chatSession, setChatSession] = useState<DirectorChatSessionStatus>(IDLE_CHAT_SESSION);
-  const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
-  const chatAbortRef = useRef<AbortController | null>(null);
-  const usageProjectRef = useRef(projectId);
-  usageProjectRef.current = projectId;
-  const chatLogRef = useRef<HTMLDivElement | null>(null);
-  const seenLayouts = useRef<Set<string>>(new Set());
-  const shotRevision = useRef(0);
-  const handledRequestId = useRef<string | null>(null);
-  const generationLocked = vramStatus?.chat_locked === true;
-  const chatActive = chatSession.active;
-  const chatDisabled = busy || compactingContext || generationLocked || chatActive || !llmModel;
-
-  const addChatImages = (files: FileList | null) => {
-    if (!files?.length) return;
-    const available = MAX_CHAT_IMAGES - pendingImages.length;
-    const selected = Array.from(files).slice(0, available);
-    const invalid = selected.find(
-      (file) => !CHAT_IMAGE_TYPES.has(file.type) || file.size > MAX_CHAT_IMAGE_BYTES,
-    );
-    if (invalid) {
-      setError(
-        CHAT_IMAGE_TYPES.has(invalid.type)
-          ? `${invalid.name} exceeds the 20 MB image limit.`
-          : `${invalid.name} is not a supported JPG, PNG, or WebP image.`,
-      );
-      return;
-    }
-    if (files.length > available) {
-      setError(`Director chat accepts at most ${MAX_CHAT_IMAGES} images.`);
-    } else {
-      setError(null);
-    }
-    setPendingImages((current) => [
-      ...current,
-      ...selected.map((file) => ({ file, previewUrl: URL.createObjectURL(file) })),
-    ]);
-  };
-
-  const removeChatImage = (index: number) => {
-    setPendingImages((current) => {
-      const removed = current[index];
-      if (removed) URL.revokeObjectURL(removed.previewUrl);
-      return current.filter((_, candidateIndex) => candidateIndex !== index);
-    });
-  };
-
-  const replaceShots = useCallback((nextShots: Shot[]) => {
-    shotRevision.current += 1;
-    setShots(nextShots);
-  }, []);
-
-  useEffect(() => {
-    setSelectedShotId((current) =>
-      current && shots.some((shot) => shot.id === current)
-        ? current
-        : shots[0]?.id ?? null,
-    );
-  }, [shots]);
-
-  const loadLlmModels = useCallback(async () => {
-    try {
-      const st = await getDirectorModel();
-      setLlmModel(st.model || "");
-      setLlmProvider(st.provider || "LLM provider");
-      setLlmReachable(st.reachable !== false);
-      setLlmOptions([...(st.available || [])]);
-    } catch {
-      setLlmReachable(false);
-      setLlmOptions([]);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadLlmModels();
-  }, [loadLlmModels]);
-
-  const refreshVramStatus = useCallback(async () => {
-    try {
-      const status = await getDirectorVramStatus();
-      setVramStatus(status);
-      setClockNow(new Date());
-      setVramPollError(null);
-    } catch (cause) {
-      setVramPollError(
-        `Could not refresh generation status: ${cause instanceof Error ? cause.message : String(cause)}`,
-      );
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!projectId) {
-      setVramStatus(null);
-      setVramPollError(null);
-      return;
-    }
-    void refreshVramStatus();
-    const timer = window.setInterval(() => void refreshVramStatus(), 2500);
-    return () => window.clearInterval(timer);
-  }, [projectId, refreshVramStatus]);
-
-  useEffect(() => {
-    if (!generationLocked) return;
-    const timer = window.setInterval(() => setClockNow(new Date()), 1000);
-    return () => window.clearInterval(timer);
-  }, [generationLocked]);
-
-  const onChangeLlm = async (model: string) => {
-    if (!model || model === llmModel) return;
-    setLlmBusy(true);
-    setError(null);
-    try {
-      const st = await setDirectorModel(model, true);
-      setLlmModel(st.model);
-      setContextUsage([]);
-      if (st.available?.length) setLlmOptions(st.available);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLlmBusy(false);
-    }
-  };
-
-  const loadProject = useCallback(async (id: string) => {
-    const detail = await getProject(id);
-    replaceShots(detail.shots);
-    return detail;
-  }, [replaceShots]);
-
-  useEffect(() => {
-    seenLayouts.current = new Set();
-    setLoadedProjectId(null);
-    setContextUsage([]);
-    setChatSession(IDLE_CHAT_SESSION);
-    if (!projectId) {
-      replaceShots([]);
-      setMessages([
-        {
-          role: "assistant",
-          content:
-            "Select or create a project in the header. Then talk to me about the story, shots, or composition, and I will help move the project forward.",
-        },
-      ]);
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    setPollError(null);
-    Promise.all([
-      loadProject(projectId),
-      getDirectorChatHistory(projectId).catch(() => []),
-      getDirectorChatSession(projectId),
-    ])
-      .then(([d, savedMessages, session]) => {
-        const entries = d.shots.flatMap((shot) => layoutChatEntries(shot).map((entry) => ({ shot, entry })));
-        for (const { entry } of entries) {
-          seenLayouts.current.add(entry.key);
-        }
-        setMessages(savedMessages.length ? savedMessages : [
-            {
-              role: "assistant",
-              content:
-                `Working on **${d.project.name}**.\n` +
-                (d.shots.length
-                  ? `${d.shots.length} shot${d.shots.length === 1 ? "" : "s"} planned. Ask about progress, revise an idea, generate reference frames, or write an H3 prompt.`
-                  : `The script is about ${(d.project.script_text || "").length} characters long. Send me the story or ask me to plan the shots.`),
-              images: entries.map(({ shot, entry }) => ({
-                url: entry.url,
-                caption: `${shot.title} · ${entry.purpose}`,
-                shot_id: shot.id,
-              })),
-            },
-          ]);
-        setChatSession(session);
-        if (session.active) {
-          setLiveRuntime("LLM busy — response is still running");
-        }
-        setLoadedProjectId(projectId);
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false));
-  }, [projectId, loadProject, replaceShots]);
-
-  useEffect(() => {
-    if (!projectId || !chatActive) return;
-    let disposed = false;
-    const poll = async () => {
-      try {
-        const session = await getDirectorChatSession(projectId);
-        if (disposed) return;
-        if (session.active) {
-          setChatSession(session);
-          setLiveRuntime("LLM busy — response is still running");
-          return;
-        }
-        setChatSession(IDLE_CHAT_SESSION);
-        setLiveStatus([]);
-        setLiveRuntime("");
-        setLiveThink("");
-        setLiveTokens("");
-        const [savedMessages] = await Promise.all([
-          getDirectorChatHistory(projectId),
-          loadProject(projectId),
-          refreshProjects(),
-        ]);
-        if (!disposed) setMessages(savedMessages);
-      } catch (cause) {
-        if (!disposed) {
-          setPollError(
-            `Could not refresh Director response status: ${cause instanceof Error ? cause.message : String(cause)}`,
-          );
-        }
-      }
-    };
-    const timer = window.setInterval(() => void poll(), 1500);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [chatActive, loadProject, projectId, refreshProjects]);
-
-  // Poll while jobs run; when a new layout appears, push it into the chat
-  useEffect(() => {
-    if (!projectId) return;
-    const active = shots.some(shouldPollShot);
-    if (!active) return;
-    const t = window.setInterval(() => {
-      const revisionAtRequest = shotRevision.current;
-      getProject(projectId)
-        .then((d) => {
-          if (revisionAtRequest !== shotRevision.current) return;
-          replaceShots(d.shots);
-          setPollError(null);
-          const fresh = d.shots.flatMap((shot) =>
-            layoutChatEntries(shot)
-              .filter((entry) => !seenLayouts.current.has(entry.key))
-              .map((entry) => ({ shot, entry })),
-          );
-          if (fresh.length) {
-            for (const { entry } of fresh) {
-              seenLayouts.current.add(entry.key);
-            }
-            setMessages((m) => [
-              ...m,
-              {
-                role: "assistant",
-                content: `Reference frame${fresh.length === 1 ? " is" : "s are"} ready for review: ${fresh.map(({ shot, entry }) => `${shot.title} (${entry.purpose})`).join(", ")}`,
-                images: fresh.map(({ shot, entry }) => ({
-                  url: entry.url,
-                  caption: `${shot.title} · ${entry.purpose}`,
-                  shot_id: shot.id,
-                })),
-              },
-            ]);
-          }
-        })
-        .catch((cause) => {
-          setPollError(`Could not refresh Layout status: ${cause instanceof Error ? cause.message : String(cause)}`);
-        });
-    }, 2500);
-    return () => window.clearInterval(t);
-  }, [projectId, replaceShots, shots]);
-
-  useEffect(() => {
-    const log = chatLogRef.current;
-    if (log) log.scrollTop = log.scrollHeight;
-  }, [messages, busy, liveStatus, liveRuntime, liveThink, liveTokens]);
-
-  const send = async (text?: string, options?: { preserveComposer?: boolean; promptRetry?: PromptRetryRequest }) => {
-    const preserveComposer = options?.preserveComposer === true;
-    const typedMessage = (text ?? draft).trim();
-    const message = typedMessage || (pendingImages.length ? "Please analyze the attached image(s)." : "");
-    if (!message || chatDisabled) return;
-    if (!projectId) {
-      setBusy(true);
-      setError(null);
-      try {
-        const name =
-          message.length < 40 && !message.includes("\n")
-            ? message
-            : message.split("\n")[0].slice(0, 40) || "Chat Project";
-        const script = message.length >= 40 || message.includes("\n") ? message : "";
-        const p = await createAndSelect(name, script);
-        setMessages((m) => [
-          ...m,
-          { role: "user", content: message },
-          {
-            role: "assistant",
-            content: script
-              ? `Created **${p.name}** and saved the script. Ask me to plan the shots when you are ready.`
-              : `Created **${p.name}**. Send me the story or script to get started.`,
-          },
-        ]);
-        setDraft("");
-        await refreshProjects();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
-
-    const outgoingDraft = draft;
-    const outgoingImages = preserveComposer ? [] : [...pendingImages];
-    const optimisticMessageId = `director-local-${Date.now()}-${Math.random()}`;
-    if (!preserveComposer) setDraft("");
-    const requestMessage = message;
-    setContextUsage([]);
-    if (!preserveComposer) setPendingImages([]);
-    setMessages((m) => [
-      ...m,
-      {
-        id: optimisticMessageId,
-        role: "user",
-        content: message,
-        images: outgoingImages.map((image) => ({
-          url: image.previewUrl,
-          caption: image.file.name,
-        })),
-      },
-    ]);
-    setBusy(true);
-    setError(null);
-    setLiveStatus([]);
-    setLiveRuntime("");
-    setLiveThink("");
-    setLiveTokens("");
-    const controller = new AbortController();
-    chatAbortRef.current = controller;
-    setChatSession({
-      active: true,
-      session_id: null,
-      started_at: new Date().toISOString(),
-    });
-    try {
-      const handlers = {
-        onContextUsage: (usage: ContextUsage) => {
-          if (chatAbortRef.current !== controller || controller.signal.aborted || usageProjectRef.current !== projectId) return;
-          setContextUsage((calls) => {
-            const existing = calls.findIndex((call) => call.call_id === usage.call_id);
-            return (existing < 0 ? [...calls, usage] : calls.map((call, index) => index === existing ? usage : call)).slice(-64);
-          });
-        },
-        onStatus: (t: string) => setLiveStatus((s) => [...s.slice(-40), t]),
-        onRuntime: (t: string) => setLiveRuntime(t),
-        onThink: (t: string) => setLiveThink((prev) => prev + t),
-        onToken: (t: string) => setLiveTokens((prev) => prev + t),
-        onTool: (t: string) => setLiveStatus((s) => [...s.slice(-40), t]),
-      };
-      const res = options?.promptRetry
-        ? await chatWithDirectorStream(projectId, requestMessage, [], handlers, [], controller.signal, options.promptRetry)
-        : outgoingImages.length
-        ? segmentSelection ? await chatWithDirectorStream(
-            projectId,
-            requestMessage,
-            [],
-            handlers,
-            outgoingImages.map((image) => image.file),
-            controller.signal,
-            undefined,
-            segmentSelection,
-          ) : await chatWithDirectorStream(
-            projectId,
-            requestMessage,
-            [],
-            handlers,
-            outgoingImages.map((image) => image.file),
-            controller.signal,
-          )
-        : segmentSelection ? await chatWithDirectorStream(
-            projectId,
-            requestMessage,
-            [],
-            handlers,
-            [],
-            controller.signal,
-            undefined,
-            segmentSelection,
-          ) : await chatWithDirectorStream(
-            projectId,
-            requestMessage,
-            [],
-            handlers,
-            [],
-            controller.signal,
-          );
-      const images = (res.images || []).filter((img) => img.url);
-      for (const img of images) {
-        const sid = img.shot_id;
-        if (sid) {
-          const sh = res.shots.find((s) => s.id === sid);
-          if (sh) {
-            for (const entry of layoutChatEntries(sh)) {
-              if (entry.url === img.url) seenLayouts.current.add(entry.key);
-            }
-          }
-        }
-      }
-      setMessages((m) => [
-        ...m,
-        {
-          role: "assistant",
-          content: res.reply,
-          images: images.length ? images : undefined,
-          thinking: (res.thinking || "").trim() || undefined,
-          steps: res.steps?.length ? res.steps : undefined,
-          prompt_retry: res.prompt_retry,
-        },
-      ]);
-      replaceShots(res.shots);
-      const focus = continuationFocus(res.actions || [], res.shots);
-      if (focus) {
-        setSelectedShotId(focus);
-        setVideoContextFocusId(focus);
-      }
-      await refreshProjects();
-    } catch (e) {
-      if (
-        controller.signal.aborted
-        || (e instanceof DOMException && e.name === "AbortError")
-      ) {
-        return;
-      }
-      if (e instanceof DirectorChatError && e.code === "GPU_GENERATION_ACTIVE") {
-        if (!preserveComposer) {
-          setDraft(outgoingDraft);
-          setPendingImages(outgoingImages);
-        }
-        setMessages((current) => current.filter((message) => message.id !== optimisticMessageId));
-        void refreshVramStatus();
-        return;
-      }
-      const err = e instanceof Error ? e.message : String(e);
-      setError(err);
-      setMessages((m) => [
-        ...m,
-        {
-          role: "assistant",
-          content: `Something went wrong: ${err}`,
-        },
-      ]);
-    } finally {
-      if (chatAbortRef.current === controller) {
-        chatAbortRef.current = null;
-      }
-      if (usageProjectRef.current === projectId) {
-        setContextUsage((calls) => calls.map((call) => call.status === "running"
-          ? { ...call, status: controller.signal.aborted ? "cancelled" : "failed" }
-          : call));
-      }
-      setChatSession(IDLE_CHAT_SESSION);
-      setBusy(false);
-      setLiveStatus([]);
-      setLiveRuntime("");
-      setLiveThink("");
-      setLiveTokens("");
-    }
-  };
-
-  const cancelChat = async () => {
-    if (!projectId || !chatActive || llmBusy) return;
-    setLlmBusy(true);
-    setError(null);
-    try {
-      chatAbortRef.current?.abort();
-      await cancelDirectorChatSession(projectId);
-      setChatSession(IDLE_CHAT_SESSION);
-      setMessages(await getDirectorChatHistory(projectId));
-      setLiveStatus([]);
-      setLiveRuntime("");
-      setLiveThink("");
-      setLiveTokens("");
-      setBusy(false);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setLlmBusy(false);
-    }
-  };
-
-  useEffect(() => {
-    if (
-      !requestedMessage
-      || requestedMessage.projectId !== projectId
-      || loadedProjectId !== projectId
-      || chatDisabled
-      || handledRequestId.current === requestedMessage.id
-    ) return;
-    handledRequestId.current = requestedMessage.id;
-    void send(requestedMessage.message);
-  }, [requestedMessage, projectId, loadedProjectId, chatDisabled]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const updateShot = (updated: Shot) => {
-    shotRevision.current += 1;
-    setShots((current) => current.map((shot) => shot.id === updated.id ? updated : shot));
-  };
-
-  const chips = [
-    { label: "Project status", text: "status" },
-    { label: "Plan shots", text: "plan" },
-    {
-      label: "Discuss Layouts",
-      text: "I want to discuss whether any shots would benefit from optional Layout studies. Ask what visual states I want before proposing sources. Do not queue generation yet.",
-    },
-  ];
-  const selectedShotIndex = Math.max(0, shots.findIndex((shot) => shot.id === selectedShotId));
-  const selectedShot = shots[selectedShotIndex] ?? null;
+  const {
+    projectId,
+    project,
+    shots,
+    messages,
+    draft,
+    setDraft,
+    pendingImages,
+    selectedShotIndex,
+    selectedShot,
+    setSelectedShotId,
+    videoContextFocusId,
+    error,
+    pollError,
+    vramPollError,
+    vramStatus,
+    clockNow,
+    busy,
+    lightbox,
+    setLightbox,
+    liveStatus,
+    liveRuntime,
+    liveThink,
+    liveTokens,
+    contextUsage,
+    setCompactingContext,
+    llmModel,
+    llmOptions,
+    llmProvider,
+    llmReachable,
+    llmBusy,
+    chatActive,
+    chatDisabled,
+    generationLocked,
+    chatLogRef,
+    setMusicSelection,
+    addChatImages,
+    removeChatImage,
+    onChangeLlm,
+    send,
+    cancelChat,
+    updateShot,
+  } = useDirectorController({
+    requestedMessage,
+    segmentSelection: providedSelection,
+  });
 
   const chatPanel = (
-    <section className="panel director-chat-panel">
-        <div className="director-chat-header workspace-panel-header">
-          <div className="director-chat-header-row">
-            <div className="director-identity">
-              <img
-                className="director-agent-mascot"
-                src="/director-agent-shot-board.png"
-                alt="Director Agent holding a shot board"
-              />
-              <div>
-                <h2>Director</h2>
-                {!projectId ? (
-                  <p className="project-scope-hint">
-                    Select a project, or create one with your first message
-                  </p>
-                ) : null}
-              </div>
+    <section className="panel director-chat-panel flex h-full max-h-none min-h-0 flex-col overflow-hidden rounded-lg border border-border-subtle bg-panel p-0 text-ink shadow-[var(--shadow-card)]">
+      <div className="director-chat-header workspace-panel-header flex min-h-[54px] shrink-0 items-center border-b border-border-subtle bg-panel/90 px-4 py-2">
+        <div className="director-chat-header-row flex w-full flex-wrap items-center justify-between gap-2 xl:flex-nowrap">
+          <div className="director-identity flex min-w-0 flex-1 items-center gap-2.5">
+            <img
+              className="director-agent-mascot h-7 w-7 shrink-0 rounded-md border border-border-subtle bg-elevated object-cover"
+              src="/director-agent-shot-board.png"
+              alt="Director Agent holding a shot board"
+            />
+            <div className="min-w-0">
+              <h2 className="text-[13px] font-semibold leading-tight tracking-[-0.01em] text-ink">
+                Director
+              </h2>
+              {!projectId ? (
+                <p className="project-scope-hint truncate text-[11px] leading-tight text-ink-muted">
+                  Select a project, or create one with your first message
+                </p>
+              ) : null}
             </div>
-            <div className="director-runtime-controls">
-              <label className="director-model-picker inline-model-picker">
-                <span className="muted tiny">LLM</span>
-                <select
-                  value={llmOptions.length ? llmModel : ""}
-                  disabled={chatDisabled || llmBusy || llmOptions.length === 0}
-                  onChange={(e) => void onChangeLlm(e.target.value)}
-                  title={`${llmProvider} model used for Director chat and shot planning`}
-                >
-                  {llmOptions.length === 0 ? (
-                    <option value="">{llmReachable ? "No models available" : `${llmProvider} unavailable`}</option>
-                  ) : (
-                    <>
-                      {llmModel && !llmOptions.includes(llmModel) ? (
-                        <option value={llmModel} disabled>{llmModel} (not available)</option>
-                      ) : null}
-                      {llmOptions.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </>
-                  )}
-                </select>
-              </label>
-              <ContextUsagePanel calls={contextUsage} compact={mobile}>
-                {projectId ? <ContextCompaction key={projectId} projectId={projectId}
+          </div>
+          <div className="director-runtime-controls flex shrink-0 items-center justify-end gap-2">
+            <label className="director-model-picker inline-model-picker flex min-w-0 items-center gap-1.5">
+              <span className="muted tiny text-[10px] font-medium uppercase tracking-wider text-ink-muted">
+                LLM
+              </span>
+              <Select
+                size="sm"
+                wrapperClassName="w-[138px] min-w-[116px] max-w-[170px]"
+                value={llmOptions.length ? llmModel : ""}
+                disabled={chatDisabled || llmBusy || llmOptions.length === 0}
+                onChange={(e) => void onChangeLlm(e.target.value)}
+                title={`${llmProvider} model used for Director chat and shot planning`}
+              >
+                {llmOptions.length === 0 ? (
+                  <option value="">
+                    {llmReachable ? "No models available" : `${llmProvider} unavailable`}
+                  </option>
+                ) : (
+                  <>
+                    {llmModel && !llmOptions.includes(llmModel) ? (
+                      <option value={llmModel} disabled>
+                        {llmModel} (not available)
+                      </option>
+                    ) : null}
+                    {llmOptions.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </>
+                )}
+              </Select>
+            </label>
+            <ContextUsagePanel calls={contextUsage} compact={mobile}>
+              {projectId ? (
+                <ContextCompaction
+                  key={projectId}
+                  projectId={projectId}
                   disabled={busy || generationLocked || chatActive || llmBusy || !llmModel}
-                  onBusyChange={setCompactingContext} /> : null}
-              </ContextUsagePanel>
-            </div>
+                  onBusyChange={setCompactingContext}
+                />
+              ) : null}
+            </ContextUsagePanel>
           </div>
         </div>
+      </div>
 
-        {mobile && !chatOnly ? (
-          <MobileShotDrawer
-            shots={shots}
-            onOpenImage={setLightbox}
-            focusShotId={videoContextFocusId}
-            onShotUpdated={updateShot}
-          />
-        ) : null}
+      {mobile && !chatOnly ? (
+        <MobileShotDrawer
+          shots={shots}
+          onOpenImage={setLightbox}
+          focusShotId={videoContextFocusId}
+          onShotUpdated={updateShot}
+        />
+      ) : null}
 
-        {error ? <div className="banner error">{error}</div> : null}
-        {pollError ? <div className="banner error" role="alert" aria-live="polite">{pollError}</div> : null}
-        {vramPollError ? <div className="banner error" role="alert" aria-live="polite">{vramPollError}</div> : null}
+      {error ? (
+        <Banner tone="danger" className="banner error mx-4 mt-2.5 shrink-0">
+          {error}
+        </Banner>
+      ) : null}
+      {pollError ? (
+        <Banner
+          tone="danger"
+          role="alert"
+          aria-live="polite"
+          className="banner error mx-4 mt-2.5 shrink-0"
+        >
+          {pollError}
+        </Banner>
+      ) : null}
+      {vramPollError ? (
+        <Banner
+          tone="danger"
+          role="alert"
+          aria-live="polite"
+          className="banner error mx-4 mt-2.5 shrink-0"
+        >
+          {vramPollError}
+        </Banner>
+      ) : null}
 
-        {generationLocked && vramStatus ? (
-          <div className="director-generation-status" role="status" aria-live="polite">
-            <span className="director-generation-dot" aria-hidden="true" />
-            <span>{generationStatusText(vramStatus, clockNow)}</span>
-          </div>
-        ) : null}
+      {generationLocked && vramStatus ? (
+        <div
+          className="director-generation-status mx-4 mt-2.5 flex shrink-0 items-center gap-2 rounded-md border border-status-warn/30 bg-status-warn-soft px-3 py-1.5 text-xs font-medium text-status-warn"
+          role="status"
+          aria-live="polite"
+        >
+          <StatusDot tone="warn" pulse className="director-generation-dot" />
+          <span>{generationStatusText(vramStatus, clockNow)}</span>
+        </div>
+      ) : null}
 
-        <div className="chat-log" ref={chatLogRef}>
-          {messages.map((m, i) => {
-            const images = visibleChatImages(m.images, shots);
-            const canRetryPrompt = m.role === "assistant"
-              && i === messages.length - 1
-              && !!m.prompt_retry;
-            return (
-              <div
-                key={m.id || i}
-                className={`chat-bubble ${m.role === "user" ? "user" : "assistant"}`}
-              >
-              <div className="chat-role">{m.role === "user" ? "You" : "Director"}</div>
+      <div className="chat-log min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4" ref={chatLogRef}>
+        {messages.map((m, i) => {
+          const images = visibleChatImages(m.images, shots);
+          const canRetryPrompt =
+            m.role === "assistant" && i === messages.length - 1 && !!m.prompt_retry;
+          const isUser = m.role === "user";
+          return (
+            <div
+              key={m.id || i}
+              className={cn(
+                "chat-bubble rounded-lg border px-3.5 py-2.5 text-ink",
+                isUser
+                  ? "user ml-auto max-w-[85%] border-accent/25 bg-accent-soft"
+                  : "assistant mr-auto max-w-[94%] border-border-subtle bg-elevated/55",
+              )}
+            >
+              <div className="chat-role mb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-muted">
+                {isUser ? "You" : "Director"}
+              </div>
               {m.steps?.length ? (
-                <details className="chat-trace" open={false}>
-                  <summary>Process ({m.steps.length})</summary>
-                  <ol className="chat-steps">
+                <details
+                  className="chat-trace my-2 overflow-hidden rounded-md border border-border-subtle bg-panel/80 text-xs"
+                  open={false}
+                >
+                  <summary className="cursor-pointer select-none px-2.5 py-1.5 font-medium text-ink-secondary hover:text-ink">
+                    Process ({m.steps.length})
+                  </summary>
+                  <ol className="chat-steps list-decimal space-y-1 border-t border-border-subtle py-2 pl-6 pr-3 text-ink-secondary">
                     {m.steps.map((s, j) => (
                       <li key={j}>{s}</li>
                     ))}
@@ -828,26 +332,43 @@ function DirectorAgentWorkspace({
                 </details>
               ) : null}
               {m.thinking ? (
-                <details className="chat-think" open={false}>
-                  <summary>Reasoning</summary>
-                  <pre className="chat-think-body">{m.thinking}</pre>
+                <details
+                  className="chat-think my-2 overflow-hidden rounded-md border border-border-subtle bg-panel/80 text-xs"
+                  open={false}
+                >
+                  <summary className="cursor-pointer select-none px-2.5 py-1.5 font-medium text-ink-secondary hover:text-ink">
+                    Reasoning
+                  </summary>
+                  <pre className="chat-think-body max-h-60 overflow-auto whitespace-pre-wrap break-words border-t border-border-subtle px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-secondary">
+                    {m.thinking}
+                  </pre>
                 </details>
               ) : null}
-              <div className="chat-content">{m.content}</div>
+              <div className="chat-content whitespace-pre-wrap break-words text-[13px] leading-relaxed text-ink">
+                {m.content}
+              </div>
               {canRetryPrompt ? (
-                <div className="chat-message-actions">
-                  <button
+                <div className="chat-message-actions mt-2.5 flex items-center gap-2">
+                  <Button
                     type="button"
+                    variant="secondary"
+                    size="xs"
                     className="prompt-retry-button"
                     disabled={chatDisabled}
-                    onClick={() => void send("Retry prompt", { preserveComposer: true, promptRetry: m.prompt_retry ?? undefined })}
+                    onClick={() =>
+                      void send("Retry prompt", {
+                        preserveComposer: true,
+                        promptRetry: m.prompt_retry ?? undefined,
+                      })
+                    }
                   >
+                    <RotateCcw className="h-3 w-3" aria-hidden="true" />
                     Retry prompt
-                  </button>
+                  </Button>
                 </div>
               ) : null}
               {images.length ? (
-                <div className="chat-images">
+                <div className="chat-images mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {images.map((img, j) => (
                     <ChatImageCard
                       key={j}
@@ -858,143 +379,197 @@ function DirectorAgentWorkspace({
                   ))}
                 </div>
               ) : null}
-              </div>
-            );
-          })}
-          {busy || chatActive ? (
-            <div className="chat-bubble assistant live">
-              <div className="chat-role">Director · Working</div>
-              {liveStatus.length ? (
-                <div className="chat-trace open">
-                  <div className="chat-trace-label">Process</div>
-                  <ol className="chat-steps">
-                    {liveStatus.map((s, j) => (
-                      <li key={j}>{s}</li>
-                    ))}
-                  </ol>
-                </div>
-              ) : !liveRuntime ? (
-                <div className="chat-content muted">Connecting…</div>
-              ) : null}
-              {liveRuntime ? (
-                <div className="chat-runtime" aria-live="polite">
-                  <div className="chat-trace-label">Runtime</div>
-                  <div>{liveRuntime}</div>
-                </div>
-              ) : null}
-              {liveThink ? (
-                <div className="chat-think open">
-                  <div className="chat-trace-label">Reasoning</div>
-                  <pre className="chat-think-body">{liveThink}</pre>
-                </div>
-              ) : null}
-              {liveTokens ? (
-                <div className="chat-content draft-tokens">{liveTokens}</div>
-              ) : null}
             </div>
-          ) : null}
-        </div>
+          );
+        })}
 
-        {!chatOnly ? <div className="chat-chips">
-          {chips.map((c) => (
-            <button
-              key={c.label}
-              type="button"
-              className="mode-chip"
-              disabled={chatDisabled}
-              onClick={() => void send(c.text)}
-            >
-              {c.label}
-            </button>
-          ))}
-          {selectedShot ? (
-            <button
-              type="button"
-              className="mode-chip prompt-shortcut"
-              disabled={chatDisabled}
-              onClick={() => void send(`Write the H3 prompt for shot ${selectedShotIndex + 1}`)}
-            >
-              Write H3 prompt · Shot {String(selectedShotIndex + 1).padStart(2, "0")}
-            </button>
-          ) : null}
-        </div> : null}
+        {busy || chatActive ? (
+          <div className="chat-bubble assistant live mr-auto max-w-[94%] space-y-2 rounded-lg border border-accent/25 bg-elevated/70 px-3.5 py-2.5 text-ink">
+            <div className="chat-role flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-accent">
+              <StatusDot tone="accent" pulse />
+              Director · Working
+            </div>
+            {liveStatus.length ? (
+              <div className="chat-trace open rounded-md border border-border-subtle bg-panel/80 p-2.5 text-xs">
+                <div className="chat-trace-label mb-1 font-medium text-ink-secondary">Process</div>
+                <ol className="chat-steps list-decimal space-y-1 pl-5 text-ink-secondary">
+                  {liveStatus.map((s, j) => (
+                    <li key={j}>{s}</li>
+                  ))}
+                </ol>
+              </div>
+            ) : !liveRuntime ? (
+              <div className="chat-content muted text-xs text-ink-muted">Connecting…</div>
+            ) : null}
+            {liveRuntime ? (
+              <div
+                className="chat-runtime rounded-md border border-border-subtle bg-panel/70 px-2.5 py-1.5 text-xs text-ink-secondary"
+                aria-live="polite"
+              >
+                <div className="chat-trace-label text-[10px] font-semibold uppercase tracking-wider text-ink-muted">
+                  Runtime
+                </div>
+                <div className="mt-0.5 font-mono text-[11px] text-ink">{liveRuntime}</div>
+              </div>
+            ) : null}
+            {liveThink ? (
+              <div className="chat-think open rounded-md border border-border-subtle bg-panel/80 p-2.5 text-xs">
+                <div className="chat-trace-label mb-1 font-medium text-ink-secondary">
+                  Reasoning
+                </div>
+                <pre className="chat-think-body max-h-52 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-ink-secondary">
+                  {liveThink}
+                </pre>
+              </div>
+            ) : null}
+            {liveTokens ? (
+              <div className="chat-content draft-tokens whitespace-pre-wrap break-words text-[13px] leading-relaxed text-ink">
+                {liveTokens}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="shrink-0 border-t border-border-subtle bg-panel">
+        {!chatOnly ? (
+          <div className="chat-chips m-0 flex flex-wrap items-center gap-1.5 px-4 pt-2.5">
+            {SHORTCUT_CHIPS.map((c) => (
+              <button
+                key={c.label}
+                type="button"
+                className="mode-chip h-6 cursor-pointer rounded-md border border-border-subtle bg-elevated px-2.5 text-[11px] font-medium text-ink-secondary transition-colors hover:border-border-strong hover:bg-hover hover:text-ink disabled:pointer-events-none disabled:opacity-45"
+                disabled={chatDisabled}
+                onClick={() => void send(c.text)}
+              >
+                {c.label}
+              </button>
+            ))}
+            {selectedShot ? (
+              <button
+                type="button"
+                className="mode-chip prompt-shortcut h-6 cursor-pointer rounded-md border border-accent/25 bg-accent-soft px-2.5 text-[11px] font-medium text-accent transition-colors hover:border-accent/50 disabled:pointer-events-none disabled:opacity-45"
+                disabled={chatDisabled}
+                onClick={() => void send(`Write the H3 prompt for shot ${selectedShotIndex + 1}`)}
+              >
+                Write H3 prompt · Shot {String(selectedShotIndex + 1).padStart(2, "0")}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
         {pendingImages.length ? (
-          <div className="chat-attachment-tray" aria-label="Attached images">
+          <div
+            className="chat-attachment-tray flex flex-wrap gap-2 px-4 pt-2.5"
+            aria-label="Attached images"
+          >
             {pendingImages.map((image, index) => (
-              <div className="chat-attachment" key={`${image.file.name}-${index}`}>
-                <img src={image.previewUrl} alt={image.file.name} />
-                <span title={image.file.name}>{image.file.name}</span>
+              <div
+                className="chat-attachment flex items-center gap-2 rounded-md border border-border-subtle bg-elevated/60 py-1 pl-1 pr-1.5 text-xs"
+                key={`${image.file.name}-${index}`}
+              >
+                <img
+                  src={image.previewUrl}
+                  alt={image.file.name}
+                  className="h-7 w-7 rounded object-cover"
+                />
+                <span title={image.file.name} className="max-w-[140px] truncate text-[11px] text-ink">
+                  {image.file.name}
+                </span>
                 <button
                   type="button"
                   aria-label={`Remove ${image.file.name}`}
                   disabled={chatDisabled}
                   onClick={() => removeChatImage(index)}
+                  className="inline-flex h-5 w-5 cursor-pointer items-center justify-center rounded text-ink-muted hover:bg-hover hover:text-ink disabled:opacity-45"
                 >
-                  ×
+                  <X className="h-3 w-3" aria-hidden="true" />
                 </button>
               </div>
             ))}
           </div>
         ) : null}
 
-        <div className="chat-composer">
-          <label
-            className={`chat-upload-btn${!projectId || chatDisabled || pendingImages.length >= MAX_CHAT_IMAGES ? " disabled" : ""}`}
-            title={projectId ? "Add up to 4 images" : "Select a project before adding images"}
-          >
-            <input
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              multiple
-              aria-label="Add images"
-              disabled={!projectId || chatDisabled || pendingImages.length >= MAX_CHAT_IMAGES}
-              onChange={(event) => {
-                addChatImages(event.target.files);
-                event.target.value = "";
+        <div className="chat-composer px-4 pb-3.5 pt-2.5">
+          <div className="flex flex-col overflow-hidden rounded-xl border border-border-subtle bg-elevated/55 transition-colors focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/15">
+            <Textarea
+              rows={mobile ? 2 : 3}
+              value={draft}
+              disabled={chatDisabled}
+              className="min-h-[64px] w-full resize-none border-0 bg-transparent px-3.5 pb-1.5 pt-2.5 text-[13px] leading-relaxed shadow-none focus-visible:border-0 focus-visible:ring-0"
+              placeholder={
+                projectId
+                  ? "Talk to the Director about the story, a weak shot, or what you want to change…"
+                  : "Enter a project name, or paste a script to create a project…"
+              }
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
               }}
             />
-            <span aria-hidden="true">+</span>
-          </label>
-          <textarea
-            rows={mobile ? 2 : 3}
-            value={draft}
-            disabled={chatDisabled}
-            placeholder={
-              projectId
-                ? "Talk to the Director about the story, a weak shot, or what you want to change…"
-                : "Enter a project name, or paste a script to create a project…"
-            }
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-          />
-          {chatActive ? (
-            <button
-              type="button"
-              className="btn danger"
-              disabled={llmBusy}
-              onClick={() => void cancelChat()}
-            >
-              Cancel
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn primary"
-              disabled={chatDisabled || (!draft.trim() && pendingImages.length === 0)}
-              onClick={() => void send()}
-            >
-              Send
-            </button>
-          )}
+            <div className="flex items-center justify-between gap-2 px-2.5 pb-2 pt-1">
+              <div className="flex items-center gap-2">
+                <label
+                  className={cn(
+                    "chat-upload-btn relative inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md border border-border-subtle bg-panel/80 text-ink-secondary transition-colors hover:border-border-strong hover:bg-hover hover:text-ink",
+                    (!projectId || chatDisabled || pendingImages.length >= MAX_CHAT_IMAGES) &&
+                      "disabled pointer-events-none opacity-45",
+                  )}
+                  title={projectId ? "Add up to 4 images" : "Select a project before adding images"}
+                >
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    multiple
+                    aria-label="Add images"
+                    className="sr-only"
+                    disabled={!projectId || chatDisabled || pendingImages.length >= MAX_CHAT_IMAGES}
+                    onChange={(event) => {
+                      addChatImages(event.target.files);
+                      event.target.value = "";
+                    }}
+                  />
+                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                </label>
+                {!mobile ? (
+                  <span className="select-none text-[11px] text-ink-muted">
+                    Enter to send · Shift+Enter for new line
+                  </span>
+                ) : null}
+              </div>
+              {chatActive ? (
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="sm"
+                  disabled={llmBusy}
+                  onClick={() => void cancelChat()}
+                >
+                  <Square className="h-3 w-3" aria-hidden="true" />
+                  Cancel
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  disabled={chatDisabled || (!draft.trim() && pendingImages.length === 0)}
+                  onClick={() => void send()}
+                >
+                  <Send className="h-3 w-3" aria-hidden="true" />
+                  Send
+                </Button>
+              )}
+            </div>
+          </div>
         </div>
+      </div>
     </section>
   );
+
   const shotPanel = (
     <ShotWorkspace
       shots={shots}
@@ -1008,11 +583,22 @@ function DirectorAgentWorkspace({
   );
 
   return (
-    <main className={`workspace director-chat-layout${!chatOnly && !mobile ? " director-fill-viewport" : ""}${chatOnly ? " chat-only" : ""}${mobile ? " mobile-director-layout" : ""}`}>
-      {project?.mode === "mv" && <SongTransport key={projectId} active={active} onSelectionChange={setMusicSelection} />}
-      {chatOnly || mobile ? chatPanel : (
+    <main
+      className={cn(
+        "workspace director-chat-layout flex min-h-0 flex-1 flex-col gap-3 p-3 sm:p-4",
+        !chatOnly && !mobile && "director-fill-viewport h-full",
+        chatOnly && "chat-only",
+        mobile && "mobile-director-layout",
+      )}
+    >
+      {project?.mode === "mv" && (
+        <SongTransport key={projectId} active={active} onSelectionChange={setMusicSelection} />
+      )}
+      {chatOnly || mobile ? (
+        chatPanel
+      ) : (
         <ResizableWorkspace
-          className="director-resizable-workspace"
+          className="director-resizable-workspace min-h-0 flex-1"
           storageKey="ds.directorChatWidth"
           separatorLabel="Resize Director chat and Shots"
           primary={chatPanel}
@@ -1022,12 +608,16 @@ function DirectorAgentWorkspace({
 
       {lightbox ? (
         <div
-          className="lightbox-overlay"
+          className="lightbox-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
           role="dialog"
           onClick={() => setLightbox(null)}
           onKeyDown={(e) => e.key === "Escape" && setLightbox(null)}
         >
-          <img src={lightbox} alt="full preview" className="lightbox-img" />
+          <img
+            src={lightbox}
+            alt="full preview"
+            className="lightbox-img max-h-[90vh] max-w-[92vw] rounded-xl border border-border-subtle object-contain shadow-[var(--shadow-popover)]"
+          />
         </div>
       ) : null}
     </main>
