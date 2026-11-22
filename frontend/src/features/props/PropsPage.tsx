@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { ImageUploadSlot, type LocalImage } from "../../shared/components/ImageUploadSlot";
 import { Lightbox } from "../../shared/components/Lightbox";
 import { OutputGrid } from "../../shared/components/OutputGrid";
 import type { OutputSlot } from "../../shared/api/types";
 import { useProject } from "../../shared/project/ProjectContext";
+import { Badge, Banner, Button, Input, StatusDot } from "../../shared/ui";
 import {
   cancelPropJob,
   generateProp,
@@ -16,6 +18,16 @@ import {
 } from "./api";
 
 const ACTIVE: JobStatus[] = ["queued", "uploading", "running"];
+
+const STATUS_TONES: Record<JobStatus | "idle", "neutral" | "info" | "ok" | "danger" | "warn"> = {
+  idle: "neutral",
+  queued: "info",
+  uploading: "info",
+  running: "info",
+  succeeded: "ok",
+  failed: "danger",
+  cancelled: "warn",
+};
 
 const MASTER_LABELS = { master: "Prop Reference Sheet" };
 
@@ -176,39 +188,56 @@ export function PropsPage({ onOpenLibrary }: Props) {
 
   return (
     <>
-      <main className="workspace">
-        <section className="panel input-panel">
-          <h2>Props · Reference Sheet</h2>
-          {projectId ? (
-            <p className="project-scope-hint">
-              Saving to project <strong>{project?.name || projectId}</strong>
-            </p>
-          ) : (
-            <div className="banner error">Select a project in the header before preparing props.</div>
-          )}
-          <p className="field-hint" style={{ marginBottom: "1rem" }}>
-            Upload one photo. Director Studio creates one multi-view reference sheet: the same
-            prop in a large hero view and supporting angles, on a neutral studio background.
-            H3 receives the finished sheet as one picture reference.
+      <main className="workspace mx-auto grid w-full max-w-[1440px] grid-cols-1 gap-4 p-5 lg:grid-cols-[420px_minmax(0,1fr)] lg:items-start">
+        <section className="panel input-panel flex flex-col gap-4 rounded-lg border border-border-subtle bg-panel p-4 shadow-[var(--shadow-card)]">
+          <div className="border-b border-border-subtle pb-3">
+            <h2 className="text-sm font-semibold tracking-[-0.01em] text-ink">
+              Props · Reference Sheet
+            </h2>
+            {projectId ? (
+              <p className="project-scope-hint mt-1 text-xs text-ink-secondary">
+                Saving to project{" "}
+                <strong className="font-medium text-ink">{project?.name || projectId}</strong>
+              </p>
+            ) : null}
+          </div>
+
+          {!projectId ? (
+            <Banner tone="danger" role="alert">
+              Select a project in the header before preparing props.
+            </Banner>
+          ) : null}
+
+          <p className="field-hint text-xs leading-relaxed text-ink-secondary">
+            Upload one photo. Director Studio creates one multi-view reference sheet: the same prop
+            in a large hero view and supporting angles, on a neutral studio background. H3 receives
+            the finished sheet as one picture reference.
           </p>
 
-          <div className="block">
-            <div className="block-title">1. Identity</div>
-            <label className="field">
-              <span>
-                Name <span className="req">*</span>
+          <div className="block flex flex-col gap-3 rounded-md border border-border-subtle bg-elevated/40 p-3">
+            <div className="block-title text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
+              1. Identity
+            </div>
+            <label className="field flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-ink-secondary">
+                Name <span className="req text-status-danger">*</span>
               </span>
-              <input
+              <Input
                 value={name}
                 disabled={isRunning}
+                hasError={Boolean(fieldErrors.name)}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. Folding knife"
               />
-              {fieldErrors.name ? <span className="field-error">{fieldErrors.name}</span> : null}
+              {fieldErrors.name ? (
+                <span className="field-error text-[11px] text-status-danger">
+                  {fieldErrors.name}
+                </span>
+              ) : null}
             </label>
-            <label className="field">
-              <span>Notes</span>
-              <input
+            <label className="field flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-ink-secondary">Notes</span>
+              <Input
                 value={notes}
                 disabled={isRunning}
                 onChange={(e) => setNotes(e.target.value)}
@@ -217,8 +246,10 @@ export function PropsPage({ onOpenLibrary }: Props) {
             </label>
           </div>
 
-          <div className="block">
-            <div className="block-title">2. Photo</div>
+          <div className="block flex flex-col gap-3 rounded-md border border-border-subtle bg-elevated/40 p-3">
+            <div className="block-title text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
+              2. Photo
+            </div>
             <ImageUploadSlot
               label="Prop photo"
               required
@@ -230,83 +261,110 @@ export function PropsPage({ onOpenLibrary }: Props) {
             />
           </div>
 
-          <div className="block advanced">
-            <button type="button" className="advanced-toggle" onClick={() => setAdvancedOpen((v) => !v)}>
-              {advancedOpen ? "▾" : "▸"} Advanced
+          <div className="block advanced rounded-md border border-border-subtle bg-elevated/30 p-3">
+            <button
+              type="button"
+              className="advanced-toggle flex w-full cursor-pointer items-center gap-1.5 text-left text-xs font-medium text-ink-secondary hover:text-ink"
+              onClick={() => setAdvancedOpen((v) => !v)}
+            >
+              {advancedOpen ? (
+                <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              <span>Advanced</span>
             </button>
             {advancedOpen ? (
-              <div className="advanced-body">
-                <label className="check">
+              <div className="advanced-body mt-3 flex flex-col gap-3 border-t border-border-subtle pt-3">
+                <label className="check flex cursor-pointer items-center gap-2 text-xs text-ink">
                   <input
                     type="checkbox"
                     checked={fixedSeed}
                     disabled={isRunning}
+                    className="h-3.5 w-3.5 rounded border-border-strong accent-accent"
                     onChange={(e) => setFixedSeed(e.target.checked)}
                   />
                   <span>Fixed seed</span>
                 </label>
                 {fixedSeed ? (
-                  <label className="field">
-                    <span>Seed</span>
-                    <input
+                  <label className="field flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-ink-secondary">Seed</span>
+                    <Input
                       value={seed}
                       disabled={isRunning}
+                      hasError={Boolean(fieldErrors.seed)}
                       onChange={(e) => setSeed(e.target.value)}
                       inputMode="numeric"
                     />
-                    {fieldErrors.seed ? <span className="field-error">{fieldErrors.seed}</span> : null}
+                    {fieldErrors.seed ? (
+                      <span className="field-error text-[11px] text-status-danger">
+                        {fieldErrors.seed}
+                      </span>
+                    ) : null}
                   </label>
                 ) : null}
               </div>
             ) : null}
           </div>
 
-          {formError ? <div className="banner error">{formError}</div> : null}
+          {formError ? (
+            <Banner tone="danger" role="alert">
+              {formError}
+            </Banner>
+          ) : null}
 
-          <div className="actions">
+          <div className="actions flex flex-wrap items-center gap-2 border-t border-border-subtle pt-3">
             {!isRunning ? (
-              <button type="button" className="btn primary" disabled={busy} onClick={onGenerate}>
+              <Button type="button" variant="primary" disabled={busy} onClick={onGenerate}>
                 {busy ? "Submitting…" : "Prepare Reference Sheet"}
-              </button>
+              </Button>
             ) : (
-              <button type="button" className="btn danger" onClick={onCancel}>
+              <Button type="button" variant="danger" onClick={onCancel}>
                 Cancel
-              </button>
+              </Button>
             )}
-            <button type="button" className="btn ghost" disabled={isRunning} onClick={onReset}>
+            <Button type="button" variant="ghost" disabled={isRunning} onClick={onReset}>
               Reset form
-            </button>
+            </Button>
           </div>
         </section>
 
-        <section className="panel output-panel">
-          <div className="output-header">
-            <h2>Output</h2>
-            <div className={`status-pill status-${status}`}>
-              <span className="dot" />
-              {statusLabel}
-              {job ? <span className="job-id">{job.id}</span> : null}
-            </div>
+        <section className="panel output-panel flex min-w-0 flex-col gap-4 rounded-lg border border-border-subtle bg-panel p-4 shadow-[var(--shadow-card)]">
+          <div className="output-header flex items-center justify-between gap-3 border-b border-border-subtle pb-3">
+            <h2 className="text-sm font-semibold tracking-[-0.01em] text-ink">Output</h2>
+            <Badge tone={STATUS_TONES[status]} className={`status-pill status-${status}`}>
+              <StatusDot tone={STATUS_TONES[status]} pulse={isRunning} />
+              <span>{statusLabel}</span>
+              {job ? <span className="job-id font-mono text-[10px] opacity-80">{job.id}</span> : null}
+            </Badge>
           </div>
 
           {!job ? (
-            <p className="empty-copy">
-              The prepared reference sheet appears here. Save it to the library so Director can
-              cast its complete multi-view object information as a single H3 picture.
+            <p className="empty-copy text-xs leading-relaxed text-ink-muted">
+              The prepared reference sheet appears here. Save it to the library so Director can cast
+              its complete multi-view object information as a single H3 picture.
             </p>
           ) : null}
 
           {job?.error && (job.status === "failed" || job.status === "cancelled") ? (
-            <div className="banner error">{job.error}</div>
+            <Banner tone="danger" role="alert">
+              {job.error}
+            </Banner>
           ) : null}
 
           {job?.seed != null ? (
-            <p className="meta-line">
-              Seed <code>{job.seed}</code>
+            <p className="meta-line text-xs text-ink-secondary">
+              Seed{" "}
+              <code className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[11px] text-ink">
+                {job.seed}
+              </code>
               {job.comfy_prompt_id ? (
                 <>
                   {" "}
-                  · Comfy <code>{job.comfy_prompt_id.slice(0, 8)}…</code>
+                  · Comfy{" "}
+                  <code className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[11px] text-ink">
+                    {job.comfy_prompt_id.slice(0, 8)}…
+                  </code>
                 </>
               ) : null}
             </p>
@@ -324,27 +382,37 @@ export function PropsPage({ onOpenLibrary }: Props) {
             }}
           />
 
-          <div className="actions output-actions">
-            <button
+          <div className="actions output-actions flex flex-wrap items-center gap-2 border-t border-border-subtle pt-3">
+            <Button
               type="button"
-              className="btn primary"
+              variant="primary"
               disabled={!job || job.status !== "succeeded" || busy || !!job.prop_id}
               onClick={onSave}
             >
               {job?.prop_id ? "Saved" : "Save to Library"}
-            </button>
-            <button type="button" className="btn secondary" disabled={!job || isRunning || busy} onClick={onGenerate}>
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!job || isRunning || busy}
+              onClick={onGenerate}
+            >
               Regenerate
-            </button>
+            </Button>
           </div>
 
           {saved || job?.prop_id ? (
-            <div className="banner ok">
-              Saved as Prop · <code>{saved?.id || job?.prop_id}</code>
-              <button type="button" className="btn ghost sm" onClick={onOpenLibrary}>
-                View in Library
-              </button>
-            </div>
+            <Banner tone="ok" role="status">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  Saved as Prop ·{" "}
+                  <code className="font-mono text-[11px]">{saved?.id || job?.prop_id}</code>
+                </span>
+                <Button type="button" variant="ghost" size="xs" onClick={onOpenLibrary}>
+                  View in Library
+                </Button>
+              </div>
+            </Banner>
           ) : null}
         </section>
       </main>

@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { ImageUploadSlot, type LocalImage } from "../../shared/components/ImageUploadSlot";
 import { Lightbox } from "../../shared/components/Lightbox";
 import { OutputGrid } from "../../shared/components/OutputGrid";
 import type { OutputSlot } from "../../shared/api/types";
 import { useProject } from "../../shared/project/ProjectContext";
+import { Badge, Banner, Button, Input, StatusDot, Textarea, cn } from "../../shared/ui";
 import {
   cancelSceneJob,
   fetchSceneDefaults,
@@ -19,6 +21,16 @@ import {
 
 const ACTIVE: JobStatus[] = ["queued", "uploading", "running"];
 
+const STATUS_TONES: Record<JobStatus | "idle", "neutral" | "info" | "ok" | "danger" | "warn"> = {
+  idle: "neutral",
+  queued: "info",
+  uploading: "info",
+  running: "info",
+  succeeded: "ok",
+  failed: "danger",
+  cancelled: "warn",
+};
+
 interface Props {
   onOpenLibrary: () => void;
 }
@@ -26,9 +38,10 @@ interface Props {
 function angleLabel(prompt: string): string {
   const parts = prompt.split(",").map((part) => part.trim());
   const primary = parts[0] || "Angle";
-  const descriptive = /^front view$/i.test(primary) && parts[1] && !/^eye level$/i.test(parts[1])
-    ? parts[1]
-    : primary;
+  const descriptive =
+    /^front view$/i.test(primary) && parts[1] && !/^eye level$/i.test(parts[1])
+      ? parts[1]
+      : primary;
   const shortLabel = descriptive.replace(/\s+view$/i, "").trim();
   return shortLabel.charAt(0).toUpperCase() + shortLabel.slice(1);
 }
@@ -114,7 +127,11 @@ export function SetDesignPage({ onOpenLibrary }: Props) {
   const isRunning = job ? ACTIVE.includes(job.status) : false;
 
   const angleLines = useMemo(
-    () => angles.split("\n").map((line) => line.trim()).filter(Boolean),
+    () =>
+      angles
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean),
     [angles],
   );
   const selectedAngleLines = useMemo(
@@ -246,45 +263,67 @@ export function SetDesignPage({ onOpenLibrary }: Props) {
 
   return (
     <>
-      <main className="workspace">
-        <section className="panel input-panel">
-          <h2>Set Design · Multi-Angle</h2>
-          {projectId ? (
-            <p className="project-scope-hint">
-              Saving to project <strong>{project?.name || projectId}</strong>
-            </p>
-          ) : (
-            <div className="banner error">Select a project in the header before generating scenes.</div>
-          )}
-          <p className="field-hint" style={{ marginBottom: "1rem" }}>
-            Upload one scene plate. 1728×960 quality mode re-shoots seven selectable views with
-            Qwen Edit 2511 multi-angle LoRA. The original plate is saved as master for H3. Filenames
-            use your scene name + view, e.g.{" "}
-            <code>{name.trim() || "SceneName"}_01_left_side_view_h270_v0.png</code>.
+      <main className="workspace mx-auto grid w-full max-w-[1440px] grid-cols-1 gap-4 p-5 lg:grid-cols-[420px_minmax(0,1fr)] lg:items-start">
+        <section className="panel input-panel flex flex-col gap-4 rounded-lg border border-border-subtle bg-panel p-4 shadow-[var(--shadow-card)]">
+          <div className="border-b border-border-subtle pb-3">
+            <h2 className="text-sm font-semibold tracking-[-0.01em] text-ink">
+              Set Design · Multi-Angle
+            </h2>
+            {projectId ? (
+              <p className="project-scope-hint mt-1 text-xs text-ink-secondary">
+                Saving to project{" "}
+                <strong className="font-medium text-ink">{project?.name || projectId}</strong>
+              </p>
+            ) : null}
+          </div>
+
+          {!projectId ? (
+            <Banner tone="danger" role="alert">
+              Select a project in the header before generating scenes.
+            </Banner>
+          ) : null}
+
+          <p className="field-hint text-xs leading-relaxed text-ink-secondary">
+            Upload one scene plate. 1728×960 quality mode re-shoots seven selectable views with Qwen
+            Edit 2511 multi-angle LoRA. The original plate is saved as master for H3. Filenames use
+            your scene name + view, e.g.{" "}
+            <code className="rounded bg-elevated px-1 py-0.5 font-mono text-[11px] text-ink">
+              {name.trim() || "SceneName"}_01_left_side_view_h270_v0.png
+            </code>
+            .
           </p>
 
-          <div className="block">
-            <div className="block-title">1. Identity</div>
-            <label className="field">
-              <span>
-                Name <span className="req">*</span>
+          <div className="block flex flex-col gap-3 rounded-md border border-border-subtle bg-elevated/40 p-3">
+            <div className="block-title text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
+              1. Identity
+            </div>
+            <label className="field flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-ink-secondary">
+                Name <span className="req text-status-danger">*</span>
               </span>
-              <input
+              <Input
                 value={name}
                 disabled={isRunning}
+                hasError={Boolean(fieldErrors.name)}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. Audition_Room"
               />
-              {fieldErrors.name ? <span className="field-error">{fieldErrors.name}</span> : null}
+              {fieldErrors.name ? (
+                <span className="field-error text-[11px] text-status-danger">
+                  {fieldErrors.name}
+                </span>
+              ) : null}
             </label>
-            <label className="field">
-              <span>Notes</span>
-              <input value={notes} disabled={isRunning} onChange={(e) => setNotes(e.target.value)} />
+            <label className="field flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-ink-secondary">Notes</span>
+              <Input value={notes} disabled={isRunning} onChange={(e) => setNotes(e.target.value)} />
             </label>
           </div>
 
-          <div className="block">
-            <div className="block-title">2. Scene reference</div>
+          <div className="block flex flex-col gap-3 rounded-md border border-border-subtle bg-elevated/40 p-3">
+            <div className="block-title text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
+              2. Scene reference
+            </div>
             <ImageUploadSlot
               label="Scene image"
               required
@@ -296,11 +335,15 @@ export function SetDesignPage({ onOpenLibrary }: Props) {
             />
           </div>
 
-          <div className="block">
-            <div className="block-title">
+          <div className="block flex flex-col gap-3 rounded-md border border-border-subtle bg-elevated/40 p-3">
+            <div className="block-title text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
               3. Angles ({angleCount}/{angleLines.length} selected)
             </div>
-            <div className="angle-toggle-row" role="group" aria-label="Scene angles">
+            <div
+              className="angle-toggle-row flex flex-wrap gap-1.5"
+              role="group"
+              aria-label="Scene angles"
+            >
               {angleLines.map((angle, index) => {
                 const selected = !disabledAngleIndexes.has(index);
                 const label = angleLabel(angle);
@@ -308,129 +351,176 @@ export function SetDesignPage({ onOpenLibrary }: Props) {
                   <button
                     key={`${index}-${angle}`}
                     type="button"
-                    className={`angle-toggle ${selected ? "selected" : ""}`}
+                    className={cn(
+                      "angle-toggle inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                      "disabled:cursor-not-allowed disabled:opacity-50",
+                      selected
+                        ? "selected border-accent/45 bg-accent-soft text-ink"
+                        : "border-border-subtle bg-panel text-ink-muted hover:border-border-strong hover:text-ink",
+                    )}
                     aria-label={label}
                     aria-pressed={selected}
                     title={angle}
                     disabled={isRunning}
                     onClick={() => toggleAngle(index)}
                   >
-                    <span className="angle-toggle-index">{String(index + 1).padStart(2, "0")}</span>
+                    <span className="angle-toggle-index font-mono text-[10px] text-ink-muted tabular-nums">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
                     <span>{label}</span>
                   </button>
                 );
               })}
             </div>
-            <label className="field">
-              <span>
-                Angle prompts <span className="req">*</span>
+            <label className="field flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-ink-secondary">
+                Angle prompts <span className="req text-status-danger">*</span>
               </span>
-              <textarea
+              <Textarea
                 rows={6}
                 value={angles}
                 disabled={isRunning}
+                hasError={Boolean(fieldErrors.angles)}
                 onChange={(e) => setAngles(e.target.value)}
                 placeholder="One angle per line…"
-                className="mono-area"
+                className="mono-area font-mono text-xs"
               />
-              {fieldErrors.angles ? <span className="field-error">{fieldErrors.angles}</span> : null}
-              <span className="field-hint">
+              {fieldErrors.angles ? (
+                <span className="field-error text-[11px] text-status-danger">
+                  {fieldErrors.angles}
+                </span>
+              ) : null}
+              <span className="field-hint text-[11px] leading-relaxed text-ink-muted">
                 Multi-angle LoRA format, e.g.{" "}
-                <code>front view, eye level, medium shot (horizontal: 0, vertical: 0, zoom: 5.0)</code>
+                <code className="rounded bg-panel px-1 py-0.5 font-mono text-[10px]">
+                  front view, eye level, medium shot (horizontal: 0, vertical: 0, zoom: 5.0)
+                </code>
               </span>
             </label>
-            <label className="field">
-              <span>Prepend</span>
-              <input
+            <label className="field flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-ink-secondary">Prepend</span>
+              <Input
                 value={prepend}
                 disabled={isRunning}
                 onChange={(e) => setPrepend(e.target.value)}
                 placeholder="Keep the same set; only change the camera"
               />
             </label>
-            <label className="field">
-              <span>Append (optional)</span>
-              <input value={append} disabled={isRunning} onChange={(e) => setAppend(e.target.value)} />
+            <label className="field flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-ink-secondary">Append (optional)</span>
+              <Input
+                value={append}
+                disabled={isRunning}
+                onChange={(e) => setAppend(e.target.value)}
+              />
             </label>
           </div>
 
-          <div className="block advanced">
-            <button type="button" className="advanced-toggle" onClick={() => setAdvancedOpen((v) => !v)}>
-              {advancedOpen ? "▾" : "▸"} Advanced
+          <div className="block advanced rounded-md border border-border-subtle bg-elevated/30 p-3">
+            <button
+              type="button"
+              className="advanced-toggle flex w-full cursor-pointer items-center gap-1.5 text-left text-xs font-medium text-ink-secondary hover:text-ink"
+              onClick={() => setAdvancedOpen((v) => !v)}
+            >
+              {advancedOpen ? (
+                <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              <span>Advanced</span>
             </button>
             {advancedOpen ? (
-              <div className="advanced-body">
-                <label className="check">
+              <div className="advanced-body mt-3 flex flex-col gap-3 border-t border-border-subtle pt-3">
+                <label className="check flex cursor-pointer items-center gap-2 text-xs text-ink">
                   <input
                     type="checkbox"
                     checked={fixedSeed}
                     disabled={isRunning}
+                    className="h-3.5 w-3.5 rounded border-border-strong accent-accent"
                     onChange={(e) => setFixedSeed(e.target.checked)}
                   />
                   <span>Fixed seed</span>
                 </label>
                 {fixedSeed ? (
-                  <label className="field">
-                    <span>Seed</span>
-                    <input
+                  <label className="field flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-ink-secondary">Seed</span>
+                    <Input
                       value={seed}
                       disabled={isRunning}
+                      hasError={Boolean(fieldErrors.seed)}
                       onChange={(e) => setSeed(e.target.value)}
                       inputMode="numeric"
                     />
-                    {fieldErrors.seed ? <span className="field-error">{fieldErrors.seed}</span> : null}
+                    {fieldErrors.seed ? (
+                      <span className="field-error text-[11px] text-status-danger">
+                        {fieldErrors.seed}
+                      </span>
+                    ) : null}
                   </label>
                 ) : null}
               </div>
             ) : null}
           </div>
 
-          {formError ? <div className="banner error">{formError}</div> : null}
+          {formError ? (
+            <Banner tone="danger" role="alert">
+              {formError}
+            </Banner>
+          ) : null}
 
-          <div className="actions">
+          <div className="actions flex flex-wrap items-center gap-2 border-t border-border-subtle pt-3">
             {!isRunning ? (
-              <button type="button" className="btn primary" disabled={busy} onClick={onGenerate}>
+              <Button type="button" variant="primary" disabled={busy} onClick={onGenerate}>
                 {busy ? "Submitting…" : `Generate ${angleCount || ""} Angles`}
-              </button>
+              </Button>
             ) : (
-              <button type="button" className="btn danger" onClick={onCancel}>
+              <Button type="button" variant="danger" onClick={onCancel}>
                 Cancel
-              </button>
+              </Button>
             )}
-            <button type="button" className="btn ghost" disabled={isRunning} onClick={onReset}>
+            <Button type="button" variant="ghost" disabled={isRunning} onClick={onReset}>
               Reset form
-            </button>
+            </Button>
           </div>
         </section>
 
-        <section className="panel output-panel">
-          <div className="output-header">
-            <h2>Output</h2>
-            <div className={`status-pill status-${status}`}>
-              <span className="dot" />
-              {statusLabel}
-              {job ? <span className="job-id">{job.id}</span> : null}
-            </div>
+        <section className="panel output-panel flex min-w-0 flex-col gap-4 rounded-lg border border-border-subtle bg-panel p-4 shadow-[var(--shadow-card)]">
+          <div className="output-header flex items-center justify-between gap-3 border-b border-border-subtle pb-3">
+            <h2 className="text-sm font-semibold tracking-[-0.01em] text-ink">Output</h2>
+            <Badge tone={STATUS_TONES[status]} className={`status-pill status-${status}`}>
+              <StatusDot tone={STATUS_TONES[status]} pulse={isRunning} />
+              <span>{statusLabel}</span>
+              {job ? <span className="job-id font-mono text-[10px] opacity-80">{job.id}</span> : null}
+            </Badge>
           </div>
 
           {!job ? (
-            <p className="empty-copy">
-              Each non-empty angle line produces one image in a single Comfy batch. Results appear as a multi-view
-              set for the library.
+            <p className="empty-copy text-xs leading-relaxed text-ink-muted">
+              Each non-empty angle line produces one image in a single Comfy batch. Results appear
+              as a multi-view set for the library.
             </p>
           ) : null}
 
           {job?.error && (job.status === "failed" || job.status === "cancelled") ? (
-            <div className="banner error">{job.error}</div>
+            <Banner tone="danger" role="alert">
+              {job.error}
+            </Banner>
           ) : null}
 
           {job?.seed != null ? (
-            <p className="meta-line">
-              Seed <code>{job.seed}</code>
+            <p className="meta-line text-xs text-ink-secondary">
+              Seed{" "}
+              <code className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[11px] text-ink">
+                {job.seed}
+              </code>
               {job.comfy_prompt_id ? (
                 <>
                   {" "}
-                  · Comfy <code>{job.comfy_prompt_id.slice(0, 8)}…</code>
+                  · Comfy{" "}
+                  <code className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[11px] text-ink">
+                    {job.comfy_prompt_id.slice(0, 8)}…
+                  </code>
                 </>
               ) : null}
               {job.used_angles?.length ? <> · {job.used_angles.length} angles</> : null}
@@ -448,27 +538,37 @@ export function SetDesignPage({ onOpenLibrary }: Props) {
             }}
           />
 
-          <div className="actions output-actions">
-            <button
+          <div className="actions output-actions flex flex-wrap items-center gap-2 border-t border-border-subtle pt-3">
+            <Button
               type="button"
-              className="btn primary"
+              variant="primary"
               disabled={!job || job.status !== "succeeded" || busy || !!job.scene_id}
               onClick={onSave}
             >
               {job?.scene_id ? "Saved" : "Save to Library"}
-            </button>
-            <button type="button" className="btn secondary" disabled={!job || isRunning || busy} onClick={onGenerate}>
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!job || isRunning || busy}
+              onClick={onGenerate}
+            >
               Regenerate
-            </button>
+            </Button>
           </div>
 
           {saved || job?.scene_id ? (
-            <div className="banner ok">
-              Saved as Scene · <code>{saved?.id || job?.scene_id}</code>
-              <button type="button" className="btn ghost sm" onClick={onOpenLibrary}>
-                View in Library
-              </button>
-            </div>
+            <Banner tone="ok" role="status">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  Saved as Scene ·{" "}
+                  <code className="font-mono text-[11px]">{saved?.id || job?.scene_id}</code>
+                </span>
+                <Button type="button" variant="ghost" size="xs" onClick={onOpenLibrary}>
+                  View in Library
+                </Button>
+              </div>
+            </Banner>
           ) : null}
         </section>
       </main>

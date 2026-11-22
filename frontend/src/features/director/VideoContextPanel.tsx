@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchH3Profiles } from "../../shared/api/client";
 import type { Shot, ShotVideoContext } from "../../shared/api/types";
+import { Banner, Button, Input, Select } from "../../shared/ui";
 import { VideoDependencyIndicator } from "./VideoDependencyIndicator";
 import {
   getShot,
@@ -58,16 +59,19 @@ function legalWindow(value: number | null | undefined): WindowFrames {
 function videoKeys(job: VideoJobRecord): string[] {
   return Object.entries(job.outputs).flatMap(([key, slot]) => {
     const name = `${slot?.filename || ""} ${slot?.url || ""}`.toLowerCase();
-    const video = key === "video"
-      || key === "video_raw"
-      || name.endsWith(".mp4")
-      || name.endsWith(".mov")
-      || name.endsWith(".webm");
+    const video =
+      key === "video" ||
+      key === "video_raw" ||
+      name.endsWith(".mp4") ||
+      name.endsWith(".mov") ||
+      name.endsWith(".webm");
     return video ? [key] : [];
   });
 }
 
-function activeContext(context: ShotVideoContext | null | undefined): context is ShotVideoContext {
+function activeContext(
+  context: ShotVideoContext | null | undefined,
+): context is ShotVideoContext {
   return Boolean(context && context.mode !== "off");
 }
 
@@ -126,17 +130,22 @@ export function VideoContextPanel({
     setVersions([]);
     if (!active || context?.mode !== "previous_shot") return;
     if (!previous) return;
-    const ids = [...new Set([...versionIds(previous), ...(context.source_job_id ? [context.source_job_id] : [])])];
+    const ids = [
+      ...new Set([
+        ...versionIds(previous),
+        ...(context.source_job_id ? [context.source_job_id] : []),
+      ]),
+    ];
     let cancelled = false;
     void (async () => {
       const loaded: VideoJobRecord[] = [];
       try {
-        loaded.push(...(await getShotVideoGenerations(previous.id) || []));
+        loaded.push(...((await getShotVideoGenerations(previous.id)) || []));
       } catch {
         // Preserve known versions if the history endpoint is temporarily unavailable.
       }
       for (const id of ids) {
-        if (loaded.some(job => job.id === id)) continue;
+        if (loaded.some((job) => job.id === id)) continue;
         try {
           const job = await getVideoJob(id);
           if (job) loaded.push(job);
@@ -164,25 +173,38 @@ export function VideoContextPanel({
     };
   }, [active, previous, context?.mode, context?.source_job_id]);
 
-  const resolvedJobId = context?.mode === "previous_shot"
-    ? (context.source_job_id || previous?.h3_job_id || "")
-    : "";
+  const resolvedJobId =
+    context?.mode === "previous_shot"
+      ? context.source_job_id || previous?.h3_job_id || ""
+      : "";
   const currentVersions = versions.filter((version) => version.jobId === resolvedJobId);
-  const resolvedKey = context?.mode === "previous_shot"
-    ? (context.source_output_key || (currentVersions.length === 1 ? currentVersions[0].outputKey : "")) : "";
-  const waitingForSource = context?.mode === "previous_shot" && previous && (
-    !resolvedJobId || jobs.some((job) => job.id === resolvedJobId
-      && ["queued", "uploading", "running"].includes(job.status))
-  );
+  const resolvedKey =
+    context?.mode === "previous_shot"
+      ? context.source_output_key ||
+        (currentVersions.length === 1 ? currentVersions[0].outputKey : "")
+      : "";
+  const waitingForSource =
+    context?.mode === "previous_shot" &&
+    previous &&
+    (!resolvedJobId ||
+      jobs.some(
+        (job) =>
+          job.id === resolvedJobId &&
+          ["queued", "uploading", "running"].includes(job.status),
+      ));
   const blocks = sourceBlocks(context, previous, jobs);
   const preview = previewUrl(shot, versions, uploadFile, previous?.h3_job_id);
-  const selectedValue = versions.some((version) => (
-    version.jobId === resolvedJobId && version.outputKey === resolvedKey
-  ))
+  const selectedValue = versions.some(
+    (version) => version.jobId === resolvedJobId && version.outputKey === resolvedKey,
+  )
     ? `${resolvedJobId}:${resolvedKey}`
     : "";
 
-  function payload(body: VideoContextSave, windowFrames = legalWindow(context?.context_frames), audio = carry): VideoContextSave {
+  function payload(
+    body: VideoContextSave,
+    windowFrames = legalWindow(context?.context_frames),
+    audio = carry,
+  ): VideoContextSave {
     if (profile === "custom") return body;
     return { ...body, context_frames: windowFrames, carry_audio: audio };
   }
@@ -207,10 +229,13 @@ export function VideoContextPanel({
     try {
       const record = await uploadVideoContext(shot.project_id, file);
       setUploadFile({ id: record.upload_id, filename: record.filename });
-      await saveVideoContext(shot.id, payload({
-        mode: "external_upload",
-        upload_id: record.upload_id,
-      }));
+      await saveVideoContext(
+        shot.id,
+        payload({
+          mode: "external_upload",
+          upload_id: record.upload_id,
+        }),
+      );
       onShotUpdated?.(await getShot(shot.id));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -227,150 +252,285 @@ export function VideoContextPanel({
     }
     setError(null);
     if (!context || next === legalWindow(context.context_frames)) return;
-    const source: VideoContextSave = context.mode === "previous_shot" ? {
-      mode: "previous_shot",
-      ...(context.source_shot_id ? { source_shot_id: context.source_shot_id } : {}),
-      ...(context.source_job_id ? { source_job_id: context.source_job_id } : {}),
-      ...(context.source_output_key ? { source_output_key: context.source_output_key } : {}),
-    } : { mode: "external_upload", ...(context.upload_id ? { upload_id: context.upload_id } : {}) };
+    const source: VideoContextSave =
+      context.mode === "previous_shot"
+        ? {
+            mode: "previous_shot",
+            ...(context.source_shot_id ? { source_shot_id: context.source_shot_id } : {}),
+            ...(context.source_job_id ? { source_job_id: context.source_job_id } : {}),
+            ...(context.source_output_key ? { source_output_key: context.source_output_key } : {}),
+          }
+        : {
+            mode: "external_upload",
+            ...(context.upload_id ? { upload_id: context.upload_id } : {}),
+          };
     void commit(payload(source, next as WindowFrames, carry));
   }
 
   if (!active) return null;
 
   return (
-    <section className="video-context-panel" role="region" aria-label="Video continuation">
+    <section
+      className="video-context-panel space-y-2.5 rounded-lg border border-border-subtle bg-elevated/45 p-3 text-xs text-ink"
+      role="region"
+      aria-label="Video continuation"
+    >
       <VideoDependencyIndicator shot={shot} shots={shots} />
-      <div className="video-context-window">
-        {profile === "builtin" ? <label>
-          Context window
-          <input type="number" aria-label="Context window" min={5} max={56} step={17}
-            value={frames} disabled={busy} onChange={(event) => setFrames(event.target.value)}
-            onBlur={updateWindow} onKeyDown={(event) => {
-              if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
-            }} />
-        </label> : null}
-        {profile === "custom" ? <label>
-          Context window
-          <input aria-label="Context window" readOnly value="Configured by workflow" />
-        </label> : null}
-        {profile === "builtin" ? <small>{contextWindowLabel(legalWindow(context?.context_frames))}</small> : null}
-      </div>
-      {blocks.map((reason) => <p key={reason} className="video-context-blocked">{reason}</p>)}
-      {waitingForSource ? <p role="status">Continuation plan saved. Waiting for the source video.</p> : null}
-      {error ? <p className="video-context-blocked" role="alert">{error}</p> : null}
-      <details
-        className="video-context-settings"
-        open={open}
-        onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
-      >
-        <summary>Continuation settings</summary>
-        {open ? <div className="video-context-fields">
-      {resolvedJobId ? (
-        <p className="video-context-fact">
-          <span>Job</span>
-          <strong aria-label="Resolved job">{resolvedJobId}</strong>
-        </p>
-      ) : null}
-      {resolvedKey ? (
-        <p className="video-context-fact"><span>Artifact</span><strong>{resolvedKey}</strong></p>
-      ) : null}
-      {context?.mode === "external_upload" && context.upload_id ? (
-        <p className="video-context-fact">
-          <span>Upload</span>
-          <strong aria-label="Resolved upload">{context.upload_id}</strong>
-        </p>
-      ) : null}
-      {preview ? (
-        <video controls playsInline preload="metadata" src={preview} />
-      ) : null}
-          {context.mode === "previous_shot" ? <label>
-            Source shot
-            <select aria-label="Source shot" value={previous?.id || ""} disabled={busy}
-              onChange={(event) => {
-                if (!event.target.value) return;
-                void commit(payload({ mode: "previous_shot", source_shot_id: event.target.value }));
-              }}>
-              {!previous ? <option value="">Source shot unavailable</option> : null}
-              {shots.slice(0, Math.max(0, shots.findIndex((item) => item.id === shot.id))).map((item, index) => (
-                <option key={item.id} value={item.id}>Shot {index + 1} · {item.title}</option>
-              ))}
-            </select>
-          </label> : null}
-          <label>
-            Source video version
-            <select
-              aria-label="Source video version"
-              value={selectedValue}
-              disabled={busy || versions.length === 0}
-              onChange={(event) => {
-                const [jobId, outputKey] = event.target.value.split(":");
-                if (!jobId || !outputKey) return;
-                void commit(payload({
-                  mode: "previous_shot",
-                  ...(previous ? { source_shot_id: previous.id } : {}),
-                  source_job_id: jobId,
-                  source_output_key: outputKey,
-                }));
-              }}
-            >
-              {selectedValue === "" ? <option value="">Select a video</option> : null}
-              {versions.map((version) => (
-                <option key={`${version.jobId}:${version.outputKey}`} value={`${version.jobId}:${version.outputKey}`}>
-                  {version.jobId} · {version.outputKey}
-                </option>
-              ))}
-            </select>
-          </label>
+
+      {profile ? (
+        <div className="video-context-window flex flex-wrap items-end justify-between gap-3">
           {profile === "builtin" ? (
-            <label>
-              <input
-                type="checkbox"
-                aria-label="Carry source audio"
-                checked={carry}
-                disabled={busy || !active}
-                onChange={(event) => {
-                  const next = event.target.checked;
-                  setCarry(next);
-                  if (!active || !context) return;
-                  if (context.mode === "previous_shot") {
-                    void commit(payload({
-                      mode: "previous_shot",
-                      ...(context.source_shot_id ? { source_shot_id: context.source_shot_id } : {}),
-                      ...(context.source_job_id ? { source_job_id: context.source_job_id } : {}),
-                      ...(context.source_output_key ? { source_output_key: context.source_output_key } : {}),
-                    }, legalWindow(context.context_frames), next));
-                  } else if (context.mode === "external_upload" && context.upload_id) {
-                    void commit(payload({
-                      mode: "external_upload",
-                      upload_id: context.upload_id,
-                    }, legalWindow(context.context_frames), next));
+            <label className="flex flex-col gap-1 text-[11px] font-medium text-ink-secondary">
+              Context window
+              <Input
+                type="number"
+                aria-label="Context window"
+                min={5}
+                max={56}
+                step={17}
+                value={frames}
+                disabled={busy}
+                className="h-7 w-24 font-mono text-xs tabular-nums"
+                onChange={(event) => setFrames(event.target.value)}
+                onBlur={updateWindow}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    event.currentTarget.blur();
                   }
                 }}
               />
-              Carry source audio
             </label>
           ) : null}
-          {context.mode === "external_upload" && <label>
-            Upload continuation video
-            <input
-              type="file"
-              aria-label="Upload continuation video"
-              accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
-              disabled={busy}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                event.target.value = "";
-                void onUpload(file);
-              }}
-            />
-          </label>}
-          {active && showDisableControl ? (
-            <button type="button" disabled={busy} onClick={() => void commit({ mode: "off" })}>
-              Turn continuation off
-            </button>
+          {profile === "custom" ? (
+            <label className="flex flex-1 flex-col gap-1 text-[11px] font-medium text-ink-secondary">
+              Context window
+              <Input
+                aria-label="Context window"
+                readOnly
+                value="Configured by workflow"
+                className="h-7 text-xs text-ink-secondary"
+              />
+            </label>
           ) : null}
-        </div> : null}
+          {profile === "builtin" ? (
+            <small className="font-mono text-[11px] text-ink-muted tabular-nums">
+              {contextWindowLabel(legalWindow(context?.context_frames))}
+            </small>
+          ) : null}
+        </div>
+      ) : null}
+
+      {blocks.map((reason) => (
+        <p
+          key={reason}
+          className="video-context-blocked rounded-md border border-status-warn/30 bg-status-warn-soft px-2.5 py-1.5 text-xs text-status-warn"
+        >
+          {reason}
+        </p>
+      ))}
+      {waitingForSource ? (
+        <Banner tone="info" role="status">
+          Continuation plan saved. Waiting for the source video.
+        </Banner>
+      ) : null}
+      {error ? (
+        <p
+          className="video-context-blocked rounded-md border border-status-danger/30 bg-status-danger-soft px-2.5 py-1.5 text-xs text-status-danger"
+          role="alert"
+        >
+          {error}
+        </p>
+      ) : null}
+
+      <details
+        className="video-context-settings rounded-md border border-border-subtle bg-panel"
+        open={open}
+        onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+      >
+        <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-ink-secondary transition-colors hover:text-ink">
+          Continuation settings
+        </summary>
+        {open ? (
+          <div className="video-context-fields space-y-3 border-t border-border-subtle p-3">
+            {resolvedJobId || resolvedKey || (context?.mode === "external_upload" && context.upload_id) ? (
+              <div className="grid grid-cols-1 gap-2 rounded-md border border-border-subtle bg-elevated/50 px-3 py-2 sm:grid-cols-2">
+                {resolvedJobId ? (
+                  <p className="video-context-fact flex items-center justify-between gap-2 text-xs">
+                    <span className="text-ink-muted">Job</span>
+                    <strong aria-label="Resolved job" className="truncate font-mono text-[11px] font-medium text-ink">
+                      {resolvedJobId}
+                    </strong>
+                  </p>
+                ) : null}
+                {resolvedKey ? (
+                  <p className="video-context-fact flex items-center justify-between gap-2 text-xs">
+                    <span className="text-ink-muted">Artifact</span>
+                    <strong className="truncate font-mono text-[11px] font-medium text-ink">
+                      {resolvedKey}
+                    </strong>
+                  </p>
+                ) : null}
+                {context?.mode === "external_upload" && context.upload_id ? (
+                  <p className="video-context-fact flex items-center justify-between gap-2 text-xs">
+                    <span className="text-ink-muted">Upload</span>
+                    <strong aria-label="Resolved upload" className="truncate font-mono text-[11px] font-medium text-ink">
+                      {context.upload_id}
+                    </strong>
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {preview ? (
+              <video
+                controls
+                playsInline
+                preload="metadata"
+                src={preview}
+                className="w-full max-h-56 rounded-md border border-border-subtle bg-black"
+              />
+            ) : null}
+
+            <div className="grid gap-2.5 sm:grid-cols-2">
+              {context.mode === "previous_shot" ? (
+                <label className="flex flex-col gap-1 text-[11px] font-medium text-ink-secondary">
+                  Source shot
+                  <Select
+                    size="sm"
+                    aria-label="Source shot"
+                    value={previous?.id || ""}
+                    disabled={busy}
+                    onChange={(event) => {
+                      if (!event.target.value) return;
+                      void commit(
+                        payload({ mode: "previous_shot", source_shot_id: event.target.value }),
+                      );
+                    }}
+                  >
+                    {!previous ? <option value="">Source shot unavailable</option> : null}
+                    {shots
+                      .slice(0, Math.max(0, shots.findIndex((item) => item.id === shot.id)))
+                      .map((item, index) => (
+                        <option key={item.id} value={item.id}>
+                          Shot {index + 1} · {item.title}
+                        </option>
+                      ))}
+                  </Select>
+                </label>
+              ) : null}
+
+              <label className="flex flex-col gap-1 text-[11px] font-medium text-ink-secondary">
+                Source video version
+                <Select
+                  size="sm"
+                  aria-label="Source video version"
+                  value={selectedValue}
+                  disabled={busy || versions.length === 0}
+                  onChange={(event) => {
+                    const [jobId, outputKey] = event.target.value.split(":");
+                    if (!jobId || !outputKey) return;
+                    void commit(
+                      payload({
+                        mode: "previous_shot",
+                        ...(previous ? { source_shot_id: previous.id } : {}),
+                        source_job_id: jobId,
+                        source_output_key: outputKey,
+                      }),
+                    );
+                  }}
+                >
+                  {selectedValue === "" ? <option value="">Select a video</option> : null}
+                  {versions.map((version) => (
+                    <option
+                      key={`${version.jobId}:${version.outputKey}`}
+                      value={`${version.jobId}:${version.outputKey}`}
+                    >
+                      {version.jobId} · {version.outputKey}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+            </div>
+
+            {profile === "builtin" ? (
+              <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-ink-secondary select-none">
+                <input
+                  type="checkbox"
+                  aria-label="Carry source audio"
+                  className="h-3.5 w-3.5 rounded border-border-strong accent-accent"
+                  checked={carry}
+                  disabled={busy || !active}
+                  onChange={(event) => {
+                    const next = event.target.checked;
+                    setCarry(next);
+                    if (!active || !context) return;
+                    if (context.mode === "previous_shot") {
+                      void commit(
+                        payload(
+                          {
+                            mode: "previous_shot",
+                            ...(context.source_shot_id ? { source_shot_id: context.source_shot_id } : {}),
+                            ...(context.source_job_id ? { source_job_id: context.source_job_id } : {}),
+                            ...(context.source_output_key
+                              ? { source_output_key: context.source_output_key }
+                              : {}),
+                          },
+                          legalWindow(context.context_frames),
+                          next,
+                        ),
+                      );
+                    } else if (context.mode === "external_upload" && context.upload_id) {
+                      void commit(
+                        payload(
+                          {
+                            mode: "external_upload",
+                            upload_id: context.upload_id,
+                          },
+                          legalWindow(context.context_frames),
+                          next,
+                        ),
+                      );
+                    }
+                  }}
+                />
+                Carry source audio
+              </label>
+            ) : null}
+
+            {context.mode === "external_upload" && (
+              <label className="flex flex-col gap-1 text-[11px] font-medium text-ink-secondary">
+                Upload continuation video
+                <input
+                  type="file"
+                  aria-label="Upload continuation video"
+                  accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+                  disabled={busy}
+                  className="block w-full cursor-pointer rounded-md border border-border-subtle bg-elevated px-2.5 py-1.5 text-xs text-ink-secondary file:mr-2 file:rounded file:border-0 file:bg-panel file:px-2 file:py-1 file:text-xs file:font-medium file:text-ink"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    void onUpload(file);
+                  }}
+                />
+              </label>
+            )}
+
+            {active && showDisableControl ? (
+              <div className="flex justify-end border-t border-border-subtle pt-2.5">
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="xs"
+                  disabled={busy}
+                  onClick={() => void commit({ mode: "off" })}
+                >
+                  Turn continuation off
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </details>
     </section>
   );
@@ -382,7 +542,13 @@ function sourceBlocks(
   jobs: VideoJobRecord[],
 ): string[] {
   if (context?.mode !== "previous_shot") return [];
-  if (!previous) return [context.source_shot_id ? "Selected source shot was not found" : "This shot has no previous shot"];
+  if (!previous) {
+    return [
+      context.source_shot_id
+        ? "Selected source shot was not found"
+        : "This shot has no previous shot",
+    ];
+  }
   const resolvedId = context.source_job_id || previous.h3_job_id || "";
   if (!resolvedId) return [];
   if (jobs.length === 0) return [];
@@ -406,17 +572,20 @@ function previewUrl(
 ): string {
   const context = shot.video_context;
   if (
-    context?.mode === "external_upload"
-    && uploadFile
-    && uploadFile.id === context.upload_id
+    context?.mode === "external_upload" &&
+    uploadFile &&
+    uploadFile.id === context.upload_id
   ) {
     return `/api/files/projects/${shot.project_id}/video_context_uploads/${uploadFile.filename}`;
   }
   if (context?.mode !== "previous_shot") return "";
   const jobId = context.source_job_id || currentSourceJobId || "";
-  const match = versions.find((version) => (
-    version.jobId === jobId && version.outputKey === (context.source_output_key || version.outputKey) && version.url
-  ));
+  const match = versions.find(
+    (version) =>
+      version.jobId === jobId &&
+      version.outputKey === (context.source_output_key || version.outputKey) &&
+      version.url,
+  );
   if (!context.source_output_key) {
     const matches = versions.filter((version) => version.jobId === jobId && version.url);
     return matches.length === 1 ? matches[0].url : "";
